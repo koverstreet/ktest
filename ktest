@@ -3,15 +3,18 @@
 DIR=.ktest
 IMG=$HOME/.ktest/root
 TMPDIR=$HOME/.ktest/tmp
+NJOBS=$((`grep ^processor /proc/cpuinfo |wc -l` * 2))
 
-. $(dirname $(readlink -f $0))/util.sh
+KTESTDIR=$(dirname $(readlink -f $0))
+
+. $KTESTDIR/util.sh
 
 checkdep genisoimage
 checkdep minicom
 checkdep socat
 
-MAKE="make -j48 O=$DIR INSTALL_MOD_PATH=modules "
-MAKE+='EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments"'
+MAKE="make -j$NJOBS O=$DIR INSTALL_MOD_PATH=modules"
+MAKE+=' EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments"'
 
 check_timeout()
 {
@@ -76,8 +79,8 @@ cmd_run()
 	done
 	IFS=$OLDIFS
 
-	[ -d $DIR ] || mkdir $DIR
-	[ -f $DIR/.config ] || cp "$HOME/ktest/config" $DIR/.config
+	mkdir -p $DIR
+	[ -f $DIR/.config ] || cp "$KTESTDIR/defconfig" "$DIR/.config"
 
 	eval $MAKE || exit
 	eval $MAKE modules_install
@@ -85,8 +88,6 @@ cmd_run()
 	# Remove symlinks, they'll break genisoimage which is following symlinks
 	rm $DIR/modules/lib/modules/*/build
 	rm $DIR/modules/lib/modules/*/source
-
-	#pkill -9 -f "^gd[b].*$VM_DIR"
 
 	genisoimage -quiet -f -R -input-charset utf-8	\
 		-o $DIR/run.iso 			\
