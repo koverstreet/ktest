@@ -1,9 +1,19 @@
 
 checkdep()
 {
-	which $1 > /dev/null
-	if [ $? -ne 0 ]; then
-		echo "Installing $1:"
-		sudo apt-get install genisoimage
+	COMMAND=$1
+	PACKAGE=$2
+	[ -z "$PACKAGE" ] && PACKAGE=$COMMAND
+
+	if ! which $COMMAND > /dev/null; then
+		echo -n "$COMMAND not found"
+
+		if which apt-get > /dev/null; then
+			echo ", installing $PACKAGE:"
+			sudo apt-get install $PACKAGE
+		else
+			echo ", please install"
+			exit 1
+		fi
 	fi
 }

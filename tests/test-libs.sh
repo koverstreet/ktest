@@ -132,7 +132,7 @@ prep_bcache_devices()
 	echo /dev/$CACHE> /sys/fs/bcache/register
 
 	if [ $? -ne 0 ]; then
-		/cdrom/make-bcache --bucket 64k --block 2k		\
+		make-bcache --bucket 64k --block 2k			\
 			--discard					\
 			--cache_replacement_policy=lru			\
 			--writeback 					\
@@ -269,7 +269,7 @@ test_bcache_test()
 		file=/mnt/$dev/test
 
 		dd if=/dev/urandom of=$file bs=1M count=512 oflag=direct
-		/cdrom/bcache-test -dnscw $file &
+		bcache-test -dnscw $file &
 	done
 }
 

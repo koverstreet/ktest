@@ -209,7 +209,6 @@ def cmd_start():
          cmd.extend(["-kernel", options.kernel])
          cmd.extend(["-append", "root=/dev/sda rw console=ttyS0,115200 kgdboc=ttyS2,115200"])
       cmd.extend(["-nographic"])
-      cmd.extend(["-s"])
       cmd.extend(["-serial", "stdio"])
       cmd.extend(["-serial", "mon:unix:" + vm.tmpdir + "con,server,nowait"])
       cmd.extend(["-serial",     "unix:" + vm.tmpdir + "gdb,server,nowait"])
@@ -490,7 +489,7 @@ if sys.argv[1] == "-h":
    cmd_help()
    sys.exit(0)
 
-# try looking up givn command in global namespace:
+# try looking up given command in global namespace:
 try:
    func = "cmd_"+sys.argv[1]
    func = getattr(sys.modules[__name__], func)

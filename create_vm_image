@@ -1,15 +1,29 @@
-#!/bin/bash
+#!/bin/bash -e
 #
 # Create a VM image suitable for running automated tests
 # Output: vm_image
-set -e
 
-. $(dirname $(readlink -f $0))/util.sh
+KTESTDIR=$(dirname $(readlink -f $0))
 
+. $KTESTDIR/util.sh
+
+usage()
+{
+	echo "create_vm_image: Create a virtual machine image for ktest"
+	echo "Usage: create_vm_image filename"
+}
+
+OUT=$1
+if [ -z "$OUT" ]; then
+	usage
+	exit
+fi
+
+checkdep fallocate util-linux
+checkdep mkfs.ext4 e2fsprogs
 checkdep debootstrap
 
-OUT=vm_image
-MNT=vm_image.mnt
+MNT="$OUT".mnt
 SIZE=$((2 * 1024 * 1024 * 1024)) # 2GB
 
 PACKAGES="less,psmisc,openssh-server"
@@ -44,7 +58,7 @@ cat > "$MNT/etc/rc.local" <<-ZZ
 #!/bin/bash
 
 mount /dev/sr0 /cdrom
-PATH=$PATH:/cdrom
+PATH=/cdrom:$PATH
 cd /cdrom
 exec ./rc
 ZZ
@@ -52,12 +66,8 @@ chmod 755 "$MNT/etc/rc.local"
 
 mkdir -p "$MNT/cdrom"
 
-# This corresponds to the public key in BTools/sms/sshkey
 mkdir -p "$MNT/root/.ssh"
-cat > "$MNT/root/.ssh/authorized_keys" <<-ZZ
-ssh-dss AAAAB3NzaC1kc3MAAACBAOgmIsVSHoBpct0FM04YQLL9udut/V8JkD0d3YCc94jmWGpWrU78r5nzqnmD3ULGlK4VJpfOQHWpeRh3bU6YckWmPQe11CAmhCd949vMGnsetAwQ+8msHtZwzD00EqbIEiA+oOSNL0pMiRJKvIOw04MKghpRf0d/kVCMNBiEZxx7AAAAFQC/WIbfGf4wf0JlVj5ccnPXtayp6wAAAIBMm3svgV2tCRDu2U7z63ognByizPJaoneAlnwI/4yDh/KU0NKrsbI+u2Ctf6ICju84P7GsIP+mveuWur8JabeU+VA5wztMrO/hO9WchatVrW3GDpMyGADNkVVIi8p/pxl3ZMX5FXTzavuQNucm4pUWsuer6v434JeteooyEgsy7wAAAIBPO5TcE8ZFs8R83YEtVc36nBbxH2jSjov0cFOanGutxni/zAO+IjfE5cDCKZMCQ4dbBYNJ3i8uyXiqqk5u2viu1jBTqSMvhbcYrUSiXzZyx+Rrxl1ukIjgoH+PuXdu2L3HSy5G9zCQvPj3NJeohtWW9I82QcLnn9C98h7Axz5d4g==
-ZZ
-chmod 0600 "$MNT/root/.ssh/authorized_keys"
+install -m0600 $KTESTDIR/id_dsa.pub "$MNT/root/.ssh/authorized_keys"
 
 umount $MNT
 rmdir $MNT

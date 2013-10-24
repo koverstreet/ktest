@@ -1,17 +1,12 @@
 #!/bin/bash -e
 
-DIR=.ktest
-IMG=$HOME/.ktest/root
-TMPDIR=$HOME/.ktest/tmp
-NJOBS=$((`grep ^processor /proc/cpuinfo |wc -l` * 2))
-
 KTESTDIR=$(dirname $(readlink -f $0))
+VMSTART=$KTESTDIR/vm-start
 
 . $KTESTDIR/util.sh
 
-checkdep genisoimage
-checkdep minicom
-checkdep socat
+DIR=.ktest
+NJOBS=$((`grep ^processor /proc/cpuinfo |wc -l` * 2))
 
 MAKE="make -j$NJOBS O=$DIR INSTALL_MOD_PATH=modules"
 MAKE+=' EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments"'
@@ -19,7 +14,7 @@ MAKE+=' EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments"'
 check_timeout()
 {
 	sleep $1
-	vm-start.py stop `cat $DIR/id`
+	$VMSTART stop `cat $DIR/id`
 	kill $$
 }
 
@@ -45,7 +40,7 @@ cmd_run()
 
 	eval `$TEST deps`
 
-	if [ -z "$SCRATCH" -o -z "$MEM" ]; then
+	if [ -z "$MEM" ]; then
 		echo "test must specify requirements"
 		exit
 	fi
@@ -99,7 +94,7 @@ cmd_run()
 		ALARM=$!
 	fi
 
-	vm-start.py start				\
+	$VMSTART start					\
 		-i $IMG -t $TMPDIR			\
 		-k $DIR/arch/x86/boot/bzImage		\
 		-c $DIR/run.iso				\
@@ -109,24 +104,24 @@ cmd_run()
 	|{
 		sed -e '/TEST SUCCESS/q'
 		[ -n "$ALARM" ] && kill $ALARM 2> /dev/null
-		vm-start.py stop `cat $DIR/id`
+		$VMSTART stop `cat $DIR/id`
 		exit 0
 	}
 }
 
 cmd_ssh()
 {
-	exec vm-start.py ssh `cat $DIR/id`
+	exec $VMSTART ssh `cat $DIR/id`
 }
 
 cmd_gdb()
 {
-	exec vm-start.py gdb `cat $DIR/id` $DIR/vmlinux
+	exec $VMSTART gdb `cat $DIR/id` $DIR/vmlinux
 }
 
 cmd_mon()
 {
-	exec vm-start.py mon `cat $DIR/id`
+	exec $VMSTART mon `cat $DIR/id`
 }
 
 cmd_oldconfig()
@@ -144,12 +139,12 @@ usage()
 {
 	echo "ktest: Test kernels in virtual machines on a pool of remote servers"
 	echo "Usage: ktest cmd [n]"
-	echo "  run n		Compile and run a kernel using config n"
-	echo "  ssh n		Root login"
-	echo "  gdb n		kgdb"
-	echo "  mon n		qemu monitor"
-	echo "  oldconfig n"
-	echo "  menuconfig n"
+	echo "  run <testfile>	Compile and run a kernel and run <testfile>"
+	echo "  ssh		Log in as root"
+	echo "  gdb		Connect to kgdb"
+	echo "  mon		Connect to qemu monitor"
+	echo "  oldconfig	Run make oldconfig"
+	echo "  config		Run make nconfig"
 }
 
 CMD="cmd_$1"
@@ -158,5 +153,27 @@ if [ -z "$1" -o "`type -t "$CMD"`" != "function" ]; then
 	exit
 fi
 shift
+
+if [ -f "/var/lib/ktest/root" ]; then
+	IMG="/var/lib/ktest/root"
+elif [ -f "$HOME/.ktest/root" ]; then
+	IMG="$HOME/.ktest/root"
+else
+	echo "VM root filesystem not found, please create /var/lib/ktest/root or"
+	echo "$HOME/.ktest/root"
+	exit
+fi
+
+if [ -d "$HOME/.ktest/tmp" ]; then
+	TMPDIR=$HOME/.ktest/tmp
+else
+	TMPDIR=/tmp
+fi
+
+checkdep genisoimage
+checkdep minicom
+checkdep socat
+checkdep gcc
+checkdep make
 
 eval $CMD $@
