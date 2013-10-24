@@ -1,0 +1,169 @@
+#!/bin/bash -e
+
+DIR=.ktest
+IMG=$HOME/.ktest/root
+TMPDIR=$HOME/.ktest/tmp
+
+checkdep()
+{
+	which $1 > /dev/null
+	if [ $? -ne 0 ]; then
+		echo "Installing $1:"
+		sudo apt-get install genisoimage
+	fi
+}
+
+checkdep genisoimage
+checkdep minicom
+checkdep socat
+
+MAKE="make -j48 O=$DIR INSTALL_MOD_PATH=modules "
+MAKE+='EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments"'
+
+check_timeout()
+{
+	sleep $1
+	vm-start.py stop `cat $DIR/id`
+	kill $$
+}
+
+cmd_run()
+{
+	while getopts "t:" arg; do
+		case $arg in
+		h)
+			echo "-t	timout in seconds" 
+			;;
+		t)
+			TIMEOUT=$OPTARG
+			;;
+		esac
+	done
+	shift $(( OPTIND - 1 ))
+
+	TEST=$1
+	if [ -z "$TEST" ]; then
+		echo "Specify a test to run"
+		exit
+	fi
+
+	eval `$TEST deps`
+
+	if [ -z "$SCRATCH" -o -z "$MEM" ]; then
+		echo "test must specify requirements"
+		exit
+	fi
+
+	ln -sf $TEST $DIR/rc
+	FILES=$DIR/rc
+	TESTDIR=`dirname $TEST`
+
+	OLDIFS=$IFS
+	IFS=','
+	PATH+=":/sbin:/usr/sbin:/usr/local/sbin"
+
+	for req in $REQUIRE; do
+		if [ -f "$TESTDIR/$req" ]; then
+			FILES+=" $TESTDIR/$req"
+		elif f="`which $req`"; then
+			FILES+=" $f"
+		else
+			echo "Dependency $req not found"
+			exit
+		fi
+	done
+
+	for req in $LREQUIRE; do
+		f=" $req"
+		if [ ! -f "$f" ]; then
+			echo "Dependency $f not found"
+			exit
+		fi
+		FILES+=" $req"
+	done
+	IFS=$OLDIFS
+
+	[ -d $DIR ] || mkdir $DIR
+	[ -f $DIR/.config ] || cp "$HOME/ktest/config" $DIR/.config
+
+	eval $MAKE || exit
+	eval $MAKE modules_install
+
+	# Remove symlinks, they'll break genisoimage which is following symlinks
+	rm $DIR/modules/lib/modules/*/build
+	rm $DIR/modules/lib/modules/*/source
+
+	#pkill -9 -f "^gd[b].*$VM_DIR"
+
+	genisoimage -quiet -f -R -input-charset utf-8	\
+		-o $DIR/run.iso 			\
+		$DIR/modules/lib $FILES || exit
+	rm -rf $DIR/modules
+
+	if [ -n "$TIMEOUT" ]; then
+		check_timeout "$TIMEOUT" &
+		ALARM=$!
+	fi
+
+	vm-start.py start				\
+		-i $IMG -t $TMPDIR			\
+		-k $DIR/arch/x86/boot/bzImage		\
+		-c $DIR/run.iso				\
+		--id $DIR/id				\
+		-m "$MEM"				\
+		-s "$SCRATCH"				\
+	|{
+		sed -e '/TEST SUCCESS/q'
+		[ -n "$ALARM" ] && kill $ALARM 2> /dev/null
+		vm-start.py stop `cat $DIR/id`
+		exit 0
+	}
+}
+
+cmd_ssh()
+{
+	exec vm-start.py ssh `cat $DIR/id`
+}
+
+cmd_gdb()
+{
+	exec vm-start.py gdb `cat $DIR/id` $DIR/vmlinux
+}
+
+cmd_mon()
+{
+	exec vm-start.py mon `cat $DIR/id`
+}
+
+cmd_oldconfig()
+{
+	eval $MAKE oldconfig
+}
+
+cmd_config()
+{
+	eval $MAKE nconfig
+
+}
+
+usage()
+{
+	echo "ktest: Test kernels in virtual machines on a pool of remote servers"
+	echo "Usage: ktest cmd [n]"
+	echo "  run n		Compile and run a kernel using config n"
+	echo "  ssh n		Root login"
+	echo "  gdb n		kgdb"
+	echo "  mon n		qemu monitor"
+	echo "  oldconfig n"
+	echo "  menuconfig n"
+}
+
+CMD="cmd_$1" # what command we are running.
+shift
+
+if [ "`type -t "$CMD"`" != "function" ]; then
+	usage
+	exit
+fi
+
+eval $CMD $@

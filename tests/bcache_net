@@ -1,0 +1,69 @@
+#!/bin/bash -e
+
+if [ "$1" = "deps" ]; then
+	cd tools/bcache; make ioctl_test extent_store_server > /dev/null
+
+	echo "REQUIRE=test-libs.sh,make-bcache"
+	echo "LREQUIRE=tools/bcache/ioctl_test,tools/bcache/extent_store_server"
+	echo "MEM=512M"
+	echo "SCRATCH=2G,2G,2G,2G,2G,2G"
+	exit
+fi
+
+. test-libs.sh
+
+#echo "file extent-cache.c +p"		> /sys/kernel/debug/dynamic_debug/control
+
+CACHE="vda vdb vdc vdd vde vdf"
+
+for dev in $CACHE; do
+	/cdrom/make-bcache --bucket 64k --block 4k --cache /dev/$dev
+	echo /dev/$dev	> /sys/fs/bcache/register
+done
+udevadm settle
+
+cache_set_settings
+
+echo
+eval `/cdrom/ioctl_test /dev/bcache_extent0 inode_create $((2 * 1024 * 2048))`
+
+/cdrom/ioctl_test /dev/bcache_extent0 inode_cp $INODE_INUM	\
+	/dev/bcache_extent1					\
+	/dev/bcache_extent2					\
+	/dev/bcache_extent3					\
+	/dev/bcache_extent4					\
+	/dev/bcache_extent5
+
+for i in `seq 0 5`; do
+	/cdrom/extent_store_server $i $((31337 + $i)) &
+done
+sleep 0.5
+
+mkdir /sys/kernel/config/extent_client/foo
+ln -s /sys/kernel/config/extent_client/foo /root/f
+cd /sys/kernel/config/extent_client/foo
+
+for i in `seq 0 5`; do
+	mkdir servers/127.0.0.1:$((31337 + $i))
+done
+
+echo "Connecting"
+mkdir luns/$INODE_UUID
+
+udevadm settle
+DEV="extent_client0"
+
+#dd if=/dev/zero of=/dev/$DEV bs=256k oflag=direct
+#echo "Finished dd"
+
+test_fio $DEV &
+#test_mkfs_stress & #>/dev/null 2>&1
+exit
+
+sleep 2
+while true; do
+	sleep 0.1
+	echo 1 > /sys/kernel/config/extent_client/foo/stats/shrink
+done
+
+echo "TEST SUCCESS"
