@@ -4,6 +4,10 @@
 # Output: vm_image
 set -e
 
+. $(dirname $(readlink -f $0))/util.sh
+
+checkdep debootstrap
+
 OUT=vm_image
 MNT=vm_image.mnt
 SIZE=$((2 * 1024 * 1024 * 1024)) # 2GB

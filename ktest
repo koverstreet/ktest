@@ -4,14 +4,7 @@ DIR=.ktest
 IMG=$HOME/.ktest/root
 TMPDIR=$HOME/.ktest/tmp
 
-checkdep()
-{
-	which $1 > /dev/null
-	if [ $? -ne 0 ]; then
-		echo "Installing $1:"
-		sudo apt-get install genisoimage
-	fi
-}
+. $(dirname $(readlink -f $0))/util.sh
 
 checkdep genisoimage
 checkdep minicom
@@ -158,12 +151,11 @@ usage()
 	echo "  menuconfig n"
 }
 
-CMD="cmd_$1" # what command we are running.
-shift
-
-if [ "`type -t "$CMD"`" != "function" ]; then
+CMD="cmd_$1"
+if [ -z "$1" -o "`type -t "$CMD"`" != "function" ]; then
 	usage
 	exit
 fi
+shift
 
 eval $CMD $@
