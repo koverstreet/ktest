@@ -65,8 +65,7 @@ cmd_run()
 	done
 
 	for req in $LREQUIRE; do
-		f=" $req"
-		if [ ! -f "$f" ]; then
+		if [ ! -f "$req" ]; then
 			echo "Dependency $f not found"
 			exit
 		fi
