@@ -20,10 +20,14 @@ check_timeout()
 
 cmd_run()
 {
-	while getopts "t:" arg; do
+        IMG=""
+	while getopts "t:i:" arg; do
 		case $arg in
 		h)
 			echo "-t	timout in seconds" 
+			;;
+		i)
+			IMG=$OPTARG
 			;;
 		t)
 			TIMEOUT=$OPTARG
@@ -32,17 +36,33 @@ cmd_run()
 	done
 	shift $(( OPTIND - 1 ))
 
+        if [ "$IMG" = "" ] ; then
+                if [ -f "/var/lib/ktest/root" ]; then
+                        IMG="/var/lib/ktest/root"
+                elif [ -f "$HOME/.ktest/root" ]; then
+                        IMG="$HOME/.ktest/root"
+                else
+                        echo "VM root filesystem not found, please create /var/lib/ktest/root or"
+                        echo "$HOME/.ktest/root"
+                        exit 1
+                fi
+        fi
+        if [ ! -f $IMG ] ; then
+                echo "VM root filesystem not found, use vm_create_image to create one"
+                exit 1
+        fi
+
 	TEST=$1
 	if [ -z "$TEST" ]; then
 		echo "Specify a test to run"
-		exit
+		exit 1
 	fi
 
 	eval `$TEST deps`
 
 	if [ -z "$MEM" ]; then
 		echo "test must specify requirements"
-		exit
+		exit 1
 	fi
 
 	ln -sf $TEST $DIR/rc
@@ -60,14 +80,14 @@ cmd_run()
 			FILES+=" $f"
 		else
 			echo "Dependency $req not found"
-			exit
+			exit 1
 		fi
 	done
 
 	for req in $LREQUIRE; do
 		if [ ! -f "$req" ]; then
 			echo "Dependency $f not found"
-			exit
+			exit 1
 		fi
 		FILES+=" $req"
 	done
@@ -76,7 +96,7 @@ cmd_run()
 	mkdir -p $DIR
 	[ -f $DIR/.config ] || cp "$KTESTDIR/defconfig" "$DIR/.config"
 
-	eval $MAKE || exit
+	eval $MAKE || exit 1
 	eval $MAKE modules_install
 
 	# Remove symlinks, they'll break genisoimage which is following symlinks
@@ -85,7 +105,7 @@ cmd_run()
 
 	genisoimage -quiet -f -R -input-charset utf-8	\
 		-o $DIR/run.iso 			\
-		$DIR/modules/lib $FILES || exit
+		$DIR/modules/lib $FILES || exit 1
 	rm -rf $DIR/modules
 
 	if [ -n "$TIMEOUT" ]; then
@@ -138,7 +158,7 @@ usage()
 {
 	echo "ktest: Test kernels in virtual machines on a pool of remote servers"
 	echo "Usage: ktest cmd [n]"
-	echo "  run <testfile>	Compile and run a kernel and run <testfile>"
+	echo "  run [-t timeut] [-i vmimage ] <testfile>	Compile and run a kernel and run <testfile>"
 	echo "  ssh		Log in as root"
 	echo "  gdb		Connect to kgdb"
 	echo "  mon		Connect to qemu monitor"
@@ -149,19 +169,10 @@ usage()
 CMD="cmd_$1"
 if [ -z "$1" -o "`type -t "$CMD"`" != "function" ]; then
 	usage
-	exit
+	exit 1
 fi
 shift
 
-if [ -f "/var/lib/ktest/root" ]; then
-	IMG="/var/lib/ktest/root"
-elif [ -f "$HOME/.ktest/root" ]; then
-	IMG="$HOME/.ktest/root"
-else
-	echo "VM root filesystem not found, please create /var/lib/ktest/root or"
-	echo "$HOME/.ktest/root"
-	exit
-fi
 
 if [ -d "$HOME/.ktest/tmp" ]; then
 	TMPDIR=$HOME/.ktest/tmp

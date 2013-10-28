@@ -19,6 +19,11 @@ if [ -z "$OUT" ]; then
 	exit
 fi
 
+if [ `id -u` != 0 ] ; then
+	echo this script must be run as root
+	exit 1
+fi
+
 checkdep fallocate util-linux
 checkdep mkfs.ext4 e2fsprogs
 checkdep debootstrap
