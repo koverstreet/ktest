@@ -21,10 +21,14 @@ check_timeout()
 cmd_run()
 {
         IMG=""
-	while getopts "t:i:" arg; do
+        KERNEL=""
+	while getopts "t:i:k:" arg; do
 		case $arg in
 		h)
 			echo "-t	timout in seconds" 
+			;;
+		k)
+			KERNEL=$OPTARG
 			;;
 		i)
 			IMG=$OPTARG
@@ -65,6 +69,7 @@ cmd_run()
 		exit 1
 	fi
 
+        mkdir -p $DIR
 	ln -sf $TEST $DIR/rc
 	FILES=$DIR/rc
 	TESTDIR=`dirname $TEST`
@@ -93,20 +98,29 @@ cmd_run()
 	done
 	IFS=$OLDIFS
 
-	mkdir -p $DIR
-	[ -f $DIR/.config ] || cp "$KTESTDIR/defconfig" "$DIR/.config"
 
-	eval $MAKE || exit 1
-	eval $MAKE modules_install
+        if [ "$KERNEL" = "" ] ; then
+                [ -f $DIR/.config ] || cp "$KTESTDIR/defconfig" "$DIR/.config"
+                eval $MAKE || exit 1
+                eval $MAKE modules_install
+                KERNEL=$DIR/arch/x86/boot/bzImage
+                KERNELDIR=$DIR
+        else
+                d=`dirname "$KERNEL"`
+                d=`dirname "$d"`
+                d=`dirname "$d"`
+                KERNELDIR=`dirname "$d"`
+                make -C $KERNELDIR INSTALL_MOD_PATH=modules modules_install 
+        fi
 
 	# Remove symlinks, they'll break genisoimage which is following symlinks
-	rm $DIR/modules/lib/modules/*/build
-	rm $DIR/modules/lib/modules/*/source
+	rm $KERNELDIR/modules/lib/modules/*/build
+	rm $KERNELDIR/modules/lib/modules/*/source
 
 	genisoimage -quiet -f -R -input-charset utf-8	\
 		-o $DIR/run.iso 			\
-		$DIR/modules/lib $FILES || exit 1
-	rm -rf $DIR/modules
+		$KERNELDIR/modules/lib $FILES || exit 1
+	rm -rf $KERNELDIR/modules
 
 	if [ -n "$TIMEOUT" ]; then
 		check_timeout "$TIMEOUT" &
@@ -115,7 +129,7 @@ cmd_run()
 
 	$VMSTART start					\
 		-i $IMG -t $TMPDIR			\
-		-k $DIR/arch/x86/boot/bzImage		\
+		-k "$KERNEL"     		        \
 		-c $DIR/run.iso				\
 		--id $DIR/id				\
 		-m "$MEM"				\

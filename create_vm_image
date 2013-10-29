@@ -74,5 +74,8 @@ mkdir -p "$MNT/cdrom"
 mkdir -p "$MNT/root/.ssh"
 install -m0600 $KTESTDIR/id_dsa.pub "$MNT/root/.ssh/authorized_keys"
 
+umount $mnt/sys/kernel/debug || true
+umount $mnt/sys || true
+# the above two mounts linger on some installations (for example debian 6)
 umount $MNT
 rmdir $MNT

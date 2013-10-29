@@ -10,7 +10,7 @@ checkdep()
 
 		if which apt-get > /dev/null; then
 			echo ", installing $PACKAGE:"
-			sudo apt-get install $PACKAGE
+			sudo apt-get install -y $PACKAGE
 		else
 			echo ", please install"
 			exit 1
