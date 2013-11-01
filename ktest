@@ -85,10 +85,13 @@ cmd_run()
 	exit 1
     fi
 
+    WHICH=`which which`
     OLDPATH=$PATH
     PATH=.
-    eval `$TEST deps`
+    TEST=`$WHICH $TEST`
     PATH=$OLDPATH
+
+    eval `$TEST deps`
 
     if [ -z "$MEM" ]; then
 	echo "test must specify requirements"
@@ -97,7 +100,7 @@ cmd_run()
 
     mkdir -p $DIR
     rm -f $DIR/rc
-    ln -sfr $TEST $DIR/rc
+    ln -sf $TEST $DIR/rc
     FILES=$DIR/rc
     TESTDIR=`dirname $TEST`
 
