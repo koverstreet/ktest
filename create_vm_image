@@ -7,23 +7,6 @@ KTESTDIR=$(dirname $(readlink -f $0))
 
 . $KTESTDIR/util.sh
 
-usage()
-{
-	echo "create_vm_image: Create a virtual machine image for ktest"
-	echo "Usage: create_vm_image filename"
-}
-
-OUT=$1
-if [ -z "$OUT" ]; then
-	usage
-	exit
-fi
-
-if [ `id -u` != 0 ] ; then
-	echo this script must be run as root
-	exit 1
-fi
-
 checkdep fallocate util-linux
 checkdep mkfs.ext4 e2fsprogs
 checkdep debootstrap
@@ -33,18 +16,49 @@ SIZE=$((2 * 1024 * 1024 * 1024)) # 2GB
 
 PACKAGES="less,psmisc,openssh-server"
 PACKAGES+=",make,gcc,g++,gdb,strace"
-PACKAGES+=",xfsprogs,mdadm,lvm2,aoetools,vblade"
+PACKAGES+=",xfsprogs,btrfs-tools,mdadm,lvm2,aoetools,vblade"
 PACKAGES+=",linux-tools,blktrace,sysstat,fio,dbench,bonnie++"
 
 EXCLUDE="dmidecode,nano,rsyslog,logrotate,cron,iptables,nfacct"
 EXCLUDE+=",debconf-i18n,info"
+
+MIRROR=http://ftp.us.debian.org/debian/
+
+usage()
+{
+    echo "create_vm_image: Create a virtual machine image for ktest"
+    echo "Usage: create_vm_image [ -m debian mirror ] filename"
+}
+
+while getopts "hm:" arg; do
+    case $arg in
+	h)
+	    echo "-m	debian mirror" 
+	    ;;
+	m)
+	    MIRROR=$OPTARG
+	    ;;
+    esac
+done
+shift $(( OPTIND - 1 ))
+
+OUT=$1
+if [ -z "$OUT" ]; then
+    usage
+    exit
+fi
+
+if [ `id -u` != 0 ] ; then
+    echo this script must be run as root
+    exit 1
+fi
 
 fallocate -l $SIZE $OUT
 mkfs.ext4 -F $OUT
 mkdir -p $MNT
 mount -o loop $OUT $MNT
 
-debootstrap --include="$PACKAGES" --exclude="$EXCLUDE" sid "$MNT" http://debian-cache:3142/debian/
+debootstrap --include="$PACKAGES" --exclude="$EXCLUDE" sid "$MNT" $MIRROR
 
 cat > "$MNT/etc/fstab" <<-ZZ
 debugfs				/sys/kernel/debug	debugfs		defaults	0	0
@@ -74,8 +88,8 @@ mkdir -p "$MNT/cdrom"
 mkdir -p "$MNT/root/.ssh"
 install -m0600 $KTESTDIR/id_dsa.pub "$MNT/root/.ssh/authorized_keys"
 
-umount $mnt/sys/kernel/debug || true
-umount $mnt/sys || true
+umount $MNT/sys/kernel/debug || true
+umount $MNT/sys || true
 # the above two mounts linger on some installations (for example debian 6)
 umount $MNT
 rmdir $MNT
