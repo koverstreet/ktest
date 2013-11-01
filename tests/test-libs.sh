@@ -232,6 +232,7 @@ test_fault()
 		echo "file request.c +o"	> /sys/kernel/debug/dynamic_fault/control 
 		echo "file util.c +o"		> /sys/kernel/debug/dynamic_fault/control 
 		echo "file writeback.c +o"	> /sys/kernel/debug/dynamic_fault/control 
+		sleep 0.5
 	done
 }
 
@@ -296,36 +297,32 @@ test_dbench()
 test_fio()
 {
 	echo "Starting fio"
-	for dev in $DEV; do
-		#cd /mnt/$dev
-		#dd if=/dev/zero of=fiotest bs=1M count=1024
-		#sync
-
-		fio - <<-ZZ
+	for dev in $@; do
+		fio --eta=always - <<-ZZ
 		[global]
 		randrepeat=1
 		ioengine=libaio
-		iodepth=2048
+		iodepth=64
+		iodepth_batch=16
 		direct=1
 
-		blocksize=4k
-		#blocksize_range=4k-256k
-		loops=100000
-		#numjobs=2
+		#blocksize=4k
+		blocksize_range=4k-256k
+		loops=1000
 
+		verify=crc32c-intel
 		#verify=meta
+		verify_fatal=1
+		verify_dump=1
 
 		[randwrite]
 		filename=/dev/$dev
 		rw=randwrite
 		ZZ
 	done
+	exit
 
 	for dev in $@; do
-		#cd /mnt/$dev
-		#dd if=/dev/zero of=fiotest bs=1M count=1024
-		#sync
-
 		fio - <<-ZZ &
 		[global]
 		randrepeat=1
