@@ -169,11 +169,10 @@ cmd_run()
     set +e
     [ -n "$ALARM" ] && kill $ALARM 2> /dev/null
     $VMSTART stop `cat $DIR/id`
-    stty sane 2> /dev/null 
+    stty sane 2> /dev/null  || true
     exit 0
 }
-
-stty sane 2> /dev/null
+stty sane 2> /dev/null || true
 }
 
 cmd_ssh()
