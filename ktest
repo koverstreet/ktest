@@ -167,11 +167,11 @@ cmd_run()
     sed -e '/TEST SUCCESS/q'
     [ -n "$ALARM" ] && kill $ALARM 2> /dev/null
     $VMSTART stop `cat $DIR/id`
-    stty sane
+    stty sane 2> /dev/null
     exit 0
 }
 
-stty sane
+stty sane 2> /dev/null
 }
 
 cmd_ssh()
