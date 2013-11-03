@@ -1,0 +1,53 @@
+#!/bin/bash
+
+if [ "$1" = "deps" ]; then
+	echo "REQUIRE=test-libs.sh,make-bcache"
+	echo "MEM=256M"
+	echo "SCRATCH=1G"
+	exit
+fi
+
+. test-libs.sh
+
+CACHE=/dev/vda
+DEV="/dev/bcache0"
+
+make-bcache --bucket 64k --block 2k			\
+	--discard					\
+	--cache_replacement_policy=lru			\
+	--cache $CACHE
+
+for dev in $CACHE; do
+	echo $dev	> /sys/fs/bcache/register
+done
+
+rm -f /root/c
+ln -s /sys/fs/bcache/*-* /root/c
+
+test_sysfs
+
+cache_set_settings
+
+for dev in $DEV; do
+	if [ ! -b $dev ]; then
+		echo 800M > /sys/fs/bcache/*/flash_vol_create
+	fi
+done
+
+udevadm settle
+wait_on_dev bcache0
+
+test_fio &
+exit
+
+prep_mkfs || exit $?
+prep_mounts || exit
+
+test_shrink &
+test_fault &
+test_stress &
+#test_bcache_test &
+
+#test_stop &
+#test_powerfail
+

@@ -25,7 +25,7 @@ udevadm settle
 cache_set_settings
 
 echo
-eval `/cdrom/ioctl_test /dev/bcache_extent0 inode_create $((2 * 1024 * 2048))`
+eval `/cdrom/ioctl_test /dev/bcache_extent0 inode_create $((1024 * 2048 * 3 / 2))`
 
 /cdrom/ioctl_test /dev/bcache_extent0 inode_cp $INODE_INUM	\
 	/dev/bcache_extent1					\
@@ -53,7 +53,8 @@ mkdir luns/$INODE_UUID
 udevadm settle
 DEV="extent_client0"
 
-#dd if=/dev/zero of=/dev/$DEV bs=256k oflag=direct
+dd if=/dev/zero of=/dev/$DEV bs=256k oflag=direct count=4
+dd if=/dev/$DEV of=/dev/null bs=256k iflag=direct count=4
 #echo "Finished dd"
 
 test_fio $DEV &

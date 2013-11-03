@@ -1,0 +1,34 @@
+#!/bin/bash
+
+if [ "$1" = "deps" ]; then
+	echo "REQUIRE=test-libs.sh,make-bcache"
+	echo "MEM=256M"
+	echo "SCRATCH=512M,512M,512M,512M,2G"
+	exit
+fi
+
+. test-libs.sh
+
+CACHE="vda vdb vdc vdd"
+BDEV="vde"
+DEV="bcache0"
+
+prep_bcache_devices || exit
+
+test_sysfs
+
+cache_set_settings
+cached_dev_settings
+
+echo 4 > /root/c/meta_replicas
+echo 4 > /root/c/data_replicas
+
+prep_mounts || exit
+
+test_shrink &
+test_fault &
+test_stress &
+#test_bcache_test &
+
+#test_stop &
+#test_powerfail
