@@ -100,7 +100,7 @@ cmd_run()
 
     mkdir -p $DIR
     rm -f $DIR/rc
-    ln -sfr $TEST $DIR/rc
+    ln -sf $TEST $DIR/rc
     FILES=$DIR/rc
     TESTDIR=`dirname $TEST`
 
