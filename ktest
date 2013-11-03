@@ -12,6 +12,7 @@ MAKE+=' EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments"'
 
 check_timeout()
 {
+    set +e
     sleep $1
     $VMSTART stop `cat $DIR/id`
     kill $$
@@ -165,9 +166,10 @@ cmd_run()
 	-s "$SCRATCH"				\
 	|{
     sed -e '/TEST SUCCESS/q'
+    set +e
     [ -n "$ALARM" ] && kill $ALARM 2> /dev/null
     $VMSTART stop `cat $DIR/id`
-    stty sane 2> /dev/null
+    stty sane 2> /dev/null 
     exit 0
 }
 
