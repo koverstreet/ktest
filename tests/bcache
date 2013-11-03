@@ -25,6 +25,9 @@ test_sysfs
 #test_shrink &
 test_fault &
 test_stress &
+
+sleep 100
+echo "TEST SUCCESSFUL"
 #test_bcache_test &
 
 #test_stop &
