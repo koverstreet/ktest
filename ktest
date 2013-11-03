@@ -194,6 +194,7 @@ else
 	TMPDIR=/tmp
 fi
 
+set -x
 checkdep genisoimage
 checkdep minicom
 checkdep socat
