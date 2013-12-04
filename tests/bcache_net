@@ -44,7 +44,7 @@ ln -s /sys/kernel/config/extent_client/foo /root/f
 cd /sys/kernel/config/extent_client/foo
 
 for i in `seq 0 5`; do
-	mkdir servers/127.0.0.1:$((31337 + $i))
+	mkdir servers/tcp:127.0.0.1:$((31337 + $i))
 done
 
 echo "Connecting"
