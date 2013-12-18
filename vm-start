@@ -227,7 +227,7 @@ def cmd_start():
          vm.vde = True
       else:             # user networking instead
          cmd.extend(["-net", "nic,model=virtio"])
-         cmd.extend(["-net", "user,hostfwd=tcp:127.0.0.1:" + str(vm.vm_id + 9000) + "-:22"])
+         cmd.extend(["-net", "user,host=10.0.2.2,restrict=off,hostfwd=tcp:127.0.0.1:" + str(vm.vm_id + 9000) + "-:22"])
          vm.vde = False
       
       p = subprocess.Popen(cmd, shell=False)

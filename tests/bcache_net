@@ -1,10 +1,8 @@
 #!/bin/bash -e
 
 if [ "$1" = "deps" ]; then
-	cd tools/bcache; make ioctl_test extent_store_server > /dev/null
-
 	echo "REQUIRE=test-libs.sh,make-bcache"
-	echo "LREQUIRE=tools/bcache/ioctl_test,tools/bcache/extent_store_server"
+	echo "LREQUIRE=ioctl_test,extent_store_server"
 	echo "MEM=512M"
 	echo "SCRATCH=2G,2G,2G,2G,2G,2G"
 	exit
