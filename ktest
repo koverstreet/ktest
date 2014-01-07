@@ -86,11 +86,7 @@ cmd_run()
 	exit 1
     fi
 
-    WHICH=`which which`
-    OLDPATH=$PATH
-    PATH=.
-    TEST=`$WHICH $TEST`
-    PATH=$OLDPATH
+    TEST=`realpath "$TEST"`
 
     eval `$TEST deps`
 
@@ -110,7 +106,7 @@ cmd_run()
     PATH+=":/sbin:/usr/sbin:/usr/local/sbin"
 
     for req in $REQUIRE; do
-	if [ -f "$TESTDIR/$req" ]; then
+	if [ -e "$TESTDIR/$req" ]; then
 	    FILES+=" $TESTDIR/$req"
 	elif f="`which $req`"; then
 	    FILES+=" $f"
@@ -121,7 +117,7 @@ cmd_run()
     done
 
     for req in $LREQUIRE; do
-	if [ ! -f "$req" ]; then
+	if [ ! -e "$req" ]; then
 	    echo "Dependency $f not found"
 	    exit 1
 	fi
@@ -228,6 +224,7 @@ else
 fi
 
 set -x
+checkdep realpath
 checkdep genisoimage
 checkdep minicom
 checkdep socat

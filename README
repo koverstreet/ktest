@@ -101,6 +101,7 @@ directory.
     with ktest run, so as to avoid unnecessary recompiles.
 
 TODO:
+  * TEST_REQUIRE - recursively handle dependencies
 
   * More tests, including integrating other existing tests - i.e. a shim for
     xfstests

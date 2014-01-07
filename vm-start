@@ -277,6 +277,9 @@ def cmd_ssh():
       die("No vm running with id: "+str(id))
 
    keyfile=os.path.dirname(os.path.realpath(__file__)) + "/id_dsa"
+
+   os.system("chmod 600 " + keyfile)
+
    if vm.vde:
       os.execlp("ssh", "ssh", "-o", "StrictHostKeyChecking=no", "-o",
                 "UserKnownHostsFile=/dev/null", "-i", keyfile, "root@"+vm.ip)

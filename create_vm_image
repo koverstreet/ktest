@@ -16,7 +16,7 @@ SIZE=$((2 * 1024 * 1024 * 1024)) # 2GB
 
 PACKAGES="less,psmisc,openssh-server"
 PACKAGES+=",make,gcc,g++,gdb,strace"
-PACKAGES+=",xfsprogs,btrfs-tools,mdadm,lvm2,aoetools,vblade"
+PACKAGES+=",hdparm,xfsprogs,btrfs-tools,mdadm,lvm2,aoetools,vblade"
 PACKAGES+=",linux-tools,blktrace,sysstat,fio,dbench,bonnie++"
 
 EXCLUDE="dmidecode,nano,rsyslog,logrotate,cron,iptables,nfacct"
