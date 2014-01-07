@@ -22,7 +22,7 @@ prep_mounts || exit
 
 test_sysfs
 
-#test_shrink &
+test_shrink &
 test_fault &
 test_stress &
 

@@ -1,0 +1,32 @@
+#!/bin/bash
+
+if [ "$1" = "deps" ]; then
+	echo "REQUIRE=../test-libs.sh,aio-multithread-test"
+	echo "MEM=256M"
+	echo "SCRATCH=2G"
+	exit
+fi
+
+echo "func free_ioctx +p"		> /sys/kernel/debug/dynamic_debug/control
+echo "func ioctx_alloc +p"		> /sys/kernel/debug/dynamic_debug/control
+echo "func sys_io_setup +p"		> /sys/kernel/debug/dynamic_debug/control
+
+echo "file percpu-refcount.c +p"	> /sys/kernel/debug/dynamic_debug/control
+
+. test-libs.sh
+
+DEV="vdb"
+
+while true; do
+    /cdrom/aio-multithread-test /dev/vdb -1 &
+    pid=$!
+
+    sleep 2
+    kill -9 $pid
+done
+
+#test_fio
+#exit
+
+#prep_mkfs
+#prep_mounts

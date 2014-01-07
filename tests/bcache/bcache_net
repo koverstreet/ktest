@@ -1,5 +1,15 @@
 #!/bin/bash -e
 
+#DEVS={a..f}
+
+for i in {a..f}; do
+    CACHE+="vd$i "
+done
+
+#CACHE="vda vdb vdc vdd vde vdf"
+NR_DEVS=6
+
+
 if [ "$1" = "deps" ]; then
 	echo "REQUIRE=test-libs.sh,make-bcache"
 	echo "LREQUIRE=ioctl_test,extent_store_server"
@@ -12,8 +22,6 @@ fi
 
 #echo "file extent-cache.c +p"		> /sys/kernel/debug/dynamic_debug/control
 
-CACHE="vda vdb vdc vdd vde vdf"
-
 for dev in $CACHE; do
 	/cdrom/make-bcache --bucket 64k --block 4k --cache /dev/$dev
 	echo /dev/$dev	> /sys/fs/bcache/register
@@ -25,24 +33,46 @@ cache_set_settings
 echo
 eval `/cdrom/ioctl_test /dev/bcache_extent0 inode_create $((1024 * 2048 * 3 / 2))`
 
-/cdrom/ioctl_test /dev/bcache_extent0 inode_cp $INODE_INUM	\
-	/dev/bcache_extent1					\
-	/dev/bcache_extent2					\
-	/dev/bcache_extent3					\
-	/dev/bcache_extent4					\
-	/dev/bcache_extent5
-
-for i in `seq 0 5`; do
-	/cdrom/extent_store_server $i $((31337 + $i)) &
+for i in `seq 1 $(($NR_DEVS - 1))`; do
+    echo /cdrom/ioctl_test /dev/bcache_extent0 inode_cp $INODE_INUM /dev/bcache_extent$i
+    /cdrom/ioctl_test /dev/bcache_extent0 inode_cp $INODE_INUM	\
+	/dev/bcache_extent$i
 done
+
+user_server()
+{
+    for i in `seq 0 $(($NR_DEVS - 1))`; do
+	/cdrom/extent_store_server $i $((31337 + $i)) &
+    done
+}
+
+kern_server()
+{
+    cd /sys/kernel/config/bcache_server
+
+    for i in `seq 0 $(($NR_DEVS - 1))`; do
+	mkdir $i
+	echo $i > $i/dev_minor
+	echo $((31337 + $i)) > $i/port
+	echo 1 > $i/enabled
+	sleep 0.1
+    done
+}
+
+#user_server
+kern_server
 sleep 0.5
 
 mkdir /sys/kernel/config/extent_client/foo
 ln -s /sys/kernel/config/extent_client/foo /root/f
 cd /sys/kernel/config/extent_client/foo
 
-for i in `seq 0 5`; do
-	mkdir servers/tcp:127.0.0.1:$((31337 + $i))
+#for i in `(cd /sys/fs/bcache; ls -d *-*-*)`; do
+#    mkdir servers/local:$i
+#done
+
+for i in `seq 0 $(($NR_DEVS - 1))`; do
+    mkdir servers/tcp:127.0.0.1:$((31337 + $i))
 done
 
 echo "Connecting"
@@ -55,14 +85,14 @@ dd if=/dev/zero of=/dev/$DEV bs=256k oflag=direct count=4
 dd if=/dev/$DEV of=/dev/null bs=256k iflag=direct count=4
 #echo "Finished dd"
 
-test_fio $DEV &
+test_fio $DEV
+test_fio $DEV
 #test_mkfs_stress & #>/dev/null 2>&1
-exit
 
 sleep 2
 while true; do
-	sleep 0.1
-	echo 1 > /sys/kernel/config/extent_client/foo/stats/shrink
+    sleep 0.1
+    echo 1 > /sys/kernel/config/extent_client/foo/stats/shrink
 done
 
-echo "TEST SUCCESS"
+#echo "TEST SUCCESS"

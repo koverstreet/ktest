@@ -1,0 +1,22 @@
+#!/bin/bash
+
+if [ "$1" = "deps" ]; then
+	echo "REQUIRE=test-libs.sh"
+	echo "MEM=256M"
+	echo "SCRATCH=2G"
+	exit
+fi
+
+#echo "file inode.c +p"		> /sys/kernel/debug/dynamic_debug/control
+#echo "file dirent.c +p"		> /sys/kernel/debug/dynamic_debug/control
+#echo "file fs.c +p"		> /sys/kernel/debug/dynamic_debug/control
+
+. test-libs.sh
+
+mkfs.ext4 /dev/vda
+DEV=bcache
+mkdir -p /mnt/$DEV
+
+mount /dev/vda /mnt/$DEV
+
+test_stress &
