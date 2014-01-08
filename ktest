@@ -118,7 +118,7 @@ cmd_run()
 
     for req in $LREQUIRE; do
 	if [ ! -e "$req" ]; then
-	    echo "Dependency $f not found"
+	    echo "Dependency $req not found"
 	    exit 1
 	fi
 	FILES+=" $req"

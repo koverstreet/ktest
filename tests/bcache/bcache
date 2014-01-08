@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [ "$1" = "deps" ]; then
-	echo "REQUIRE=test-libs.sh,make-bcache"
+	echo "REQUIRE=../test-libs.sh,make-bcache"
 	echo "MEM=256M"
 	echo "SCRATCH=512M,2G,2G"
 	exit
