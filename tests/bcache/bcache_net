@@ -9,13 +9,15 @@ done
 #CACHE="vda vdb vdc vdd vde vdf"
 NR_DEVS=6
 
-
 if [ "$1" = "deps" ]; then
-	echo "REQUIRE=../test-libs.sh,make-bcache"
-	echo "LREQUIRE=tools/bcache/ioctl_test"
-	echo "MEM=512M"
-	echo "SCRATCH=2G,2G,2G,2G,2G,2G"
-	exit
+    cat <<-ZZ
+REQUIRE=../test-libs.sh,make-bcache
+LREQUIRE=tools/bcache/ioctl_test
+KERNEL_CONFIG_REQUIRE=BCACHE,DFS_CLIENT,DFS_SERVER
+MEM=512M
+SCRATCH=2G,2G,2G,2G,2G,2G
+ZZ
+    exit
 fi
 
 . test-libs.sh

@@ -21,7 +21,6 @@ check_timeout()
 cmd_run()
 {
     IMG=""
-    KERNEL=""
     NJOBS=$((`grep ^processor /proc/cpuinfo |wc -l` * 2))
 
     run_usage()
@@ -39,9 +38,6 @@ cmd_run()
 	    h)
 		run_usage
 		exit 0
-		;;
-	    k)
-		KERNEL=$OPTARG
 		;;
 	    i)
 		IMG=$OPTARG
@@ -123,21 +119,27 @@ cmd_run()
 	fi
 	FILES+=" $req"
     done
+
+    for req in $KERNEL_CONFIG_REQUIRE; do
+	./scripts/config --file $DIR/.config -e $req
+    done
+
+    eval $MAKE oldconfig
+
+    for req in $KERNEL_CONFIG_REQUIRE; do
+	if [ `./scripts/config --file $DIR/.config -s $req` != "y" ]; then
+	    echo "Kernel config option $req not set"
+	    exit 1
+	fi
+    done
+
     IFS=$OLDIFS
 
-    if [ "$KERNEL" = "" ] ; then
-	[ -f $DIR/.config ] || cp "$KTESTDIR/defconfig" "$DIR/.config"
-	eval $MAKE || exit 1
-	eval $MAKE modules_install
-	KERNEL=$DIR/arch/x86/boot/bzImage
-	KERNELDIR=$DIR
-    else
-	d=`dirname "$KERNEL"`
-	d=`dirname "$d"`
-	d=`dirname "$d"`
-	KERNELDIR=`dirname "$d"`
-	make -C $KERNELDIR INSTALL_MOD_PATH=modules modules_install
-    fi
+    [ -f $DIR/.config ] || cp "$KTESTDIR/defconfig" "$DIR/.config"
+    eval $MAKE || exit 1
+    eval $MAKE modules_install
+    KERNEL=$DIR/arch/x86/boot/bzImage
+    KERNELDIR=$DIR
 
     # Remove symlinks, they'll break genisoimage which is following symlinks
     rm $KERNELDIR/modules/lib/modules/*/build

@@ -1,10 +1,13 @@
 #!/bin/bash
 
 if [ "$1" = "deps" ]; then
-	echo "REQUIRE=../test-libs.sh,make-bcache"
-	echo "MEM=256M"
-	echo "SCRATCH=512M,2G,2G"
-	exit
+    cat <<-ZZ
+REQUIRE=../test-libs.sh,make-bcache
+KERNEL_CONFIG_REQUIRE=BCACHE
+MEM=256M
+SCRATCH=512M,2G,2G
+ZZ
+    exit
 fi
 
 . test-libs.sh
