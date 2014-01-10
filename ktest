@@ -5,39 +5,55 @@ VMSTART=$KTESTDIR/vm-start
 
 . $KTESTDIR/util.sh
 
-DIR=.ktest
+NJOBS=$((`grep ^processor /proc/cpuinfo |wc -l` * 2))
 
-MAKE="make O=$DIR INSTALL_MOD_PATH=modules"
-MAKE+=' EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments"'
+DIR=".ktest"
+
+KERNEL_SOURCE="."
+KERNEL_OUTPUT="$KERNEL_SOURCE/$DIR"
+
+do_make()
+{
+    make -C "$KERNEL_SOURCE" O="$KERNEL_OUTPUT" -j "$NJOBS"	\
+	INSTALL_MOD_PATH=modules				\
+	EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments" $@
+}
 
 check_timeout()
 {
     set +e
     sleep $1
-    $VMSTART stop `cat $DIR/id`
+    $VMSTART stop `cat $KERNEL_OUTPUT/id`
     kill $$
 }
 
 cmd_run()
 {
     IMG=""
-    NJOBS=$((`grep ^processor /proc/cpuinfo |wc -l` * 2))
+    BUILD=1
 
     run_usage()
     {
 	echo "ktest run: Run a kernel test"
 	echo "Usage: ktest run [options] test"
-	echo "	-k	kernel"
+	echo "	-k	kernel source dir"
+	echo "	-K	don't build kernel"
 	echo "	-i	VM root filesystem image"
 	echo "	-t	timout in seconds"
 	echo "	-j	j option to make"
     }
 
-    while getopts "hk:i:t:j:" arg; do
+    while getopts "hKk:i:t:j:" arg; do
 	case $arg in
 	    h)
 		run_usage
 		exit 0
+		;;
+	    k)
+		KERNEL_SOURCE=`realpath "$OPTARG"`
+		;;
+	    K)
+		BUILD=""
 		;;
 	    i)
 		IMG=$OPTARG
@@ -52,7 +68,10 @@ cmd_run()
     done
     shift $(( OPTIND - 1 ))
 
-    MAKE+=" -j$NJOBS"
+    KERNEL_OUTPUT="$KERNEL_SOURCE/$DIR"
+
+    kconfig="$KERNEL_OUTPUT/.config"
+    config_tool="$KERNEL_SOURCE/scripts/config"
 
     if [ "$IMG" = "" ] ; then
 	if [ -f "/var/lib/ktest/root" ]; then
@@ -91,10 +110,10 @@ cmd_run()
 	exit 1
     fi
 
-    mkdir -p $DIR
-    rm -f $DIR/rc
-    ln -sf $TEST $DIR/rc
-    FILES=$DIR/rc
+    mkdir -p $KERNEL_OUTPUT
+    rm -f $KERNEL_OUTPUT/rc
+    ln -sf $TEST $KERNEL_OUTPUT/rc
+    FILES=$KERNEL_OUTPUT/rc
     TESTDIR=`dirname $TEST`
 
     OLDIFS=$IFS
@@ -120,14 +139,18 @@ cmd_run()
 	FILES+=" $req"
     done
 
-    for req in $KERNEL_CONFIG_REQUIRE; do
-	./scripts/config --file $DIR/.config -e $req
-    done
+    if [ -n "$BUILD" ]; then
+	[ -f "$kconfig" ] || cp "$KTESTDIR/defconfig" "$kconfig"
 
-    eval $MAKE oldconfig
+	for req in $KERNEL_CONFIG_REQUIRE; do
+	    "$config_tool" --file "$kconfig" -e $req
+	done
+
+	do_make oldconfig
+    fi
 
     for req in $KERNEL_CONFIG_REQUIRE; do
-	if [ `./scripts/config --file $DIR/.config -s $req` != "y" ]; then
+	if [ `"$config_tool" --file "$kconfig" -s $req` != "y" ]; then
 	    echo "Kernel config option $req not set"
 	    exit 1
 	fi
@@ -135,20 +158,20 @@ cmd_run()
 
     IFS=$OLDIFS
 
-    [ -f $DIR/.config ] || cp "$KTESTDIR/defconfig" "$DIR/.config"
-    eval $MAKE || exit 1
-    eval $MAKE modules_install
-    KERNEL=$DIR/arch/x86/boot/bzImage
-    KERNELDIR=$DIR
+    if [ -n "$BUILD" ]; then
+	do_make || exit 1
+    fi
+
+    do_make modules_install
 
     # Remove symlinks, they'll break genisoimage which is following symlinks
-    rm $KERNELDIR/modules/lib/modules/*/build
-    rm $KERNELDIR/modules/lib/modules/*/source
+    rm $KERNEL_OUTPUT/modules/lib/modules/*/build
+    rm $KERNEL_OUTPUT/modules/lib/modules/*/source
 
     genisoimage -quiet -f -R -input-charset utf-8	\
-	-o $DIR/run.iso 			\
-	$KERNELDIR/modules/lib $FILES || exit 1
-    rm -rf $KERNELDIR/modules
+	-o $KERNEL_OUTPUT/run.iso 			\
+	$KERNEL_OUTPUT/modules/lib $FILES || exit 1
+    rm -rf $KERNEL_OUTPUT/modules
 
     if [ -n "$TIMEOUT" ]; then
 	check_timeout "$TIMEOUT" &
@@ -157,46 +180,45 @@ cmd_run()
 
     $VMSTART start				\
 	-i $IMG -t $TMPDIR			\
-	-k "$KERNEL"     		        \
-	-c $DIR/run.iso				\
-	--id $DIR/id				\
+	-k "$KERNEL_OUTPUT/arch/x86/boot/bzImage"\
+	-c $KERNEL_OUTPUT/run.iso		\
+	--id $KERNEL_OUTPUT/id			\
 	-m "$MEM"				\
 	-s "$SCRATCH"				\
 	|{
-    sed -e '/TEST SUCCESS/q'
-    set +e
-    [ -n "$ALARM" ] && kill $ALARM 2> /dev/null
-    $VMSTART stop `cat $DIR/id`
-    stty sane 2> /dev/null  || true
-    exit 0
-}
-stty sane 2> /dev/null || true
+	sed -e '/TEST SUCCESS/q'
+	set +e
+	[ -n "$ALARM" ] && kill $ALARM 2> /dev/null
+	$VMSTART stop `cat $KERNEL_OUTPUT/id`
+	stty sane 2> /dev/null  || true
+	exit 0
+    }
+    stty sane 2> /dev/null || true
 }
 
 cmd_ssh()
 {
-    exec $VMSTART ssh `cat $DIR/id`
+    exec $VMSTART ssh `cat $KERNEL_OUTPUT/id`
 }
 
 cmd_gdb()
 {
-    exec $VMSTART gdb `cat $DIR/id` $DIR/vmlinux
+    exec $VMSTART gdb `cat $KERNEL_OUTPUT/id` $KERNEL_OUTPUT/vmlinux
 }
 
 cmd_mon()
 {
-    exec $VMSTART mon `cat $DIR/id`
+    exec $VMSTART mon `cat $KERNEL_OUTPUT/id`
 }
 
 cmd_oldconfig()
 {
-    eval $MAKE oldconfig
+    do_make oldconfig
 }
 
 cmd_config()
 {
-    eval $MAKE nconfig
-
+    do_make nconfig
 }
 
 usage()
