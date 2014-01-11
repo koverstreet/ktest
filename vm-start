@@ -112,6 +112,11 @@ def cmd_start():
          help="boot image of the virtual machine")
    opt.add_option("-k", "--kernel", dest="kernel",
          help="kernel qemu should use to boot")
+   opt.add_option("-r", "--initrd", dest="initrd",
+         help="initial ramdisk for boot")
+   opt.add_option("-a", "--append", dest="append",
+         help="append kernel boot arguments",
+         default="root=/dev/sda rw")
    opt.add_option("-c", "--cdrom-source", dest="cdrom",
          help="source to made into a cdrom")
    opt.add_option("-s", "--scratch-dev ", dest="scratch",
@@ -136,6 +141,9 @@ def cmd_start():
    #   die("Requires a kernel to boot")
    if options.kernel and not os.path.isfile(options.kernel):
       die("Cannot find kernel file: "+options.kernel)
+   if options.initrd and not os.path.isfile(options.initrd):
+      die("Cannot find initrd file: "+options.initrd)
+
 
    # get user if SUDO
    try:
@@ -207,7 +215,9 @@ def cmd_start():
       #cmd.extend(["-vnc", "0.0.0.0:"+str(17100+vm.vm_id)])
       if options.kernel:
          cmd.extend(["-kernel", options.kernel])
-         cmd.extend(["-append", "root=/dev/sda rw console=ttyS0,115200 kgdboc=ttyS2,115200"])
+         cmd.extend(["-append", "console=ttyS0,115200 kgdboc=ttyS2,115200 %s" % options.append])
+      if options.initrd:
+         cmd.extend(["-initrd", options.initrd])
       cmd.extend(["-nographic"])
       cmd.extend(["-serial", "stdio"])
       cmd.extend(["-serial", "mon:unix:" + vm.tmpdir + "con,server,nowait"])
