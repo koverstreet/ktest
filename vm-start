@@ -127,6 +127,8 @@ def cmd_start():
          help="amount of memory to be allocated per VM")
    opt.add_option("-p", "--persistant", dest="persistant", action="store_true",
          help="turns off snapshot, so writeback happens to disk instead of tmp")
+   opt.add_option("--fs", dest="filesystems", action="append", nargs=2,
+         help="mount a directory (first argument) as a filesystem label (second argument) in the VM")
    opt.add_option("--id", dest="indexfile", help="file to write vm number to")
    opt.add_option("--vde", dest="vde", action="store_true", 
          help="use vde networking instead of user mode. This requires a vde"+
@@ -227,6 +229,8 @@ def cmd_start():
          cmd.extend(["-drive", "format=raw,file="+options.image])
       else:
          cmd.extend(["-drive", "format=raw,snapshot=on,file="+options.image])
+      for fspath, fslabel in options.filesystems:
+	cmd.extend(["-virtfs", "local,path="+fspath+",mount_tag="+fslabel+",security_model=none,readonly"])
       for drive in drives:  # add scratch drives
          cmd.extend(["-drive", "if=virtio,format=raw,cache=writeback,file="+drive])
       if iso:              # add cdrom
