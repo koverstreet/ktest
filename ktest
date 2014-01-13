@@ -27,10 +27,18 @@ check_timeout()
     kill $$
 }
 
+control_c()
+{
+    echo "USER HIT ^C"
+    $VMSTART stop `cat $KERNEL_OUTPUT/id`
+    kill $$
+}
+
 cmd_run()
 {
     IMG=""
     BUILD=1
+    NEED_SUDO=""
 
     run_usage()
     {
@@ -118,7 +126,7 @@ cmd_run()
 
     mkdir -p $KERNEL_OUTPUT
     rm -f $KERNEL_OUTPUT/rc
-    ln -sf $TEST $KERNEL_OUTPUT/rc
+    cp -f $TEST $KERNEL_OUTPUT/rc
     FILES=$KERNEL_OUTPUT/rc
     TESTDIR=`dirname $TEST`
 
@@ -128,9 +136,9 @@ cmd_run()
 
     for req in $REQUIRE; do
 	if [ -e "$TESTDIR/$req" ]; then
-	    FILES+=" $TESTDIR/$req"
+	    FILES+=" `realpath $TESTDIR/$req`"
 	elif f="`which $req`"; then
-	    FILES+=" $f"
+	    FILES+=" `realpath $f`"
 	else
 	    echo "Dependency $req not found"
 	    exit 1
@@ -142,8 +150,28 @@ cmd_run()
 	    echo "Dependency $req not found"
 	    exit 1
 	fi
-	FILES+=" $req"
+	FILES+=" `realpath $req`"
     done
+   
+    sudo rm -rf container
+    for req in $CONTAINER; do
+        mkdir -p container
+	if [ ! -e "$req" ]; then
+	    echo "Container $req not found"
+	    exit 1
+	fi
+        cname=`basename "$req" .tar.gz`
+        sudo tar xz -C container -f "$req"
+        if [ ! -d "container/$cname" ] ; then
+           echo "Container '$req' does not unpack into expected directory '$cname'"
+           exit 1
+        fi
+    done
+    if [ -d container ] ; then
+	FILES+=" container"
+        NEED_SUDO=sudo
+    fi
+
 
     if [ -n "$BUILD" ]; then
 	[ -f "$kconfig" ] || cp "$KTESTDIR/defconfig" "$kconfig"
@@ -171,19 +199,21 @@ cmd_run()
     do_make modules_install
 
     # Remove symlinks, they'll break genisoimage which is following symlinks
-    rm $KERNEL_OUTPUT/modules/lib/modules/*/build
-    rm $KERNEL_OUTPUT/modules/lib/modules/*/source
+    rm -f $KERNEL_OUTPUT/modules/lib/modules/*/build
+    rm -f $KERNEL_OUTPUT/modules/lib/modules/*/source
 
-    genisoimage -quiet -f -R -input-charset utf-8	\
+    $NEED_SUDO genisoimage -quiet -R -input-charset utf-8	\
 	-o $KERNEL_OUTPUT/run.iso 			\
 	$KERNEL_OUTPUT/modules/lib $FILES || exit 1
-    rm -rf $KERNEL_OUTPUT/modules
+    test -n "$BUILD" && rm -rf $KERNEL_OUTPUT/modules
 
     if [ -n "$TIMEOUT" ]; then
 	check_timeout "$TIMEOUT" &
 	ALARM=$!
     fi
 
+    stty -a
+    trap control_c SIGINT
     $VMSTART start				\
 	-i $IMG -t $TMPDIR			\
 	-k "$KERNEL_OUTPUT/arch/x86/boot/bzImage"\
@@ -191,7 +221,7 @@ cmd_run()
 	--id $KERNEL_OUTPUT/id			\
 	-m "$MEM"				\
 	-s "$SCRATCH"				\
-	|{
+	 |{
 	sed -e '/TEST SUCCESS/q'
 	set +e
 	[ -n "$ALARM" ] && kill $ALARM 2> /dev/null
@@ -199,6 +229,7 @@ cmd_run()
 	stty sane 2> /dev/null  || true
 	exit 0
     }
+    trap SIGINT
     stty sane 2> /dev/null || true
 }
 
