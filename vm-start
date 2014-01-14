@@ -125,7 +125,7 @@ def cmd_start():
          help="location of the tmpfs directory. Only used for scratch devs")
    opt.add_option("-m", "--memory", dest="mem", default=DEFAULT_MEMORY,
          help="amount of memory to be allocated per VM")
-   opt.add_option("--cpus", dest="cpus", default=1,
+   opt.add_option("--cpus", dest="cpus", default="1",
          help="number of CPUs allocated.")
    opt.add_option("-p", "--persistant", dest="persistant", action="store_true",
          help="turns off snapshot, so writeback happens to disk instead of tmp")
@@ -216,7 +216,9 @@ def cmd_start():
       cmd.extend(["-machine", "accel=kvm"])
       cmd.extend(["-pidfile", vm.tmpdir + "pid"])
       cmd.extend(["-m", options.mem])
-      cmd.extend(["-smp", options.cpus])
+      # LAPIC bug in qemu, shows up occasionally as a kernel panic.
+      # Use threads= for smp.
+      cmd.extend(["-smp", "1,cores=1,threads=" + options.cpus])
       #cmd.extend(["-vnc", "0.0.0.0:"+str(17100+vm.vm_id)])
       if options.kernel:
          cmd.extend(["-kernel", options.kernel])
