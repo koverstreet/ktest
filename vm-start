@@ -112,6 +112,11 @@ def cmd_start():
          help="boot image of the virtual machine")
    opt.add_option("-k", "--kernel", dest="kernel",
          help="kernel qemu should use to boot")
+   opt.add_option("-r", "--initrd", dest="initrd",
+         help="initial ramdisk for boot")
+   opt.add_option("-a", "--append", dest="append",
+         help="append kernel boot arguments",
+         default="root=/dev/sda rw")
    opt.add_option("-c", "--cdrom-source", dest="cdrom",
          help="source to made into a cdrom")
    opt.add_option("-s", "--scratch-dev ", dest="scratch",
@@ -122,6 +127,8 @@ def cmd_start():
          help="amount of memory to be allocated per VM")
    opt.add_option("-p", "--persistant", dest="persistant", action="store_true",
          help="turns off snapshot, so writeback happens to disk instead of tmp")
+   opt.add_option("--fs", dest="filesystems", action="append", nargs=2,
+         help="mount a directory (first argument) as a filesystem label (second argument) in the VM")
    opt.add_option("--id", dest="indexfile", help="file to write vm number to")
    opt.add_option("--vde", dest="vde", action="store_true", 
          help="use vde networking instead of user mode. This requires a vde"+
@@ -136,6 +143,9 @@ def cmd_start():
    #   die("Requires a kernel to boot")
    if options.kernel and not os.path.isfile(options.kernel):
       die("Cannot find kernel file: "+options.kernel)
+   if options.initrd and not os.path.isfile(options.initrd):
+      die("Cannot find initrd file: "+options.initrd)
+
 
    # get user if SUDO
    try:
@@ -207,7 +217,9 @@ def cmd_start():
       #cmd.extend(["-vnc", "0.0.0.0:"+str(17100+vm.vm_id)])
       if options.kernel:
          cmd.extend(["-kernel", options.kernel])
-         cmd.extend(["-append", "root=/dev/sda rw console=ttyS0,115200 kgdboc=ttyS2,115200"])
+         cmd.extend(["-append", "console=ttyS0,115200 kgdboc=ttyS2,115200 %s" % options.append])
+      if options.initrd:
+         cmd.extend(["-initrd", options.initrd])
       cmd.extend(["-nographic"])
       cmd.extend(["-serial", "stdio"])
       cmd.extend(["-serial", "mon:unix:" + vm.tmpdir + "con,server,nowait"])
@@ -217,6 +229,9 @@ def cmd_start():
          cmd.extend(["-drive", "format=raw,file="+options.image])
       else:
          cmd.extend(["-drive", "format=raw,snapshot=on,file="+options.image])
+      if options.filesystems:
+         for fspath, fslabel in options.filesystems:
+            cmd.extend(["-virtfs", "local,path="+fspath+",mount_tag="+fslabel+",security_model=none,readonly"])
       for drive in drives:  # add scratch drives
          cmd.extend(["-drive", "if=virtio,format=raw,cache=writeback,file="+drive])
       if iso:              # add cdrom
@@ -268,6 +283,11 @@ def cmd_ssh():
       die("Please provide a vm id to SSH to")
    id=int(sys.argv[1])
 
+   try:
+      user=sys.argv[2]
+   except IndexError:
+      user="root"
+
    d = openLockedDb()
    running_vms=d["running_vms"]
    vm = next((vm for vm in running_vms if vm.vm_id == id), None)
@@ -282,10 +302,10 @@ def cmd_ssh():
 
    if vm.vde:
       os.execlp("ssh", "ssh", "-o", "StrictHostKeyChecking=no", "-o",
-                "UserKnownHostsFile=/dev/null", "-i", keyfile, "root@"+vm.ip)
+                "UserKnownHostsFile=/dev/null", "-i", keyfile, user+"@"+vm.ip)
    else:
       os.execlp("ssh", "ssh", "-o", "NoHostAuthenticationForLocalhost=yes",
-            "-i", keyfile, "-p", str(9000 + id), "root@localhost")
+            "-i", keyfile, "-p", str(9000 + id), user+"@localhost")
 
 def cmd_stop():
    """Stop virtual machines"""
