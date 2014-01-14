@@ -125,6 +125,8 @@ def cmd_start():
          help="location of the tmpfs directory. Only used for scratch devs")
    opt.add_option("-m", "--memory", dest="mem", default=DEFAULT_MEMORY,
          help="amount of memory to be allocated per VM")
+   opt.add_option("--cpus", dest="cpus", default=1,
+         help="number of CPUs allocated.")
    opt.add_option("-p", "--persistant", dest="persistant", action="store_true",
          help="turns off snapshot, so writeback happens to disk instead of tmp")
    opt.add_option("--fs", dest="filesystems", action="append", nargs=2,
@@ -214,6 +216,7 @@ def cmd_start():
       cmd.extend(["-machine", "accel=kvm"])
       cmd.extend(["-pidfile", vm.tmpdir + "pid"])
       cmd.extend(["-m", options.mem])
+      cmd.extend(["-smp", options.cpus])
       #cmd.extend(["-vnc", "0.0.0.0:"+str(17100+vm.vm_id)])
       if options.kernel:
          cmd.extend(["-kernel", options.kernel])
