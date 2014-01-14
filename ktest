@@ -27,13 +27,6 @@ check_timeout()
     kill $$
 }
 
-control_c()
-{
-    echo "USER HIT ^C"
-    $VMSTART stop `cat $KERNEL_OUTPUT/id`
-    kill $$
-}
-
 cmd_run()
 {
     IMG=""
@@ -212,8 +205,6 @@ cmd_run()
 	ALARM=$!
     fi
 
-    stty -a
-    trap control_c SIGINT
     $VMSTART start				\
 	-i $IMG -t $TMPDIR			\
 	-k "$KERNEL_OUTPUT/arch/x86/boot/bzImage"\
