@@ -25,7 +25,7 @@ while true; do
     kill -9 $pid
 done
 
-#test_fio
+#test_fio $DEV
 #exit
 
 #prep_mkfs
