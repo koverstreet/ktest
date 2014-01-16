@@ -1,24 +1,27 @@
 #!/bin/bash
 
 if [ "$1" = "deps" ]; then
-	echo "REQUIRE=test-libs.sh,make-bcache"
-	echo "MEM=256M"
-	echo "SCRATCH=1G"
-	exit
+    cat <<-ZZ
+REQUIRE=../test-libs.sh,make-bcache
+KERNEL_CONFIG_REQUIRE=BCACHE
+MEM=256M
+SCRATCH=2G
+ZZ
+    exit
 fi
 
 . test-libs.sh
 
 CACHE=/dev/vda
-DEV="/dev/bcache0"
+DEV=bcache0
 
-make-bcache --bucket 64k --block 2k			\
+make-bcache --bucket 2M --block 2k			\
 	--discard					\
 	--cache_replacement_policy=lru			\
 	--cache $CACHE
 
 for dev in $CACHE; do
-	echo $dev	> /sys/fs/bcache/register
+    echo $dev > /sys/fs/bcache/register
 done
 
 rm -f /root/c
@@ -29,15 +32,15 @@ test_sysfs
 cache_set_settings
 
 for dev in $DEV; do
-	if [ ! -b $dev ]; then
-		echo 800M > /sys/fs/bcache/*/flash_vol_create
-	fi
+    if [ ! -b $dev ]; then
+        echo 1900M > /sys/fs/bcache/*/flash_vol_create
+    fi
 done
 
 udevadm settle
 wait_on_dev bcache0
 
-test_fio &
+test_fio $DEV &
 exit
 
 prep_mkfs || exit $?

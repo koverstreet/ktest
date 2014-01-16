@@ -2,6 +2,7 @@
 
 KTESTDIR=$(dirname $(readlink -f $0))
 VMSTART=$KTESTDIR/vm-start
+INTERACTIVE=0
 
 . $KTESTDIR/util.sh
 
@@ -30,9 +31,7 @@ check_timeout()
 cmd_run()
 {
     IMG=""
-    BUILD=1
     NEED_SUDO=""
-    INTERACTIVE=0
 
     run_usage()
     {
@@ -46,41 +45,6 @@ cmd_run()
 	echo "	-j	j option to make"
 	echo "	-I	interactive run"
     }
-
-    while getopts "hKIb:k:i:t:j:" arg; do
-	case $arg in
-	    h)
-		run_usage
-		exit 0
-		;;
-	    k)
-		KERNEL_SOURCE=`realpath "$OPTARG"`
-		;;
-	    K)
-		BUILD=""
-		;;
-	    I)
-		INTERACTIVE=1
-		;;
-	    i)
-		IMG=$OPTARG
-		;;
-	    t)
-		TIMEOUT=$OPTARG
-		;;
-	    b)
-		KERNEL_OUTPUT=$OPTARG
-		;;
-	    j)
-		NJOBS=$OPTARG
-		;;
-	esac
-    done
-    shift $(( OPTIND - 1 ))
-
-    if [ ! -n "$KERNEL_OUTPUT" ] ; then
-       KERNEL_OUTPUT="$KERNEL_SOURCE/$DIR"
-    fi
 
     kconfig="$KERNEL_OUTPUT/.config"
     config_tool="$KERNEL_SOURCE/scripts/config"
@@ -126,7 +90,7 @@ cmd_run()
     rm -f $KERNEL_OUTPUT/rc
     cp -f $TEST $KERNEL_OUTPUT/rc
     if [ "$INTERACTIVE" = 1 ] ; then
-       echo /bin/bash >> rc
+       echo /bin/bash >> $KERNEL_OUTPUT/rc
     fi
     FILES=$KERNEL_OUTPUT/rc
     TESTDIR=`dirname $TEST`
@@ -154,25 +118,26 @@ cmd_run()
 	FILES+=" `realpath $req`"
     done
    
-    sudo rm -rf container
-    for req in $CONTAINER; do
-        mkdir -p container
-	if [ ! -e "$req" ]; then
-	    echo "Container $req not found"
-	    exit 1
+    if [ -n "$CONTAINER" ]; then
+	sudo rm -rf container
+	for req in $CONTAINER; do
+	    mkdir -p container
+	    if [ ! -e "$req" ]; then
+		echo "Container $req not found"
+		exit 1
+	    fi
+	    cname=`basename "$req" .tar.gz`
+	    sudo tar xz -C container -f "$req"
+	    if [ ! -d "container/$cname" ] ; then
+		echo "Container '$req' does not unpack into expected directory '$cname'"
+		exit 1
+	    fi
+	done
+	if [ -d container ] ; then
+	    FILES+=" container"
+	    NEED_SUDO=sudo
 	fi
-        cname=`basename "$req" .tar.gz`
-        sudo tar xz -C container -f "$req"
-        if [ ! -d "container/$cname" ] ; then
-           echo "Container '$req' does not unpack into expected directory '$cname'"
-           exit 1
-        fi
-    done
-    if [ -d container ] ; then
-	FILES+=" container"
-        NEED_SUDO=sudo
     fi
-
 
     if [ -n "$BUILD" ]; then
 	[ -f "$kconfig" ] || cp "$KTESTDIR/defconfig" "$kconfig"
@@ -289,7 +254,45 @@ if [ -z "$1" -o "`type -t "$CMD"`" != "function" ]; then
     exit 1
 fi
 shift
+BUILD=1
 
+while getopts "IhKb:k:i:t:j:v" arg; do
+    case $arg in
+	h)
+	    run_usage
+	    exit 0
+	    ;;
+	k)
+	    KERNEL_SOURCE=`realpath "$OPTARG"`
+	    ;;
+	K)
+	    BUILD=""
+	    ;;
+	i)
+	    IMG=$OPTARG
+	    ;;
+	t)
+	    TIMEOUT=$OPTARG
+	    ;;
+	b)
+	    KERNEL_OUTPUT=$OPTARG
+	    ;;
+	j)
+	    NJOBS=$OPTARG
+	    ;;
+        I)
+            INTERACTIVE=1
+            ;;
+	v)
+	    set -x
+	    ;;
+    esac
+done
+shift $(( OPTIND - 1 ))
+
+if [ -z "$KERNEL_OUTPUT" ]; then
+    KERNEL_OUTPUT="$KERNEL_SOURCE/$DIR"
+fi
 
 if [ -d "$HOME/.ktest/tmp" ]; then
     TMPDIR=$HOME/.ktest/tmp
@@ -297,7 +300,6 @@ else
     TMPDIR=/tmp
 fi
 
-set -x
 checkdep realpath
 checkdep genisoimage
 checkdep minicom

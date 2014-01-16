@@ -8,7 +8,8 @@ checkdep()
 	if ! which $COMMAND > /dev/null; then
 		echo -n "$COMMAND not found"
 
-		if which apt-get > /dev/null; then
+		if which apt-get > /dev/null && \
+			which sudo > /dev/null; then
 			echo ", installing $PACKAGE:"
 			sudo apt-get install -y $PACKAGE
 		else
