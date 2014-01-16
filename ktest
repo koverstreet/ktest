@@ -32,6 +32,7 @@ cmd_run()
     IMG=""
     BUILD=1
     NEED_SUDO=""
+    INTERACTIVE=0
 
     run_usage()
     {
@@ -43,9 +44,10 @@ cmd_run()
 	echo "	-t	timout in seconds"
 	echo "	-b	bld directory for kernel"
 	echo "	-j	j option to make"
+	echo "	-I	interactive run"
     }
 
-    while getopts "hKb:k:i:t:j:" arg; do
+    while getopts "hKIb:k:i:t:j:" arg; do
 	case $arg in
 	    h)
 		run_usage
@@ -56,6 +58,9 @@ cmd_run()
 		;;
 	    K)
 		BUILD=""
+		;;
+	    I)
+		INTERACTIVE=1
 		;;
 	    i)
 		IMG=$OPTARG
@@ -120,6 +125,9 @@ cmd_run()
     mkdir -p $KERNEL_OUTPUT
     rm -f $KERNEL_OUTPUT/rc
     cp -f $TEST $KERNEL_OUTPUT/rc
+    if [ "$INTERACTIVE" = 1 ] ; then
+       echo /bin/bash >> rc
+    fi
     FILES=$KERNEL_OUTPUT/rc
     TESTDIR=`dirname $TEST`
 
@@ -205,21 +213,31 @@ cmd_run()
 	ALARM=$!
     fi
 
-    $VMSTART start				\
-	-i $IMG -t $TMPDIR			\
-	-k "$KERNEL_OUTPUT/arch/x86/boot/bzImage"\
-	-c $KERNEL_OUTPUT/run.iso		\
-	--id $KERNEL_OUTPUT/id			\
-	-m "$MEM"				\
-	-s "$SCRATCH"				\
-	 |{
-	sed -e '/TEST SUCCESS/q'
-	set +e
-	[ -n "$ALARM" ] && kill $ALARM 2> /dev/null
-	$VMSTART stop `cat $KERNEL_OUTPUT/id`
-	stty sane 2> /dev/null  || true
-	exit 0
-    }
+    if [ "$INTERACTIVE" = 1 ] ; then
+       $VMSTART start				\
+           -i $IMG -t $TMPDIR			\
+           -k "$KERNEL_OUTPUT/arch/x86/boot/bzImage"\
+           -c $KERNEL_OUTPUT/run.iso		\
+           --id $KERNEL_OUTPUT/id			\
+           -m "$MEM"				\
+           -s "$SCRATCH"
+    else
+       $VMSTART start				\
+           -i $IMG -t $TMPDIR			\
+           -k "$KERNEL_OUTPUT/arch/x86/boot/bzImage"\
+           -c $KERNEL_OUTPUT/run.iso		\
+           --id $KERNEL_OUTPUT/id			\
+           -m "$MEM"				\
+           -s "$SCRATCH"				\
+            |{
+           sed -e '/TEST SUCCESS/q'
+           set +e
+           [ -n "$ALARM" ] && kill $ALARM 2> /dev/null
+           $VMSTART stop `cat $KERNEL_OUTPUT/id`
+           stty sane 2> /dev/null  || true
+           exit 0
+       }
+    fi
     trap SIGINT
     stty sane 2> /dev/null || true
 }
@@ -229,6 +247,10 @@ cmd_ssh()
     exec $VMSTART ssh `cat $KERNEL_OUTPUT/id`
 }
 
+cmd_stop()
+{
+    exec $VMSTART ssh `cat $KERNEL_OUTPUT/id`
+}
 cmd_gdb()
 {
     exec $VMSTART gdb `cat $KERNEL_OUTPUT/id` $KERNEL_OUTPUT/vmlinux
