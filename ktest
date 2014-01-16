@@ -30,7 +30,6 @@ check_timeout()
 cmd_run()
 {
     IMG=""
-    BUILD=1
     NEED_SUDO=""
 
     run_usage()
@@ -236,6 +235,7 @@ if [ -z "$1" -o "`type -t "$CMD"`" != "function" ]; then
     exit 1
 fi
 shift
+BUILD=1
 
 while getopts "hKb:k:i:t:j:v" arg; do
     case $arg in
@@ -245,7 +245,6 @@ while getopts "hKb:k:i:t:j:v" arg; do
 	    ;;
 	k)
 	    KERNEL_SOURCE=`realpath "$OPTARG"`
-	    KERNEL_OUTPUT="$KERNEL_SOURCE/$DIR"
 	    ;;
 	K)
 	    BUILD=""
