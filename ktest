@@ -91,6 +91,7 @@ cmd_run()
     cp -f $TEST $KERNEL_OUTPUT/rc
     if [ "$INTERACTIVE" = 1 ] ; then
        echo /bin/bash >> $KERNEL_OUTPUT/rc
+       echo "echo o > /proc/sysrq-trigger" >> $KERNEL_OUTPUT/rc
     fi
     FILES=$KERNEL_OUTPUT/rc
     TESTDIR=`dirname $TEST`
