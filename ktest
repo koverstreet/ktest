@@ -44,7 +44,8 @@ cmd_run()
 	echo "	-b	bld directory for kernel"
 	echo "	-j	j option to make"
 	echo "	-I	interactive run"
-   echo "   -V run with vde"
+   echo "   -v run with vde"
+   echo "   -x print out ktest script commands"
     }
 
     kconfig="$KERNEL_OUTPUT/.config"
