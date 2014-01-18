@@ -44,6 +44,7 @@ cmd_run()
 	echo "	-b	bld directory for kernel"
 	echo "	-j	j option to make"
 	echo "	-I	interactive run"
+   echo "   -V run with vde"
     }
 
     kconfig="$KERNEL_OUTPUT/.config"
@@ -186,7 +187,8 @@ cmd_run()
            -c $KERNEL_OUTPUT/run.iso		\
            --id $KERNEL_OUTPUT/id			\
            -m "$MEM"				\
-           -s "$SCRATCH"
+           -s "$SCRATCH"      \
+           $VDE
     else
        $VMSTART start				\
            -i $IMG -t $TMPDIR			\
@@ -195,6 +197,7 @@ cmd_run()
            --id $KERNEL_OUTPUT/id			\
            -m "$MEM"				\
            -s "$SCRATCH"				\
+           $VDE               \
             |{
            sed -e '/TEST SUCCESS/q'
            set +e
@@ -257,10 +260,10 @@ fi
 shift
 BUILD=1
 
-while getopts "IhKb:k:i:t:j:v" arg; do
+while getopts "IhKb:k:i:t:j:vx" arg; do
     case $arg in
 	h)
-	    run_usage
+	    usage
 	    exit 0
 	    ;;
 	k)
@@ -281,12 +284,15 @@ while getopts "IhKb:k:i:t:j:v" arg; do
 	j)
 	    NJOBS=$OPTARG
 	    ;;
-        I)
-            INTERACTIVE=1
-            ;;
-	v)
+   I)
+       INTERACTIVE=1
+       ;;
+	x)
 	    set -x
 	    ;;
+   v)
+       VDE="--vde"
+       ;;
     esac
 done
 shift $(( OPTIND - 1 ))

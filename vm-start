@@ -217,7 +217,12 @@ def cmd_start():
       #cmd.extend(["-vnc", "0.0.0.0:"+str(17100+vm.vm_id)])
       if options.kernel:
          cmd.extend(["-kernel", options.kernel])
-         cmd.extend(["-append", "console=ttyS0,115200 kgdboc=ttyS2,115200 %s" % options.append])
+         kernelParams = "console=ttyS0,115200 kgdboc=ttyS2,115200"
+         if options.vde:
+            kernelParams += " ip="+vm.ip
+         if options.append:
+            kernelParams += " "+options.append
+         cmd.extend(["-append", kernelParams])
       if options.initrd:
          cmd.extend(["-initrd", options.initrd])
       cmd.extend(["-nographic"])
