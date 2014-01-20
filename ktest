@@ -13,6 +13,9 @@ DIR=".ktest"
 KERNEL_SOURCE="."
 KERNEL_OUTPUT=""
 
+export PS4='+${LINENO}+ '
+set -x
+
 do_make()
 {
     make -C "$KERNEL_SOURCE" O="$WORK_DIRECTORY" -j "$NJOBS"	\
