@@ -301,7 +301,8 @@ fi
 if [ -z "$WORK_DIRECTORY" ] ; then
    WORK_DIRECTORY=$KERNEL_OUTPUT
 fi
-WORK_DIRECTORY=`realpath $WORK_DIRECTORY`
+mkdir -p "$WORK_DIRECTORY"
+WORK_DIRECTORY=`realpath "$WORK_DIRECTORY"`
 
 if [ -d "$HOME/.ktest/tmp" ]; then
     TMPDIR=$HOME/.ktest/tmp
