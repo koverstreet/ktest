@@ -6,7 +6,8 @@ Source0: %{name}-%{version}.tar.gz
 License: Datera
 Group: tools
 BuildRoot: %{_tmppath}/%{name}-root
-Requires: realpath
+Requires: realpath, minicom, genisoimage, socat
+BuildRequires: qemu, kvm, qemu-kvm, linux-bcache
 
 %description
 kernel testing tool

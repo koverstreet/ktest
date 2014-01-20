@@ -1,0 +1,15 @@
+#!/bin/bash
+
+KERNEL=/usr/share/DateraContainer/kernel
+
+test="$1"
+if [ "$srcdir" = "" ] ; then
+   srcdir=`dirname $0`
+   # if no srcdir is given assume that the directory where this script
+   # is stored is the srcdir.
+fi
+set -e
+dir=`expr "$test" : "$srcdir/\(.*\)"`
+env
+$srcdir/ktest run -w $dir.dir -K -b $KERNEL -k $KERNEL -t 120 $srcdir/$test
+exit 0

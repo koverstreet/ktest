@@ -1,0 +1,41 @@
+#!/bin/bash
+
+# Warning: this test has currently several timers and requires that
+# - the vm gets up and fully initialized in less than 30 seconds
+# - the kill process ends and is no longer killable 5 seconds after
+#   sendinf the kill signal
+# In a highly loaded system this could be a problem, in which case 
+# either the timers have to be increased, or the timers need to be 
+# replaced with code that checks if everything is ready.
+
+KERNEL=/usr/share/DateraContainer/kernel
+set -x
+if [ "$srcdir" = "" ] ; then
+   srcdir=`dirname $0`
+   # if no srcdir is given assume that the directory where this script
+   # is stored is the srcdir.
+fi
+
+opt="-w . -K -b $KERNEL -k $KERNEL -t 120 $srcdir/runtest.ktest"
+
+( 
+   sleep 30
+   echo 'killall sleep' | $srcdir/ktest ssh $opt 
+) &
+pid="$!"
+
+$srcdir/ktest run $opt
+ret="$?"
+
+sleep 5 
+# give the the kill process some time to exit
+
+if kill $pid > /dev/null 2>&1 ; then
+   ret=1
+   # if the test passed the kill process should not exist anymore
+fi
+
+stty sane
+
+exit $ret
+
