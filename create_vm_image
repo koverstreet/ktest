@@ -85,6 +85,8 @@ chmod 755 "$MNT/etc/rc.local"
 
 mkdir -p "$MNT/cdrom"
 
+ln -s /cdrom/modules "$MNT/lib/modules"
+
 mkdir -p "$MNT/root/.ssh"
 install -m0600 $KTESTDIR/id_dsa.pub "$MNT/root/.ssh/authorized_keys"
 
