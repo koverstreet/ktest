@@ -15,7 +15,7 @@ KERNEL_OUTPUT=""
 
 do_make()
 {
-    make -C "$KERNEL_SOURCE" O="$KERNEL_OUTPUT" -j "$NJOBS"	\
+    make -C "$KERNEL_SOURCE" O="$WORK_DIRECTORY" -j "$NJOBS"	\
 	INSTALL_MOD_PATH=modules				\
 	EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments" $@
 }
