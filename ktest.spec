@@ -7,6 +7,7 @@ License: Datera
 Group: tools
 BuildRoot: %{_tmppath}/%{name}-root
 Requires: realpath
+BuildRequires: qemu, kvm, qemu-kvm, linux-bcache
 
 %description
 kernel testing tool

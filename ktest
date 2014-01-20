@@ -24,7 +24,7 @@ check_timeout()
 {
     set +e
     sleep $1
-    $VMSTART stop `cat $KERNEL_OUTPUT/id`
+    $VMSTART stop `cat $WORK_DIRECTORY/id`
     kill $$
 }
 
@@ -32,19 +32,6 @@ cmd_run()
 {
     IMG=""
     NEED_SUDO=""
-
-    run_usage()
-    {
-	echo "ktest run: Run a kernel test"
-	echo "Usage: ktest run [options] test"
-	echo "	-k	kernel source dir"
-	echo "	-K	don't build kernel"
-	echo "	-i	VM root filesystem image"
-	echo "	-t	timout in seconds"
-	echo "	-b	bld directory for kernel"
-	echo "	-j	j option to make"
-	echo "	-I	interactive run"
-    }
 
     kconfig="$KERNEL_OUTPUT/.config"
     config_tool="$KERNEL_SOURCE/scripts/config"
@@ -68,7 +55,7 @@ cmd_run()
     TEST=$1
     if [ -z "$TEST" ]; then
 	echo "ktest: missing test"
-	run_usage
+	usage
 	exit 1
     fi
 
@@ -86,14 +73,14 @@ cmd_run()
 	exit 1
     fi
 
-    mkdir -p $KERNEL_OUTPUT
-    rm -f $KERNEL_OUTPUT/rc
-    cp -f $TEST $KERNEL_OUTPUT/rc
+    mkdir -p $WORK_DIRECTORY
+    rm -f $WORK_DIRECTORY/rc
+    cp -f $TEST $WORK_DIRECTORY/rc
     if [ "$INTERACTIVE" = 1 ] ; then
-       echo /bin/bash >> $KERNEL_OUTPUT/rc
-       echo "echo o > /proc/sysrq-trigger" >> $KERNEL_OUTPUT/rc
+       echo /bin/bash >> $WORK_DIRECTORY/rc
+       echo "echo o > /proc/sysrq-trigger" >> $WORK_DIRECTORY/rc
     fi
-    FILES=$KERNEL_OUTPUT/rc
+    FILES=$WORK_DIRECTORY/rc
     TESTDIR=`dirname $TEST`
 
     OLDIFS=$IFS
@@ -166,11 +153,11 @@ cmd_run()
     do_make modules_install
 
     # Remove symlinks, they'll break genisoimage which is following symlinks
-    rm -f $KERNEL_OUTPUT/modules/lib/modules/*/build
-    rm -f $KERNEL_OUTPUT/modules/lib/modules/*/source
+    rm -f $WORK_DIRECTORY/modules/lib/modules/*/build
+    rm -f $WORK_DIRECTORY/modules/lib/modules/*/source
 
     $NEED_SUDO genisoimage -quiet -R -input-charset utf-8	\
-	-o $KERNEL_OUTPUT/run.iso 			\
+	-o $WORK_DIRECTORY/run.iso 			\
 	$KERNEL_OUTPUT/modules/lib $FILES || exit 1
     test -n "$BUILD" && rm -rf $KERNEL_OUTPUT/modules
 
@@ -183,23 +170,23 @@ cmd_run()
        $VMSTART start				\
            -i $IMG -t $TMPDIR			\
            -k "$KERNEL_OUTPUT/arch/x86/boot/bzImage"\
-           -c $KERNEL_OUTPUT/run.iso		\
-           --id $KERNEL_OUTPUT/id			\
+           -c $WORK_DIRECTORY/run.iso		\
+           --id $WORK_DIRECTORY/id			\
            -m "$MEM"				\
            -s "$SCRATCH"
     else
        $VMSTART start				\
            -i $IMG -t $TMPDIR			\
            -k "$KERNEL_OUTPUT/arch/x86/boot/bzImage"\
-           -c $KERNEL_OUTPUT/run.iso		\
-           --id $KERNEL_OUTPUT/id			\
+           -c $WORK_DIRECTORY/run.iso		\
+           --id $WORK_DIRECTORY/id			\
            -m "$MEM"				\
            -s "$SCRATCH"				\
             |{
            sed -e '/TEST SUCCESS/q'
            set +e
            [ -n "$ALARM" ] && kill $ALARM 2> /dev/null
-           $VMSTART stop `cat $KERNEL_OUTPUT/id`
+           $VMSTART stop `cat $WORK_DIRECTORY/id`
            stty sane 2> /dev/null  || true
            exit 0
        }
@@ -210,21 +197,21 @@ cmd_run()
 
 cmd_ssh()
 {
-    exec $VMSTART ssh `cat $KERNEL_OUTPUT/id`
+    exec $VMSTART ssh `cat $WORK_DIRECTORY/id`
 }
 
 cmd_stop()
 {
-    exec $VMSTART ssh `cat $KERNEL_OUTPUT/id`
+    exec $VMSTART ssh `cat $WORK_DIRECTORY/id`
 }
 cmd_gdb()
 {
-    exec $VMSTART gdb `cat $KERNEL_OUTPUT/id` $KERNEL_OUTPUT/vmlinux
+    exec $VMSTART gdb `cat $WORK_DIRECTORY/id` $KERNEL_OUTPUT/vmlinux
 }
 
 cmd_mon()
 {
-    exec $VMSTART mon `cat $KERNEL_OUTPUT/id`
+    exec $VMSTART mon `cat $WORK_DIRECTORY/id`
 }
 
 cmd_oldconfig()
@@ -240,13 +227,23 @@ cmd_config()
 usage()
 {
     echo "ktest: Test kernels in virtual machines on a pool of remote servers"
-    echo "Usage: ktest cmd [n]"
-    echo "  run [-t timeut] [-i vmimage ] <testfile>	Compile and run a kernel and run <testfile>"
+    echo "Usage: ktest cmd [options] [n]"
+    echo "  run [options]: Run a kernel test"
     echo "  ssh		Log in as root"
     echo "  gdb		Connect to kgdb"
     echo "  mon		Connect to qemu monitor"
     echo "  oldconfig	Run make oldconfig"
     echo "  config	Run make nconfig"
+    echo
+    echo "  options:"
+    echo "	-k	kernel source dir"
+    echo "	-b	bld directory for kernel (default: kernel_source/.ktest)"
+    echo "	-w	work director (default: kernel build directory)"
+    echo "	-K	don't build kernel (run cmd only)"
+    echo "	-i	VM root filesystem image (run cmd only)"
+    echo "	-t	timout in seconds (run cmd only)"
+    echo "	-j	j option to make (run cmd only)"
+    echo "	-I	interactive run (run cmd only)"
 }
 
 CMD="cmd_$1"
@@ -256,11 +253,12 @@ if [ -z "$1" -o "`type -t "$CMD"`" != "function" ]; then
 fi
 shift
 BUILD=1
+WORK_DIRECTORY=""
 
-while getopts "IhKb:k:i:t:j:v" arg; do
+while getopts "IhKb:k:i:t:j:w:v" arg; do
     case $arg in
 	h)
-	    run_usage
+	    usage
 	    exit 0
 	    ;;
 	k)
@@ -284,6 +282,9 @@ while getopts "IhKb:k:i:t:j:v" arg; do
         I)
             INTERACTIVE=1
             ;;
+        w)
+            WORK_DIRECTORY=$OPTARG
+            ;;
 	v)
 	    set -x
 	    ;;
@@ -293,6 +294,9 @@ shift $(( OPTIND - 1 ))
 
 if [ -z "$KERNEL_OUTPUT" ]; then
     KERNEL_OUTPUT="$KERNEL_SOURCE/$DIR"
+fi
+if [ -z "$WORK_DIRECTORY" ] ; then
+   WORK_DIRECTORY=$KERNEL_OUTPUT
 fi
 
 if [ -d "$HOME/.ktest/tmp" ]; then
