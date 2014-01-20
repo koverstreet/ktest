@@ -161,8 +161,8 @@ cmd_run()
 
     $NEED_SUDO genisoimage -quiet -R -input-charset utf-8	\
 	-o $WORK_DIRECTORY/run.iso 			\
-	$KERNEL_OUTPUT/modules/lib $FILES || exit 1
-    test -n "$BUILD" && rm -rf $KERNEL_OUTPUT/modules
+	$WORK_DIRECTORY/modules/lib $FILES || exit 1
+    rm -rf $WORK_DIRECTORY/modules
 
     if [ -n "$TIMEOUT" ]; then
 	check_timeout "$TIMEOUT" &
