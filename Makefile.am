@@ -3,6 +3,7 @@
 MAKEFLAGS = --jobs=3
 # don't want to overdue it with vms running in parallel
 
+export VERBOSE=1
 bin_SCRIPTS=ktest
 check_SCRIPTS=runtest 
 
