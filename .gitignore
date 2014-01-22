@@ -9,3 +9,10 @@ install-sh
 ltmain.sh
 m4
 missing
+
+.cscope*
+cscope*
+.ctags*
+tags
+*.tags
+
