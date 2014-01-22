@@ -37,7 +37,7 @@ NC='\033[0m'
 DEVNULL = open(os.devnull, "wb")
 
 
-""" 
+"""
 Functions of opening shelf to lock while
 reading and writing to shelf file
 """
@@ -96,7 +96,7 @@ class Domain:
       if subprocess.call("kill "+str(self.pid), shell=True):
          print "Error killing vm: "+self.name
          return False
-      
+
       print "Vm "+self.name+" terminated. Releasing domain"
       return True
 
@@ -162,11 +162,11 @@ def cmd_start():
       d.close()
       dropLock(lock)
       die("Not enough domains to start a vms")
-   
+
    # get domain, mark for setup
    vm = free_vms.pop()
    vm.state = "setup"
-   vm.owner = user 
+   vm.owner = user
 
    # save and free up database while launching vms
    d["free_vms"] = free_vms
@@ -175,7 +175,7 @@ def cmd_start():
    try:
       # generate tmp dir
       vm.tmpdir = options.tmpfs+"/"+randStr()+"-vm"+str(vm.vm_id)+"-"+user
-      try: 
+      try:
          os.mkdir(vm.tmpdir, 0700)
       except OSError:
          die ("Failed to create tmpdir: "+vm.tmpdir)
@@ -184,9 +184,9 @@ def cmd_start():
       # setup run CD:
       if not options.cdrom:
          iso=None
-      elif os.path.isdir(options.cdrom): 
+      elif os.path.isdir(options.cdrom):
          iso = vm.tmpdir + "run.iso"
-         if subprocess.call(["genisoimage", "-quiet", "-R", "-input-charset", 
+         if subprocess.call(["genisoimage", "-quiet", "-R", "-input-charset",
                             "utf-8", "-o", iso, options.cdrom]):
             die("Could not create cdrom from dir: "+options.cdrom)
       else:
@@ -210,7 +210,7 @@ def cmd_start():
          f=open(options.indexfile, "w")
          f.write(str(vm.vm_id))
          f.close()
-   
+
       # build qemu command and start
       cmd = ["qemu-system-x86_64"]
       cmd.extend(["-machine", "accel=kvm"])
@@ -251,7 +251,7 @@ def cmd_start():
          cmd.extend(["-net", "nic,model=virtio"])
          cmd.extend(["-net", "user,host=10.0.2.2,restrict=off,hostfwd=tcp:127.0.0.1:" + str(vm.vm_id + 9000) + "-:22"])
          vm.vde = False
-      
+
       p = subprocess.Popen(cmd, shell=False)
 
       vm.pid = p.pid
@@ -262,9 +262,9 @@ def cmd_start():
       d = openLockedDb()
       free_vms = d["free_vms"]
       free_vms.append(vm)
-      d["free_vms"] = sorted(free_vms, key=operator.attrgetter("vm_id"), reverse=True) 
+      d["free_vms"] = sorted(free_vms, key=operator.attrgetter("vm_id"), reverse=True)
       closeLockedDb(d)
-      
+
       exc_type, exc_obj, exc_tb = sys.exc_info()
       fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
       die("Unexpected Exception: "+str(exc_type)+", File: "+str(fname)+", Line: "+str(exc_tb.tb_lineno))
@@ -281,8 +281,8 @@ def cmd_start():
    except KeyboardInterrupt:
       warning("KeyBoard interrupt raised")
 
-   __stop(vm.vm_id) 
- 
+   __stop(vm.vm_id)
+
 def cmd_ssh():
    """ssh into a virtual machine"""
 
@@ -323,7 +323,7 @@ def cmd_stop():
 
    if len(args)==0:
       die("Please provide a vm id to stop")
-   
+
    __stop(int(args[0]))
 
 def cmd_gdb():
@@ -384,7 +384,7 @@ def __stop(stop_id):
 
    # check if they exist and kill if needed
    print "Stopping vm "+str(vm.vm_id)
-      
+
    # kill the vm:
    if not vm.kill():
       # if it can't killed? what now?
@@ -396,8 +396,8 @@ def __stop(stop_id):
       os.system("rm -rf " + vm.tmpdir);
 
    vm.state = "stopped"
-   vm.owner = None          
-   vm.pid = None                          
+   vm.owner = None
+   vm.pid = None
    vm.name = "vm"+str(vm.vm_id)
    vm.base = None
    vm.kernel = None
@@ -417,14 +417,14 @@ def cmd_list():
    opt=OptionParser("usage: %prog vm list [session_id]",
          description="""List out running VMs""")
    (options, args) = opt.parse_args()
-      
+
    # get running vms:
    d = openLockedDb()
    running_vms = d["running_vms"]
    closeLockedDb(d)
 
    running_vms = sorted(running_vms, key=operator.attrgetter("owner", "vm_id"))
-   
+
    print "Domain\tIP\t\tOwner\tPID\tDead\tSPECIAL"
    print "------\t------------\t-----\t-----\t----\t-------"
 
@@ -450,7 +450,7 @@ def cmd_genips():
          description="""Generate a new IP/MAC file""")
    (options, args) = opt.parse_args()
 
-   if os.geteuid() != 0: 
+   if os.geteuid() != 0:
       die("You need root permissions to do this, laterz!")
 
    check = raw_input("This will overwrite any current vm list files. Are you sure? (y): ")
@@ -473,7 +473,7 @@ def cmd_genips():
    free_vms = []
    lock = open(IP_FILE_LOCK, "w")
    lock.write("used for locking access to vm database file")
-   
+
    for i in range (0, 100):
       #generate IP file
       vm_num = str(i).zfill(2)
