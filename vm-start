@@ -201,7 +201,9 @@ def cmd_start():
             name = str(vm.tmpdir)+"disk-"+str(i)
             i += 1
             if subprocess.call(["fallocate", "-l", size, name]):
-               die ("Error creating a "+size+" scratch drive")
+               warning ("Error creating a "+size+" scratch drive with fallocate. Trying dd")
+               if subprocess.call(["dd", "if=/dev/zero", "of="+name, "count=1", "bs="+size]):
+                  die ("Error creating a "+size+" scratch drive with dd")
             drives.append(name)
 
       if options.indexfile:
