@@ -14,7 +14,6 @@ KERNEL_SOURCE="."
 KERNEL_OUTPUT=""
 
 export PS4='+${LINENO}+ '
-set -x
 
 do_make()
 {
