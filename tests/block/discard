@@ -1,0 +1,22 @@
+#!/bin/bash
+
+if [ "$1" = "deps" ]; then
+    cat <<-ZZ
+REQUIRE=../test-libs.sh
+KERNEL_CONFIG_REQUIRE=EXT4_FS
+MEM=2G
+ZZ
+    exit
+fi
+
+. test-libs.sh
+
+modprobe scsi_debug dev_size_mb=1024
+
+stride=8192
+
+for i in `seq 0 $stride 4194304`; do
+    hdparm --please-destroy-my-drive --trim-sector-ranges $i:$stride /dev/sdb > /dev/null 2> /dev/null
+done
+
+echo "TEST SUCCESSFUL"

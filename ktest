@@ -14,7 +14,6 @@ KERNEL_SOURCE="."
 KERNEL_OUTPUT=""
 
 export PS4='+${LINENO}+ '
-set -x
 
 do_make()
 {
@@ -176,7 +175,8 @@ cmd_run()
            -c $WORK_DIRECTORY/run.iso		\
            --id $WORK_DIRECTORY/id			\
            -m "$MEM"				\
-           -s "$SCRATCH"
+           -s "$SCRATCH"      \
+           $VDE
     else
        $VMSTART start				\
            -i $IMG -t $TMPDIR			\
@@ -185,6 +185,7 @@ cmd_run()
            --id $WORK_DIRECTORY/id			\
            -m "$MEM"				\
            -s "$SCRATCH"				\
+           $VDE               \
             |{
            sed -e '/TEST SUCCESS/q'
            set +e
@@ -239,6 +240,7 @@ usage()
     echo "  config	Run make nconfig"
     echo
     echo "  options:"
+    echo "	-x bash debug statements"
     echo "	-k	kernel source dir"
     echo "	-b	bld directory for kernel (default: kernel_source/.ktest)"
     echo "	-w	work director (default: kernel build directory)"
@@ -247,6 +249,7 @@ usage()
     echo "	-t	timout in seconds (run cmd only)"
     echo "	-j	j option to make (run cmd only)"
     echo "	-I	interactive run (run cmd only)"
+    echo "	-v run with vde networking (run cmd only)"
 }
 
 CMD="cmd_$1"
@@ -258,7 +261,7 @@ shift
 BUILD=1
 WORK_DIRECTORY=""
 
-while getopts "IhKb:k:i:t:j:w:v" arg; do
+while getopts "IhKb:k:i:t:j:w:vx" arg; do
     case $arg in
 	h)
 	    usage
@@ -282,15 +285,18 @@ while getopts "IhKb:k:i:t:j:w:v" arg; do
 	j)
 	    NJOBS=$OPTARG
 	    ;;
-        I)
-            INTERACTIVE=1
-            ;;
-        w)
-            WORK_DIRECTORY=$OPTARG
-            ;;
-	v)
+   I)
+       INTERACTIVE=1
+       ;;
+   w)
+       WORK_DIRECTORY=$OPTARG
+       ;;
+	x)
 	    set -x
 	    ;;
+   v)
+       VDE="--vde"
+       ;;
     esac
 done
 shift $(( OPTIND - 1 ))

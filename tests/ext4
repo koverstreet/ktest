@@ -6,7 +6,7 @@ REQUIRE=test-libs.sh
 KERNEL_CONFIG_REQUIRE=EXT4_FS
 MEM=256M
 SCRATCH=2G
-    ZZ
+ZZ
     exit
 fi
 
