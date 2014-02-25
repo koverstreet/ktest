@@ -201,13 +201,14 @@ cmd_run()
 
 cmd_ssh()
 {
-    exec $VMSTART ssh `cat $WORK_DIRECTORY/id`
+    exec $VMSTART ssh `cat $WORK_DIRECTORY/id` "$@"
 }
 
 cmd_stop()
 {
     exec $VMSTART ssh `cat $WORK_DIRECTORY/id`
 }
+
 cmd_gdb()
 {
     exec $VMSTART gdb `cat $WORK_DIRECTORY/id` $KERNEL_OUTPUT/vmlinux
@@ -285,18 +286,18 @@ while getopts "IhKb:k:i:t:j:w:vx" arg; do
 	j)
 	    NJOBS=$OPTARG
 	    ;;
-   I)
-       INTERACTIVE=1
-       ;;
-   w)
-       WORK_DIRECTORY=$OPTARG
-       ;;
+	I)
+	    INTERACTIVE=1
+	    ;;
+	w)
+	    WORK_DIRECTORY=$OPTARG
+	    ;;
 	x)
 	    set -x
 	    ;;
-   v)
-       VDE="--vde"
-       ;;
+	v)
+	    VDE="--vde"
+	    ;;
     esac
 done
 shift $(( OPTIND - 1 ))
