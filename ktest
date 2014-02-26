@@ -203,7 +203,7 @@ cmd_run()
 
 cmd_ssh()
 {
-    exec $VMSTART ssh `cat $WORK_DIRECTORY/id` "$@"
+    $VMSTART ssh `cat $WORK_DIRECTORY/id` "$@"
 }
 
 cmd_stop()
@@ -219,6 +219,30 @@ cmd_gdb()
 cmd_mon()
 {
     exec $VMSTART mon `cat $WORK_DIRECTORY/id`
+}
+
+cmd_lcov()
+{
+    checkdep lcov
+
+    gcov_in=/sys/kernel/debug/gcov/`realpath $KERNEL_OUTPUT`
+    gcov_out=$WORK_DIRECTORY/gcov
+    info=$WORK_DIRECTORY/gcov.info
+    html=$WORK_DIRECTORY/gcov.html
+
+    mkdir -p $gcov_out
+
+    cmd_ssh mkdir -p /tmp/gcov
+    cmd_ssh cp -a "$gcov_in/*" /tmp/gcov
+    cmd_ssh "(cd /tmp/gcov; tar cf - .)"    \
+	|(cd "$gcov_out"; tar xf -)
+
+    lcov --directory "$gcov_out" --capture --output-file $info
+    genhtml --output-directory $html $info
+
+    echo
+    echo "LCOV report:"
+    echo    file://$html/index.html
 }
 
 cmd_oldconfig()
