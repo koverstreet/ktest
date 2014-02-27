@@ -1,0 +1,35 @@
+#!/bin/bash
+
+if [ "$1" = "deps" ]; then
+    cat <<-ZZ
+REQUIRE=../test-libs.sh,make-bcache
+KERNEL_CONFIG_REQUIRE=BCACHE
+MEM=256M
+SCRATCH=256M,1G
+ZZ
+    exit
+fi
+
+. test-libs.sh
+
+CACHE=vda
+BDEV="vdb"
+DEV="bcache0"
+
+prep_bcache_devices || exit
+
+cache_set_settings
+cached_dev_settings
+
+prep_mounts || exit
+
+test_sysfs
+
+test_shrink &
+test_fault &
+test_stress &
+
+sleep 20
+jobs -x kill
+
+test_stop

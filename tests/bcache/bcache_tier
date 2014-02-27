@@ -3,13 +3,13 @@
 if [ "$1" = "deps" ]; then
 	echo "REQUIRE=../test-libs.sh,make-bcache"
 	echo "MEM=256M"
-	echo "SCRATCH=1G,512M,2G"
+	echo "SCRATCH=1G,1512M"
 	exit
 fi
 
 . test-libs.sh
 
-CACHE="vda vdb vdc"
+CACHE="vda vdb"
 DEV="bcache0"
 
 cd /dev
@@ -32,9 +32,11 @@ test_sysfs
 cache_set_settings
 cached_dev_settings
 
-echo 1 > /root/c/cache2/tier
+echo 1 > /root/c/cache1/tier
+#echo 1 > /root/c/meta_replicas
+#echo 1 > /root/c/data_replicas
 
-echo 1256M > /sys/fs/bcache/*/flash_vol_create
+echo 1G > /sys/fs/bcache/*/flash_vol_create
 
 udevadm settle
 prep_mkfs || exit $?

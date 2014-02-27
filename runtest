@@ -1,5 +1,3 @@
-#!/bin/bash
-
 # Warning: this test has currently several timers and requires that
 # - the vm gets up and fully initialized in less than 30 seconds
 # - the kill process ends and is no longer killable 5 seconds after
@@ -16,7 +14,7 @@ if [ "$srcdir" = "" ] ; then
    # is stored is the srcdir.
 fi
 
-opt="-w . -K -b $KERNEL -k $KERNEL -t 120 $srcdir/runtest.ktest"
+opt="-w . -K -b $KERNEL -k $KERNEL -t 120"
 
 ( 
    sleep 30
@@ -24,7 +22,7 @@ opt="-w . -K -b $KERNEL -k $KERNEL -t 120 $srcdir/runtest.ktest"
 ) &
 pid="$!"
 
-$srcdir/ktest run $opt
+$srcdir/ktest run $opt $srcdir/runtest.ktest
 ret="$?"
 
 sleep 5 

@@ -20,8 +20,8 @@ test_sysfs
 cache_set_settings
 cached_dev_settings
 
-echo 4 > /root/c/meta_replicas
-echo 4 > /root/c/data_replicas
+#echo 4 > /root/c/meta_replicas
+#echo 4 > /root/c/data_replicas
 
 prep_mounts || exit
 

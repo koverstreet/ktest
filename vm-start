@@ -295,11 +295,6 @@ def cmd_ssh():
       die("Please provide a vm id to SSH to")
    id=int(sys.argv[1])
 
-   try:
-      user=sys.argv[2]
-   except IndexError:
-      user="root"
-
    d = openLockedDb()
    running_vms=d["running_vms"]
    vm = next((vm for vm in running_vms if vm.vm_id == id), None)
@@ -313,11 +308,14 @@ def cmd_ssh():
    os.system("chmod 600 " + keyfile)
 
    if vm.vde:
-      os.execlp("ssh", "ssh", "-o", "StrictHostKeyChecking=no", "-o",
-                "UserKnownHostsFile=/dev/null", "-i", keyfile, user+"@"+vm.ip)
+      cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o",
+	    "UserKnownHostsFile=/dev/null", "-i", keyfile, "root@"+vm.ip]
    else:
-      os.execlp("ssh", "ssh", "-o", "NoHostAuthenticationForLocalhost=yes",
-            "-i", keyfile, "-p", str(9000 + id), user+"@localhost")
+      cmd = ["ssh", "-o", "NoHostAuthenticationForLocalhost=yes",
+	    "-i", keyfile, "-p", str(9000 + id), "root@localhost"]
+
+   cmd.extend(sys.argv[2:])
+   os.execvp("ssh", cmd)
 
 def cmd_stop():
    """Stop virtual machines"""
