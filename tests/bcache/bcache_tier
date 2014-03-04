@@ -3,7 +3,7 @@
 if [ "$1" = "deps" ]; then
 	echo "REQUIRE=../test-libs.sh,make-bcache"
 	echo "MEM=256M"
-	echo "SCRATCH=1G,1512M"
+	echo "SCRATCH=1G,2G"
 	exit
 fi
 
@@ -14,7 +14,7 @@ DEV="bcache0"
 
 cd /dev
 
-make-bcache --bucket 64k --block 2k			\
+make-bcache --bucket 64k --block 4k			\
    --discard			                     \
    --cache_replacement_policy=lru			\
    --cache $CACHE					            \
@@ -36,7 +36,7 @@ echo 1 > /root/c/cache1/tier
 #echo 1 > /root/c/meta_replicas
 #echo 1 > /root/c/data_replicas
 
-echo 1G > /sys/fs/bcache/*/flash_vol_create
+echo 1600M > /sys/fs/bcache/*/flash_vol_create
 
 udevadm settle
 prep_mkfs || exit $?
