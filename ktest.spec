@@ -7,7 +7,7 @@ License: Datera
 Group: tools
 BuildRoot: %{_tmppath}/%{name}-root
 Requires: realpath, minicom, genisoimage, socat
-BuildRequires: qemu, kvm, qemu-kvm, linux-bcache, dfs-server, bcache-tools
+BuildRequires: qemu, kvm, qemu-kvm, qemu-system-x86, linux-bcache, dfs-server, bcache-tools
 
 %description
 kernel testing tool

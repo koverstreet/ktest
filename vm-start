@@ -349,7 +349,7 @@ def cmd_ssh():
 	    "UserKnownHostsFile=/dev/null", "-i", keyfile, "root@"+vm.ip]
     else:
 	cmd = ["ssh", "-o", "NoHostAuthenticationForLocalhost=yes",
-	    "-i", keyfile, "-p", str(9000 + id), "root@localhost"]
+	    "-i", keyfile, "-p", str(9000 + id), "root@127.0.0.1"]
     
     cmd.extend(sys.argv[2:])
     os.execvp("ssh", cmd)

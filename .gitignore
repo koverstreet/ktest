@@ -14,3 +14,4 @@ missing
 cscope*
 tags
 *.tags
+test-driver
