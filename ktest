@@ -1,5 +1,6 @@
 #!/bin/bash -e
 
+set -x
 KTESTDIR=$(dirname $(readlink -f $0))
 VMSTART=$KTESTDIR/vm-start
 INTERACTIVE=0
@@ -109,22 +110,23 @@ cmd_run()
     done
    
     if [ -n "$CONTAINER" ]; then
-	sudo rm -rf container
+        containerdir="$WORK_DIRECTORY/container"
+	sudo rm -rf $containerdir
 	for req in $CONTAINER; do
-	    mkdir -p container
+	    mkdir -p $containerdir
 	    if [ ! -e "$req" ]; then
 		echo "Container $req not found"
 		exit 1
 	    fi
 	    cname=`basename "$req" .tar.gz`
-	    sudo tar xz -C container -f "$req"
-	    if [ ! -d "container/$cname" ] ; then
+	    sudo tar xz -C $containerdir -f "$req"
+	    if [ ! -d "$containerdir/$cname" ] ; then
 		echo "Container '$req' does not unpack into expected directory '$cname'"
 		exit 1
 	    fi
 	done
-	if [ -d container ] ; then
-	    FILES+=" container"
+	if [ -d $containerdir ] ; then
+	    FILES+=" $containerdir"
 	    NEED_SUDO=sudo
 	fi
     fi

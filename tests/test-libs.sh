@@ -390,4 +390,4 @@ test_mkfs_stress()
 dmesg -n 7
 echo 1 > /proc/sys/kernel/sysrq
 
-ln -sf /sys/kernel/debug/tracing/ /root/t
+ln -sf /sys/kernel/debug/tracing/ /root/t || true
