@@ -11,6 +11,7 @@ import operator
 import time
 import string
 import random
+import re
 
 from optparse import OptionParser, OptionGroup
 
@@ -19,8 +20,15 @@ DIR=os.path.dirname(__file__)       # path to script directory
 
 # global info file settings:
 IP_FILE = "/etc/vms/ips"
+PCI_CONNECTX3_FILE = "/etc/vms/pci_connectx3"
 IP_FILE_LOCK = IP_FILE+".lock"      # File we use to lock access to VM info list or dict
 IP_FILE_DICT = IP_FILE+".dict"      # Shelf file used to store vm information as python objects
+
+PCI_CONNECTX3_FILE_LOCK = PCI_CONNECTX3_FILE+".lock"
+				    # File we use to lock access to VM info list or dict
+PCI_CONNECTX3_FILE_DICT = PCI_CONNECTX3_FILE+".dict"
+				    # Shelf file used to store vm information as python objects
+
 MAX_VMS = 100                       # Max number of VMs. Currently this is pretty arbitrary.
 
 DEFAULT_MEMORY = "1G"               # how much memory to give the vms
@@ -41,10 +49,10 @@ DEVNULL = open(os.devnull, "wb")
 Functions of opening shelf to lock while
 reading and writing to shelf file
 """
-def openLockedDb():
-   lockFD = os.open(IP_FILE_LOCK,os.O_RDONLY)
+def openLockedDb(file_lock, file_dict):
+   lockFD = os.open(file_lock, os.O_RDONLY)
    fcntl.flock(lockFD, fcntl.LOCK_EX)
-   db = shelve.open(IP_FILE_DICT)
+   db = shelve.open(file_dict)
    db.lockFD = lockFD
    return db
 
@@ -75,6 +83,7 @@ class Domain:
       self.base = None           # base image if this isn't persistant
       self.kernel = None         # kernel image booted with
       self.tmpdir  = None        # the location of dir to store scratch drives
+      self.conx3_id = None 	 # dev id of the virtual pci x3 Connect X3 card
 
    def exists(self):
       """Does the VM this represents actually exists?"""
@@ -132,6 +141,8 @@ def cmd_start():
    opt.add_option("--fs", dest="filesystems", action="append", nargs=2,
          help="mount a directory (first argument) as a filesystem label (second argument) in the VM")
    opt.add_option("--id", dest="indexfile", help="file to write vm number to")
+   opt.add_option("--conx3", action="store_true", dest="assign_conx3", default=False,
+	 help="assign a virtual pci connect x3 nic for rdma")
    opt.add_option("--vde", dest="vde", action="store_true", 
          help="use vde networking instead of user mode. This requires a vde"+
               "switch to be set up, and an dns setup to listen")
@@ -156,7 +167,7 @@ def cmd_start():
       user = os.environ["USER"]
 
    #load database:
-   d = openLockedDb()
+   d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
    free_vms = d["free_vms"]
 
    # check to make sure we have enough domains
@@ -257,6 +268,21 @@ def cmd_start():
          cmd.extend(["-net", "user,host=10.0.2.2,restrict=off,hostfwd=tcp:127.0.0.1:" + str(vm.vm_id + 9000) + "-:22"])
          vm.vde = False
 
+      if options.assign_conx3:
+	db = openLockedDb(PCI_CONNECTX3_FILE_LOCK, PCI_CONNECTX3_FILE_DICT)
+	free_conx3 = db["free_conx3"]
+	if len(free_conx3) == 0:
+	   closeLockedDb(db)
+	   die("Not enough virtual connect x3 to start a vms")
+	vm.conx3_id = free_conx3.pop()
+	cmd.extend(["-device", "pci-assign,host="+str(vm.conx3_id)])
+	print "Assigning vf: ", vm.conx3_id
+	# save and free up database while using a card
+	db["free_conx3"] = free_conx3
+	closeLockedDb(db)
+      else:
+	vm.conx3_id = None
+
       p = subprocess.Popen(cmd, shell=False)
 
       vm.pid = p.pid
@@ -264,18 +290,25 @@ def cmd_start():
       print GREEN+"Vm ID: "+str(vm.vm_id)+" IP: "+vm.ip+" MAC: "+vm.mac+NC
 
    except Exception as e: # so we don't lose vm if exception occurs. Prolly could be better made
-      d = openLockedDb()
+      d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
       free_vms = d["free_vms"]
       free_vms.append(vm)
       d["free_vms"] = sorted(free_vms, key=operator.attrgetter("vm_id"), reverse=True)
       closeLockedDb(d)
+
+      if vm.conx3_id is not None:
+	      db = openLockedDb(PCI_CONNECTX3_FILE_LOCK, PCI_CONNECTX3_FILE_DICT)
+	      free_conx3 = db["free_conx3"]
+	      free_conx3.append(vm.conx3_id)
+	      db["free_conx3"] = free_conx3
+	      closeLockedDb(db)
 
       exc_type, exc_obj, exc_tb = sys.exc_info()
       fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
       die("Unexpected Exception: "+str(exc_type)+", File: "+str(fname)+", Line: "+str(exc_tb.tb_lineno))
 
    # resave vms with process and pid information
-   d = openLockedDb()
+   d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
    running_vms=d["running_vms"]
    running_vms.append(vm)
    d["running_vms"] = running_vms
@@ -295,7 +328,7 @@ def cmd_ssh():
       die("Please provide a vm id to SSH to")
    id=int(sys.argv[1])
 
-   d = openLockedDb()
+   d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
    running_vms=d["running_vms"]
    vm = next((vm for vm in running_vms if vm.vm_id == id), None)
    closeLockedDb(d)
@@ -335,7 +368,7 @@ def cmd_gdb():
 
    id=int(sys.argv[1])
 
-   d = openLockedDb()
+   d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
    running_vms = d["running_vms"]
    vm = next((vm for vm in running_vms if vm.vm_id == id), None)
 
@@ -358,7 +391,7 @@ def cmd_mon():
 
    id=int(sys.argv[1])
 
-   d = openLockedDb()
+   d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
    running_vms = d["running_vms"]
    vm = next((vm for vm in running_vms if vm.vm_id == id), None)
 
@@ -376,7 +409,7 @@ def cmd_mon():
 
 def __stop(stop_id):
    #get vm to stop
-   d = openLockedDb()
+   d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
    running_vms = d["running_vms"]
    vm = next((vm for vm in running_vms if vm.vm_id == stop_id), None)
 
@@ -407,6 +440,13 @@ def __stop(stop_id):
    vm.tmpdir = None
    vm.vde = None
 
+   if vm.conx3_id is not None:
+	   db = openLockedDb(PCI_CONNECTX3_FILE_LOCK, PCI_CONNECTX3_FILE_DICT)
+	   free_conx3 = db["free_conx3"]
+	   free_conx3.append(vm.conx3_id)
+	   db["free_conx3"] = free_conx3
+	   closeLockedDb(db)
+
    # save changes
    running_vms.remove(vm)
    free_vms = d["free_vms"]
@@ -422,19 +462,19 @@ def cmd_list():
    (options, args) = opt.parse_args()
 
    # get running vms:
-   d = openLockedDb()
+   d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
    running_vms = d["running_vms"]
    closeLockedDb(d)
 
    running_vms = sorted(running_vms, key=operator.attrgetter("owner", "vm_id"))
 
-   print "Domain\tIP\t\tOwner\tPID\tDead\tSPECIAL"
-   print "------\t------------\t-----\t-----\t----\t-------"
+   print "Domain\tIP\t\tConX3 id\tOwner\tPID\tDead\tSPECIAL"
+   print "------\t------------\t-------\t-----\t-----\t----\t-------"
 
    for vm in running_vms:
       mia=" " if vm.exists() == True else "X"
-      line=(str(vm.name)+"\t"+str(vm.ip)+"\t"+str(vm.owner)+"\t"+
-            str(vm.pid)+"\t"+mia+"\t")
+      line=(str(vm.name)+"\t"+str(vm.ip)+"\t"+str(vm.conx3_id)+"\t"+
+	    str(vm.owner)+"\t"+str(vm.pid)+"\t"+mia+"\t")
       print line
 
 
@@ -505,12 +545,107 @@ def cmd_genips():
 
    print "Setup completed"
 
+
+def cmd_genconx3():
+    """
+    Generates a new set of detached virtual Mellanox X3 card
+    provided the machine has one. Updates the existing database.
+    Your vm can use rdma functionality with this card.
+    """
+
+    p = subprocess.Popen(['lspci', '-vvv'], bufsize=-1, stdout=subprocess.PIPE)
+    flag = 0
+    phys_dev = ""
+    for line in p.stdout:
+	if flag == 0:
+	    if re.search("Mellanox", line):
+		entries = re.split('\W+', line)
+		searchStr = entries[0] + ':0'
+		phys_dev = entries[0] + ':' + entries[1] + '.' + entries[2]
+		print phys_dev
+		flag = 1
+	if flag == 1:
+	    if re.search("Number of VFs:", line):
+		entries = re.split(',', line)
+		entry = re.split(':', entries[0])
+		num_vfs='num_vfs=' + str(int(entry[1]))
+		entry = re.split(':', entries[1])
+		probe_vf='probe_vf=' + str(int(entry[1]))
+		entry = re.split(':', entries[2])
+		# Number of VFs: 0
+		if int(entry[1]) == 0:
+		    print "SR-IOV is not yet enabled!"
+		    subprocess.call(['rmmod', 'mlx4_ib', 'mlx4_core'])
+		    print num_vfs + ' ' + probe_vf
+		    subprocess.call(['modprobe', '-v', 'mlx4_core', num_vfs, probe_vf])
+		else:
+		    print "SR-IOV enabled!"
+		break
+    p.kill()
+    p.wait()
+
+    if flag == 1:
+	d = shelve.open(PCI_CONNECTX3_FILE_DICT)
+	free_conx3 = []
+	lock = open(PCI_CONNECTX3_FILE_LOCK, "w")
+	lock.write("used for locking access to pci connect x3 nic database file")
+	# when flag is 1, we know that our machine does have a mellanox X3 card
+	# Now detach the pci cards and keep populate db
+	subprocess.call(['modprobe', '-v', 'pci_stub'])
+	subprocess.call(['modprobe', '-v', 'mlx4_core'])
+	# The following are to get the ib0 up on the host
+	# Similar calls need to made on the guest to get
+	# the guest ib0 up too.
+	subprocess.call(['modprobe', '-v', 'ib_addr'])
+	subprocess.call(['modprobe', '-v', 'ib_cm'])
+	subprocess.call(['modprobe', '-v', 'ib_core'])
+	subprocess.call(['modprobe', '-v', 'ib_mad'])
+	subprocess.call(['modprobe', '-v', 'ib_umad'])
+	subprocess.call(['modprobe', '-v', 'ib_sa'])
+	subprocess.call(['modprobe', '-v', 'ib_uverbs'])
+	subprocess.call(['modprobe', '-v', 'ib_ipoib'])
+	p = subprocess.Popen(['lspci', '-n'], bufsize=-1, stdout=subprocess.PIPE)
+	flag = 0
+	for line in p.stdout:
+	    m = re.match(searchStr, line)
+	    if m:
+		entries = re.split(' ', line)
+		#entries[0] is the vf id
+		#entries[2] is the vendor and the device id
+		if not re.match(phys_dev, entries[0]):
+		    if flag == 0:
+			entry = re.split('[:\n]', entries[2])
+			vend_dev_id = entry[0] + ' ' + entry[1]
+			f = open('/sys/bus/pci/drivers/pci-stub/new_id', 'w')
+			f.write(vend_dev_id)
+			f.close()
+			flag = 1
+		    fn = '/sys/bus/pci/devices/0000:' + entries[0] + '/driver/unbind'
+		    devid = '0000:' + entries[0]
+		    f = open(fn, 'w')
+		    f.write(devid)
+		    f.close()
+		    f = open('/sys/bus/pci/drivers/pci-stub/bind', 'w')
+		    f.write(devid)
+		    f.close()
+		    # populate the connect x3 pci cards db with these devids
+		    free_conx3.append(entries[0])
+		    d["free_conx3"] = free_conx3
+		    print d["free_conx3"]
+	d["free_conx3"] = free_conx3
+	d.close()
+	lock.close()
+	p.kill()
+	p.wait()
+
+
 def cmd_help():
    print """List of valid commands:
    start    starts a vm
    stop     stop a vm by name
    list     list all running vms
    genips   generate a fresh vm database
+   genconx3  update db with virtual rdma capable nic
    """
 
 # main:
