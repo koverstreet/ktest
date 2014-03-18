@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ(2.61)
-AC_INIT(FULL-PACKAGE-NAME, VERSION, BUG-REPORT-ADDRESS)
+AC_INIT(ktest, VERSION, BUG-REPORT-ADDRESS)
 AM_INIT_AUTOMAKE([parallel-tests])
 LT_INIT
 AC_CONFIG_MACRO_DIR([m4])
