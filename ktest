@@ -1,6 +1,5 @@
 #!/bin/bash -e
 
-set -x
 KTESTDIR=$(dirname $(readlink -f $0))
 VMSTART=$KTESTDIR/vm-start
 INTERACTIVE=0
