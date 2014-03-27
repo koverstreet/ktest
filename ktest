@@ -30,13 +30,48 @@ check_timeout()
     kill $$
 }
 
+build_kernel()
+{
+    KERNEL_SOURCE=$1
+    KERNEL_OUTPUT=$2
+    KERNEL_CONFIG_REQUIRE=$3
+
+    kconfig="$KERNEL_OUTPUT/.config"
+    config_tool="$KERNEL_SOURCE/scripts/config"
+
+    OLDIFS=$IFS
+    IFS=','
+
+    if [ -n "$BUILD" ]; then
+	[ -f "$kconfig" ] || cp "$KTESTDIR/defconfig" "$kconfig"
+
+	for req in $KERNEL_CONFIG_REQUIRE; do
+	    "$config_tool" --file "$kconfig" -e $req
+	done
+
+	do_make oldconfig
+    fi
+
+    for req in $KERNEL_CONFIG_REQUIRE; do
+	if [ `"$config_tool" --file "$kconfig" -s $req` != "y" ]; then
+	    echo "Kernel config option $req not set"
+	    exit 1
+	fi
+    done
+
+    IFS=$OLDIFS
+
+    if [ -n "$BUILD" ]; then
+	do_make || exit 1
+    fi
+
+    do_make modules_install
+}
+
 cmd_run()
 {
     IMG=""
     NEED_SUDO=""
-
-    kconfig="$KERNEL_OUTPUT/.config"
-    config_tool="$KERNEL_SOURCE/scripts/config"
 
     if [ "$IMG" = "" ] ; then
 	if [ -f "/var/lib/ktest/root" ]; then
@@ -130,30 +165,9 @@ cmd_run()
 	fi
     fi
 
-    if [ -n "$BUILD" ]; then
-	[ -f "$kconfig" ] || cp "$KTESTDIR/defconfig" "$kconfig"
-
-	for req in $KERNEL_CONFIG_REQUIRE; do
-	    "$config_tool" --file "$kconfig" -e $req
-	done
-
-	do_make oldconfig
-    fi
-
-    for req in $KERNEL_CONFIG_REQUIRE; do
-	if [ `"$config_tool" --file "$kconfig" -s $req` != "y" ]; then
-	    echo "Kernel config option $req not set"
-	    exit 1
-	fi
-    done
-
     IFS=$OLDIFS
 
-    if [ -n "$BUILD" ]; then
-	do_make || exit 1
-    fi
-
-    do_make modules_install
+    build_kernel $KERNEL_SOURCE $KERNEL_OUTPUT $KERNEL_CONFIG_REQUIRE
 
     # Remove symlinks, they'll break genisoimage which is following symlinks
     rm -f $WORK_DIRECTORY/modules/lib/modules/*/build
@@ -169,25 +183,23 @@ cmd_run()
 	ALARM=$!
     fi
 
+    vmstart_command="$VMSTART start			\
+	-i $IMG -t $TMPDIR				\
+	-k "$KERNEL_OUTPUT/arch/x86/boot/bzImage"	\
+	-c $WORK_DIRECTORY/run.iso			\
+	--id $WORK_DIRECTORY/id				\
+	-m "$MEM"					\
+	-s "$SCRATCH"					\
+	$VDE"
+
+    if [ -n "$INFINIBAND" ]; then
+	vmstart_command+=" --conx3"
+    fi
+
     if [ "$INTERACTIVE" = 1 ] ; then
-       $VMSTART start				\
-           -i $IMG -t $TMPDIR			\
-           -k "$KERNEL_OUTPUT/arch/x86/boot/bzImage"\
-           -c $WORK_DIRECTORY/run.iso		\
-           --id $WORK_DIRECTORY/id			\
-           -m "$MEM"				\
-           -s "$SCRATCH"      \
-           $VDE
+	$vmstart_command
     else
-       $VMSTART start				\
-           -i $IMG -t $TMPDIR			\
-           -k "$KERNEL_OUTPUT/arch/x86/boot/bzImage"\
-           -c $WORK_DIRECTORY/run.iso		\
-           --id $WORK_DIRECTORY/id			\
-           -m "$MEM"				\
-           -s "$SCRATCH"				\
-           $VDE               \
-            |{
+	$vmstart_command|{
            sed -e '/TEST SUCCESS/q'
            set +e
            [ -n "$ALARM" ] && kill $ALARM 2> /dev/null
