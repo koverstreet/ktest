@@ -11,7 +11,6 @@ checkdep fallocate util-linux
 checkdep mkfs.ext4 e2fsprogs
 checkdep debootstrap
 
-MNT="$OUT".mnt
 SIZE=$((2 * 1024 * 1024 * 1024)) # 2GB
 
 PACKAGES="less,psmisc,openssh-server"
@@ -52,6 +51,8 @@ if [ `id -u` != 0 ] ; then
     echo this script must be run as root
     exit 1
 fi
+
+MNT="$OUT".mnt
 
 fallocate -l $SIZE $OUT
 mkfs.ext4 -F $OUT
