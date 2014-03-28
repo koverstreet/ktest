@@ -318,6 +318,7 @@ def cmd_start():
     closeLockedDb(d)
     
     try:
+	print GREEN+"waiting..................."
 	p.wait()
     except KeyboardInterrupt:
 	warning("KeyBoard interrupt raised")
@@ -533,7 +534,7 @@ def cmd_genips():
     
     # generate database files:
     name = "ips"
-    dhcp = open("Vm.dhcp", "w")
+    dhcp = open("/etc/vms/Vm.dhcp", "w")
     
     d = shelve.open(IP_FILE_DICT)
     d["sess_id"] = 1000

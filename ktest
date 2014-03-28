@@ -22,6 +22,20 @@ do_make()
 	EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments" $@
 }
 
+
+check_mlxcard()
+{
+    ret=0
+    line=`lspci | grep Mellanox`
+    if [ -n "$line" ]
+    then
+	sudo $VMSTART genconx3
+	ret=1
+    fi
+    echo $ret
+}
+
+
 check_timeout()
 {
     set +e
@@ -193,7 +207,10 @@ cmd_run()
 	$VDE"
 
     if [ -n "$INFINIBAND" ]; then
-	vmstart_command+=" --conx3"
+	ret=$(check_mlxcard)
+	if [ $ret -eq 1 ]; then
+	    vmstart_command+=" --conx3"
+	fi
     fi
 
     if [ "$INTERACTIVE" = 1 ] ; then

@@ -54,6 +54,12 @@ TOOLS:
 
 GETTING STARTED:
 ================
+ktest works well in a 's chroot' environment. You need to have a debian package
+cloned in your working space from which you can run 's chroot' and then
+do the steps that follow.
+
+Before running ktests make sure that you have done s build bcache-tools so that
+make-bcache is installed in your path.
 
 As root, create a root filesystem for the virtual machines and place it in
 either /var/lib/ktest/root or $HOME/.ktest/root:
@@ -71,6 +77,15 @@ as root run:
 ktest will use /tmp for the VM scratch devices by default; if you wish to use
 another directory you can create a symlink to it at $HOME/.ktest/tmp. I
 suggest using a tmpfs.
+
+Similarly, the vm-start tool needs a database initialized for the running vms
+so it can allocate rdma capable pci cards in passthrough mode provided virtual
+functions are possible on such a card on the host. The database will be world
+writable, and it lives in /etc/vms. To create it, as root run:
+  # vm-start genconx3
+To assign such a rdma enabled virtual function to your vm run vm-start with
+the --conx3 switch
+
 
 
 USING KTEST:
