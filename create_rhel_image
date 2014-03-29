@@ -17,6 +17,7 @@ PACKAGES="less psmisc openssh-server"
 PACKAGES+=" make gcc g++ gdb strace"
 PACKAGES+=" hdparm xfsprogs btrfs-tools mdadm lvm2 aoetools vblade"
 PACKAGES+=" linux-tools blktrace sysstat fio dbench bonnie++"
+PACKAGES+=" libunwind"
 
 MIRROR="http://mirrors.daterainc.com/mirrors/"
 REPOS="rhel-7-mirror epel-7-x86_64 rhel-7-ports"
