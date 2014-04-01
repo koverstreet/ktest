@@ -150,8 +150,17 @@ ZZ
 cat > "$MNT/etc/rc.d/rc.local" <<-ZZ
 #!/bin/bash -x
 
+echo "Wait for network and devices to settle"
+i=0
+while [ \$i -lt 60 ]
+do
+    [ \$(nmcli networking connectivity) == "full" ] && break
+    sleep 1
+    i=\$(( \$i + 1 ))
+done
+
 mount /dev/sr0 /cdrom
-PATH=/cdrom:$PATH
+PATH=/cdrom:\$PATH
 cd /cdrom
 exec ./rc
 ZZ
