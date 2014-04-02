@@ -20,7 +20,7 @@ PACKAGES+=" linux-tools blktrace sysstat fio dbench bonnie++"
 PACKAGES+=" libunwind"
 
 MIRROR="http://mirrors.daterainc.com/mirrors/"
-REPOS="rhel-7-mirror epel-7-x86_64 rhel-7-ports"
+REPOS="rhel-7-mirror rhel-7-debug epel-7-x86_64 rhel-7-ports"
 
 usage()
 {
