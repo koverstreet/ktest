@@ -25,7 +25,7 @@ REPOS="rhel-7-mirror rhel-7-debug epel-7-x86_64 rhel-7-ports"
 usage()
 {
     echo "create_vm_image: Create a virtual machine image for ktest"
-    echo "Usage: create_vm_image [ -m debian mirror ] filename"
+    echo "Usage: create_vm_image [ -m mirror ] filename"
 }
 
 while getopts "hm:r:" arg; do
