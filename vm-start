@@ -7,6 +7,8 @@ import os
 import fcntl
 import subprocess
 import shelve
+import shutil
+import signal
 import operator
 import time
 import string
@@ -44,6 +46,29 @@ NC='\033[0m'
 
 DEVNULL = open(os.devnull, "wb")
 
+"""
+Print Error:
+"""
+def die(msg, exitStatus=1):
+    print >> sys.stderr, "vm-script error: "+msg
+    sys.exit(exitStatus)
+
+def warning(msg):
+    print >> sys.stderr, "vm script warning: "+msg
+
+def randStr(size=12, chars=string.letters + string.digits):
+    return "".join(random.choice(chars) for x in range(size))
+
+def readfile(filename):
+    f = open(filename, 'r')
+    line = f.readline()
+    f.close()
+    return line
+
+def writefile(filename, line):
+    f = open(filename, 'w')
+    print >>f, line
+    f.close()
 
 """
 Functions of opening shelf to lock while
@@ -61,16 +86,6 @@ def closeLockedDb(db):
     fcntl.flock(db.lockFD, fcntl.LOCK_UN)
     os.close(db.lockFD)
 
-"""
-Print Error:
-"""
-def die(msg, exitStatus=1):
-    print >> sys.stderr, "vm-script error: "+msg
-    sys.exit(exitStatus)
-
-def warning(msg):
-    print >> sys.stderr, "vm script warning: "+msg
-
 class Domain:
     """Represents a single virtual machine"""
     def __init__ (self, vm_id, ip, mac):
@@ -78,39 +93,134 @@ class Domain:
 	self.ip = ip               # ip address
 	self.mac = mac             # mac addresss
 	self.owner = None          # who started this machine
-	self.pid = None            # qemu process ID
 	self.name = "vm"+str(vm_id)   # name of the vm, can be custom
-	self.base = None           # base image if this isn't persistant
-	self.kernel = None         # kernel image booted with
 	self.tmpdir  = None        # the location of dir to store scratch drives
 	self.conx3_id = None 	 # dev id of the virtual pci x3 Connect X3 card
     
     def exists(self):
 	"""Does the VM this represents actually exists?"""
-	if subprocess.call("ps aux | grep "+str(self.tmpdir)+" | grep "+str(self.pid)+
-		    " | grep -v grep", shell=True, stdout=DEVNULL):
+	if subprocess.call(['pgrep', '--pidfile', self.tmpdir + '/pid',
+			    'qemu-system-x86'],
+			   stdout=DEVNULL, stderr=DEVNULL):
 	    return False
 	return True
+
+def vm_conx3_put(conx3_id):
+    db = openLockedDb(PCI_CONNECTX3_FILE_LOCK, PCI_CONNECTX3_FILE_DICT)
+    free_conx3 = db["free_conx3"]
+    free_conx3.append(conx3_id)
+    db["free_conx3"] = free_conx3
+    closeLockedDb(db)
+
+def vm_conx3_get():
+    db = openLockedDb(PCI_CONNECTX3_FILE_LOCK, PCI_CONNECTX3_FILE_DICT)
+    free_conx3 = db["free_conx3"]
+    if len(free_conx3) == 0:
+	closeLockedDb(db)
+	die("Not enough virtual connect x3 to start a vms")
+    conx3_id = free_conx3.pop()
+    db["free_conx3"] = free_conx3
+    closeLockedDb(db)
+    return conx3_id
+
+def vm_slot_put(id):
+    d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
+    running_vms = d["running_vms"]
+    vm = next((vm for vm in running_vms if vm.vm_id == id), None)
     
-    def kill(self):
-	"""This kills the VM"""
-	if not self.pid:
-	    print "Vm "+self.name+"never started. Releasing domain"
-	    return True
+    if not vm:
+	closeLockedDb(d)
+	return
 
-	if not self.exists():
-	    print "Vm "+self.name+" terminated. Releasing domain"
-	    return True
+    running_vms.remove(vm)
+    d["running_vms"] = running_vms
+    
+    vm.state	= "stopped"
+    vm.owner	= None
+    vm.pid	= None
+    vm.name	= "vm"+str(vm.vm_id)
+    vm.base	= None
+    vm.kernel	= None
+    vm.tmpdir	= None
+    vm.vde	= None
+    
+    if vm.conx3_id is not None:
+	vm_conx3_put(vm.conx3_id)
+    
+    free_vms = d["free_vms"]
+    free_vms.append(vm)
+    d["free_vms"] =  sorted(free_vms, key=operator.attrgetter("vm_id"), reverse=True)
+    closeLockedDb(d)
 
-	if subprocess.call("kill "+str(self.pid), shell=True):
-	    print "Error killing vm: "+self.name
-	    return False
-	
-	print "Vm "+self.name+" terminated. Releasing domain"
-	return True
+def vm_slot_get(tmpdir, vde, conx3):
+    try:
+	user = os.environ["SUDO_USER"]
+    except KeyError:
+	user = os.environ["USER"]
 
-def randStr(size=12, chars=string.letters + string.digits):
-    return "".join(random.choice(chars) for x in range(size))
+    if conx3:
+	conx3_id = vm_conx3_get()
+    else:
+	conx3_id = None
+    
+    #load database:
+    d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
+    free_vms = d["free_vms"]
+    
+    # check to make sure we have enough domains
+    if len(free_vms) == 0:
+	closeLockedDb(d)
+	if conx3_id is not None:
+	    vm_conx3_put(vm.conx3_id)
+	die("Not enough domains to start a vms")
+    
+    # get domain, mark for setup
+    vm = free_vms.pop()
+    vm.state	= "setup"
+    vm.owner	= user
+    vm.tmpdir	= tmpdir
+    vm.conx3_id	= conx3_id
+    vm.vde	= vde
+    
+    # save and free up database while launching vms
+    d["free_vms"] = free_vms
+
+    running_vms=d["running_vms"]
+    running_vms.append(vm)
+    d["running_vms"] = running_vms
+
+    closeLockedDb(d)
+    return vm
+
+def vm_lookup(id):
+    d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
+    running_vms = d["running_vms"]
+    vm = next((vm for vm in running_vms if vm.vm_id == id), None)
+    
+    # make sure we actually found some
+    if not vm:
+	closeLockedDb(d)
+	die("vm " + str(id) + " not running")
+    
+    closeLockedDb(d)
+    return vm
+
+def vm_cleanup(vmdir):
+    try:
+	pid = readfile(vmdir + '/pid')
+	os.kill(int(pid), signal.SIGKILL)
+    except:
+	pass
+    
+    try:
+	vm_slot_put(int(readfile(vmdir + '/id')))
+    except:
+	pass
+    
+    try:
+	shutil.rmtree(vmdir)
+    except:
+	pass
 
 def cmd_start():
     """Start new virtual machines"""
@@ -141,7 +251,7 @@ def cmd_start():
     opt.add_option("--fs", dest="filesystems", action="append", nargs=2,
 		   help="mount a directory (first argument) as a filesystem label (second argument) in the VM")
     opt.add_option("--id", dest="indexfile", help="file to write vm number to")
-    opt.add_option("--conx3", action="store_true", dest="assign_conx3", default=False,
+    opt.add_option("--conx3", action="store_true", dest="conx3", default=False,
 		   help="assign a virtual pci connect x3 nic for rdma")
     opt.add_option("--vde", dest="vde", action="store_true", 
 		   help="use vde networking instead of user mode. This requires a vde"+
@@ -159,45 +269,35 @@ def cmd_start():
     if options.initrd and not os.path.isfile(options.initrd):
 	die("Cannot find initrd file: "+options.initrd)
 
-    # get user if SUDO
     try:
-	user = os.environ["SUDO_USER"]
-    except KeyError:
-	user = os.environ["USER"]
-    
-    #load database:
-    d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
-    free_vms = d["free_vms"]
-    
-    # check to make sure we have enough domains
-    if len(free_vms) == 0:
-	d.close()
-	dropLock(lock)
-	die("Not enough domains to start a vms")
-    
-    # get domain, mark for setup
-    vm = free_vms.pop()
-    vm.state = "setup"
-    vm.owner = user
-    
-    # save and free up database while launching vms
-    d["free_vms"] = free_vms
-    closeLockedDb(d)
-    
-    try:
-	# generate tmp dir
-	vm.tmpdir = options.tmpfs+"/"+randStr()+"-vm"+str(vm.vm_id)+"-"+user
-	try:
-	    os.mkdir(vm.tmpdir, 0700)
-	except OSError:
-	    die ("Failed to create tmpdir: "+vm.tmpdir)
-        vm.tmpdir += "/"
+	caught_signal = False
 
+	def sighandler(signum, stack):
+	    if not caught_signal:
+		caught_signal = True
+		raise Exception("signal caught")
+
+	for i in [x for x in dir(signal) if x.startswith("SIG")]:
+	    if i in ['SIGHUP', 'SIGINT', 'SIGQUIT', 'SIGILL', 'SIGABRT',
+		     'SIGFPE', 'SIGSEGV', 'SIGPIPE', 'SIGALRM', 'SIGTERM',
+		     'SIGUSR1', 'SIGUSR2']:
+		signum = getattr(signal, i)
+		signal.signal(signum, sighandler)
+
+	tmpdir = options.tmpfs + '/vm-' + randStr() + '/'
+	os.mkdir(tmpdir, 0700)
+	
+	vm = vm_slot_get(tmpdir, options.vde, options.conx3)
+
+	writefile(tmpdir + 'id', vm.vm_id)
+	if options.indexfile:
+	    writefile(options.indexfile, vm.vm_id)
+    
 	# setup run CD:
 	if not options.cdrom:
 	    iso=None
 	elif os.path.isdir(options.cdrom):
-	    iso = vm.tmpdir + "run.iso"
+	    iso = tmpdir + "run.iso"
 	    if subprocess.call(["genisoimage", "-quiet", "-R", "-input-charset",
 			 "utf-8", "-o", iso, options.cdrom]):
 		die("Could not create cdrom from dir: "+options.cdrom)
@@ -209,24 +309,21 @@ def cmd_start():
 	if options.scratch:
 	    sizes = options.scratch.split(",")
 	    i = 1;
-	for size in sizes:
-	    name = str(vm.tmpdir)+"disk-"+str(i)
-	    i += 1
-	    if subprocess.call(["fallocate", "-l", size, name]):
-		warning ("Error creating a "+size+" scratch drive with fallocate. Trying dd")
-		if subprocess.call(["dd", "if=/dev/zero", "of="+name, "count=1", "bs="+size]):
-		    die ("Error creating a "+size+" scratch drive with dd")
-            drives.append(name)
+	    for size in sizes:
+		name = tmpdir + "disk-" + str(i)
+		i += 1
 
-	if options.indexfile:
-	    f=open(options.indexfile, "w")
-	    f.write(str(vm.vm_id))
-	    f.close()
+		if subprocess.call(["fallocate", "-l", size, name]):
+		    warning("fallocate error, trying dd")
+		    if subprocess.call(["dd", "if=/dev/zero", "of="+name,
+					"count=1", "bs="+size]):
+			die ("error creating scratch drive")
+		drives.append(name)
 
 	# build qemu command and start
 	cmd = ["qemu-system-x86_64"]
 	cmd.extend(["-machine", "accel=kvm"])
-	cmd.extend(["-pidfile", vm.tmpdir + "pid"])
+	cmd.extend(["-pidfile", tmpdir + "pid"])
 	cmd.extend(["-m", options.mem])
 	# LAPIC bug in qemu, shows up occasionally as a kernel panic.
 	# Use threads= for smp.
@@ -244,12 +341,12 @@ def cmd_start():
 	    cmd.extend(["-initrd", options.initrd])
 	cmd.extend(["-nographic"])
 	cmd.extend(["-serial",	"stdio"])
-	cmd.extend(["-serial",	"mon:unix:" + vm.tmpdir + "con,server,nowait"])
-	cmd.extend(["-serial",	"unix:" + vm.tmpdir + "kgdb,server,nowait"])
-	cmd.extend(["-monitor",	"unix:" + vm.tmpdir + "mon,server,nowait"])
-	cmd.extend(["-gdb",	"unix:" + vm.tmpdir + "gdb,server,nowait"])
+	cmd.extend(["-serial",	"mon:unix:" + tmpdir + "con,server,nowait"])
+	cmd.extend(["-serial",	"unix:" + tmpdir + "kgdb,server,nowait"])
+	cmd.extend(["-monitor",	"unix:" + tmpdir + "mon,server,nowait"])
+	cmd.extend(["-gdb",	"unix:" + tmpdir + "gdb,server,nowait"])
 
-	# Devices:
+	# Drives:
 	if options.persistant:
 	    cmd.extend(["-drive", "format=raw,file="+options.image])
 	else:
@@ -270,20 +367,9 @@ def cmd_start():
 	    cmd.extend(["-net", "user,host=10.0.2.2,restrict=off,hostfwd=tcp:127.0.0.1:" + str(vm.vm_id + 9000) + "-:22"])
 	    vm.vde = False
 
-	if options.assign_conx3:
-	    db = openLockedDb(PCI_CONNECTX3_FILE_LOCK, PCI_CONNECTX3_FILE_DICT)
-	    free_conx3 = db["free_conx3"]
-	    if len(free_conx3) == 0:
-		closeLockedDb(db)
-		die("Not enough virtual connect x3 to start a vms")
-	    vm.conx3_id = free_conx3.pop()
-	    cmd.extend(["-device", "pci-assign,host="+str(vm.conx3_id)])
+	if options.conx3:
 	    print "Assigning vf: ", vm.conx3_id
-	    # save and free up database while using a card
-	    db["free_conx3"] = free_conx3
-	    closeLockedDb(db)
-	else:
-	    vm.conx3_id = None
+	    cmd.extend(["-device", "pci-assign,host="+str(vm.conx3_id)])
 
 	p = subprocess.Popen(cmd, shell=False)
 
@@ -291,57 +377,38 @@ def cmd_start():
 	vm.status="running"
 	print GREEN+"Vm ID: "+str(vm.vm_id)+" IP: "+vm.ip+" MAC: "+vm.mac+NC
     
-    except Exception as e:
-	# so we don't lose vm if exception occurs. Prolly could be better made
-	d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
-	free_vms = d["free_vms"]
-	free_vms.append(vm)
-	d["free_vms"] = sorted(free_vms, key=operator.attrgetter("vm_id"), reverse=True)
-	closeLockedDb(d)
-
-	if vm.conx3_id is not None:
-	    db = openLockedDb(PCI_CONNECTX3_FILE_LOCK, PCI_CONNECTX3_FILE_DICT)
-	    free_conx3 = db["free_conx3"]
-	    free_conx3.append(vm.conx3_id)
-	    db["free_conx3"] = free_conx3
-	    closeLockedDb(db)
-
-	exc_type, exc_obj, exc_tb = sys.exc_info()
-	fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-	die("Unexpected Exception: "+str(exc_type)+", File: "+str(fname)+", Line: "+str(exc_tb.tb_lineno))
-    
-    # resave vms with process and pid information
-    d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
-    running_vms=d["running_vms"]
-    running_vms.append(vm)
-    d["running_vms"] = running_vms
-    closeLockedDb(d)
-    
-    try:
-	print GREEN+"waiting..................."
 	p.wait()
-    except KeyboardInterrupt:
-	warning("KeyBoard interrupt raised")
+    except:
+	pass
+
+    vm_cleanup(tmpdir)
+    subprocess.call(["stty", "sane"])
+
+def cmd_stop():
+    """Stop virtual machines"""
+    
+    opt=OptionParser("usage: %prog vm stop [id]",
+		     description="""Stop virtual machines""")
+    (options, args) = opt.parse_args()
      
-    __stop(vm.vm_id)
+    if len(args)==0:
+	die("Please provide a vm id to stop")
+
+    vm = vm_lookup(int(sys.argv[1]))
+    pid = readfile(vm.tmpdir + '/pid')
+
+    os.kill(int(pid), signal.SIGKILL)
 
 def cmd_ssh():
     """ssh into a virtual machine"""
      
-    if len(sys.argv)<=1:
+    if len(sys.argv) <= 1:
 	die("Please provide a vm id to SSH to")
-    id=int(sys.argv[1])
+
+    id = int(sys.argv[1])
+    vm = vm_lookup(id)
     
-    d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
-    running_vms=d["running_vms"]
-    vm = next((vm for vm in running_vms if vm.vm_id == id), None)
-    closeLockedDb(d)
-    
-    if vm == None:
-	die("No vm running with id: "+str(id))
-    
-    keyfile=os.path.dirname(os.path.realpath(__file__)) + "/id_dsa"
-     
+    keyfile = os.path.dirname(os.path.realpath(__file__)) + "/id_dsa"
     os.system("chmod 600 " + keyfile)
      
     if vm.vde:
@@ -354,132 +421,30 @@ def cmd_ssh():
     cmd.extend(sys.argv[2:])
     os.execvp("ssh", cmd)
 
-def cmd_stop():
-    """Stop virtual machines"""
-    
-    opt=OptionParser("usage: %prog vm stop [id]",
-		     description="""Stop virtual machines""")
-    (options, args) = opt.parse_args()
-     
-    if len(args)==0:
-	die("Please provide a vm id to stop")
-    
-    __stop(int(args[0]))
+def vm_gdb(gdbsocket):
+    if len(sys.argv) <= 2:
+	die("Please provide a vm ID and a vmlinux file")
+        
+    vm = vm_lookup(int(sys.argv[1]))
+    os.execlp("gdb", "gdb",
+	      "-ex", "set remote interrupt-on-connect",
+	      "-ex", "target remote | socat UNIX-CONNECT:" +
+	      vm.tmpdir + gdbsocket + ' -', sys.argv[2])
 
 def cmd_gdb():
-    if len(sys.argv)<=2:
-	die("Please provide a session ID to SSH to and a vmlinux file")
-        
-    id=int(sys.argv[1])
-    
-    d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
-    running_vms = d["running_vms"]
-    vm = next((vm for vm in running_vms if vm.vm_id == id), None)
-    
-    # make sure we actually found some
-    if not vm:
-	closeLockedDb(d)
-	die("vm " + str(id) + " not running")
-    
-    tmpdir = vm.tmpdir
-    closeLockedDb(d)
-    
-    os.execlp("gdb", "gdb",
-	      "-ex", "set remote interrupt-on-connect",
-	      "-ex", "target remote | socat UNIX-CONNECT:" + tmpdir + "/gdb -",
-	      sys.argv[2])
+    vm_gdb('gdb')
 
 def cmd_kgdb():
-    if len(sys.argv)<=2:
-	die("Please provide a session ID to SSH to and a vmlinux file")
-        
-    id=int(sys.argv[1])
-    
-    d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
-    running_vms = d["running_vms"]
-    vm = next((vm for vm in running_vms if vm.vm_id == id), None)
-    
-    # make sure we actually found some
-    if not vm:
-	closeLockedDb(d)
-	die("vm " + str(id) + " not running")
-    
-    tmpdir = vm.tmpdir
-    closeLockedDb(d)
-    
-    os.execlp("gdb", "gdb",
-	      "-ex", "set remote interrupt-on-connect",
-	      "-ex", "target remote | socat UNIX-CONNECT:" + tmpdir + "/kgdb -",
-	      sys.argv[2])
+    vm_gdb('kgdb')
 
 def cmd_mon():
     if len(sys.argv)<=1:
-	die("Please provide a session ID")
+	die("Please provide a vm id")
     
-    id=int(sys.argv[1])
-    
-    d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
-    running_vms = d["running_vms"]
-    vm = next((vm for vm in running_vms if vm.vm_id == id), None)
-    
-    # make sure we actually found some
-    if not vm:
-	closeLockedDb(d)
-	die("vm " + str(id) + " not running")
-    
-    tmpdir = vm.tmpdir
-    closeLockedDb(d)
+    vm = vm_lookup(int(sys.argv[1]))
     
     os.execlp("minicom", "minicom",
-	      "-D", "unix#" + tmpdir + "/mon")
-
-def __stop(stop_id):
-    """get vm to stop"""
-    d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
-    running_vms = d["running_vms"]
-    vm = next((vm for vm in running_vms if vm.vm_id == stop_id), None)
-    
-    # make sure we actually found some
-    if not vm:
-	closeLockedDb(d)
-	die("No Running vms with id "+str(stop_id))
-    
-    # check if they exist and kill if needed
-    print "Stopping vm "+str(vm.vm_id)
-    
-    # kill the vm:
-    if not vm.kill():
-	# if it can't killed? what now?
-	if vm.exists():
-	    closeLockedDb(d)
-	    die("Couldn't kill: "+vm.name)
-    
-    if vm.tmpdir:
-	os.system("rm -rf " + vm.tmpdir);
-    
-    vm.state = "stopped"
-    vm.owner = None
-    vm.pid = None
-    vm.name = "vm"+str(vm.vm_id)
-    vm.base = None
-    vm.kernel = None
-    vm.tmpdir = None
-    vm.vde = None
-    
-    if vm.conx3_id is not None:
-	db = openLockedDb(PCI_CONNECTX3_FILE_LOCK, PCI_CONNECTX3_FILE_DICT)
-	free_conx3 = db["free_conx3"]
-	free_conx3.append(vm.conx3_id)
-	db["free_conx3"] = free_conx3
-	closeLockedDb(db)
-    
-    # save changes
-    running_vms.remove(vm)
-    free_vms = d["free_vms"]
-    free_vms.append(vm)
-    d["free_vms"] =  sorted(free_vms, key=operator.attrgetter("vm_id"), reverse=True)
-    d["running_vms"]=running_vms
-    closeLockedDb(d)
+	      "-D", "unix#" + vm.tmpdir + "mon")
 
 def cmd_list():
     """List out running VMs"""
@@ -494,21 +459,20 @@ def cmd_list():
     
     running_vms = sorted(running_vms, key=operator.attrgetter("owner", "vm_id"))
     
-    print "Domain\tIP\t\tConX3 id\tOwner\tPID\tDead\tSPECIAL"
-    print "------\t------------\t-------\t-----\t-----\t----\t-------"
+    print "Domain\tIP\t\tConX3 id\tOwner\tDead"
+    print "------\t------------\t--------\t-----\t----"
     
     for vm in running_vms:
 	mia=" " if vm.exists() == True else "X"
-	line=(str(vm.name)+"\t"+str(vm.ip)+"\t"+str(vm.conx3_id)+"\t"+
-	    str(vm.owner)+"\t"+str(vm.pid)+"\t"+mia+"\t")
-	print line
+	print(str(vm.name) + "\t" + str(vm.ip) + "\t" +
+	      str(vm.conx3_id) + "\t\t" +
+	      str(vm.owner) + "\t" + mia)
 
 def cmd_genips():
     """
     Generates a new set of new IP Macaddress combinations for
     and puts them in the proper locations:
     Vm.ips-dict - shelve dictionary used by python
-    Vm.dhcp - contains dhcp entries for dhcpd
     
     For use when setting up networking on a new machine, or if
     any of the config files get screwed up.
@@ -534,7 +498,6 @@ def cmd_genips():
     
     # generate database files:
     name = "ips"
-    dhcp = open("/etc/vms/Vm.dhcp", "w")
     
     d = shelve.open(IP_FILE_DICT)
     d["sess_id"] = 1000
@@ -549,17 +512,10 @@ def cmd_genips():
 	ip = "172.20.0."+str(i+100)
 	mac = "DE:AD:BE:EF:01:"+vm_num
 	
-	#generate DHCP entries
-	dhcp.write("\thost "+name+" {\n")
-	dhcp.write("\t\thardware ethernet "+mac+";\n")
-	dhcp.write("\t\tfixed-address "+ip+";\n")
-	dhcp.write("\t}\n\n")
-	
 	#generate ips dict
 	vm = Domain(i, ip, mac)
 	free_vms.insert(0, vm)
     
-    dhcp.close()
     d["free_vms"] = free_vms
     d["running_vms"] = []
     d.close()
@@ -613,21 +569,6 @@ def cmd_genconx3():
 	free_conx3 = []
 	lock = open(PCI_CONNECTX3_FILE_LOCK, "w")
 	lock.write("used for locking access to pci connect x3 nic database file")
-	# when flag is 1, we know that our machine does have a mellanox X3 card
-	# Now detach the pci cards and keep populate db
-	subprocess.call(['modprobe', '-v', 'pci_stub'])
-	subprocess.call(['modprobe', '-v', 'mlx4_core'])
-	# The following are to get the ib0 up on the host
-	# Similar calls need to made on the guest to get
-	# the guest ib0 up too.
-	subprocess.call(['modprobe', '-v', 'ib_addr'])
-	subprocess.call(['modprobe', '-v', 'ib_cm'])
-	subprocess.call(['modprobe', '-v', 'ib_core'])
-	subprocess.call(['modprobe', '-v', 'ib_mad'])
-	subprocess.call(['modprobe', '-v', 'ib_umad'])
-	subprocess.call(['modprobe', '-v', 'ib_sa'])
-	subprocess.call(['modprobe', '-v', 'ib_uverbs'])
-	subprocess.call(['modprobe', '-v', 'ib_ipoib'])
 	p = subprocess.Popen(['lspci', '-n'], bufsize=-1, stdout=subprocess.PIPE)
 	flag = 0
 	for line in p.stdout:
@@ -665,7 +606,6 @@ def cmd_genconx3():
 def cmd_help():
     print """List of valid commands:
 	start    starts a vm
-	stop     stop a vm by name
 	list     list all running vms
 	genips   generate a fresh vm database
 	genconx3  update db with virtual rdma capable nic
