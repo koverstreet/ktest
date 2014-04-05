@@ -178,6 +178,16 @@ ln -s /cdrom/modules "$MNT/lib/modules"
 mkdir -p "$MNT/root/.ssh"
 install -m0600 $KTESTDIR/id_dsa.pub "$MNT/root/.ssh/authorized_keys"
 
+# Blank the root password and autologin to root on the console
+sed -i -e 's/root:[^:]*:/root::/' "$MNT"/etc/shadow
+mkdir -p '/etc/systemd/system/serial-getty@ttyS0.service.d'
+cat > '/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf' <<-ZZ
+[Service]
+ExecStart=
+ExecStart=-/usr/sbin/agetty --autologin root -s %I 115200,38400,9600 linux
+ZZ
+
+
 # Unmount everything in the root
 i=0
 while [ $i -lt 10 ]
