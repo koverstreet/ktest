@@ -281,7 +281,7 @@ test_bonnie()
 	while true; do
 		for dev in $DEV; do
 #			cd /mnt/$dev
-			bonnie -x 100000 -u root -d /mnt/$dev &
+			bonnie++ -x 100000 -u root -d /mnt/$dev &
 		done
 		wait
 	done

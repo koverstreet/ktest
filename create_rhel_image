@@ -14,10 +14,15 @@ checkdep yum rpm
 SIZE="2G"   # See man fallocate and resize2fs for meaning
 
 PACKAGES="less psmisc openssh-server"
-PACKAGES+=" make gcc g++ gdb strace"
-PACKAGES+=" hdparm xfsprogs btrfs-tools mdadm lvm2 aoetools vblade"
+PACKAGES+=" make gcc gcc-g++ gdb strace"
+PACKAGES+=" hdparm xfsprogs btrfs-progs mdadm lvm2 aoetools vblade"
 PACKAGES+=" linux-tools blktrace sysstat fio dbench bonnie++"
-PACKAGES+=" libunwind"
+PACKAGES+=" libunwind  libdwarf libdwarf-devel"
+PACKAGES+=" elfutils-libelf elfutils-libelf-devel elfutils-libs elfutils-devel"
+PACKAGES+=" numactl-devel numactl-libs perl perl-libs perl-devel"
+PACKAGES+=" libunwind libunwind-devel"
+PACKAGES+=" libuuid libuuid-devel uuid-perl"
+
 
 MIRROR="http://mirrors.daterainc.com/mirrors/"
 REPOS="rhel-7-mirror rhel-7-debug epel-7-x86_64 rhel-7-ports"
