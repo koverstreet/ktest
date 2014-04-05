@@ -244,6 +244,11 @@ cmd_gdb()
     exec $VMSTART gdb `cat $WORK_DIRECTORY/id` $KERNEL_OUTPUT/vmlinux
 }
 
+cmd_kgdb()
+{
+    exec $VMSTART kgdb `cat $WORK_DIRECTORY/id` $KERNEL_OUTPUT/vmlinux
+}
+
 cmd_mon()
 {
     exec $VMSTART mon `cat $WORK_DIRECTORY/id`
