@@ -29,7 +29,7 @@ check_mlxcard()
     line=`lspci | grep Mellanox`
     if [ -n "$line" ]
     then
-	sudo $VMSTART genconx3
+	sudo $VMSTART genconx3 > /dev/null 2>&1
 	ret=1
     fi
     echo $ret
@@ -208,7 +208,7 @@ cmd_run()
 
     if [ -n "$INFINIBAND" ]; then
 	ret=$(check_mlxcard)
-	if [ $ret -eq 1 ]; then
+	if [ "$ret" -eq 1 ]; then
 	    vmstart_command+=" --conx3"
 	fi
     fi
