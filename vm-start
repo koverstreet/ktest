@@ -118,10 +118,11 @@ def vm_conx3_get():
     if len(free_conx3) == 0:
 	closeLockedDb(db)
 	die("Not enough virtual connect x3 to start a vms")
-    print "free_conx3:",free_conx3
-    #conx3_id = free_conx3.pop()
-    conx3_id = free_conx3[0]
-    free_conx3=free_conx3[1:]
+    conx3_id = free_conx3.pop()
+    if conx3_id=="08:02.0":
+       conx3_id = free_conx3.pop()
+       # this device is incorrectly reported one that can be used,
+       # however it does not work si we just drop it.
     print "conx3_id=",conx3_id
     db["free_conx3"] = free_conx3
     closeLockedDb(db)

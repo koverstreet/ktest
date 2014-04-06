@@ -15,6 +15,8 @@ KERNEL_OUTPUT=""
 
 export PS4='+${LINENO}+ '
 
+trap 'stty sane > /dev/null 2>&1 || true' EXIT
+
 do_make()
 {
     make -C "$KERNEL_SOURCE" O="$WORK_DIRECTORY" -j "$NJOBS"	\
@@ -40,7 +42,8 @@ check_timeout()
 {
     set +e
     sleep $1
-    $VMSTART stop `cat $WORK_DIRECTORY/id`
+    $2 $VMSTART stop `cat $WORK_DIRECTORY/id`
+    stty sane 2> /dev/null || true
     kill $$
 }
 
@@ -67,7 +70,8 @@ build_kernel()
     fi
 
     for req in $KERNEL_CONFIG_REQUIRE; do
-	if [ `"$config_tool" --file "$kconfig" -s $req` != "y" ]; then
+        c=`"$config_tool" --file "$kconfig" -s $req`
+	if [ "$c" != "y" ]; then
 	    echo "Kernel config option $req not set"
 	    exit 1
 	fi
@@ -192,11 +196,6 @@ cmd_run()
 	$WORK_DIRECTORY/modules/lib $FILES || exit 1
     rm -rf $WORK_DIRECTORY/modules
 
-    if [ -n "$TIMEOUT" ]; then
-	check_timeout "$TIMEOUT" &
-	ALARM=$!
-    fi
-
     vmstart_command="$VMSTART start			\
 	-i $IMG -t $TMPDIR				\
 	-k "$KERNEL_OUTPUT/arch/x86/boot/bzImage"	\
@@ -206,12 +205,20 @@ cmd_run()
 	-s "$SCRATCH"					\
 	$VDE"
 
+    vmsudo=""
     if [ -n "$INFINIBAND" ]; then
 	ret=$(check_mlxcard)
 	if [ "$ret" -eq 1 ]; then
-	    vmstart_command+=" --conx3"
+	    vmstart_command="sudo $vmstart_command --conx3"
+            vmsudo=sudo
 	fi
     fi
+
+    if [ -n "$TIMEOUT" ]; then
+	check_timeout "$TIMEOUT" "$vmsudo" &
+	ALARM=$!
+    fi
+
 
     if [ "$INTERACTIVE" = 1 ] ; then
 	$vmstart_command
