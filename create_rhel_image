@@ -22,6 +22,7 @@ PACKAGES+=" elfutils-libelf elfutils-libelf-devel elfutils-libs elfutils-devel"
 PACKAGES+=" numactl-devel numactl-libs perl perl-libs perl-devel"
 PACKAGES+=" libunwind libunwind-devel"
 PACKAGES+=" libuuid libuuid-devel uuid-perl"
+PACKAGES+=" net-tools"
 
 
 MIRROR="http://mirrors.daterainc.com/mirrors/"
@@ -175,6 +176,9 @@ ZZ
 chmod 755 "$MNT/etc/rc.d/rc.local"
 
 mkdir -p "$MNT/cdrom"
+
+mkdir -p "$MNT/root/"
+rsync -a -H -S "$MNT/etc/skel/" "$MNT/root/"
 
 mkdir -p "$MNT/root/.ssh"
 install -m0600 $KTESTDIR/id_dsa.pub "$MNT/root/.ssh/authorized_keys"
