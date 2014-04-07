@@ -165,6 +165,9 @@ do
 done
 
 mount /dev/sr0 /cdrom
+mkdir -p /lib/modules
+find /cdrom/modules -name \$(uname -r) -exec ln -sf '{}' /lib/modules/ \; -prune
+
 PATH=/cdrom:\$PATH
 cd /cdrom
 exec ./rc
@@ -172,8 +175,6 @@ ZZ
 chmod 755 "$MNT/etc/rc.d/rc.local"
 
 mkdir -p "$MNT/cdrom"
-
-ln -s /cdrom/modules "$MNT/lib/modules"
 
 mkdir -p "$MNT/root/.ssh"
 install -m0600 $KTESTDIR/id_dsa.pub "$MNT/root/.ssh/authorized_keys"
