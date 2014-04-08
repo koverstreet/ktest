@@ -227,7 +227,7 @@ cmd_run()
            sed -e '/TEST SUCCESS/q'
            set +e
            [ -n "$ALARM" ] && kill $ALARM 2> /dev/null
-           $VMSTART stop `cat $WORK_DIRECTORY/id`
+           $vmsudo $VMSTART stop `cat $WORK_DIRECTORY/id`
            stty sane 2> /dev/null  || true
            exit 0
        }
