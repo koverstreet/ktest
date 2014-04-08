@@ -92,13 +92,13 @@ cmd_run()
     NEED_SUDO=""
 
     if [ "$IMG" = "" ] ; then
-	if [ -f "/var/lib/ktest/root.rhel7" ]; then
-	    IMG="/var/lib/ktest/root.rhel7"
-	elif [ -f "$HOME/.ktest/root.rhel7" ]; then
-	    IMG="$HOME/.ktest/root.rhel7"
+	if [ -f "/var/lib/ktest/root" ]; then
+	    IMG="/var/lib/ktest/root"
+	elif [ -f "$HOME/.ktest/root" ]; then
+	    IMG="$HOME/.ktest/root"
 	else
-	    echo "VM root filesystem not found, please create /var/lib/ktest/root.rhel7 or"
-	    echo "$HOME/.ktest/root.rhel7"
+	    echo "VM root filesystem not found, please create /var/lib/ktest/root or"
+	    echo "$HOME/.ktest/root"
 	    exit 1
 	fi
     fi
