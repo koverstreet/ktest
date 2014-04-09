@@ -224,11 +224,14 @@ cmd_run()
 	$vmstart_command
     else
 	$vmstart_command|{
-           sed -e '/TEST SUCCESS/q'
+           res=`sed -n -e '/TEST SUCCESS/p' -e '/TEST SUCCESS/q'`
            set +e
            [ -n "$ALARM" ] && kill $ALARM 2> /dev/null
            $vmsudo $VMSTART stop `cat $WORK_DIRECTORY/id`
            stty sane 2> /dev/null  || true
+           if ! expr "$res" : ".*TEST SUCCESS" > /dev/null ; then
+               exit 1
+           fi
            exit 0
        }
     fi
