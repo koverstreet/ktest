@@ -22,7 +22,7 @@ PACKAGES+=" elfutils-libelf elfutils-libelf-devel elfutils-libs elfutils-devel"
 PACKAGES+=" numactl-devel numactl-libs perl perl-libs perl-devel"
 PACKAGES+=" libunwind libunwind-devel"
 PACKAGES+=" libuuid libuuid-devel uuid-perl"
-PACKAGES+=" net-tools"
+PACKAGES+=" net-tools htop"
 
 
 MIRROR="http://mirrors.daterainc.com/mirrors/"
@@ -188,6 +188,7 @@ sed -i -e 's/root:[^:]*:/root::/' "$MNT"/etc/shadow
 mkdir -p '/etc/systemd/system/serial-getty@ttyS0.service.d'
 cat > '/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf' <<-ZZ
 [Service]
+Type=Idle
 ExecStart=
 ExecStart=-/usr/sbin/agetty --autologin root -s %I 115200,38400,9600 linux
 ZZ
