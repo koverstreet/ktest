@@ -22,7 +22,7 @@ PACKAGES+=" elfutils-libelf elfutils-libelf-devel elfutils-libs elfutils-devel"
 PACKAGES+=" numactl-devel numactl-libs perl perl-libs perl-devel"
 PACKAGES+=" libunwind libunwind-devel"
 PACKAGES+=" libuuid libuuid-devel uuid-perl"
-PACKAGES+=" net-tools htop"
+PACKAGES+=" net-tools htop python-magic"
 
 
 MIRROR="http://mirrors.daterainc.com/mirrors/"
