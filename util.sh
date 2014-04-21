@@ -2,8 +2,12 @@
 checkdep()
 {
 	COMMAND=$1
-	PACKAGE=$2
-	[ -z "$PACKAGE" ] && PACKAGE=$COMMAND
+
+	if [[ $# -ge 2 ]]; then
+	    PACKAGE=$2
+	else
+	    PACKAGE=$COMMAND
+	fi
 
 	if ! which $COMMAND > /dev/null; then
 		echo -n "$COMMAND not found"

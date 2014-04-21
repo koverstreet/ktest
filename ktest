@@ -1,19 +1,29 @@
-#!/bin/bash -e
+#!/bin/bash
+
+set -o nounset
+set -o errexit
+
+export PS4='+${LINENO}+ '
 
 KTESTDIR=$(dirname $(readlink -f $0))
 VMSTART=$KTESTDIR/vm-start
-INTERACTIVE=0
 
 . $KTESTDIR/util.sh
 
 NJOBS=$((`grep ^processor /proc/cpuinfo |wc -l` * 2))
+INTERACTIVE=0
+TIMEOUT=""
+VDE=""
 
 DIR=".ktest"
-
 KERNEL_SOURCE="."
 KERNEL_OUTPUT=""
 
-export PS4='+${LINENO}+ '
+IMG="/var/lib/ktest/root"
+
+if [ -f "$HOME/.ktest/root" ]; then
+    IMG="$HOME/.ktest/root"
+fi
 
 trap 'stty sane > /dev/null 2>&1 || true' EXIT
 
@@ -24,25 +34,22 @@ do_make()
 	EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments" $@
 }
 
-
 check_mlxcard()
 {
-    ret=0
-    line=`lspci | grep Mellanox`
-    if [ -n "$line" ]
-    then
-	sudo $VMSTART genconx3 > /dev/null 2>&1
-	ret=1
+    if ! lspci | grep -q Mellanox; then
+	echo "no infiniband card present"
+	exit 1
     fi
-    echo $ret
-}
 
+    $VMSTART genconx3 > /dev/null 2>&1
+}
 
 check_timeout()
 {
-    set +e
-    sleep $1
-    $2 $VMSTART stop `cat $WORK_DIRECTORY/id`
+    TIMEOUT=$1
+
+    sleep $TIMEOUT
+    $VMSTART stop `cat $WORK_DIRECTORY/id`
     stty sane 2> /dev/null || true
     kill $$
 }
@@ -86,46 +93,29 @@ build_kernel()
     do_make modules_install
 }
 
-cmd_run()
+parse_deps()
 {
-    IMG=""
-    NEED_SUDO=""
+    local TEST=$1
 
-    if [ "$IMG" = "" ] ; then
-	if [ -f "/var/lib/ktest/root" ]; then
-	    IMG="/var/lib/ktest/root"
-	elif [ -f "$HOME/.ktest/root" ]; then
-	    IMG="$HOME/.ktest/root"
-	else
-	    echo "VM root filesystem not found, please create /var/lib/ktest/root or"
-	    echo "$HOME/.ktest/root"
-	    exit 1
-	fi
-    fi
-    if [ ! -f $IMG ] ; then
-	echo "VM root filesystem not found, use vm_create_image to create one"
-	exit 1
-    fi
-
-    TEST=$1
-    if [ -z "$TEST" ]; then
-	echo "ktest: missing test"
-	usage
-	exit 1
-    fi
-
-    if [ ! -f "$TEST" ]; then
-	echo "Test $TEST not found"
-	exit 1
-    fi
-
-    TEST=`realpath "$TEST"`
+    REQUIRE=""
+    LREQUIRE=""
+    KERNEL_CONFIG_REQUIRE=""
+    CONTAINER=""
+    MEM=""
+    SCRATCH=""
+    INFINIBAND=""
 
     eval `$TEST deps`
 
     if [ -z "$MEM" ]; then
 	echo "test must specify requirements"
 	exit 1
+    fi
+
+    if [ -n "$INFINIBAND" ]; then
+	VMSTART="sudo $VMSTART"
+	INFINIBAND="--conx3"
+	check_mlxcard
     fi
 
     mkdir -p $WORK_DIRECTORY
@@ -179,21 +169,50 @@ cmd_run()
 	done
 	if [ -d $containerdir ] ; then
 	    FILES+=" $containerdir"
-	    NEED_SUDO=sudo
+	    genisoimage_sudo=sudo
 	fi
     fi
 
     IFS=$OLDIFS
+}
 
-    build_kernel $KERNEL_SOURCE $KERNEL_OUTPUT $KERNEL_CONFIG_REQUIRE
+cmd_run()
+{
+    genisoimage_sudo=""
+    local ALARM=""
+
+    if [ ! -f "$IMG" ] ; then
+	echo "VM root filesystem not found, use vm_create_image to create one"
+	exit 1
+    fi
+
+    TEST=$1
+    if [ -z "$TEST" ]; then
+	echo "ktest: missing test"
+	usage
+	exit 1
+    fi
+
+    if [ ! -f "$TEST" ]; then
+	echo "Test $TEST not found"
+	exit 1
+    fi
+
+    TEST=`realpath "$TEST"`
+
+    parse_deps $TEST
+
+    build_kernel "$KERNEL_SOURCE" "$KERNEL_OUTPUT" "$KERNEL_CONFIG_REQUIRE"
 
     # Remove symlinks, they'll break genisoimage which is following symlinks
     rm -f $WORK_DIRECTORY/modules/lib/modules/*/build
     rm -f $WORK_DIRECTORY/modules/lib/modules/*/source
 
-    $NEED_SUDO genisoimage -quiet -R -input-charset utf-8	\
+    $genisoimage_sudo genisoimage -quiet -R		\
+	-input-charset utf-8				\
 	-o $WORK_DIRECTORY/run.iso 			\
 	$WORK_DIRECTORY/modules/lib $FILES || exit 1
+
     rm -rf $WORK_DIRECTORY/modules
 
     vmstart_command="$VMSTART start			\
@@ -203,31 +222,23 @@ cmd_run()
 	--id $WORK_DIRECTORY/id				\
 	-m "$MEM"					\
 	-s "$SCRATCH"					\
-	$VDE"
-
-    vmsudo=""
-    if [ -n "$INFINIBAND" ]; then
-	ret=$(check_mlxcard)
-	if [ "$ret" -eq 1 ]; then
-	    vmstart_command="sudo $vmstart_command --conx3"
-            vmsudo=sudo
-	fi
-    fi
+	$VDE						\
+	$INFINIBAND"
 
     if [ -n "$TIMEOUT" ]; then
-	check_timeout "$TIMEOUT" "$vmsudo" &
+	check_timeout "$TIMEOUT" &
 	ALARM=$!
     fi
-
 
     if [ "$INTERACTIVE" = 1 ] ; then
 	$vmstart_command
     else
-	$vmstart_command|{
-           sed -e '/TEST SUCCESS/q' 2>&1 | tee $WORK_DIRECTORY/log
+	$vmstart_command				\
+	|{
+	   sed -u -e '/TEST SUCCESS/q' 2>&1 | tee $WORK_DIRECTORY/log
            set +e
            [ -n "$ALARM" ] && kill $ALARM 2> /dev/null
-           $vmsudo $VMSTART stop `cat $WORK_DIRECTORY/id`
+	   $VMSTART stop `cat $WORK_DIRECTORY/id`
            stty sane 2> /dev/null  || true
            if ! grep -q "TEST SUCCESS" $WORK_DIRECTORY/log ; then
                exit 1
