@@ -150,22 +150,31 @@ parse_deps()
 	fi
 	FILES+=" `realpath $req`"
     done
-   
+
     if [ -n "$CONTAINER" ]; then
         containerdir="$WORK_DIRECTORY/container"
+	containersrc="/usr/share/DateraContainer"
 	sudo rm -rf $containerdir
-	for req in $CONTAINER; do
+	for cname in $CONTAINER; do
 	    mkdir -p $containerdir
-	    if [ ! -e "$req" ]; then
-		echo "Container $req not found"
+	    cvf="$containersrc/${cname}.version.txt"
+	    if [ ! -e "$cvf" ]; then
+		echo "Container version file not found: $cvf"
 		exit 1
 	    fi
-	    cname=`basename "$req" .tar.gz`
-	    sudo tar xz -C $containerdir -f "$req"
-	    if [ ! -d "$containerdir/$cname" ] ; then
-		echo "Container '$req' does not unpack into expected directory '$cname'"
+	    cv=$(cat "$cvf")
+	    cf="$containersrc/${cname}-${cv}.tar.gz"
+	    cdir="${cname}-${cv}"
+	    if [ ! -e "$cf" ]; then
+		echo "Container file not found: $cf"
 		exit 1
 	    fi
+	    sudo tar xz -C "$containerdir" -f "$cf"
+	    if [ ! -d "$containerdir/$cdir" ]; then
+		echo "Container '$cname' does not unpack into expected directory '$cdir'"
+		exit 1
+	    fi
+	    sudo ln -s "$cdir" "${containerdir}/${cname}.chroot"
 	done
 	if [ -d $containerdir ] ; then
 	    FILES+=" $containerdir"

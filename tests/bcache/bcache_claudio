@@ -3,7 +3,7 @@
 if [ "$1" = "deps" ]; then
         echo "REQUIRE=../test-libs.sh,make-bcache,container-builder"
         echo "LREQUIRE=/usr/bin/ioctl_test,/usr/bin/extent_store_server"
-        echo "CONTAINER=/usr/share/DateraContainer/dcpd.chroot.tar.gz,/usr/share/DateraContainer/DfsConnectTest.chroot.tar.gz"
+        echo "CONTAINER=dcpd,DfsConnectTest"
         echo "MEM=512M"
         echo "SCRATCH=2G,2G,2G,2G,2G,2G"
         exit
