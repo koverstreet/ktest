@@ -257,6 +257,7 @@ def cmd_start():
     opt.add_option("--fs", dest="filesystems", action="append", nargs=2,
 		   help="mount a directory (first argument) as a filesystem label (second argument) in the VM")
     opt.add_option("--id", dest="indexfile", help="file to write vm number to")
+    opt.add_option("--console", dest="console", help="where to attach the VM serial console (ex: stdio, file:foo)", default="stdio")
     opt.add_option("--conx3", action="store_true", dest="conx3", default=False,
 		   help="assign a virtual pci connect x3 nic for rdma")
     opt.add_option("--vde", dest="vde", action="store_true", 
@@ -346,7 +347,7 @@ def cmd_start():
 	if options.initrd:
 	    cmd.extend(["-initrd", options.initrd])
 	cmd.extend(["-nographic"])
-	cmd.extend(["-serial",	"stdio"])
+	cmd.extend(["-serial",	options.console])
 	cmd.extend(["-serial",	"mon:unix:" + tmpdir + "con,server,nowait"])
 	cmd.extend(["-serial",	"unix:" + tmpdir + "kgdb,server,nowait"])
 	cmd.extend(["-monitor",	"unix:" + tmpdir + "mon,server,nowait"])
