@@ -14,7 +14,7 @@ checkdep debootstrap
 SIZE=$((2 * 1024 * 1024 * 1024)) # 2GB
 
 PACKAGES="less,psmisc,openssh-server"
-PACKAGES+=",make,gcc,g++,gdb,strace"
+PACKAGES+=",make,gcc,g++,gdb,strace,valgrind"
 PACKAGES+=",hdparm,xfsprogs,btrfs-tools,mdadm,lvm2,aoetools,vblade"
 PACKAGES+=",linux-tools,blktrace,sysstat,fio,dbench,bonnie++"
 
@@ -80,7 +80,7 @@ cat > "$MNT/etc/rc.local" <<-ZZ
 mount /dev/sr0 /cdrom
 PATH=/cdrom:$PATH
 cd /cdrom
-exec ./rc
+./rc || echo "TEST FAILED"
 ZZ
 chmod 755 "$MNT/etc/rc.local"
 

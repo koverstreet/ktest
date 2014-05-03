@@ -342,12 +342,19 @@ usage()
     echo "	-v run with vde networking (run cmd only)"
 }
 
-CMD="cmd_$1"
-if [ -z "$1" -o "`type -t "$CMD"`" != "function" ]; then
+if [[ $# -lt 1 ]]; then
     usage
     exit 1
 fi
+
+CMD="cmd_$1"
 shift
+
+if [ "`type -t "$CMD"`" != "function" ]; then
+    usage
+    exit 1
+fi
+
 BUILD=1
 WORK_DIRECTORY=""
 
