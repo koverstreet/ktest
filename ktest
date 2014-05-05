@@ -52,7 +52,12 @@ check_timeout()
     sleep $TIMEOUT
     $VMSTART stop `cat $WORK_DIRECTORY/id`
     stty sane 2> /dev/null || true
-    kill $$
+    pkill -g $$
+}
+
+stop_timeout()
+{
+    pkill -g $$ sleep || true
 }
 
 do_make()
@@ -296,27 +301,26 @@ cmd_run()
 	$_INFINIBAND					\
 	$_VMCLUSTER"
 
-    if [ -n "$TIMEOUT" ]; then
-        check_timeout "$TIMEOUT" &
-        ALARM=$!
-    fi
-
     if [ "$INTERACTIVE" = 1 ]; then
         $vmstart_command
     else
-        $vmstart_command|{ \
-            sed -u -e '/TEST SUCCESS/q' 2>&1 | tee $WORK_DIRECTORY/log
-            set +e
-            [ -n "$ALARM" ] && kill $ALARM 2> /dev/null        
-            $VMSTART stop `cat $WORK_DIRECTORY/id`
-            stty sane 2> /dev/null  || true
-            if ! grep -q "TEST SUCCESS" $WORK_DIRECTORY/log ; then
-                exit 1
-            fi
-            exit 0
-       }
+	if [ -n "$TIMEOUT" ]; then
+	    check_timeout "$TIMEOUT" &
+	    trap "stop_timeout" EXIT
+	fi
+
+	$vmstart_command|{ \
+	    sed -u -e '/TEST SUCCESS/q' 2>&1 | tee $WORK_DIRECTORY/log
+	    stop_timeout
+	    $VMSTART stop `cat $WORK_DIRECTORY/id`
+	    stty sane 2> /dev/null || true
+	    if ! grep -q "TEST SUCCESS" $WORK_DIRECTORY/log ; then
+		exit 1
+	    fi
+	    exit 0
+	}
+	wait
     fi
-    trap SIGINT
     stty sane 2> /dev/null || true
 }
 
