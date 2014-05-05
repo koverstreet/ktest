@@ -73,7 +73,7 @@ build_kernel()
 	    "$config_tool" --file "$kconfig" -e $req
 	done
 
-	do_make oldconfig
+	do_make olddefconfig
     fi
 
     for req in $KERNEL_CONFIG_REQUIRE; do
