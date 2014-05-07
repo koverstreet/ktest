@@ -2,14 +2,14 @@
 
 # Wait for an IP or IPv6 address to show
 # up on a specific device.
-# args: addr bits=24 type=4 dev=eth0 timeout=10 on=true
+# args: addr bits=24 type=4 dev=eth0 timeout=60 on=true
 wait_on_ip()
 {
     addr=${1:?"ERROR: address must be provided"}
     bits=${2:-"24"}
     addrtype=${3:-"4"}
     ethdev=${4:-"eth0"}
-    timeout=${5:-"10"}
+    timeout=${5:-"60"}
     on=${6:-"true"}
 
     case "$addrtype" in
