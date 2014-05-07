@@ -3,7 +3,7 @@
 if [ "$1" = "deps" ]; then
     cat <<-ZZ
 REQUIRE=../test-libs.sh,make-bcache
-KERNEL_CONFIG_REQUIRE=BCACHE
+KERNEL_CONFIG_REQUIRE=MD,BCACHE
 MEM=256M
 SCRATCH=256M,1G
 ZZ
