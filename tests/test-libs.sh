@@ -1,5 +1,61 @@
 # Util code
 
+# Wait for an IP or IPv6 address to show
+# up on a specific device.
+# args: addr bits=24 type=4 dev=eth0 timeout=60 on=true
+wait_on_ip()
+{
+    addr=${1:?"ERROR: address must be provided"}
+    bits=${2:-"24"}
+    addrtype=${3:-"4"}
+    ethdev=${4:-"eth0"}
+    timeout=${5:-"60"}
+    on=${6:-"true"}
+
+    case "$addrtype" in
+	4)
+	    inet="inet"
+	    pingcmd="ping"
+	    ;;
+	6)
+	    inet="inet6"
+	    pingcmd="ping6"
+	    ;;
+	*)
+	    echo "ERROR: Unknown address type: $inet"
+	    exit 1
+	    ;;
+    esac
+
+    i=0
+    while true
+    do
+	ipinfo=$(ip -$addrtype -o addr show dev $ethdev)
+
+        if [[ ( $on == "true" ) && ( $ipinfo =~ "$inet $addr/$bits" ) ]]
+	then
+	    $pingcmd -I $ethdev -c 1 $addr && break
+	elif [[ ( $on == "false" ) && ! ( $ipinfo =~ "$inet $addr/$bits" ) ]]
+	then
+	    $pingcmd -I $ethdev -c 1 $addr || break
+	fi
+
+	if [ $i -gt $timeout ]
+	then
+	    exit 1
+	fi
+
+	i=$[ $i + 1 ]
+	sleep 1
+    done
+    
+}
+
+wait_no_ip()
+{
+    wait_on_ip "$1" "$2" "$3" "$4" "$5" "false"
+}
+
 wait_on_dev()
 {
 	for i in $@; do

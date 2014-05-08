@@ -25,25 +25,17 @@ PACKAGES+=" libuuid libuuid-devel uuid-perl"
 PACKAGES+=" net-tools htop python-magic"
 
 
-MIRROR="http://mirrors.daterainc.com/mirrors/"
-REPOS="rhel-7-mirror rhel-7-debug epel-7-x86_64 rhel-7-ports"
-
 usage()
 {
-    echo "create_vm_image: Create a virtual machine image for ktest"
-    echo "Usage: create_vm_image [ -m mirror ] filename"
+    echo "sudo create_vm_image: Create a virtual machine image for ktest"
+    echo "Usage: create_vm_image filename"
 }
 
-while getopts "hm:r:" arg; do
+while getopts "h" arg; do
     case $arg in
 	h)
-	    echo "-m mirror server -r repos"
-	    ;;
-	m)
-	    MIRROR="$OPTARG"
-	    ;;
-	r)
-	    REPOS="$OPTARG"
+	    usage
+	    exit 1
 	    ;;
     esac
 done
@@ -108,19 +100,31 @@ installonly_limit=3
 reposdir=${CHROOTPATH}/etc/yum.repos.d
 ZZ
 
-for repo in $REPOS
-do
-repourl="${MIRROR}/$repo"
-reponame=$( echo $repo | sed -e 's/[^a-zA-Z0-9\_\.\-]/_/g' )
 cat >> $MNT/etc/yum.repos.d/install.repo <<-ZZ
+[rhel-7-mirror]
+name=rhel-7-mirror
+baseurl=http://mirrors.daterainc.com/mirrors/rhel-7-mirror
+enabled=1
+gpgcheck=0
 
-[$reponame]
-name=$reponame
-baseurl=$repourl
+[rhel-7-debug]
+name=rhel-7-debug
+baseurl=http://mirrors.daterainc.com/mirrors/rhel-7-debug
+enabled=1
+gpgcheck=0
+
+[epel-7-x86_64]
+name=epel-7-x86_64
+baseurl=http://mirrors.daterainc.com/mirrors/epel-7-x86_64
+enabled=1
+gpgcheck=0
+
+[rhel-7-ports]
+name=rhel-7-ports
+baseurl=http://mirrors.daterainc.com/mirrors/rhel-7-ports
 enabled=1
 gpgcheck=0
 ZZ
-done
 
 # Trimmed down list of core packages
 COREPKGS="basesystem bash biosdevname btrfs-progs coreutils"
