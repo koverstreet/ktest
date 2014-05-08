@@ -101,27 +101,15 @@ reposdir=${CHROOTPATH}/etc/yum.repos.d
 ZZ
 
 cat >> $MNT/etc/yum.repos.d/install.repo <<-ZZ
-[rhel-7rc-Server_x86_64_os]
-name=rhel-7rc-Server_x86_64_os
-baseurl=http://mirrors.daterainc.com/mirrors/rhel-7rc-Server/x86_64/os
+[rhel-7-mirror]
+name=rhel-7-mirror
+baseurl=http://mirrors.daterainc.com/mirrors/rhel-7-mirror
 enabled=1
 gpgcheck=0
 
-[rhel-7rc-Server_x86_64_debug_tree]
-name=rhel-7rc-Server_x86_64_debug_tree
-baseurl=http://mirrors.daterainc.com/mirrors/rhel-7rc-Server/x86_64/debug/tree
-enabled=1
-gpgcheck=0
-
-[rhel-7rc-Server-optional_x86_64_os]
-name=rhel-7rc-Server-optional_x86_64_os
-baseurl=http://mirrors.daterainc.com/mirrors/rhel-7rc-Server-optional/x86_64/os
-enabled=1
-gpgcheck=0
-
-[rhel-7rc-Server-optional_x86_64_debug_tree]
-name=rhel-7rc-Server-optional_x86_64_debug_tree
-baseurl=http://mirrors.daterainc.com/mirrors/rhel-7rc-Server-optional/x86_64/debug/tree
+[rhel-7-debug]
+name=rhel-7-debug
+baseurl=http://mirrors.daterainc.com/mirrors/rhel-7-debug
 enabled=1
 gpgcheck=0
 
