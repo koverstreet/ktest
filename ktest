@@ -29,16 +29,16 @@ trap 'stty sane > /dev/null 2>&1 || true' EXIT
 
 do_make()
 {
-    make -C "$KERNEL_SOURCE" O="$WORK_DIRECTORY" -j "$NJOBS"	\
-	INSTALL_MOD_PATH=modules				\
-	EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments" $@
+    make -C "$KERNEL_SOURCE" O="$WORK_DIRECTORY" -j "$NJOBS"    \
+    INSTALL_MOD_PATH=modules                \
+    EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments" $@
 }
 
 check_mlxcard()
 {
     if ! lspci | grep -q Mellanox; then
-	echo "no infiniband card present"
-	exit 1
+        echo "no infiniband card present"
+        exit 1
     fi
 
     $VMSTART genconx3 > /dev/null 2>&1
@@ -67,27 +67,27 @@ build_kernel()
     IFS=','
 
     if [ -n "$BUILD" ]; then
-	[ -f "$kconfig" ] || cp "$KTESTDIR/defconfig" "$kconfig"
+        [ -f "$kconfig" ] || cp "$KTESTDIR/defconfig" "$kconfig"
 
-	for req in $KERNEL_CONFIG_REQUIRE; do
-	    "$config_tool" --file "$kconfig" -e $req
-	done
+        for req in $KERNEL_CONFIG_REQUIRE; do
+            "$config_tool" --file "$kconfig" -e $req
+        done
 
-	do_make olddefconfig
+        do_make olddefconfig
     fi
 
     for req in $KERNEL_CONFIG_REQUIRE; do
         c=`"$config_tool" --file "$kconfig" -s $req`
-	if [ "$c" != "y" ]; then
-	    echo "Kernel config option $req not set"
-	    exit 1
-	fi
+        if [ "$c" != "y" ]; then
+            echo "Kernel config option $req not set"
+            exit 1
+        fi
     done
 
     IFS=$OLDIFS
 
     if [ -n "$BUILD" ]; then
-	do_make || exit 1
+        do_make || exit 1
     fi
 
     do_make modules_install
@@ -104,26 +104,28 @@ parse_deps()
     MEM=""
     SCRATCH=""
     INFINIBAND=""
+    BRIDGE=""
+    VMCOUNT=""
 
     eval `$TEST deps`
 
     if [ -z "$MEM" ]; then
-	echo "test must specify requirements"
-	exit 1
+        echo "test must specify requirements"
+        exit 1
     fi
 
     if [ -n "$INFINIBAND" ]; then
-	VMSTART="sudo $VMSTART"
-	INFINIBAND="--conx3"
-	check_mlxcard
+        VMSTART="sudo $VMSTART"
+        INFINIBAND="--conx3"
+        check_mlxcard
     fi
 
     mkdir -p $WORK_DIRECTORY
     rm -f $WORK_DIRECTORY/rc
     cp -f $TEST $WORK_DIRECTORY/rc
     if [ "$INTERACTIVE" = 1 ] ; then
-       echo /bin/bash >> $WORK_DIRECTORY/rc
-       echo "echo o > /proc/sysrq-trigger" >> $WORK_DIRECTORY/rc
+        echo /bin/bash >> $WORK_DIRECTORY/rc
+        echo "echo o > /proc/sysrq-trigger" >> $WORK_DIRECTORY/rc
     fi
     FILES=$WORK_DIRECTORY/rc
     TESTDIR=`dirname $TEST`
@@ -133,53 +135,58 @@ parse_deps()
     PATH+=":/sbin:/usr/sbin:/usr/local/sbin"
 
     for req in $REQUIRE; do
-	if [ -e "$TESTDIR/$req" ]; then
-	    FILES+=" `realpath $TESTDIR/$req`"
-	elif f="`which $req`"; then
-	    FILES+=" `realpath $f`"
-	else
-	    echo "Dependency $req not found"
-	    exit 1
-	fi
+        if [ -e "$TESTDIR/$req" ]; then
+            FILES+=" `realpath $TESTDIR/$req`"
+        elif f="`which $req`"; then
+            FILES+=" `realpath $f`"
+        else
+            echo "Dependency $req not found"
+            exit 1
+        fi
     done
 
     for req in $LREQUIRE; do
-	if [ ! -e "$req" ]; then
-	    echo "Dependency $req not found"
-	    exit 1
-	fi
-	FILES+=" `realpath $req`"
+        if [ ! -e "$req" ]; then
+            echo "Dependency $req not found"
+            exit 1
+        fi
+        FILES+=" `realpath $req`"
     done
 
     if [ -n "$CONTAINER" ]; then
         containerdir="$WORK_DIRECTORY/container"
-	containersrc="/usr/share/DateraContainer"
-	sudo rm -rf $containerdir
-	for cname in $CONTAINER; do
-	    mkdir -p $containerdir
-	    cvf="$containersrc/${cname}.version.txt"
-	    if [ ! -e "$cvf" ]; then
-		echo "Container version file not found: $cvf"
-		exit 1
-	    fi
-	    cv=$(cat "$cvf")
-	    cf="$containersrc/${cname}-${cv}.tar.gz"
-	    cdir="${cname}-${cv}"
-	    if [ ! -e "$cf" ]; then
-		echo "Container file not found: $cf"
-		exit 1
-	    fi
-	    sudo tar xz -C "$containerdir" -f "$cf"
-	    if [ ! -d "$containerdir/$cdir" ]; then
-		echo "Container '$cname' does not unpack into expected directory '$cdir'"
-		exit 1
-	    fi
-	    sudo ln -s "$cdir" "${containerdir}/${cname}.chroot"
-	done
-	if [ -d $containerdir ] ; then
-	    FILES+=" $containerdir"
-	    genisoimage_sudo=sudo
-	fi
+        containersrc="/usr/share/DateraContainer"
+        sudo rm -rf $containerdir
+        for cname in $CONTAINER; do
+            mkdir -p $containerdir
+            cvf="$containersrc/${cname}.version.txt"
+            if [ ! -e "$cvf" ]; then
+                echo "Container version file not found: $cvf"
+                exit 1
+            fi
+            cv=$(cat "$cvf")
+            cf="$containersrc/${cname}-${cv}.tar.gz"
+            cdir="${cname}-${cv}"
+            if [ ! -e "$cf" ]; then
+                echo "Container file not found: $cf"
+                exit 1
+            fi
+            sudo tar xz -C "$containerdir" -f "$cf"
+            if [ ! -d "$containerdir/$cdir" ]; then
+                echo "Container '$cname' does not unpack into expected directory '$cdir'"
+                exit 1
+            fi
+            sudo ln -s "$cdir" "${containerdir}/${cname}.chroot"
+        done
+        if [ -d $containerdir ] ; then
+            FILES+=" $containerdir"
+            genisoimage_sudo=sudo
+        fi
+    fi
+
+    if [ -n "$VMCOUNT" ]; then
+        VMSTART=$KTESTDIR/vm-cluster
+        BRIDGE=" -b 2 "
     fi
 
     IFS=$OLDIFS
@@ -190,21 +197,25 @@ cmd_run()
     genisoimage_sudo=""
     local ALARM=""
 
+    # JFR - per review comments on 4/11/14
+    # Removed extraneous filename empty-string check
+    # Claudio says the following works fine if the string is empty
+
     if [ ! -f "$IMG" ] ; then
-	echo "VM root filesystem not found, use vm_create_image to create one"
-	exit 1
+        echo "VM root filesystem not found, use vm_create_image to create one"
+        exit 1
     fi
 
     TEST=$1
     if [ -z "$TEST" ]; then
-	echo "ktest: missing test"
-	usage
-	exit 1
+        echo "ktest: missing test"
+        usage
+        exit 1
     fi
 
     if [ ! -f "$TEST" ]; then
-	echo "Test $TEST not found"
-	exit 1
+        echo "Test $TEST not found"
+        exit 1
     fi
 
     TEST=`realpath "$TEST"`
@@ -217,42 +228,43 @@ cmd_run()
     rm -f $WORK_DIRECTORY/modules/lib/modules/*/build
     rm -f $WORK_DIRECTORY/modules/lib/modules/*/source
 
-    $genisoimage_sudo genisoimage -quiet -R		\
-	-input-charset utf-8				\
-	-o $WORK_DIRECTORY/run.iso 			\
-	$WORK_DIRECTORY/modules/lib $FILES || exit 1
+    $genisoimage_sudo genisoimage -quiet -R     \
+    -input-charset utf-8                \
+    -o $WORK_DIRECTORY/run.iso          \
+    $WORK_DIRECTORY/modules/lib $FILES || exit 1
 
     rm -rf $WORK_DIRECTORY/modules
 
-    vmstart_command="$VMSTART start			\
-	-i $IMG -t $TMPDIR				\
-	-k "$KERNEL_OUTPUT/arch/x86/boot/bzImage"	\
-	-c $WORK_DIRECTORY/run.iso			\
-	--id $WORK_DIRECTORY/id				\
-	-m "$MEM"					\
-	-s "$SCRATCH"					\
-	$VDE						\
-	$INFINIBAND"
+    vmstart_command="$VMSTART start                 \
+    -i $IMG -t $TMPDIR                              \
+    -k $KERNEL_OUTPUT/arch/x86/boot/bzImage         \
+    -c $WORK_DIRECTORY/run.iso                      \
+    --id $WORK_DIRECTORY/id                         \
+    -m $MEM                                         \
+    -s $SCRATCH                                     \
+    $VDE                                            \
+    $INFINIBAND                                     \
+    $BRIDGE                                         \
+    $VMCOUNT"
 
     if [ -n "$TIMEOUT" ]; then
-	check_timeout "$TIMEOUT" &
-	ALARM=$!
+        check_timeout "$TIMEOUT" &
+        ALARM=$!
     fi
 
     if [ "$INTERACTIVE" = 1 ] ; then
-	$vmstart_command
+        $vmstart_command
     else
-	$vmstart_command				\
-	|{
-	   sed -u -e '/TEST SUCCESS/q' 2>&1 | tee $WORK_DIRECTORY/log
-           set +e
-           [ -n "$ALARM" ] && kill $ALARM 2> /dev/null
-	   $VMSTART stop `cat $WORK_DIRECTORY/id`
-           stty sane 2> /dev/null  || true
-           if ! grep -q "TEST SUCCESS" $WORK_DIRECTORY/log ; then
-               exit 1
-           fi
-           exit 0
+        $vmstart_command|{ \
+            sed -u -e '/TEST SUCCESS/q' 2>&1 | tee $WORK_DIRECTORY/log
+            set +e
+            [ -n "$ALARM" ] && kill $ALARM 2> /dev/null        
+            $VMSTART stop `cat $WORK_DIRECTORY/id`
+            stty sane 2> /dev/null  || true
+            if ! grep -q "TEST SUCCESS" $WORK_DIRECTORY/log ; then
+                exit 1
+            fi
+            exit 0
        }
     fi
     trap SIGINT
@@ -298,7 +310,7 @@ cmd_lcov()
     cmd_ssh mkdir -p /tmp/gcov
     cmd_ssh cp -a "$gcov_in/*" /tmp/gcov
     cmd_ssh "(cd /tmp/gcov; tar cf - .)"    \
-	|(cd "$gcov_out"; tar xf -)
+        |(cd "$gcov_out"; tar xf -)
 
     lcov --directory "$gcov_out" --capture --output-file $info
     genhtml --output-directory $html $info
@@ -323,23 +335,23 @@ usage()
     echo "ktest: Test kernels in virtual machines on a pool of remote servers"
     echo "Usage: ktest cmd [options] [n]"
     echo "  run [options]: Run a kernel test"
-    echo "  ssh		Log in as root"
-    echo "  gdb		Connect to kgdb"
-    echo "  mon		Connect to qemu monitor"
-    echo "  oldconfig	Run make oldconfig"
-    echo "  config	Run make nconfig"
+    echo "  ssh         Log in as root"
+    echo "  gdb         Connect to kgdb"
+    echo "  mon         Connect to qemu monitor"
+    echo "  oldconfig   Run make oldconfig"
+    echo "  config      Run make nconfig"
     echo
     echo "  options:"
-    echo "	-x bash debug statements"
-    echo "	-k	kernel source dir"
-    echo "	-b	bld directory for kernel (default: kernel_source/.ktest)"
-    echo "	-w	work director (default: kernel build directory)"
-    echo "	-K	don't build kernel (run cmd only)"
-    echo "	-i	VM root filesystem image (run cmd only)"
-    echo "	-t	timout in seconds (run cmd only)"
-    echo "	-j	j option to make (run cmd only)"
-    echo "	-I	interactive run (run cmd only)"
-    echo "	-v run with vde networking (run cmd only)"
+    echo "      -x bash debug statements"
+    echo "      -k      kernel source dir"
+    echo "      -b      bld directory for kernel (default: kernel_source/.ktest)"
+    echo "      -w      work director (default: kernel build directory)"
+    echo "      -K      don't build kernel (run cmd only)"
+    echo "      -i      VM root filesystem image (run cmd only)"
+    echo "      -t      timout in seconds (run cmd only)"
+    echo "      -j      j option to make (run cmd only)"
+    echo "      -I      interactive run (run cmd only)"
+    echo "      -v run with vde networking (run cmd only)"
 }
 
 if [[ $# -lt 1 ]]; then
@@ -360,40 +372,40 @@ WORK_DIRECTORY=""
 
 while getopts "IhKb:k:i:t:j:w:vx" arg; do
     case $arg in
-	h)
-	    usage
-	    exit 0
-	    ;;
-	k)
-	    KERNEL_SOURCE=`realpath "$OPTARG"`
-	    ;;
-	K)
-	    BUILD=""
-	    ;;
-	i)
-	    IMG=$OPTARG
-	    ;;
-	t)
-	    TIMEOUT=$OPTARG
-	    ;;
-	b)
-	    KERNEL_OUTPUT=$OPTARG
-	    ;;
-	j)
-	    NJOBS=$OPTARG
-	    ;;
-	I)
-	    INTERACTIVE=1
-	    ;;
-	w)
-	    WORK_DIRECTORY=$OPTARG
-	    ;;
-	x)
-	    set -x
-	    ;;
-	v)
-	    VDE="--vde"
-	    ;;
+        h)
+            usage
+            exit 0
+            ;;
+        k)
+            KERNEL_SOURCE=`realpath "$OPTARG"`
+            ;;
+        K)
+            BUILD=""
+            ;;
+        i)
+            IMG=$OPTARG
+            ;;
+        t)
+            TIMEOUT=$OPTARG
+            ;;
+        b)
+            KERNEL_OUTPUT=$OPTARG
+            ;;
+        j)
+            NJOBS=$OPTARG
+            ;;
+        I)
+            INTERACTIVE=1
+            ;;
+        w)
+            WORK_DIRECTORY=$OPTARG
+            ;;
+        x)
+            set -x
+            ;;
+        v)
+            VDE="--vde"
+            ;;
     esac
 done
 shift $(( OPTIND - 1 ))
