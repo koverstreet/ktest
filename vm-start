@@ -62,29 +62,34 @@ NC='\033[0m'
 
 DEVNULL = open(os.devnull, "wb")
 
+DEBUG = False
+
 """
 Print Error:
 """
 def die(msg, exitStatus=1):
-    print >> sys.stderr, "vm-script error: "+msg
+    print >> sys.stderr, "[error] "+msg
     sys.exit(exitStatus)
 
 def warning(msg):
-    print >> sys.stderr, "vm script warning: "+msg
+    print >> sys.stderr, "[warning] "+msg
+
+def debug(msg):
+    if DEBUG:
+        print >> sys.stderr, "[debug] "+msg
 
 def randstr(size=8, chars=string.letters + string.digits):
     return "".join(random.choice(chars) for x in range(size))
 
 def readfile(filename):
-    f = open(filename, 'r')
-    line = f.readline()
-    f.close()
+    with open(filename, 'r') as f:
+        line = f.readline()
     return line
 
 def writefile(filename, line):
-    f = open(filename, 'w')
-    print >>f, line
-    f.close()
+    debug("in writefile - writing <%s> into %s" % (line,filename))
+    with open(filename, 'w') as f:
+        f.write(str(line)+"\n")
 
 def appendfile(filename, line):
 
@@ -95,9 +100,10 @@ def appendfile(filename, line):
             newline = newline.strip()
             newline += "/"
                    
-    newline += str(line) + "\n"    
+    newline += str(line)
+    debug("in appendfile - writing <%s> into %s" % (newline,filename))
     with open(filename, 'w') as f:
-        f.write(newline)  
+        f.write(newline+"\n")  
 
 """
 Functions of opening shelf to lock while
@@ -303,14 +309,12 @@ def vm_cleanup(vmdir):
     pid = "NONE"
     try:
         pid = readfile(pidfile)
-        warning(pid)
         os.kill(int(pid), signal.SIGKILL)
     except:
         pass
 
     for id in ids:
         try:
-            warning("Clearing vm "+id.strip())
             vm_slot_put(int(id.strip()))
         except:
             pass
@@ -686,7 +690,7 @@ def cmd_start():
         die ("Failed to create tmpdir: "+options.tmpdir)
         
     if options.bridge != "" and len(args) > 0:
-
+        
         cluster = Cluster(int(args[0]),options)
 
         cluster.run()
@@ -710,7 +714,6 @@ def cmd_start():
             die("Cannot find initrd file: "+options.initrd)
 
         try:
-                        
             caught_signal = False
 
             def sighandler(signum, stack):
@@ -725,10 +728,11 @@ def cmd_start():
                     signum = getattr(signal, i)
                     signal.signal(signum, sighandler)
 
-
             vm = vm_slot_get(options.tmpdir, options.vde, options.conx3)
 
-            writefile(os.join.path(options.tmpdir,'id'), vm.vm_id)
+            idfile = os.path.join(options.tmpdir,'id')
+
+            writefile(idfile, vm.vm_id)
             if options.indexfile:
                 writefile(options.indexfile, vm.vm_id)
 
@@ -736,7 +740,7 @@ def cmd_start():
             if not options.cdrom:
                 iso=None
             elif os.path.isdir(options.cdrom):
-                iso = options.tmpdir + "run.iso"
+                iso = options.tmpdir + "/run.iso"
                 if subprocess.call(["genisoimage", "-quiet", "-R",
                     "-input-charset",
                     "utf-8", "-o", iso, options.cdrom]):
@@ -751,7 +755,7 @@ def cmd_start():
 
                 i = 1;
                 for size in sizes:
-                    name = options.tmpdir + "disk-" + str(i)
+                    name = options.tmpdir + "/disk-" + str(i)
                     i += 1
 
                     if subprocess.call(["fallocate", "-l", size, name]):
@@ -764,7 +768,7 @@ def cmd_start():
             # build qemu command and start
             cmd = ["qemu-system-x86_64"]
             cmd.extend(["-machine", "accel=kvm"])
-            cmd.extend(["-pidfile", options.tmpdir + "pid"])
+            cmd.extend(["-pidfile", options.tmpdir + "/pid"])
             cmd.extend(["-m", options.mem])
             # LAPIC bug in qemu, shows up occasionally as a kernel panic.
 
@@ -785,10 +789,10 @@ def cmd_start():
 
             cmd.extend(["-nographic"])
             cmd.extend(["-serial",  options.console])
-            cmd.extend(["-serial",  "mon:unix:" + options.tmpdir + "con,server,nowait"])
-            cmd.extend(["-serial",  "unix:" + options.tmpdir + "kgdb,server,nowait"])
-            cmd.extend(["-monitor", "unix:" + options.tmpdir + "mon,server,nowait"])
-            cmd.extend(["-gdb", "unix:" + options.tmpdir + "gdb,server,nowait"])
+            cmd.extend(["-serial",  "mon:unix:" + options.tmpdir + "/con,server,nowait"])
+            cmd.extend(["-serial",  "unix:" + options.tmpdir + "/kgdb,server,nowait"])
+            cmd.extend(["-monitor", "unix:" + options.tmpdir + "/mon,server,nowait"])
+            cmd.extend(["-gdb", "unix:" + options.tmpdir + "/gdb,server,nowait"])
     
             # Drives:
             if options.persistant:
@@ -817,6 +821,8 @@ def cmd_start():
                 print "Assigning vf: ", vm.conx3_id
                 cmd.extend(["-device", "pci-assign,host="+str(vm.conx3_id)])
         
+            warning("Executing: "+str(cmd))
+            
             p = subprocess.Popen(cmd, shell=False)
 
             vm.pid = p.pid
