@@ -317,15 +317,16 @@ def cmd_start():
 	    sizes = options.scratch.split(",")
 	    i = 1;
 	    for size in sizes:
-		name = tmpdir + "disk-" + str(i)
-		i += 1
+                if size.strip():
+                    name = tmpdir + "disk-" + str(i)
+                    i += 1
 
-		if subprocess.call(["fallocate", "-l", size, name]):
-		    warning("fallocate error, trying dd")
-		    if subprocess.call(["dd", "if=/dev/zero", "of="+name,
-					"count=1", "bs="+size]):
-			die ("error creating scratch drive")
-		drives.append(name)
+                    if subprocess.call(["fallocate", "-l", size, name]):
+                        warning("fallocate error, trying dd")
+                        if subprocess.call(["dd", "if=/dev/zero", "of="+name,
+                                            "count=1", "bs="+size]):
+                            die ("error creating scratch drive")
+                    drives.append(name)
 
 	# build qemu command and start
 	cmd = ["qemu-system-x86_64"]
