@@ -2,7 +2,7 @@
 # Copyright (c) 2013 Datera, Inc. All rights reserved
 # Datera, Inc. Confidential and Propriatory
 
-import os.path
+import os.path 
 import getpass
 import threading
 
@@ -18,6 +18,7 @@ import time
 import string
 import random
 import re
+import datetime
 
 import inspect
 
@@ -35,14 +36,16 @@ DIR=os.path.dirname(__file__)       # path to script directory
 
 # global info file settings:
 IP_FILE = "/etc/vms/ips"
-PCI_CONNECTX3_FILE = "/etc/vms/pci_connectx3"
-IP_FILE_LOCK = IP_FILE+".lock"      # File we use to lock access to VM info list or dict
-IP_FILE_DICT = IP_FILE+".dict"      # Shelf file used to store vm information as python objects
+IP_FILE_LOCK = IP_FILE+".lock"      # File to lock access to VM list
+IP_FILE_DICT = IP_FILE+".dict"      # Shelf file to store vm list
 
-PCI_CONNECTX3_FILE_LOCK = PCI_CONNECTX3_FILE+".lock"
-                    # File we use to lock access to VM info list or dict
-PCI_CONNECTX3_FILE_DICT = PCI_CONNECTX3_FILE+".dict"
-                    # Shelf file used to store vm information as python objects
+CX3_FILE = "/etc/vms/pci_connectx3"
+CX3_FILE_LOCK = CX3_FILE+".lock"    # File to lock access to PCI_CONNECTX3 info
+CX3_FILE_DICT = CX3_FILE+".dict"    # Shelf file to store PCI_CONNECTX3 info
+
+BR_FILE = "/etc/vms/bridges"
+BR_FILE_LOCK = BR_FILE+".lock"      # File to lock access to bridge info
+BR_FILE_DICT = BR_FILE+".dict"      # Shelf file to store bridge info
 
 MAX_VMS = 100                       # Max number of VMs. Currently this is pretty arbitrary.
 
@@ -69,7 +72,7 @@ def die(msg, exitStatus=1):
 def warning(msg):
     print >> sys.stderr, "vm script warning: "+msg
 
-def randStr(size=12, chars=string.letters + string.digits):
+def randstr(size=8, chars=string.letters + string.digits):
     return "".join(random.choice(chars) for x in range(size))
 
 def readfile(filename):
@@ -82,6 +85,19 @@ def writefile(filename, line):
     f = open(filename, 'w')
     print >>f, line
     f.close()
+
+def appendfile(filename, line):
+
+    newline = ""
+    if os.path.exists(filename):
+        with open(filename, 'r') as f:
+            newline = f.read()
+            newline = newline.strip()
+            newline += "/"
+                   
+    newline += str(line) + "\n"    
+    with open(filename, 'w') as f:
+        f.write(newline)  
 
 """
 Functions of opening shelf to lock while
@@ -98,6 +114,14 @@ def closeLockedDb(db):
     db.close()
     fcntl.flock(db.lockFD, fcntl.LOCK_UN)
     os.close(db.lockFD)
+
+class Bridge:
+    """Represents a single bridge"""
+    def __init__ (self, br_key, br_num, br_name):
+        self.br_key = br_key       # string bridge key
+        self.br_num = br_num       # integer bridge number
+        self.br_name = br_name     # bridge name
+        self.available = True      # available?
 
 class Domain:
     """Represents a single virtual machine"""
@@ -118,15 +142,47 @@ class Domain:
             return False
         return True
 
+def bridge_free(br_key):
+    db = openLockedDb(BR_FILE_LOCK, BR_FILE_DICT)
+    bridges = db["bridges"]
+
+    bridges[br_key].available = True
+
+    db["bridges"] = bridges
+    closeLockedDb(db)
+    
+def bridge_get():
+    db = openLockedDb(BR_FILE_LOCK, BR_FILE_DICT)
+    bridges = db["bridges"]
+
+    keys = bridges.keys()
+    keys.sort()
+    
+    bridge = None
+    for key in keys:
+        if bridges[key].available:
+            bridge = bridges[key]
+            bridge.available = False
+            bridges[key] = bridge
+            break
+
+    if bridge == None:
+        die("No bridge entries available to start cluster")        
+
+    db["bridges"] = bridges
+    closeLockedDb(db)
+    return bridge
+
+
 def vm_conx3_put(conx3_id):
-    db = openLockedDb(PCI_CONNECTX3_FILE_LOCK, PCI_CONNECTX3_FILE_DICT)
+    db = openLockedDb(CX3_FILE_LOCK, CX3_FILE_DICT)
     free_conx3 = db["free_conx3"]
     free_conx3.append(conx3_id)
     db["free_conx3"] = free_conx3
     closeLockedDb(db)
 
 def vm_conx3_get():
-    db = openLockedDb(PCI_CONNECTX3_FILE_LOCK, PCI_CONNECTX3_FILE_DICT)
+    db = openLockedDb(CX3_FILE_LOCK, CX3_FILE_DICT)
     free_conx3 = db["free_conx3"]
     if len(free_conx3) == 0:
         closeLockedDb(db)
@@ -186,14 +242,14 @@ def vm_slot_get(tmpdir, vde, conx3):
     d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
     free_vms = d["free_vms"]
 
-    # check to make sure we have enough domains
+    # check to make sure we have a free vm entry
     if len(free_vms) == 0:
         closeLockedDb(d)
         if conx3_id is not None:
             vm_conx3_put(vm.conx3_id)
-        die("Not enough domains to start a vms")
+        die("No vm entries available to start a vm")
 
-    # get domain, mark for setup
+    # get vm entr, mark for setup
     vm = free_vms.pop()
     vm.state    = "setup"
     vm.owner    = user
@@ -224,17 +280,40 @@ def vm_lookup(id):
     closeLockedDb(d)
     return vm
 
+
+
+
 def vm_cleanup(vmdir):
+
+    idfile = os.path.join(vmdir,"id")
+    pidfile = os.path.join(vmdir,"pid")
+        
+    ids = ""
     try:
-        pid = readfile(vmdir + '/pid')
+        with open(idfile,"r") as f:
+            ids = f.read()
+    except:
+        pass
+    
+    ids = ids.split("/")
+    
+    if ids[0] == "":
+        die("No ids found in <%s>!" % idfile)
+    
+    pid = "NONE"
+    try:
+        pid = readfile(pidfile)
+        warning(pid)
         os.kill(int(pid), signal.SIGKILL)
     except:
         pass
 
-    try:
-        vm_slot_put(int(readfile(vmdir + '/id')))
-    except:
-        pass
+    for id in ids:
+        try:
+            warning("Clearing vm "+id.strip())
+            vm_slot_put(int(id.strip()))
+        except:
+            pass
 
     try:
         shutil.rmtree(vmdir)
@@ -269,7 +348,7 @@ class RunVMInThread(threading.Thread):
         if self.log == "console":
             self.proc = subprocess.Popen(
                 self.obj.command, bufsize=5000, stdin=None,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                stdout=None, stderr=subprocess.STDOUT)
         else:
             self.logf = open(self.log,"w")
             self.proc = subprocess.Popen(
@@ -281,7 +360,7 @@ class RunVMInThread(threading.Thread):
             % (self.obj.name, self.proc.pid, self.log),
 
         # handle VM log output
-        if self.log == "console":
+        #if self.log != "console":
             # for the console, poll and post output until VM terminates
 
             # JFR - per review comments on 4/11/14
@@ -293,15 +372,16 @@ class RunVMInThread(threading.Thread):
                 #print "[%s]%s" % (self.obj.name,line),
                 #line = self.proc.stdout.readline()
 
-            while True:
-                line = self.proc.stdout.readline()
-                if not line: 
-                    break
-                print "[%s]%s" % (self.obj.name,line),
+            #while True:
+                #line = self.proc.stdout.readline()
+                #if not line: 
+                    #break
+                #print "[%s]%s" % (self.obj.name,line),
 
-        else:
+        #else:
             # for a logfile, wait for VM to terminate and close the log file
-            self.proc.wait()
+        self.proc.wait()
+        if self.log != "console":
             self.logf.close()
 
         # indicate the VM has been terminated
@@ -313,7 +393,7 @@ class ClusteredVM(object):
     """Defines a virtual machine object.
     """
 
-    def __init__(self, vm_id, bridge, opts):
+    def __init__(self, vm_id, bridge, opts, vms_id, vm_tmpdir):
         """Initialize the VM object with its essential data.
         """
         #print vm_id
@@ -321,6 +401,7 @@ class ClusteredVM(object):
         #print opts
 
         self.idnum    = vm_id
+        self.vmsid    = vms_id
         self.idstr    = str(self.idnum)
         self.idhex    = hex(self.idnum+256)[-2:]
         self.bridge   = bridge
@@ -329,10 +410,8 @@ class ClusteredVM(object):
         self.name     = "vm%d-%s" % (self.idnum, bridge.name)
         self.thread   = None
         self.status   = "inactive"
-
-        # generate tmp dir
-        self.tmpdir = os.path.join(self.bridge.tmpdir,
-            self.name+"-"+self.bridge.owner)
+        self.tmpdir   = vm_tmpdir 
+        
         try:
             os.makedirs(self.tmpdir, 0700)
         except OSError:
@@ -369,7 +448,7 @@ class ClusteredVM(object):
         # build qemu command and start
         cmd = ["qemu-system-x86_64"]
         cmd.extend(["-machine", "accel=kvm"])
-        cmd.extend(["-pidfile", os.path.join(self.tmpdir,"pid")])
+        cmd.extend(["-pidfile", os.path.join(self.tmpdir,"pid",)])
         cmd.extend(["-m", opts.mem])
         # LAPIC bug in qemu, shows up occasionally as a kernel panic.
         # Use threads= for smp.
@@ -389,7 +468,7 @@ class ClusteredVM(object):
         cmd.extend(["-serial", "mon:unix:" + os.path.join(self.tmpdir,"con")+",server,nowait"])
         cmd.extend(["-serial", "unix:" + os.path.join(self.tmpdir,"gdb")+",server,nowait"])
         cmd.extend(["-monitor", "unix:" + os.path.join(self.tmpdir,"mon")+",server,nowait"])
-        if opts.persistent:
+        if opts.persistant:
             cmd.extend(["-drive", "format=raw,file="+opts.image])
         else:
             cmd.extend(["-drive", "format=raw,snapshot=on,file="+opts.image])
@@ -414,7 +493,11 @@ class Cluster(object):
     def __init__(self, num_of_vms, opts):
         """Initialize the cluster object with bridge information.
         """
-        self.idnum    = int(opts.bridge)            # int version of id
+        
+        bridge = bridge_get()
+        
+        self.idnum    = bridge.br_num               # int version of id
+        self.br_key   = bridge.br_key               # key of bridge
         self.idstr    = str(self.idnum)             # str version of id
         self.idhex    = hex(self.idnum+256)[-2:]    # hex version of id
         self.name     = "vmbr%s" % self.idstr       # bridge name
@@ -426,18 +509,7 @@ class Cluster(object):
         self.owner    = getpass.getuser()           # who "owns" this cluster
         self.ipaddr   = "172.30.%s.1" % self.idstr  # bridge ip addresss
         self.status   = "inactive"                  # cluster status
-
-        # generate tmp dir
-        self.tmpdir = os.path.join(opts.tmpfs,
-            randstr()+"-"+self.name+"-"+self.owner)
-        try:
-            os.makedirs(self.tmpdir, 0700)
-        except OSError:
-            die ("Failed to create tmpdir: "+self.tmpdir)
-
-        #if not os.path.exists(opts.tmpdir):
-            #os.makedirs(opts.tmpdir)
-        #self.tmpdir = opts.tmpdir
+        self.tmpdir   = opts.tmpdir
 
         self.br_ifup = os.path.join(self.tmpdir,"vmbr-ifup")
         self.br_ifdn = os.path.join(self.tmpdir,"vmbr-ifdn")
@@ -447,10 +519,29 @@ class Cluster(object):
         os.system('chmod +x %s' % self.br_ifup)
         os.system('chmod +x %s' % self.br_ifdn)
 
-        # for each VM, create a VM object and add it to cluster's VM list
+        slotfile = os.path.join(self.tmpdir,'id')
+        if os.path.exists(slotfile):
+            os.remove(slotfile)
+        
+        if os.path.exists(opts.indexfile):
+            os.remove(opts.indexfile)
+
+        # for each VM, grab a VM object and add it to cluster's VM list
         for vm in range(num_of_vms):
+
+            vm_name = "vm%d-%s" % (vm+2, self.name)
+
+            vm_tmpdir = os.path.join(self.tmpdir,
+                vm_name+"-"+self.owner)
+                
             #try:
-            self.vms.append(ClusteredVM(vm+2, self, opts))
+            slot = vm_slot_get(vm_tmpdir, opts.vde, opts.conx3)
+
+            appendfile(slotfile, slot.vm_id)
+            if opts.indexfile:
+                appendfile(opts.indexfile, slot.vm_id)
+            
+            self.vms.append(ClusteredVM(vm+2, self, opts, slot, vm_tmpdir))
             #except:
             #die("Unable to create virtual machine <%s-vm%d>"
                     #% (self.name,vm+2))
@@ -470,12 +561,19 @@ class Cluster(object):
         """Disable the bridge using bridge control commands.
         """
         try:
-            os.system("sudo ifconfig %s down" % self.name)
-            os.system("sudo brctl","delbr %s" % self.name)
-            self.owner = None
-            self.status = "disabled"
+            os.system("sudo ip link set %s down" % self.name)
         except:
-            die("Unable to disable bridge <%s>" % self.name)
+            die("Unable to bring bridge <%s> down" % self.name)
+
+        try:
+            os.system("sudo brctl delbr %s" % self.name)
+        except:
+            die("Unable to delete bridge <%s>" % self.name)
+
+        bridge_free(self.br_key)
+
+        self.owner = None
+        self.status = "disabled"
 
     def run(self):
         """Setup and run the cluster.
@@ -486,11 +584,11 @@ class Cluster(object):
 
         # create thread object and start it for each VM
         for vm in self.vms:
-            if vm.idnum == 0:
+            if vm.idnum == 2:
                 vm.thread = RunVMInThread(vm)
             else:
                 vm.thread = RunVMInThread(vm,vm.logf)
-                vm.thread.start()
+            vm.thread.start()
 
         # wait for all VM threads to finish
         for vm in self.vms:
@@ -504,6 +602,10 @@ def cmd_start():
     """Start new virtual machines
     """
 
+    with open("./sysargs.txt","w") as f:
+        for i in range(len(sys.argv)):  
+            f.write(sys.argv[i]+"\n")
+        
     opt = OptionParser("Usage: %prog start [options] [number]",
         description="Start a virtual machine or cluster")
 
@@ -571,6 +673,18 @@ def cmd_start():
 
     (options, args) = opt.parse_args()
 
+    tmpdate = datetime.datetime.strftime(
+        datetime.datetime.today(),"%Y%m%d-%H%M%S")
+    
+    options.tmpdir = os.path.join(
+        options.tmpfs,"vm-%s-%s" % (tmpdate, randstr()))
+
+    # generate tmp dir
+    try:
+        os.makedirs(options.tmpdir, 0700)
+    except OSError:
+        die ("Failed to create tmpdir: "+options.tmpdir)
+        
     if options.bridge != "" and len(args) > 0:
 
         cluster = Cluster(int(args[0]),options)
@@ -611,12 +725,10 @@ def cmd_start():
                     signum = getattr(signal, i)
                     signal.signal(signum, sighandler)
 
-            tmpdir = options.tmpfs + '/vm-' + randStr() + '/'
-            os.mkdir(tmpdir, 0700)
 
-            vm = vm_slot_get(tmpdir, options.vde, options.conx3)
+            vm = vm_slot_get(options.tmpdir, options.vde, options.conx3)
 
-            writefile(tmpdir + 'id', vm.vm_id)
+            writefile(os.join.path(options.tmpdir,'id'), vm.vm_id)
             if options.indexfile:
                 writefile(options.indexfile, vm.vm_id)
 
@@ -624,7 +736,7 @@ def cmd_start():
             if not options.cdrom:
                 iso=None
             elif os.path.isdir(options.cdrom):
-                iso = tmpdir + "run.iso"
+                iso = options.tmpdir + "run.iso"
                 if subprocess.call(["genisoimage", "-quiet", "-R",
                     "-input-charset",
                     "utf-8", "-o", iso, options.cdrom]):
@@ -639,7 +751,7 @@ def cmd_start():
 
                 i = 1;
                 for size in sizes:
-                    name = tmpdir + "disk-" + str(i)
+                    name = options.tmpdir + "disk-" + str(i)
                     i += 1
 
                     if subprocess.call(["fallocate", "-l", size, name]):
@@ -652,7 +764,7 @@ def cmd_start():
             # build qemu command and start
             cmd = ["qemu-system-x86_64"]
             cmd.extend(["-machine", "accel=kvm"])
-            cmd.extend(["-pidfile", tmpdir + "pid"])
+            cmd.extend(["-pidfile", options.tmpdir + "pid"])
             cmd.extend(["-m", options.mem])
             # LAPIC bug in qemu, shows up occasionally as a kernel panic.
 
@@ -673,10 +785,10 @@ def cmd_start():
 
             cmd.extend(["-nographic"])
             cmd.extend(["-serial",  options.console])
-            cmd.extend(["-serial",  "mon:unix:" + tmpdir + "con,server,nowait"])
-            cmd.extend(["-serial",  "unix:" + tmpdir + "kgdb,server,nowait"])
-            cmd.extend(["-monitor", "unix:" + tmpdir + "mon,server,nowait"])
-            cmd.extend(["-gdb", "unix:" + tmpdir + "gdb,server,nowait"])
+            cmd.extend(["-serial",  "mon:unix:" + options.tmpdir + "con,server,nowait"])
+            cmd.extend(["-serial",  "unix:" + options.tmpdir + "kgdb,server,nowait"])
+            cmd.extend(["-monitor", "unix:" + options.tmpdir + "mon,server,nowait"])
+            cmd.extend(["-gdb", "unix:" + options.tmpdir + "gdb,server,nowait"])
     
             # Drives:
             if options.persistant:
@@ -715,8 +827,8 @@ def cmd_start():
         except:
             pass
     
-        vm_cleanup(tmpdir)
-        subprocess.call(["stty", "sane"])
+    vm_cleanup(options.tmpdir)
+    subprocess.call(["stty", "sane"])
 
 def cmd_stop():
     """Stop virtual machines by id or ipaddr
@@ -739,9 +851,14 @@ def cmd_stop():
         if len(args) == 0:
             die("Please provide a vm id or ip address to stop")
 
-        vm = vm_lookup(int(args[0]))
-        pid = readfile(vm.tmpdir + '/pid')
-        os.kill(int(pid), signal.SIGKILL)
+        ids = args[0].split("/") 
+        
+        print ids       
+        
+        for id in ids:
+            vm = vm_lookup(int(id))
+            pid = readfile(vm.tmpdir + '/pid')
+            os.kill(int(pid), signal.SIGKILL)
 
 
 def cmd_ssh():
@@ -802,23 +919,37 @@ def cmd_list():
              description="""List out running VMs""")
     (options, args) = opt.parse_args()
 
-    # get running vms:
-    d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
-    running_vms = d["running_vms"]
-    closeLockedDb(d)
+    if len(args) == 0 or args[0] == "vms":
+        
+        # get running vms:
+        d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
+        running_vms = d["running_vms"]
+        closeLockedDb(d)
+    
+        running_vms = sorted(running_vms, key=operator.attrgetter("owner", "vm_id"))
+    
+        print "Domain\tIP\t\tConX3 id\tOwner\tDead"
+        print "------\t------------\t--------\t-----\t----"
+    
+        for vm in running_vms:
+            mia=" " if vm.exists() == True else "X"
+            print (str(vm.name) + "\t" + str(vm.ip) + "\t" +
+                str(vm.conx3_id) + "\t\t" +
+                str(vm.owner) + "\t" + mia)
 
-    running_vms = sorted(running_vms, key=operator.attrgetter("owner", "vm_id"))
+    elif args[0] == "bridges":
+        d = openLockedDb(BR_FILE_LOCK, BR_FILE_DICT)
+        bridges = d["bridges"]
+        closeLockedDb(d)
 
-    print "Domain\tIP\t\tConX3 id\tOwner\tDead"
-    print "------\t------------\t--------\t-----\t----"
-
-    for vm in running_vms:
-        mia=" " if vm.exists() == True else "X"
-        print (str(vm.name) + "\t" + str(vm.ip) + "\t" +
-            str(vm.conx3_id) + "\t\t" +
-            str(vm.owner) + "\t" + mia)
-
-
+        bridges = bridges.values()
+       
+        bridges = sorted(bridges, key=operator.attrgetter("br_name"))
+        print "Bridge\tAvailable?"
+        print "------\t----------"
+        for br in bridges:
+            print br.br_name+"\t"+str(br.available)
+    
 def cmd_genips():
     """
     Generates a new set of new IP Macaddress combinations for
@@ -877,6 +1008,54 @@ def cmd_genips():
 
     print "Setup completed"
 
+def cmd_genbridges():
+    """
+    Generates a new set of bridges
+
+    For use when setting up networking on a new machine, or if
+    any of the config files get screwed up.
+    """
+
+    opt=OptionParser("usage: %prog genbridges",
+             description="""Generate a new bridge file""")
+    (options, args) = opt.parse_args()
+
+    if os.geteuid() != 0:
+        die("You need root permissions to do this, laterz!")
+
+    check = raw_input("This will overwrite any current bridge list files. Are you sure? (y): ")
+    if check != "y":
+        sys.exit(0)
+
+    # make directory
+    if not os.path.isdir("/etc/vms"):
+        try:
+            os.mkdir("/etc/vms")
+        except OSError:
+             die("Failed to create /etc/vms")
+
+    # generate database files:
+    db = shelve.open(BR_FILE_DICT)
+    db["sess_id"] = 1000
+    bridges = {}
+    lock = open(BR_FILE_LOCK, "w")
+    lock.write("Used for locking access to vm database file")
+
+    for br_num in range (1,10):
+        #generate bridge file
+        br_key = str(br_num)
+        br_name = "br"+br_key
+        bridges[br_key] = Bridge(br_key,br_num,br_name)
+
+    db["bridges"] = bridges
+    db.close()
+    lock.close()
+
+    os.chmod(BR_FILE_DICT, 0666)
+    os.chmod(BR_FILE_LOCK, 0666)
+
+    print "Bridge setup completed"
+
 
 def cmd_genconx3():
     """
@@ -917,9 +1096,9 @@ def cmd_genconx3():
     p.wait()
 
     if flag == 1:
-        d = shelve.open(PCI_CONNECTX3_FILE_DICT)
+        d = shelve.open(CX3_FILE_DICT)
         free_conx3 = []
-        lock = open(PCI_CONNECTX3_FILE_LOCK, "w")
+        lock = open(CX3_FILE_LOCK, "w")
         lock.write("used for locking access to pci connect x3 nic database file")
         p = subprocess.Popen(['lspci', '-n'], bufsize=-1, stdout=subprocess.PIPE)
         flag = 0

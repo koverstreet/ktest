@@ -27,6 +27,7 @@ fi
 brctl delif ${bridge} $1
 sleep 0.5s
 ip link set $1 down
+ip tuntap del dev $1 mode tap
 exit 0
 
 """
@@ -39,8 +40,6 @@ if [ ! $(which brctl) ]; then
   err="brctl"
 elif [ ! $(which ip) ]; then
   err="ip"
-elif [ ! $(which tunctl) ]; then
-  err="tunctl"
 fi
 
 if [ "$err" != "ok" ]; then
@@ -53,7 +52,7 @@ if [ -z "$1" ]; then
   exit 1
 fi
 
-tunctl -u `whoami` -t $1
+ip tuntap add dev $1 mode tap
 ip link set $1 up
 sleep 0.5s
 brctl addif ${bridge} $1
