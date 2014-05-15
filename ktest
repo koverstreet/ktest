@@ -228,6 +228,11 @@ cmd_run()
     rm -f $WORK_DIRECTORY/modules/lib/modules/*/build
     rm -f $WORK_DIRECTORY/modules/lib/modules/*/source
 
+    echo "ADDING FILES:"
+    for f in $FILES; do
+	echo $f
+    done	
+
     $genisoimage_sudo genisoimage -quiet -R     \
     -input-charset utf-8                \
     -o $WORK_DIRECTORY/run.iso          \
