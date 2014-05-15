@@ -185,7 +185,6 @@ parse_deps()
     fi
 
     if [ -n "$VMCOUNT" ]; then
-        VMSTART=$KTESTDIR/vm-cluster
         BRIDGE=" -b 2 "
     fi
 

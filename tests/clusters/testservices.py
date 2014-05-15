@@ -76,9 +76,9 @@ class TestServices(object):
         # do the ssh command <repeat> times until success.
         for i in range(repeat):
 
-	    try:
-                self.results = subprocess.check_output(self._ssh_cmd,
-                    stderr=subprocess.STDOUT)
+            try:
+                self.results = subprocess.check_output(
+                    self._ssh_cmd,stderr=subprocess.STDOUT)
             except subprocess.CalledProcessError as e:
                 print "SSH command '%s' failed" % cmd
                 print "Waiting %d seconds..." % wait

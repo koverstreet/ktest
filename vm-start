@@ -2,6 +2,10 @@
 # Copyright (c) 2013 Datera, Inc. All rights reserved
 # Datera, Inc. Confidential and Propriatory
 
+import os.path 
+import getpass
+import threading
+
 import sys
 import os
 import fcntl
@@ -14,6 +18,16 @@ import time
 import string
 import random
 import re
+import datetime
+
+import inspect
+
+def lineno():
+    """Returns the current line number in our program."""
+    return inspect.currentframe().f_back.f_lineno
+
+from vmcutils import *
+from vmbrtmpl import *
 
 from optparse import OptionParser, OptionGroup
 
@@ -22,14 +36,16 @@ DIR=os.path.dirname(__file__)       # path to script directory
 
 # global info file settings:
 IP_FILE = "/etc/vms/ips"
-PCI_CONNECTX3_FILE = "/etc/vms/pci_connectx3"
-IP_FILE_LOCK = IP_FILE+".lock"      # File we use to lock access to VM info list or dict
-IP_FILE_DICT = IP_FILE+".dict"      # Shelf file used to store vm information as python objects
+IP_FILE_LOCK = IP_FILE+".lock"      # File to lock access to VM list
+IP_FILE_DICT = IP_FILE+".dict"      # Shelf file to store vm list
 
-PCI_CONNECTX3_FILE_LOCK = PCI_CONNECTX3_FILE+".lock"
-				    # File we use to lock access to VM info list or dict
-PCI_CONNECTX3_FILE_DICT = PCI_CONNECTX3_FILE+".dict"
-				    # Shelf file used to store vm information as python objects
+CX3_FILE = "/etc/vms/pci_connectx3"
+CX3_FILE_LOCK = CX3_FILE+".lock"    # File to lock access to PCI_CONNECTX3 info
+CX3_FILE_DICT = CX3_FILE+".dict"    # Shelf file to store PCI_CONNECTX3 info
+
+BR_FILE = "/etc/vms/bridges"
+BR_FILE_LOCK = BR_FILE+".lock"      # File to lock access to bridge info
+BR_FILE_DICT = BR_FILE+".dict"      # Shelf file to store bridge info
 
 MAX_VMS = 100                       # Max number of VMs. Currently this is pretty arbitrary.
 
@@ -46,29 +62,48 @@ NC='\033[0m'
 
 DEVNULL = open(os.devnull, "wb")
 
+DEBUG = False
+
 """
 Print Error:
 """
 def die(msg, exitStatus=1):
-    print >> sys.stderr, "vm-script error: "+msg
+    print >> sys.stderr, "[error] "+msg
     sys.exit(exitStatus)
 
 def warning(msg):
-    print >> sys.stderr, "vm script warning: "+msg
+    print >> sys.stderr, "[warning] "+msg
 
-def randStr(size=12, chars=string.letters + string.digits):
+def debug(msg):
+    if DEBUG:
+        print >> sys.stderr, "[debug] "+msg
+
+def randstr(size=8, chars=string.letters + string.digits):
     return "".join(random.choice(chars) for x in range(size))
 
 def readfile(filename):
-    f = open(filename, 'r')
-    line = f.readline()
-    f.close()
+    with open(filename, 'r') as f:
+        line = f.readline()
     return line
 
 def writefile(filename, line):
-    f = open(filename, 'w')
-    print >>f, line
-    f.close()
+    debug("in writefile - writing <%s> into %s" % (line,filename))
+    with open(filename, 'w') as f:
+        f.write(str(line)+"\n")
+
+def appendfile(filename, line):
+
+    newline = ""
+    if os.path.exists(filename):
+        with open(filename, 'r') as f:
+            newline = f.read()
+            newline = newline.strip()
+            newline += "/"
+                   
+    newline += str(line)
+    debug("in appendfile - writing <%s> into %s" % (newline,filename))
+    with open(filename, 'w') as f:
+        f.write(newline+"\n")  
 
 """
 Functions of opening shelf to lock while
@@ -86,38 +121,78 @@ def closeLockedDb(db):
     fcntl.flock(db.lockFD, fcntl.LOCK_UN)
     os.close(db.lockFD)
 
+class Bridge:
+    """Represents a single bridge"""
+    def __init__ (self, br_key, br_num, br_name):
+        self.br_key = br_key       # string bridge key
+        self.br_num = br_num       # integer bridge number
+        self.br_name = br_name     # bridge name
+        self.available = True      # available?
+
 class Domain:
     """Represents a single virtual machine"""
     def __init__ (self, vm_id, ip, mac):
-	self.vm_id = vm_id         # id number for this vm
-	self.ip = ip               # ip address
-	self.mac = mac             # mac addresss
-	self.owner = None          # who started this machine
-	self.name = "vm"+str(vm_id)   # name of the vm, can be custom
-	self.tmpdir  = None        # the location of dir to store scratch drives
-	self.conx3_id = None 	 # dev id of the virtual pci x3 Connect X3 card
-    
+        self.vm_id = vm_id         # id number for this vm
+        self.ip = ip               # ip address
+        self.mac = mac             # mac addresss
+        self.owner = None          # who started this machine
+        self.name = "vm"+str(vm_id)   # name of the vm, can be custom
+        self.tmpdir  = None        # the location of dir to store scratch drives
+        self.conx3_id = None     # dev id of the virtual pci x3 Connect X3 card
+
     def exists(self):
-	"""Does the VM this represents actually exists?"""
-	if subprocess.call(['pgrep', '--pidfile', self.tmpdir + '/pid',
-			    'qemu-system-x86'],
-			   stdout=DEVNULL, stderr=DEVNULL):
-	    return False
-	return True
+        """Does the VM this represents actually exists?"""
+        if subprocess.call(['pgrep', '--pidfile', self.tmpdir + '/pid',
+            'qemu-system-x86'],
+            stdout=DEVNULL, stderr=DEVNULL):
+            return False
+        return True
+
+def bridge_free(br_key):
+    db = openLockedDb(BR_FILE_LOCK, BR_FILE_DICT)
+    bridges = db["bridges"]
+
+    bridges[br_key].available = True
+
+    db["bridges"] = bridges
+    closeLockedDb(db)
+    
+def bridge_get():
+    db = openLockedDb(BR_FILE_LOCK, BR_FILE_DICT)
+    bridges = db["bridges"]
+
+    keys = bridges.keys()
+    keys.sort()
+    
+    bridge = None
+    for key in keys:
+        if bridges[key].available:
+            bridge = bridges[key]
+            bridge.available = False
+            bridges[key] = bridge
+            break
+
+    if bridge == None:
+        die("No bridge entries available to start cluster")        
+
+    db["bridges"] = bridges
+    closeLockedDb(db)
+    return bridge
+
 
 def vm_conx3_put(conx3_id):
-    db = openLockedDb(PCI_CONNECTX3_FILE_LOCK, PCI_CONNECTX3_FILE_DICT)
+    db = openLockedDb(CX3_FILE_LOCK, CX3_FILE_DICT)
     free_conx3 = db["free_conx3"]
     free_conx3.append(conx3_id)
     db["free_conx3"] = free_conx3
     closeLockedDb(db)
 
 def vm_conx3_get():
-    db = openLockedDb(PCI_CONNECTX3_FILE_LOCK, PCI_CONNECTX3_FILE_DICT)
+    db = openLockedDb(CX3_FILE_LOCK, CX3_FILE_DICT)
     free_conx3 = db["free_conx3"]
     if len(free_conx3) == 0:
-	closeLockedDb(db)
-	die("Not enough virtual connect x3 to start a vms")
+        closeLockedDb(db)
+        die("Not enough virtual connect x3 to start a vms")
     print free_conx3
     conx3_id = free_conx3.pop()
     while conx3_id=="08:02.0":
@@ -133,26 +208,26 @@ def vm_slot_put(id):
     d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
     running_vms = d["running_vms"]
     vm = next((vm for vm in running_vms if vm.vm_id == id), None)
-    
+
     if not vm:
-	closeLockedDb(d)
-	return
+        closeLockedDb(d)
+        return
 
     running_vms.remove(vm)
     d["running_vms"] = running_vms
-    
-    vm.state	= "stopped"
-    vm.owner	= None
-    vm.pid	= None
-    vm.name	= "vm"+str(vm.vm_id)
-    vm.base	= None
-    vm.kernel	= None
-    vm.tmpdir	= None
-    vm.vde	= None
-    
+
+    vm.state    = "stopped"
+    vm.owner    = None
+    vm.pid  = None
+    vm.name = "vm"+str(vm.vm_id)
+    vm.base = None
+    vm.kernel   = None
+    vm.tmpdir   = None
+    vm.vde  = None
+
     if vm.conx3_id is not None:
-	vm_conx3_put(vm.conx3_id)
-    
+        vm_conx3_put(vm.conx3_id)
+
     free_vms = d["free_vms"]
     free_vms.append(vm)
     d["free_vms"] =  sorted(free_vms, key=operator.attrgetter("vm_id"), reverse=True)
@@ -160,34 +235,34 @@ def vm_slot_put(id):
 
 def vm_slot_get(tmpdir, vde, conx3):
     try:
-	user = os.environ["SUDO_USER"]
+        user = os.environ["SUDO_USER"]
     except KeyError:
-	user = os.environ["USER"]
+        user = os.environ["USER"]
 
     if conx3:
-	conx3_id = vm_conx3_get()
+        conx3_id = vm_conx3_get()
     else:
-	conx3_id = None
-    
+        conx3_id = None
+
     #load database:
     d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
     free_vms = d["free_vms"]
-    
-    # check to make sure we have enough domains
+
+    # check to make sure we have a free vm entry
     if len(free_vms) == 0:
-	closeLockedDb(d)
-	if conx3_id is not None:
-	    vm_conx3_put(vm.conx3_id)
-	die("Not enough domains to start a vms")
-    
-    # get domain, mark for setup
+        closeLockedDb(d)
+        if conx3_id is not None:
+            vm_conx3_put(vm.conx3_id)
+        die("No vm entries available to start a vm")
+
+    # get vm entr, mark for setup
     vm = free_vms.pop()
-    vm.state	= "setup"
-    vm.owner	= user
-    vm.tmpdir	= tmpdir
-    vm.conx3_id	= conx3_id
-    vm.vde	= vde
-    
+    vm.state    = "setup"
+    vm.owner    = user
+    vm.tmpdir   = tmpdir
+    vm.conx3_id = conx3_id
+    vm.vde  = vde
+
     # save and free up database while launching vms
     d["free_vms"] = free_vms
 
@@ -202,337 +277,793 @@ def vm_lookup(id):
     d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
     running_vms = d["running_vms"]
     vm = next((vm for vm in running_vms if vm.vm_id == id), None)
-    
+
     # make sure we actually found some
     if not vm:
-	closeLockedDb(d)
-	die("vm " + str(id) + " not running")
-    
+        closeLockedDb(d)
+        die("vm " + str(id) + " not running")
+
     closeLockedDb(d)
     return vm
 
+
+
+
 def vm_cleanup(vmdir):
+
+    idfile = os.path.join(vmdir,"id")
+    pidfile = os.path.join(vmdir,"pid")
+        
+    ids = ""
     try:
-	pid = readfile(vmdir + '/pid')
-	os.kill(int(pid), signal.SIGKILL)
+        with open(idfile,"r") as f:
+            ids = f.read()
     except:
-	pass
+        pass
     
-    try:
-	vm_slot_put(int(readfile(vmdir + '/id')))
-    except:
-	pass
+    ids = ids.split("/")
     
+    if ids[0] == "":
+        die("No ids found in <%s>!" % idfile)
+    
+    pid = "NONE"
     try:
-	shutil.rmtree(vmdir)
+        pid = readfile(pidfile)
+        os.kill(int(pid), signal.SIGKILL)
     except:
-	pass
+        pass
+
+    for id in ids:
+        try:
+            vm_slot_put(int(id.strip()))
+        except:
+            pass
+
+    try:
+        shutil.rmtree(vmdir)
+    except:
+        pass
+
+
+class RunVMInThread(threading.Thread):
+    """Runs a virtual machine object in a thread.
+    """
+
+    def __init__(self, vm, log="console"):
+        """Initialize the thread object with the VM object and log info.
+        """
+        threading.Thread.__init__(self)
+        self.obj = vm
+        self.log = log
+        self.logf = None
+        self.proc = None
+
+    def run(self):
+        """Start the VM inside the thread object.
+
+        If logging is targeted at the console, spool all thread output
+        from different VMs to the same console tagged with the VM name.
+
+        This method is not called directly but is executed when the
+        thread object is started by its start() method.
+        """
+
+        # use subprocess.Popen to run the VM and target the output
+        if self.log == "console":
+            self.proc = subprocess.Popen(
+                self.obj.command, bufsize=5000, stdin=None,
+                stdout=None, stderr=subprocess.STDOUT)
+        else:
+            self.logf = open(self.log,"w")
+            self.proc = subprocess.Popen(
+                self.obj.command, bufsize=5000, stdin=None,
+                stdout=self.logf, stderr=subprocess.STDOUT)
+
+        # indicate the VM has been started
+        print "<%s> started as pid <%d> stdout <%s>\n" \
+            % (self.obj.name, self.proc.pid, self.log),
+
+        # handle VM log output
+        #if self.log != "console":
+            # for the console, poll and post output until VM terminates
+
+            # JFR - per review comments on 4/11/14
+            # Kent says this is preferable... not sure if it works in all cases
+            # Replaced four lines with four
+
+            #line = self.proc.stdout.readline()
+            #while self.proc.poll() == None:
+                #print "[%s]%s" % (self.obj.name,line),
+                #line = self.proc.stdout.readline()
+
+            #while True:
+                #line = self.proc.stdout.readline()
+                #if not line: 
+                    #break
+                #print "[%s]%s" % (self.obj.name,line),
+
+        #else:
+            # for a logfile, wait for VM to terminate and close the log file
+        self.proc.wait()
+        if self.log != "console":
+            self.logf.close()
+
+        # indicate the VM has been terminated
+        print "<%s> terminated\n" % self.obj.name, 
+
+
+
+class ClusteredVM(object):
+    """Defines a virtual machine object.
+    """
+
+    def __init__(self, vm_id, bridge, opts, vms_id, vm_tmpdir):
+        """Initialize the VM object with its essential data.
+        """
+        #print vm_id
+        #print bridge.__dict__
+        #print opts
+
+        self.idnum    = vm_id
+        self.vmsid    = vms_id
+        self.idstr    = str(self.idnum)
+        self.idhex    = hex(self.idnum+256)[-2:]
+        self.bridge   = bridge
+        self.ipaddr   = ".".join(bridge.ipaddr.split('.')[0:3])+'.'+self.idstr
+        self.macaddr  = "DE:AD:BE:EF:%s:%s" % (bridge.idhex, self.idhex)
+        self.name     = "vm%d-%s" % (self.idnum, bridge.name)
+        self.thread   = None
+        self.status   = "inactive"
+        self.tmpdir   = vm_tmpdir 
+        
+        try:
+            os.makedirs(self.tmpdir, 0700)
+        except OSError:
+            die ("Failed to create tmpdir: "+self.tmpdir)
+        
+        self.logf = os.path.join(self.tmpdir,"console")
+
+        # setup run CD:
+        if not opts.cdrom:
+            self.iso=None
+        elif os.path.isdir(opts.cdrom):
+            self.iso = os.path.join(self.tmpdir,"run.iso")
+            if subprocess.call(["genisoimage", "-quiet", "-R",
+                                "-input-charset", "utf-8", "-o",
+                                self.iso, opts.cdrom]):
+                die("Could not create cdrom from dir: "+opts.cdrom)
+        else:
+            self.iso = opts.cdrom
+
+        # generates scratch drives:
+        self.drives = []
+        if opts.scratch:
+            sizes = opts.scratch.split(",")
+            i = 1;
+            for size in sizes:
+                if size.strip():
+                    name = os.path.join(self.tmpdir,"disk-"+str(i))
+                    i += 1
+                    if subprocess.call(["fallocate", "-l", size, name]):
+                        warning ("Error creating a "+size+" scratch drive with fallocate. Trying dd")
+                        if subprocess.call(["dd", "if=/dev/zero", "of="+name, "count=1", "bs="+size]):
+                            die ("Error creating a "+size+" scratch drive with dd")
+                    self.drives.append(name)
+
+        # build qemu command and start
+        cmd = ["qemu-system-x86_64"]
+        cmd.extend(["-machine", "accel=kvm"])
+        cmd.extend(["-pidfile", os.path.join(self.tmpdir,"pid",)])
+        cmd.extend(["-m", opts.mem])
+        # LAPIC bug in qemu, shows up occasionally as a kernel panic.
+        # Use threads= for smp.
+        cmd.extend(["-smp", "1,cores=1,threads=" + opts.cpus])
+        #cmd.extend(["-vnc", "0.0.0.0:"+str(17100+vm.vm_id)])
+        if opts.kernel:
+            cmd.extend(["-kernel", opts.kernel])
+            kernelParams = "console=ttyS0,115200 kgdboc=ttyS2,115200"
+            kernelParams += " ip="+self.ipaddr
+            if opts.append:
+                kernelParams += " "+opts.append
+            cmd.extend(["-append", kernelParams])
+        if opts.initrd:
+            cmd.extend(["-initrd", opts.initrd])
+        cmd.extend(["-nographic"])
+        cmd.extend(["-serial", "stdio"])
+        cmd.extend(["-serial", "mon:unix:" + os.path.join(self.tmpdir,"con")+",server,nowait"])
+        cmd.extend(["-serial", "unix:" + os.path.join(self.tmpdir,"gdb")+",server,nowait"])
+        cmd.extend(["-monitor", "unix:" + os.path.join(self.tmpdir,"mon")+",server,nowait"])
+        if opts.persistant:
+            cmd.extend(["-drive", "format=raw,file="+opts.image])
+        else:
+            cmd.extend(["-drive", "format=raw,snapshot=on,file="+opts.image])
+        if opts.filesystems:
+            for fspath, fslabel in opts.filesystems:
+                cmd.extend(["-virtfs", "local,path="+fspath+",mount_tag="+fslabel+",security_model=none,readonly"])
+        for drive in self.drives:  # add scratch drives
+            cmd.extend(["-drive", "if=virtio,format=raw,cache=writeback,file="+drive])
+        if self.iso:              # add cdrom
+            cmd.extend(["-cdrom", self.iso])
+        cmd.extend(["-netdev","tap,id=eth0,script=%s,downscript=%s"
+            % (self.bridge.br_ifup,self.bridge.br_ifdn)])
+        cmd.extend(["-device","virtio-net-pci,netdev=eth0,mac="+self.macaddr])
+        self.command = cmd
+        #print self.command
+
+
+class Cluster(object):
+    """Defines a cluster of VMs attachd to a single virtual bridge.
+    """
+
+    def __init__(self, num_of_vms, opts):
+        """Initialize the cluster object with bridge information.
+        """
+        
+        bridge = bridge_get()
+        
+        self.idnum    = bridge.br_num               # int version of id
+        self.br_key   = bridge.br_key               # key of bridge
+        self.idstr    = str(self.idnum)             # str version of id
+        self.idhex    = hex(self.idnum+256)[-2:]    # hex version of id
+        self.name     = "vmbr%s" % self.idstr       # bridge name
+        self.vms      = []                          # list of vms in cluster
+
+        # JFR - per review comments on 4/11/14
+        # Replaced my username with call to getpass.getuser()
+
+        self.owner    = getpass.getuser()           # who "owns" this cluster
+        self.ipaddr   = "172.30.%s.1" % self.idstr  # bridge ip addresss
+        self.status   = "inactive"                  # cluster status
+        self.tmpdir   = opts.tmpdir
+
+        self.br_ifup = os.path.join(self.tmpdir,"vmbr-ifup")
+        self.br_ifdn = os.path.join(self.tmpdir,"vmbr-ifdn")
+        br_arg = {"bridge":self.name}
+        process_template(vmbr_ifup,self.br_ifup,br_arg)
+        process_template(vmbr_ifdn,self.br_ifdn,br_arg)
+        os.system('chmod +x %s' % self.br_ifup)
+        os.system('chmod +x %s' % self.br_ifdn)
+
+        slotfile = os.path.join(self.tmpdir,'id')
+        if os.path.exists(slotfile):
+            os.remove(slotfile)
+        
+        if os.path.exists(opts.indexfile):
+            os.remove(opts.indexfile)
+
+        # for each VM, grab a VM object and add it to cluster's VM list
+        for vm in range(num_of_vms):
+
+            vm_name = "vm%d-%s" % (vm+2, self.name)
+
+            vm_tmpdir = os.path.join(self.tmpdir,
+                vm_name+"-"+self.owner)
+                
+            #try:
+            slot = vm_slot_get(vm_tmpdir, opts.vde, opts.conx3)
+
+            appendfile(slotfile, slot.vm_id)
+            if opts.indexfile:
+                appendfile(opts.indexfile, slot.vm_id)
+            
+            self.vms.append(ClusteredVM(vm+2, self, opts, slot, vm_tmpdir))
+            #except:
+            #die("Unable to create virtual machine <%s-vm%d>"
+                    #% (self.name,vm+2))
+
+    def enable_bridge(self):
+        """Enable the bridge using bridge control commands.
+        """
+        try:
+            os.system("sudo brctl addbr %s" % self.name)
+            os.system("sudo ifconfig %s %s netmask 255.255.255.0" % (self.name,self.ipaddr))
+            self.owner = getpass.getuser()
+            self.status = "enabled"
+        except:
+            die("Unable to enable bridge <%s>" % self.name)
+
+    def disable_bridge(self):
+        """Disable the bridge using bridge control commands.
+        """
+        try:
+            os.system("sudo ip link set %s down" % self.name)
+        except:
+            die("Unable to bring bridge <%s> down" % self.name)
+
+        try:
+            os.system("sudo brctl delbr %s" % self.name)
+        except:
+            die("Unable to delete bridge <%s>" % self.name)
+
+        bridge_free(self.br_key)
+
+        self.owner = None
+        self.status = "disabled"
+
+    def run(self):
+        """Setup and run the cluster.
+        """
+
+        # enable the bridge
+        self.enable_bridge()
+
+        # create thread object and start it for each VM
+        for vm in self.vms:
+            if vm.idnum == 2:
+                vm.thread = RunVMInThread(vm)
+            else:
+                vm.thread = RunVMInThread(vm,vm.logf)
+            vm.thread.start()
+
+        # wait for all VM threads to finish
+        for vm in self.vms:
+            if vm.thread.is_alive:
+                vm.thread.join()
+
+        # disable the bridge
+        self.disable_bridge()
 
 def cmd_start():
-    """Start new virtual machines"""
+    """Start new virtual machines
+    """
 
-    opt=OptionParser("usage: %prog vm start [number]",
-		     description="""Boot start virtual machines""")
+    with open("./sysargs.txt","w") as f:
+        for i in range(len(sys.argv)):  
+            f.write(sys.argv[i]+"\n")
+        
+    opt = OptionParser("Usage: %prog start [options] [number]",
+        description="Start a virtual machine or cluster")
+
     opt.add_option("-i", "--image", dest="image",
-		   help="boot image of the virtual machine")
+        help="boot image of the virtual machine(s)")
+
     opt.add_option("-k", "--kernel", dest="kernel",
-		   help="kernel qemu should use to boot")
+        help="kernel used to boot the virtual machine(s)")
+
     opt.add_option("-r", "--initrd", dest="initrd",
-		   help="initial ramdisk for boot")
+        help="initial ramdisk for boot")
+
     opt.add_option("-a", "--append", dest="append",
-		   help="append kernel boot arguments",
-		   default="root=/dev/sda rw")
+        default="root=/dev/sda rw",
+        help="append kernel command line boot arguments")
+
     opt.add_option("-c", "--cdrom-source", dest="cdrom",
-		   help="source to made into a cdrom")
+        help="cdrom image or directory to convert into a cdrom image")
+
     opt.add_option("-s", "--scratch-dev ", dest="scratch",
-		   help="list of scratch device sizes. ex: 256M,2G")
-    opt.add_option("-t", "--tmpfs-dir", dest="tmpfs", default=DEFAULT_TMP,
-		   help="location of the tmpfs directory. Only used for scratch devs")
-    opt.add_option("-m", "--memory", dest="mem", default=DEFAULT_MEMORY,
-		   help="amount of memory to be allocated per VM")
-    opt.add_option("--cpus", dest="cpus", default="1",
-		   help="number of CPUs allocated.")
-    opt.add_option("-p", "--persistant", dest="persistant", action="store_true",
-		   help="turns off snapshot, so writeback happens to disk instead of tmp")
-    opt.add_option("--fs", dest="filesystems", action="append", nargs=2,
-		   help="mount a directory (first argument) as a filesystem label (second argument) in the VM")
-    opt.add_option("--id", dest="indexfile", help="file to write vm number to")
-    opt.add_option("--console", dest="console", help="where to attach the VM serial console (ex: stdio, file:foo)", default="stdio")
-    opt.add_option("--conx3", action="store_true", dest="conx3", default=False,
-		   help="assign a virtual pci connect x3 nic for rdma")
-    opt.add_option("--vde", dest="vde", action="store_true", 
-		   help="use vde networking instead of user mode. This requires a vde"+
-		   "switch to be set up, and an dns setup to listen")
+        default="",
+        help="list of scratch device sizes. ex: 256M,2G")
+
+    opt.add_option("-t", "--tmpfs-dir", dest="tmpfs",
+        default=DEFAULT_TMP,
+        help="location of the tmpfs directory for scratch devices")
+
+    opt.add_option("-m", "--memory", dest="mem",
+        default=DEFAULT_MEMORY,
+        help="amount of memory to be allocated per VM")
+
+    opt.add_option("--cpus", dest="cpus",
+        default="1",
+        help="number of CPUs allocated per VM")
+
+    opt.add_option("-p", "--persistant", dest="persistant",
+        action="store_true",
+        help="use writeback")
+
+
+    opt.add_option("--fs", dest="filesystems",
+        action="append", nargs=2,
+        help="mount a directory (first argument) as " +
+        "a filesystem label (second argument) in the VM")
+
+    opt.add_option("--id", dest="indexfile",
+        help="file to write vm number to")
+
+    opt.add_option("--console", dest="console",
+        default="stdio",
+        help="where to attach the vm console (ex: stdio, file:foo)")
+
+    opt.add_option("--conx3", dest="conx3",
+        default=False, action="store_true",
+        help="assign a virtual pci connect x3 nic for rdma")
+
+    opt.add_option("--vde", dest="vde",
+        action="store_true",
+        help="use vde networking instead of user mode. This requires " +
+        "a vde switch to be set up, and a dns setup to listen")
+
+    opt.add_option("-b", "--bridge", dest="bridge",
+        default="",
+        help="bridge number")
+
     (options, args) = opt.parse_args()
-    
-    if not options.image:
-	die ("Requires an image to boot")
-    if not os.path.isfile(options.image):
-	die("Cannot find base image file: "+options.image)
-    #if not options.kernel:
-    #   die("Requires a kernel to boot")
-    if options.kernel and not os.path.isfile(options.kernel):
-	die("Cannot find kernel file: "+options.kernel)
-    if options.initrd and not os.path.isfile(options.initrd):
-	die("Cannot find initrd file: "+options.initrd)
 
+    tmpdate = datetime.datetime.strftime(
+        datetime.datetime.today(),"%Y%m%d-%H%M%S")
+    
+    options.tmpdir = os.path.join(
+        options.tmpfs,"vm-%s-%s" % (tmpdate, randstr()))
+
+    # generate tmp dir
     try:
-	caught_signal = False
+        os.makedirs(options.tmpdir, 0700)
+    except OSError:
+        die ("Failed to create tmpdir: "+options.tmpdir)
+        
+    if options.bridge != "" and len(args) > 0:
+        
+        cluster = Cluster(int(args[0]),options)
 
-	def sighandler(signum, stack):
-	    if not caught_signal:
-		caught_signal = True
-		raise Exception("signal caught")
+        cluster.run()
 
-	for i in [x for x in dir(signal) if x.startswith("SIG")]:
-	    if i in ['SIGHUP', 'SIGINT', 'SIGQUIT', 'SIGILL', 'SIGABRT',
-		     'SIGFPE', 'SIGSEGV', 'SIGPIPE', 'SIGALRM', 'SIGTERM',
-		     'SIGUSR1', 'SIGUSR2']:
-		signum = getattr(signal, i)
-		signal.signal(signum, sighandler)
+    else:
 
-	tmpdir = options.tmpfs + '/vm-' + randStr() + '/'
-	os.mkdir(tmpdir, 0700)
-	
-	vm = vm_slot_get(tmpdir, options.vde, options.conx3)
+        # path for single vm
 
-	writefile(tmpdir + 'id', vm.vm_id)
-	if options.indexfile:
-	    writefile(options.indexfile, vm.vm_id)
+        if not options.image:
+            die ("Requires an image to boot")
+
+        if not os.path.isfile(options.image):
+            die("Cannot find base image file: "+options.image)
+
+        #if not options.kernel:
+
+        if options.kernel and not os.path.isfile(options.kernel):
+            die("Cannot find kernel file: "+options.kernel)
+
+        if options.initrd and not os.path.isfile(options.initrd):
+            die("Cannot find initrd file: "+options.initrd)
+
+        try:
+            caught_signal = False
+
+            def sighandler(signum, stack):
+                if not caught_signal:
+                    caught_signal = True
+                    raise Exception("signal caught")
+
+            for i in [x for x in dir(signal) if x.startswith("SIG")]:
+                if i in ['SIGHUP', 'SIGINT', 'SIGQUIT', 'SIGILL', 'SIGABRT',
+                    'SIGFPE', 'SIGSEGV', 'SIGPIPE', 'SIGALRM', 'SIGTERM',
+                    'SIGUSR1', 'SIGUSR2']:
+                    signum = getattr(signal, i)
+                    signal.signal(signum, sighandler)
+
+            vm = vm_slot_get(options.tmpdir, options.vde, options.conx3)
+
+            idfile = os.path.join(options.tmpdir,'id')
+
+            writefile(idfile, vm.vm_id)
+            if options.indexfile:
+                writefile(options.indexfile, vm.vm_id)
+
+            # setup run CD:
+            if not options.cdrom:
+                iso=None
+            elif os.path.isdir(options.cdrom):
+                iso = options.tmpdir + "/run.iso"
+                if subprocess.call(["genisoimage", "-quiet", "-R",
+                    "-input-charset",
+                    "utf-8", "-o", iso, options.cdrom]):
+                    die("Could not create cdrom from dir: "+options.cdrom)
+            else:
+                iso=options.cdrom
+
+             # generates scratch drives:
+            drives = []
+            if options.scratch:
+                sizes = options.scratch.split(",")
+
+                i = 1;
+                for size in sizes:
+                    if size.strip():
+                        name = options.tmpdir + "/disk-" + str(i)
+                        i += 1
+
+                        if subprocess.call(["fallocate", "-l", size, name]):
+                            warning("fallocate error, trying dd")
+                            if subprocess.call(["dd", "if=/dev/zero", "of="+name,
+                                "count=1", "bs="+size]):
+                                die ("error creating scratch drive")
+                        drives.append(name)
+
+            # build qemu command and start
+            cmd = ["qemu-system-x86_64"]
+            cmd.extend(["-machine", "accel=kvm"])
+            cmd.extend(["-pidfile", options.tmpdir + "/pid"])
+            cmd.extend(["-m", options.mem])
+            # LAPIC bug in qemu, shows up occasionally as a kernel panic.
+
+            cmd.extend(["-smp", "1,cores=1,threads=" + options.cpus])
+            #cmd.extend(["-vnc", "0.0.0.0:"+str(17100+vm.vm_id)])
+
+            if options.kernel:
+                cmd.extend(["-kernel", options.kernel])
+                kernelParams = "console=ttyS0,115200 kgdboc=ttyS2,115200"
+                if options.vde:
+                    kernelParams += " ip="+vm.ip
+                if options.append:
+                    kernelParams += " "+options.append
+                cmd.extend(["-append", kernelParams])
+
+            if options.initrd:
+                cmd.extend(["-initrd", options.initrd])
+
+            cmd.extend(["-nographic"])
+            cmd.extend(["-serial",  options.console])
+            cmd.extend(["-serial",  "mon:unix:" + options.tmpdir + "/con,server,nowait"])
+            cmd.extend(["-serial",  "unix:" + options.tmpdir + "/kgdb,server,nowait"])
+            cmd.extend(["-monitor", "unix:" + options.tmpdir + "/mon,server,nowait"])
+            cmd.extend(["-gdb", "unix:" + options.tmpdir + "/gdb,server,nowait"])
     
-	# setup run CD:
-	if not options.cdrom:
-	    iso=None
-	elif os.path.isdir(options.cdrom):
-	    iso = tmpdir + "run.iso"
-	    if subprocess.call(["genisoimage", "-quiet", "-R", "-input-charset",
-			 "utf-8", "-o", iso, options.cdrom]):
-		die("Could not create cdrom from dir: "+options.cdrom)
-	else:
-	    iso=options.cdrom
+            # Drives:
+            if options.persistant:
+                cmd.extend(["-drive", "format=raw,file="+options.image])
+            else:
+                cmd.extend(["-drive", "format=raw,snapshot=on,file="+options.image])
+            if options.filesystems:
+                for fspath, fslabel in options.filesystems:
+                    cmd.extend(["-virtfs", "local,path="+fspath+",mount_tag="+fslabel+",security_model=none,readonly"])
+            for drive in drives:  # add scratch drives
+                cmd.extend(["-drive", "if=virtio,format=raw,cache=writeback,file="+drive])
 
-	# generates scratch drives:
-	drives = []
-	if options.scratch:
-	    sizes = options.scratch.split(",")
-	    i = 1;
-	    for size in sizes:
-                if size.strip():
-                    name = tmpdir + "disk-" + str(i)
-                    i += 1
-
-                    if subprocess.call(["fallocate", "-l", size, name]):
-                        warning("fallocate error, trying dd")
-                        if subprocess.call(["dd", "if=/dev/zero", "of="+name,
-                                            "count=1", "bs="+size]):
-                            die ("error creating scratch drive")
-                    drives.append(name)
-
-	# build qemu command and start
-	cmd = ["qemu-system-x86_64"]
-	cmd.extend(["-machine", "accel=kvm"])
-	cmd.extend(["-pidfile", tmpdir + "pid"])
-	cmd.extend(["-m", options.mem])
-	# LAPIC bug in qemu, shows up occasionally as a kernel panic.
-	# Use threads= for smp.
-	cmd.extend(["-smp", "1,cores=1,threads=" + options.cpus])
-	#cmd.extend(["-vnc", "0.0.0.0:"+str(17100+vm.vm_id)])
-	if options.kernel:
-	    cmd.extend(["-kernel", options.kernel])
-	    kernelParams = "console=ttyS0,115200 kgdboc=ttyS2,115200"
-	    if options.vde:
-		kernelParams += " ip="+vm.ip
-	    if options.append:
-		kernelParams += " "+options.append
-	    cmd.extend(["-append", kernelParams])
-	if options.initrd:
-	    cmd.extend(["-initrd", options.initrd])
-	cmd.extend(["-nographic"])
-	cmd.extend(["-serial",	options.console])
-	cmd.extend(["-serial",	"mon:unix:" + tmpdir + "con,server,nowait"])
-	cmd.extend(["-serial",	"unix:" + tmpdir + "kgdb,server,nowait"])
-	cmd.extend(["-monitor",	"unix:" + tmpdir + "mon,server,nowait"])
-	cmd.extend(["-gdb",	"unix:" + tmpdir + "gdb,server,nowait"])
-
-	# Drives:
-	if options.persistant:
-	    cmd.extend(["-drive", "format=raw,file="+options.image])
-	else:
-	    cmd.extend(["-drive", "format=raw,snapshot=on,file="+options.image])
-	if options.filesystems:
-	    for fspath, fslabel in options.filesystems:
-		cmd.extend(["-virtfs", "local,path="+fspath+",mount_tag="+fslabel+",security_model=none,readonly"])
-	for drive in drives:  # add scratch drives
-	    cmd.extend(["-drive", "if=virtio,format=raw,cache=writeback,file="+drive])
-	if iso:              # add cdrom
-	    cmd.extend(["-cdrom", iso])
-	if options.vde:   # enable vde networking
-	    cmd.extend(["-netdev", "vde,id=vde_net,sock=/tmp/vde.ctl"])
-	    cmd.extend(["-device", "virtio-net-pci,netdev=vde_net,mac="+vm.mac])
-	    vm.vde = True
-	else:             # user networking instead
-	    cmd.extend(["-net", "nic,model=virtio"])
-	    cmd.extend(["-net", "user,host=10.0.2.2,restrict=off,hostfwd=tcp:127.0.0.1:" + str(vm.vm_id + 9000) + "-:22"])
-	    vm.vde = False
-
-	if options.conx3:
-	    print "Assigning vf: ", vm.conx3_id
-	    cmd.extend(["-device", "pci-assign,host="+str(vm.conx3_id)])
-
-	p = subprocess.Popen(cmd, shell=False)
-
-	vm.pid = p.pid
-	vm.status="running"
-	print GREEN+"Vm ID: "+str(vm.vm_id)+" IP: "+vm.ip+" MAC: "+vm.mac+NC
+            if iso:              # add cdrom
+                cmd.extend(["-cdrom",iso])
+ 
+            if options.vde:   # enable vde networking
+                cmd.extend(["-netdev", "vde,id=vde_net,sock=/tmp/vde.ctl"])
+                cmd.extend(["-device", "virtio-net-pci,netdev=vde_net,mac="+vm.mac])
+                vm.vde = True
+            else:             # user networking instead
+                cmd.extend(["-net", "nic,model=virtio"])
+                cmd.extend(["-net", "user,host=10.0.2.2,restrict=off,hostfwd=tcp:127.0.0.1:" + str(vm.vm_id + 9000) + "-:22"])
+                vm.vde = False
     
-	p.wait()
-    except:
-	pass
+            if options.conx3:
+                print "Assigning vf: ", vm.conx3_id
+                cmd.extend(["-device", "pci-assign,host="+str(vm.conx3_id)])
+        
+            warning("Executing: "+str(cmd))
+            
+            p = subprocess.Popen(cmd, shell=False)
 
-    vm_cleanup(tmpdir)
+            vm.pid = p.pid
+            vm.status="running"
+            print GREEN+"Vm ID: "+str(vm.vm_id)+" IP: "+vm.ip+" MAC: "+vm.mac+NC
+    
+            p.wait()
+        except:
+            pass
+    
+    vm_cleanup(options.tmpdir)
     subprocess.call(["stty", "sane"])
 
 def cmd_stop():
-    """Stop virtual machines"""
-    
-    opt=OptionParser("usage: %prog vm stop [id]",
-		     description="""Stop virtual machines""")
-    (options, args) = opt.parse_args()
-     
-    if len(args)==0:
-	die("Please provide a vm id to stop")
+    """Stop virtual machines by id or ipaddr
+    """
 
-    vm = vm_lookup(int(sys.argv[1]))
-    pid = readfile(vm.tmpdir + '/pid')
+    opt = OptionParser("Usage: %prog stop [options] [id]",
+        description="Stop a vm by its id or its ip address")
 
-    os.kill(int(pid), signal.SIGKILL)
+    opt.add_option("-i", "--ip", dest="ipaddr",
+      help="The ip address of the vm")
+
+    (opts, args) = opt.parse_args()
+
+    if opts.ipaddr:
+        os.system(
+          "ssh -o StrictHostKeyChecking=no -i id_dsa %s 'shutdown -h now'"
+          % opts.ipaddr)
+    else:
+
+        if len(args) == 0:
+            die("Please provide a vm id or ip address to stop")
+
+        ids = args[0].split("/") 
+        
+        print ids       
+        
+        for id in ids:
+            vm = vm_lookup(int(id))
+            pid = readfile(vm.tmpdir + '/pid')
+            os.kill(int(pid), signal.SIGKILL)
+
 
 def cmd_ssh():
     """ssh into a virtual machine"""
-     
+
     if len(sys.argv) <= 1:
-	die("Please provide a vm id to SSH to")
+        die("Please provide a vm id to SSH to")
 
     id = int(sys.argv[1])
     vm = vm_lookup(id)
-    
+
     keyfile = os.path.dirname(os.path.realpath(__file__)) + "/id_dsa"
     os.system("chmod 600 " + keyfile)
-     
+
     if vm.vde:
-	cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o",
-	    "UserKnownHostsFile=/dev/null", "-i", keyfile, "root@"+vm.ip]
+        cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o",
+            "UserKnownHostsFile=/dev/null", "-i", keyfile, "root@"+vm.ip]
     else:
-	cmd = ["ssh", "-o", "NoHostAuthenticationForLocalhost=yes",
-	    "-i", keyfile, "-p", str(9000 + id), "root@127.0.0.1"]
-    
+        cmd = ["ssh", "-o", "NoHostAuthenticationForLocalhost=yes",
+            "-i", keyfile, "-p", str(9000 + id), "root@127.0.0.1"]
+
     cmd.extend(sys.argv[2:])
     os.execvp("ssh", cmd)
 
+
 def vm_gdb(gdbsocket):
     if len(sys.argv) <= 2:
-	die("Please provide a vm ID and a vmlinux file")
-        
+        die("Please provide a vm ID and a vmlinux file")
+
     vm = vm_lookup(int(sys.argv[1]))
     os.execlp("gdb", "gdb",
-	      "-ex", "set remote interrupt-on-connect",
-	      "-ex", "target remote | socat UNIX-CONNECT:" +
-	      vm.tmpdir + gdbsocket + ' -', sys.argv[2])
+          "-ex", "set remote interrupt-on-connect",
+          "-ex", "target remote | socat UNIX-CONNECT:" +
+          vm.tmpdir + gdbsocket + ' -', sys.argv[2])
+
 
 def cmd_gdb():
     vm_gdb('gdb')
 
+
 def cmd_kgdb():
     vm_gdb('kgdb')
 
+
 def cmd_mon():
     if len(sys.argv)<=1:
-	die("Please provide a vm id")
-    
+        die("Please provide a vm id")
+
     vm = vm_lookup(int(sys.argv[1]))
-    
+
     os.execlp("minicom", "minicom",
-	      "-D", "unix#" + vm.tmpdir + "mon")
+          "-D", "unix#" + vm.tmpdir + "mon")
+
 
 def cmd_list():
     """List out running VMs"""
     opt=OptionParser("usage: %prog vm list [session_id]",
-		     description="""List out running VMs""")
+             description="""List out running VMs""")
     (options, args) = opt.parse_args()
-       
-    # get running vms:
-    d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
-    running_vms = d["running_vms"]
-    closeLockedDb(d)
-    
-    running_vms = sorted(running_vms, key=operator.attrgetter("owner", "vm_id"))
-    
-    print "Domain\tIP\t\tConX3 id\tOwner\tDead"
-    print "------\t------------\t--------\t-----\t----"
-    
-    for vm in running_vms:
-	mia=" " if vm.exists() == True else "X"
-	print(str(vm.name) + "\t" + str(vm.ip) + "\t" +
-	      str(vm.conx3_id) + "\t\t" +
-	      str(vm.owner) + "\t" + mia)
 
+    if len(args) == 0 or args[0] == "vms":
+        
+        # get running vms:
+        d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
+        running_vms = d["running_vms"]
+        closeLockedDb(d)
+    
+        running_vms = sorted(running_vms, key=operator.attrgetter("owner", "vm_id"))
+    
+        print "Domain\tIP\t\tConX3 id\tOwner\tDead"
+        print "------\t------------\t--------\t-----\t----"
+    
+        for vm in running_vms:
+            mia=" " if vm.exists() == True else "X"
+            print (str(vm.name) + "\t" + str(vm.ip) + "\t" +
+                str(vm.conx3_id) + "\t\t" +
+                str(vm.owner) + "\t" + mia)
+
+    elif args[0] == "bridges":
+        d = openLockedDb(BR_FILE_LOCK, BR_FILE_DICT)
+        bridges = d["bridges"]
+        closeLockedDb(d)
+
+        bridges = bridges.values()
+       
+        bridges = sorted(bridges, key=operator.attrgetter("br_name"))
+        print "Bridge\tAvailable?"
+        print "------\t----------"
+        for br in bridges:
+            print br.br_name+"\t"+str(br.available)
+    
 def cmd_genips():
     """
     Generates a new set of new IP Macaddress combinations for
     and puts them in the proper locations:
     Vm.ips-dict - shelve dictionary used by python
-    
+
     For use when setting up networking on a new machine, or if
     any of the config files get screwed up.
     """
-    
+
     opt=OptionParser("usage: %prog vm genips",
-		     description="""Generate a new IP/MAC file""")
+             description="""Generate a new IP/MAC file""")
     (options, args) = opt.parse_args()
-    
+
     if os.geteuid() != 0:
-	die("You need root permissions to do this, laterz!")
-    
+        die("You need root permissions to do this, laterz!")
+
     check = raw_input("This will overwrite any current vm list files. Are you sure? (y): ")
     if check != "y":
-	sys.exit(0)
-    
+        sys.exit(0)
+
     # make directory
     if not os.path.isdir("/etc/vms"):
-      try:
-         os.mkdir("/etc/vms")
-      except OSError:
-         die("Failed to create /etc/vms")
-    
+        try:
+            os.mkdir("/etc/vms")
+        except OSError:
+             die("Failed to create /etc/vms")
+
     # generate database files:
     name = "ips"
-    
+
     d = shelve.open(IP_FILE_DICT)
     d["sess_id"] = 1000
     free_vms = []
     lock = open(IP_FILE_LOCK, "w")
     lock.write("used for locking access to vm database file")
-    
+
     for i in range (0, 100):
-	#generate IP file
-	vm_num = str(i).zfill(2)
-	name = "vm"+vm_num
-	ip = "172.20.0."+str(i+100)
-	mac = "DE:AD:BE:EF:01:"+vm_num
-	
-	#generate ips dict
-	vm = Domain(i, ip, mac)
-	free_vms.insert(0, vm)
-    
+        #generate IP file
+        vm_num = str(i).zfill(2)
+        name = "vm"+vm_num
+        ip = "172.20.0."+str(i+100)
+        mac = "DE:AD:BE:EF:01:"+vm_num
+
+        #generate ips dict
+        vm = Domain(i, ip, mac)
+        free_vms.insert(0, vm)
+
     d["free_vms"] = free_vms
     d["running_vms"] = []
     d.close()
     lock.close()
-     
+
     os.chmod(IP_FILE_DICT, 0666)
     os.chmod(IP_FILE_LOCK, 0666)
-    
+
     print "Setup completed"
+
+def cmd_genbridges():
+    """
+    Generates a new set of bridges
+
+    For use when setting up networking on a new machine, or if
+    any of the config files get screwed up.
+    """
+
+    opt=OptionParser("usage: %prog genbridges",
+             description="""Generate a new bridge file""")
+    (options, args) = opt.parse_args()
+
+    if os.geteuid() != 0:
+        die("You need root permissions to do this, laterz!")
+
+    check = raw_input("This will overwrite any current bridge list files. Are you sure? (y): ")
+    if check != "y":
+        sys.exit(0)
+
+    # make directory
+    if not os.path.isdir("/etc/vms"):
+        try:
+            os.mkdir("/etc/vms")
+        except OSError:
+             die("Failed to create /etc/vms")
+
+    # generate database files:
+    db = shelve.open(BR_FILE_DICT)
+    db["sess_id"] = 1000
+    bridges = {}
+    lock = open(BR_FILE_LOCK, "w")
+    lock.write("Used for locking access to vm database file")
+
+    for br_num in range (1,10):
+        #generate bridge file
+        br_key = str(br_num)
+        br_name = "br"+br_key
+        bridges[br_key] = Bridge(br_key,br_num,br_name)
+
+    db["bridges"] = bridges
+    db.close()
+    lock.close()
+
+    os.chmod(BR_FILE_DICT, 0666)
+    os.chmod(BR_FILE_LOCK, 0666)
+
+    print "Bridge setup completed"
+
 
 def cmd_genconx3():
     """
@@ -545,103 +1076,111 @@ def cmd_genconx3():
     flag = 0
     phys_dev = ""
     for line in p.stdout:
-	if flag == 0:
-	    if re.search("Mellanox", line):
-		entries = re.split('\W+', line)
-		searchStr = entries[0] + ':0'
-		phys_dev = entries[0] + ':' + entries[1] + '.' + entries[2]
-		print phys_dev
-		flag = 1
-	if flag == 1:
-	    if re.search("Number of VFs:", line):
-		entries = re.split(',', line)
-		entry = re.split(':', entries[0])
-		num_vfs='num_vfs=' + str(int(entry[1]))
-		entry = re.split(':', entries[1])
-		probe_vf='probe_vf=' + str(int(entry[1]))
-		entry = re.split(':', entries[2])
-		# Number of VFs: 0
-		if int(entry[1]) == 0:
-		    print "SR-IOV is not yet enabled!"
-		    subprocess.call(['rmmod', 'mlx4_ib', 'mlx4_core'])
-		    print num_vfs + ' ' + probe_vf
-		    subprocess.call(['modprobe', '-v', 'mlx4_core', num_vfs, probe_vf])
-		else:
-		    print "SR-IOV enabled!"
-		break
+        if flag == 0:
+            if re.search("Mellanox", line):
+                entries = re.split('\W+', line)
+                searchStr = entries[0] + ':0'
+                phys_dev = entries[0] + ':' + entries[1] + '.' + entries[2]
+                print phys_dev
+                flag = 1
+        if flag == 1:
+            if re.search("Number of VFs:", line):
+                entries = re.split(',', line)
+                entry = re.split(':', entries[0])
+                num_vfs='num_vfs=' + str(int(entry[1]))
+                entry = re.split(':', entries[1])
+                probe_vf='probe_vf=' + str(int(entry[1]))
+                entry = re.split(':', entries[2])
+            # Number of VFs: 0
+            if int(entry[1]) == 0:
+                print "SR-IOV is not yet enabled!"
+                subprocess.call(['rmmod', 'mlx4_ib', 'mlx4_core'])
+                print num_vfs + ' ' + probe_vf
+                subprocess.call(['modprobe', '-v', 'mlx4_core', num_vfs, probe_vf])
+            else:
+                print "SR-IOV enabled!"
+            break
     p.kill()
     p.wait()
 
     if flag == 1:
-	d = shelve.open(PCI_CONNECTX3_FILE_DICT)
-	free_conx3 = []
-	lock = open(PCI_CONNECTX3_FILE_LOCK, "w")
-	lock.write("used for locking access to pci connect x3 nic database file")
-	p = subprocess.Popen(['lspci', '-n'], bufsize=-1, stdout=subprocess.PIPE)
-	flag = 0
-	for line in p.stdout:
-	    m = re.match(searchStr, line)
-	    if m:
-		entries = re.split(' ', line)
-		#entries[0] is the vf id
-		#entries[2] is the vendor and the device id
-		if not re.match(phys_dev, entries[0]):
-		    if flag == 0:
-			entry = re.split('[:\n]', entries[2])
-			vend_dev_id = entry[0] + ' ' + entry[1]
-			f = open('/sys/bus/pci/drivers/pci-stub/new_id', 'w')
-			f.write(vend_dev_id)
-			f.close()
-			flag = 1
-		    fn = '/sys/bus/pci/devices/0000:' + entries[0] + '/driver/unbind'
-		    devid = '0000:' + entries[0]
-		    f = open(fn, 'w')
-		    f.write(devid)
-		    f.close()
-		    f = open('/sys/bus/pci/drivers/pci-stub/bind', 'w')
-		    f.write(devid)
-		    f.close()
-		    # populate the connect x3 pci cards db with these devids
-		    free_conx3.append(entries[0])
-		    d["free_conx3"] = free_conx3
-		    print d["free_conx3"]
-	d["free_conx3"] = free_conx3
-	d.close()
-	lock.close()
-	p.kill()
-	p.wait()
+        d = shelve.open(CX3_FILE_DICT)
+        free_conx3 = []
+        lock = open(CX3_FILE_LOCK, "w")
+        lock.write("used for locking access to pci connect x3 nic database file")
+        p = subprocess.Popen(['lspci', '-n'], bufsize=-1, stdout=subprocess.PIPE)
+        flag = 0
+        for line in p.stdout:
+            m = re.match(searchStr, line)
+            if m:
+                entries = re.split(' ', line)
+                #entries[0] is the vf id
+                #entries[2] is the vendor and the device id
+                if not re.match(phys_dev, entries[0]):
+                    if flag == 0:
+                        entry = re.split('[:\n]', entries[2])
+                        vend_dev_id = entry[0] + ' ' + entry[1]
+                        f = open('/sys/bus/pci/drivers/pci-stub/new_id', 'w')
+                        f.write(vend_dev_id)
+                        f.close()
+                        flag = 1
+                    fn = '/sys/bus/pci/devices/0000:' + entries[0] + '/driver/unbind'
+                    devid = '0000:' + entries[0]
+                    f = open(fn, 'w')
+                    f.write(devid)
+                    f.close()
+                    f = open('/sys/bus/pci/drivers/pci-stub/bind', 'w')
+                    f.write(devid)
+                    f.close()
+                    # populate the connect x3 pci cards db with these devids
+                    free_conx3.append(entries[0])
+                    d["free_conx3"] = free_conx3
+                    print d["free_conx3"]
+        d["free_conx3"] = free_conx3
+        d.close()
+        lock.close()
+        p.kill()
+        p.wait()
+
 
 def cmd_help():
-    print """List of valid commands:
-	start    starts a vm
-	list     list all running vms
-	genips   generate a fresh vm database
-	genconx3  update db with virtual rdma capable nic
-	"""
+    """Print help for commands."""
+    print """Usage: vm-start [command] [args]
 
-# main:
+  Commands:
+    start       setup and start a vm or a vm cluster
+    stop        stop a vm by id or, for a cluster,
+                all vms or a single by name
+    ssh         ssh to a virtual machine by id
+    gdb         connect to gbd
+    kgdb        connect to kgdb
+    mon         connect to the qemu monitor
+    list        list all running vms
+    genips      generate a fresh vm database
+    gemconx3    update db with virtual rdma capable nic
+    help        print help for commands
+    """
+
+"""Main program."""
+
+# if there is no command or args, print error message
 if len(sys.argv) == 1:
     cmd_help()
-    die("Please give a command")
+    die("Please provide a command and appropriate arguments.")
 
-if sys.argv[1] == "-h":
+# if first arg is a help option or command, print help and exit
+if sys.argv[1] in ["-h", "--help", "help"]:
     cmd_help()
     sys.exit(0)
 
-# try looking up given command in global namespace:
+# try to find the command in the global namespace
 try:
-    func = "cmd_"+sys.argv[1]
-    func = getattr(sys.modules[__name__], func)
+    _cmd_name = "cmd_" + sys.argv[1]
+    _cmd_func = getattr(sys.modules[__name__], _cmd_name)
 except AttributeError:
-    cmd_help()
-    die(sys.argv[1]+" is not a valid command")
+    die("<%s> is not a valid command.\n" % sys.argv[1] +
+      "Try 'vm-cluster help' for more info.")
 
-# check for vm.dict setup:
-if func != cmd_genips:
-    if not os.path.isfile(IP_FILE_DICT):
-	die("Vm list file not found. Please run genips")
-    if not os.path.isfile(IP_FILE_LOCK):
-	die("Lock file for vm list access not found. Did you run genips?")
-
+# remove the command from argv and execute the command function
 sys.argv.pop(1)
-func()
+_cmd_func()

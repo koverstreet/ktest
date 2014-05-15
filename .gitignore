@@ -15,3 +15,5 @@ cscope*
 tags
 *.tags
 test-driver
+*.pyc
+
