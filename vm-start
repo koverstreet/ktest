@@ -2,7 +2,6 @@
 # Copyright (c) 2013 Datera, Inc. All rights reserved
 # Datera, Inc. Confidential and Propriatory
 
-import os.path 
 import getpass
 import threading
 
@@ -171,8 +170,7 @@ def bridge_get():
             bridge.available = False
             bridges[key] = bridge
             break
-
-    if bridge == None:
+    else:
         die("No bridge entries available to start cluster")        
 
     db["bridges"] = bridges
@@ -507,9 +505,6 @@ class Cluster(object):
         self.idhex    = hex(self.idnum+256)[-2:]    # hex version of id
         self.name     = "vmbr%s" % self.idstr       # bridge name
         self.vms      = []                          # list of vms in cluster
-
-        # JFR - per review comments on 4/11/14
-        # Replaced my username with call to getpass.getuser()
 
         self.owner    = getpass.getuser()           # who "owns" this cluster
         self.ipaddr   = "172.30.%s.1" % self.idstr  # bridge ip addresss
