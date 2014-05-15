@@ -441,13 +441,14 @@ class ClusteredVM(object):
             sizes = opts.scratch.split(",")
             i = 1;
             for size in sizes:
-                name = os.path.join(self.tmpdir,"disk-"+str(i))
-                i += 1
-                if subprocess.call(["fallocate", "-l", size, name]):
-                    warning ("Error creating a "+size+" scratch drive with fallocate. Trying dd")
-                    if subprocess.call(["dd", "if=/dev/zero", "of="+name, "count=1", "bs="+size]):
-                        die ("Error creating a "+size+" scratch drive with dd")
-                self.drives.append(name)
+                if size.strip():
+                    name = os.path.join(self.tmpdir,"disk-"+str(i))
+                    i += 1
+                    if subprocess.call(["fallocate", "-l", size, name]):
+                        warning ("Error creating a "+size+" scratch drive with fallocate. Trying dd")
+                        if subprocess.call(["dd", "if=/dev/zero", "of="+name, "count=1", "bs="+size]):
+                            die ("Error creating a "+size+" scratch drive with dd")
+                    self.drives.append(name)
 
         # build qemu command and start
         cmd = ["qemu-system-x86_64"]
@@ -630,7 +631,7 @@ def cmd_start():
         help="cdrom image or directory to convert into a cdrom image")
 
     opt.add_option("-s", "--scratch-dev ", dest="scratch",
-        default="256M,1G",
+        default="",
         help="list of scratch device sizes. ex: 256M,2G")
 
     opt.add_option("-t", "--tmpfs-dir", dest="tmpfs",
@@ -755,15 +756,16 @@ def cmd_start():
 
                 i = 1;
                 for size in sizes:
-                    name = options.tmpdir + "/disk-" + str(i)
-                    i += 1
+                    if size.strip():
+                        name = options.tmpdir + "/disk-" + str(i)
+                        i += 1
 
-                    if subprocess.call(["fallocate", "-l", size, name]):
-                        warning("fallocate error, trying dd")
-                        if subprocess.call(["dd", "if=/dev/zero", "of="+name,
-                            "count=1", "bs="+size]):
-                            die ("error creating scratch drive")
-                    drives.append(name)
+                        if subprocess.call(["fallocate", "-l", size, name]):
+                            warning("fallocate error, trying dd")
+                            if subprocess.call(["dd", "if=/dev/zero", "of="+name,
+                                "count=1", "bs="+size]):
+                                die ("error creating scratch drive")
+                        drives.append(name)
 
             # build qemu command and start
             cmd = ["qemu-system-x86_64"]
