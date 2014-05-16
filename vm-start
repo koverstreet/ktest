@@ -335,6 +335,7 @@ class RunVMInThread(threading.Thread):
         self.log = log
         self.logf = None
         self.proc = None
+        self.rc = 0
 
     def run(self):
         """Start the VM inside the thread object.
@@ -348,42 +349,20 @@ class RunVMInThread(threading.Thread):
 
         # use subprocess.Popen to run the VM and target the output
         if self.log == "console":
-            self.proc = subprocess.Popen(
-                self.obj.command, bufsize=5000, stdin=None,
-                stdout=None, stderr=subprocess.STDOUT)
+            self.logf = None
         else:
             self.logf = open(self.log,"w")
-            self.proc = subprocess.Popen(
-                self.obj.command, bufsize=5000, stdin=None,
-                stdout=self.logf, stderr=subprocess.STDOUT)
+        
+        self.proc = subprocess.Popen(
+            self.obj.command, bufsize=0, stdin=None,
+            stdout=self.logf, stderr=subprocess.STDOUT)
 
         # indicate the VM has been started
         print "<%s> started as pid <%d> stdout <%s>\n" \
             % (self.obj.name, self.proc.pid, self.log),
 
-        # handle VM log output
-        #if self.log != "console":
-            # for the console, poll and post output until VM terminates
-
-            # JFR - per review comments on 4/11/14
-            # Kent says this is preferable... not sure if it works in all cases
-            # Replaced four lines with four
-
-            #line = self.proc.stdout.readline()
-            #while self.proc.poll() == None:
-                #print "[%s]%s" % (self.obj.name,line),
-                #line = self.proc.stdout.readline()
-
-            #while True:
-                #line = self.proc.stdout.readline()
-                #if not line: 
-                    #break
-                #print "[%s]%s" % (self.obj.name,line),
-
-        #else:
-            # for a logfile, wait for VM to terminate and close the log file
-        self.proc.wait()
-        if self.log != "console":
+        self.rc = self.proc.wait()
+        if self.logf:
             self.logf.close()
 
         # indicate the VM has been terminated
