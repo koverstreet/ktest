@@ -1,17 +1,20 @@
 #!/bin/bash
 
 if [ "$1" = "deps" ]; then
-	echo "REQUIRE=test-libs.sh,make-bcache"
-	echo "MEM=256M"
-	echo "SCRATCH=2G"
-	exit
+    cat <<-ZZ
+REQUIRE=../test-libs.sh,make-bcache,../ltp-fsx
+KERNEL_CONFIG_REQUIRE=MD,BCACHE
+MEM=256M
+SCRATCH=2G
+ZZ
+    exit
 fi
+
+. test-libs.sh
 
 echo "file inode.c +p"		> /sys/kernel/debug/dynamic_debug/control
 #echo "file dirent.c +p"		> /sys/kernel/debug/dynamic_debug/control
 echo "file fs.c +p"		> /sys/kernel/debug/dynamic_debug/control
-
-. test-libs.sh
 
 CACHE=/dev/vda
 
@@ -30,20 +33,18 @@ sleep 0.5
 #prep_bcache_devices || exit
 #cache_set_settings
 
-echo "register done"
-
 cd /sys/fs/bcache
 UUID=`ls -d *-*-*`
 
-echo
-echo "cache set uuid $UUID"
-echo "Mounting bcachefs"
-
-cd
+echo "register done, mounting $UUID"
 
 DEV=bcache
 mkdir -p /mnt/$DEV
 
+cd /
 mount -t bcachefs $UUID /mnt/$DEV
 
-test_stress &
+test_shrink &
+ltp-fsx /mnt/$DEV/foo
+
+#test_stress &
