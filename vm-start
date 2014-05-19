@@ -642,6 +642,10 @@ def cmd_start():
         default=DEFAULT_MEMORY,
         help="amount of memory to be allocated per VM")
 
+    opt.add_option("-C", "--core", dest="core",
+        default=None,
+        help="file used for log and core")
+
     opt.add_option("--cpus", dest="cpus",
         default="1",
         help="number of CPUs allocated per VM")
@@ -764,8 +768,22 @@ def cmd_start():
                             warning("fallocate error, trying dd")
                             if subprocess.call(["dd", "if=/dev/zero", "of="+name,
                                 "count=1", "bs="+size]):
-                                die ("error creating scratch drive")
+                               die ("error creating scratch drive '"+name+"'")
                         drives.append(name)
+
+            # generate log and core dump device
+            if options.core:
+                (name,size) = options.core.split(",")
+                if size==None:
+                    size="10G"
+                if subprocess.call(["fallocate", "-l", size, name]):
+                    warning("fallocate error, trying dd")
+                    if subprocess.call(["dd", "if=/dev/zero", "of="+name,
+                                        "count=1", "bs="+size]):
+                        die ("error creating core/log drive '"+name+"'")
+                if subprocess.call(["mkfs.ext4", "-U","11111111-2222-3333-4444-555555555555","-F",name]):
+                    die("mkfs.ext4 failed on '"+name+"'")
+
 
             # build qemu command and start
             cmd = ["qemu-system-x86_64"]
@@ -804,6 +822,9 @@ def cmd_start():
             if options.filesystems:
                 for fspath, fslabel in options.filesystems:
                     cmd.extend(["-virtfs", "local,path="+fspath+",mount_tag="+fslabel+",security_model=none,readonly"])
+            if options.core:
+               cmd.extend(["-drive", "format=raw,file="+options.core.split(",")[0]])
+
             for drive in drives:  # add scratch drives
                 cmd.extend(["-drive", "if=virtio,format=raw,cache=writeback,file="+drive])
 

@@ -244,6 +244,7 @@ cmd_run()
     -k $KERNEL_OUTPUT/arch/x86/boot/bzImage         \
     -c $WORK_DIRECTORY/run.iso                      \
     --id $WORK_DIRECTORY/id                         \
+    -C $WORK_DIRECTORY/logfs,10G                    \
     -m $MEM                                         \
     -s $SCRATCH                                     \
     $VDE                                            \

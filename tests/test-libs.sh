@@ -1,5 +1,7 @@
 # Util code
 
+export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}+ '
+
 # Wait for an IP or IPv6 address to show
 # up on a specific device.
 # args: addr bits=24 type=4 dev=eth0 timeout=60 on=true
@@ -447,3 +449,16 @@ dmesg -n 7
 echo 1 > /proc/sys/kernel/sysrq
 
 ln -sf /sys/kernel/debug/tracing/ /root/t || true
+
+set -x
+# mount /var/log device if it exists
+if [ -b /dev/disk/by-uuid/11111111-2222-3333-4444-555555555555 ] ; then
+    systemctl stop rsyslog
+    mount /dev/disk/by-uuid/11111111-2222-3333-4444-555555555555 /var/log
+    systemctl start rsyslog
+    mkdir -p /var/log/core
+    echo 1 > /proc/sys/fs/suid_dumpable
+    echo /var/log/core/core.%e.PID%p.SIG%s.TIME%t > /proc/sys/kernel/core_pattern
+    ulimit -c unlimited
+fi
+
