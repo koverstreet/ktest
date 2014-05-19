@@ -525,12 +525,20 @@ class Cluster(object):
             #die("Unable to create virtual machine <%s-vm%d>"
                     #% (self.name,vm+2))
 
+
     def enable_bridge(self):
         """Enable the bridge using bridge control commands.
         """
         try:
-            os.system("sudo brctl addbr %s" % self.name)
-            os.system("sudo ifconfig %s %s netmask 255.255.255.0" % (self.name,self.ipaddr))
+            subprocess.check_call("sudo brctl addbr %s" % self.name)
+            subprocess.check_call("sudo ifconfig %s %s netmask 255.255.255.0" % (self.name, self.ipaddr))
+
+            # NAT IPv4 packets off the bridge.  The iptables
+            # configuration depends on iptables on the server not being
+            # used for anything else.
+            subprocess.check_call("sudo sysctl -w net.ipv4.ip_forward=1")
+            subprocess.check_call("sudo iptables -t nat -I POSTROUTING -s %s/255.255.255.0 ! -d %s/255.255.255.0 -j MASQUERADE" % (self.ipaddr, self.ipaddr ))
+
             self.owner = getpass.getuser()
             self.status = "enabled"
         except:
@@ -540,14 +548,13 @@ class Cluster(object):
         """Disable the bridge using bridge control commands.
         """
         try:
-            os.system("sudo ip link set %s down" % self.name)
+            # Note, we will leave ip forwarding enabled since there
+            # may be other bridges using it.
+            subprocess.check_call("sudo iptables -t nat -D POSTROUTING -s %s/255.255.255.0 ! -d %s/255.255.255.0 -j MASQUERADE" % (self.ipaddr, self.ipaddr ))
+            subprocess.check_call("sudo ip link set %s down" % self.name)
+            subprocess.check_call("sudo brctl delbr %s" % self.name)
         except:
             die("Unable to bring bridge <%s> down" % self.name)
-
-        try:
-            os.system("sudo brctl delbr %s" % self.name)
-        except:
-            die("Unable to delete bridge <%s>" % self.name)
 
         bridge_free(self.br_key)
 
