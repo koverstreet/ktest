@@ -609,14 +609,14 @@ class Cluster(object):
             vm.run()
 
         # Collect VMs as they finish
-        polling = True
-        while polling:
-            time.sleep(0.5)
-            polling = False
+        while True:
             for vm in self.vms:
                 if vm.proc.returncode == None:
                     vm.proc.poll()
-                    polling = True
+                    break
+            else:
+                break
+            time.sleep(0.5)
 
         # Cleanup after the VMs
         for vm in self.vms:
