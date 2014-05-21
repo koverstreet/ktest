@@ -737,9 +737,8 @@ def cmd_start():
         help="use vde networking instead of user mode. This requires " +
         "a vde switch to be set up, and a dns setup to listen")
 
-    opt.add_option("-b", "--bridge", dest="bridge",
-        default="",
-        help="bridge number")
+    opt.add_option("--cluster", dest="cluster",
+        help="Start a cluster with the specified number of nodes")
 
     (options, args) = opt.parse_args()
 
@@ -755,9 +754,9 @@ def cmd_start():
     except OSError:
         die ("Failed to create tmpdir: "+options.tmpdir)
         
-    if options.bridge != "" and len(args) > 0:
+    if options.cluster:
         
-        cluster = Cluster(int(args[0]),options)
+        cluster = Cluster(options.cluster,options)
 
         cluster.run()
 

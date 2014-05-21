@@ -104,7 +104,7 @@ parse_deps()
     MEM=""
     SCRATCH=""
     INFINIBAND=""
-    BRIDGE=""
+    VMCLUSTER=""
     VMCOUNT=""
 
     eval `$TEST deps`
@@ -185,7 +185,7 @@ parse_deps()
     fi
 
     if [ -n "$VMCOUNT" ]; then
-        BRIDGE=" -b 2 "
+        VMCLUSTER="--cluster $VMCOUNT"
     fi
 
     IFS=$OLDIFS
@@ -249,8 +249,7 @@ cmd_run()
     -s $SCRATCH                                     \
     $VDE                                            \
     $INFINIBAND                                     \
-    $BRIDGE                                         \
-    $VMCOUNT"
+    $VMCLUSTER"
 
     if [ -n "$TIMEOUT" ]; then
         check_timeout "$TIMEOUT" &
