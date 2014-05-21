@@ -1,0 +1,40 @@
+#!/bin/bash -e
+#
+# Create a VM image suitable for running automated tests
+# Output: vm_image
+
+VM_IMAGE_DIR=$(dirname $(readlink -f $0))
+KTESTDIR=$VM_IMAGE_DIR/..
+
+. $KTESTDIR/util.sh
+
+. $VM_IMAGE_DIR/create_vm_image_common.sh
+
+checkdep debootstrap
+
+PACKAGES="less,psmisc,openssh-server"
+PACKAGES+=",make,gcc,g++,gdb,strace,valgrind"
+PACKAGES+=",hdparm,xfsprogs,btrfs-tools,mdadm,lvm2,aoetools,vblade"
+PACKAGES+=",linux-tools,blktrace,sysstat,fio,dbench,bonnie++"
+
+EXCLUDE="dmidecode,nano,rsyslog,logrotate,cron,iptables,nfacct"
+EXCLUDE+=",debconf-i18n,info"
+
+MIRROR=http://ftp.us.debian.org/debian/
+
+create_mount_image
+
+debootstrap --include="$PACKAGES" --exclude="$EXCLUDE" sid "$MNT" $MIRROR
+
+cat > "$MNT/etc/network/interfaces" <<-ZZ
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp
+ZZ
+
+cp $VM_IMAGE_DIR/rc.local "$MNT/etc/rc.local"
+chmod 755 "$MNT/etc/rc.local"
+
+finish_umount_image
