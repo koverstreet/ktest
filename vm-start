@@ -611,6 +611,7 @@ class Cluster(object):
         # Collect VMs as they finish
         polling = True
         while polling:
+            time.sleep(0.5)
             polling = False
             for vm in self.vms:
                 if vm.proc.returncode == None:
