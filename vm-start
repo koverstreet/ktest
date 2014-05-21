@@ -3,8 +3,6 @@
 # Datera, Inc. Confidential and Propriatory
 
 import getpass
-import threading
-
 import sys
 import os
 import fcntl
@@ -18,7 +16,7 @@ import string
 import random
 import re
 import datetime
-
+import select
 import inspect
 
 def lineno():
@@ -284,8 +282,6 @@ def vm_lookup(id):
     return vm
 
 
-
-
 def vm_cleanup(vmdir):
 
     idfile = os.path.join(vmdir,"id")
@@ -322,61 +318,11 @@ def vm_cleanup(vmdir):
         pass
 
 
-class RunVMInThread(threading.Thread):
-    """Runs a virtual machine object in a thread.
-    """
-
-    def __init__(self, vm, log="console"):
-        """Initialize the thread object with the VM object and log info.
-        """
-        threading.Thread.__init__(self)
-        self.obj = vm
-        self.log = log
-        self.logf = None
-        self.proc = None
-        self.rc = 0
-
-    def run(self):
-        """Start the VM inside the thread object.
-
-        If logging is targeted at the console, spool all thread output
-        from different VMs to the same console tagged with the VM name.
-
-        This method is not called directly but is executed when the
-        thread object is started by its start() method.
-        """
-
-        # use subprocess.Popen to run the VM and target the output
-        if self.log == "console":
-            self.logf = None
-        else:
-            self.logf = open(self.log,"w")
-        
-        self.proc = subprocess.Popen(
-            self.obj.command, bufsize=0, stdin=None,
-            stdout=self.logf, stderr=subprocess.STDOUT)
-
-        # indicate the VM has been started
-        print "<%s> started as pid <%d> stdout <%s>\n" \
-            % (self.obj.name, self.proc.pid, self.log),
-
-        self.rc = self.proc.wait()
-
-        self.obj.cleanup()
-
-        if self.logf:
-            self.logf.close()
-
-        # indicate the VM has been terminated
-        print "<%s> terminated\n" % self.obj.name, 
-
-
-
 class ClusteredVM(object):
     """Defines a virtual machine object.
     """
 
-    def __init__(self, vm_id, bridge, opts, vms_id, vm_tmpdir):
+    def __init__(self, vm_id, bridge, opts, vms_id, vm_tmpdir, vm_logfile=None):
         """Initialize the VM object with its essential data.
         """
         self.idnum    = vm_id
@@ -391,19 +337,31 @@ class ClusteredVM(object):
         self.thread   = None
         self.status   = "inactive"
         self.tmpdir   = vm_tmpdir
-        
+        self.opts     = opts
+
+        if vm_logfile:
+            self.logfile  = vm_logfile
+            self.console  = "file:%s" % self.logfile
+        else:
+            self.logfile = None
+            self.console = "stdio"
+
         try:
             os.makedirs(self.tmpdir, 0700)
         except OSError:
             die ("Failed to create tmpdir: "+self.tmpdir)
-        
-        self.logf = os.path.join(self.tmpdir,"console")
+
+    def run(self):
+        opts = self.opts
 
         # Create the tap device owned by the current user
-        subprocess.check_call("sudo ip tuntap add dev %s mode tap user %d group %d" % 
-                              (self.tapname, os.getuid(), os.getgid()))
-        subprocess.check_call("sudo ip link set up %s" % self.tapname)
-        subprocess.check_call("sudo brctl addif %s %s" % (self.bridge, self.tapname))
+        subprocess.check_call(['sudo', '-n', '--', 'ip', 'tuntap',
+                               'add', 'dev', self.tapname,
+                               'mode', 'tap',
+                               'user', str(os.getuid()),
+                               'group', str(os.getgid())])
+        subprocess.check_call(['sudo', '-n', '--', 'ip', 'link', 'set', 'up', self.tapname])
+        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addif', self.bridge.name, self.tapname])
 
         # setup run CD:
         if not opts.cdrom:
@@ -451,7 +409,7 @@ class ClusteredVM(object):
         if opts.initrd:
             cmd.extend(["-initrd", opts.initrd])
         cmd.extend(["-nographic"])
-        cmd.extend(["-serial", "stdio"])
+        cmd.extend(["-serial", self.console])
         cmd.extend(["-serial", "mon:unix:" + os.path.join(self.tmpdir,"con")+",server,nowait"])
         cmd.extend(["-serial", "unix:" + os.path.join(self.tmpdir,"gdb")+",server,nowait"])
         cmd.extend(["-monitor", "unix:" + os.path.join(self.tmpdir,"mon")+",server,nowait"])
@@ -468,17 +426,18 @@ class ClusteredVM(object):
             cmd.extend(["-cdrom", self.iso])
         cmd.extend(["-netdev","tap,id=eth0,ifname=%s,script=no,downscript=no" % self.tapname])
         cmd.extend(["-device","virtio-net-pci,netdev=eth0,mac="+self.macaddr])
-        self.command = cmd
-        #print self.command
 
+        self.proc = subprocess.Popen(cmd, shell=False, close_fds=True)
+
+        return self.proc
 
     def cleanup(self):
         """Cleanup tasks for this vm after it has terminated
         """
         # Take down the tap device
-        subprocess.check_call("sudo ip link set down %s" % self.tapname)
-        subprocess.check_call("sudo brctl delif %s %s" % (self.bridge, self.tapname))
-        subprocess.check_call("sudo ip tuntap del dev %s mode tap" % self.tapname)
+        subprocess.check_call(['sudo', '-n', '--', 'ip', 'link', 'set', 'down', self.tapname])
+        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'delif', self.bridge, self.tapname])
+        subprocess.check_call(['sudo',' -n', '--', 'ip', 'tuntap', 'del', 'dev', self.tapname, 'mode', 'tap'])
 
 
 class Cluster(object):
@@ -516,16 +475,16 @@ class Cluster(object):
         # Set the dnsmasq file attributes and wipe the files
         for dnattr in ["conf", "pid", "leases", "hostsfile", "addnhosts", "output"]:
             dnfile=os.path.join(self.tmpdir, "%s.dnsmasq.%s" % (self.name, dnattr))
-            setattr(self, dnfile)
+            setattr(self, "dnsmasq_%s" % dnattr, dnfile)
             open(dnfile, 'w').close() # Truncate/create
-                    
 
         slotfile = os.path.join(self.tmpdir,'id')
         if os.path.exists(slotfile):
             os.remove(slotfile)
 
-        if os.path.exists(opts.indexfile):
-            os.remove(opts.indexfile)
+        if opts.indexfile:
+            if os.path.exists(opts.indexfile):
+                os.remove(opts.indexfile)
 
         # for each VM, grab a VM object and add it to cluster's VM list
         for vm in range(num_of_vms):
@@ -534,18 +493,19 @@ class Cluster(object):
 
             vm_tmpdir = os.path.join(self.tmpdir,
                 vm_name+"-"+self.owner)
-                
-            #try:
+
             slot = vm_slot_get(vm_tmpdir, opts.vde, opts.conx3)
 
             appendfile(slotfile, slot.vm_id)
             if opts.indexfile:
                 appendfile(opts.indexfile, slot.vm_id)
-            
-            self.vms.append(ClusteredVM(vm+2, self, opts, slot, vm_tmpdir))
-            #except:
-            #die("Unable to create virtual machine <%s-vm%d>"
-                    #% (self.name,vm+2))
+
+            if vm == 0:
+                vm_console = None
+            else:
+                vm_console = os.path.join(vm_tmpdir, "console")
+
+            self.vms.append(ClusteredVM(vm+2, self, opts, slot, vm_tmpdir, vm_console))
 
 
     # Network address generators indexed off node number for the MAC address,
@@ -557,7 +517,7 @@ class Cluster(object):
         return "172.30.%d.%d" % (self.idnum, node)
 
     def ipv6gen(self, node):
-        "fd84:c772:8103::ac1e:%s%s" % (self.idhex, hex(node+256)[-2:])
+        return "fd84:c772:8103::ac1e:%s%s" % (self.idhex, hex(node+256)[-2:])
 
 
     def enable_dnsmasq(self):
@@ -604,15 +564,15 @@ class Cluster(object):
         """Enable the bridge using bridge control commands.
         """
         try:
-            subprocess.check_call("sudo brctl addbr %s" % self.name)
-            subprocess.check_call("sudo ip addr add %s/%d dev %s" % (self.ipaddr, self.cidr, self.name))
-            subprocess.check_call("sudo ip addr add %s/%d dev %s" % (self.ipv6addr, self.v6cidr, self.name))
+            subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addbr', self.name])
+            subprocess.check_call(['sudo', '-n', '--', 'ip', 'addr', 'add', "%s/%d" %(self.ipaddr, self.cidr), "dev", self.name])
+            subprocess.check_call(['sudo', '-n', '--', 'ip', 'addr', 'add', "%s/%d" %(self.ipv6addr, self.v6cidr), "dev", self.name])
 
             # NAT IPv4 packets off the bridge.  The iptables
             # configuration depends on iptables on the server not being
             # used for anything else.
-            subprocess.check_call("sudo sysctl -w net.ipv4.ip_forward=1")
-            subprocess.check_call("sudo iptables -t nat -I POSTROUTING -s %s/%d ! -d %s/%d -j MASQUERADE" % (self.ipnet, self.cidr, self.ipnet, self.cidr ))
+            subprocess.check_call(['sudo', '-n', '--', 'sysctl', '-w', 'net.ipv4.ip_forward=1'])
+            subprocess.check_call(['sudo', '-n', '--', 'iptables', '-t', 'nat', '-I', 'POSTROUTING', '-s', "%s/%d" % (self.ipnet, self.cidr), '!', '-d', "%s/%d" %(self.ipnet, self.cidr), '-j', 'MASQUERADE'])
 
             self.status = "enabled"
         except:
@@ -624,9 +584,9 @@ class Cluster(object):
         try:
             # Note, we will leave ip forwarding enabled since there
             # may be other bridges using it.
-            subprocess.check_call("sudo iptables -t nat -D POSTROUTING -s %s/%d ! -d %s/%d -j MASQUERADE" % (self.ipnet, self.cidr, self.ipnet, self.cidr ))
-            subprocess.check_call("sudo ip link set %s down" % self.name)
-            subprocess.check_call("sudo brctl delbr %s" % self.name)
+            subprocess.check_call(['sudo', '-n', '--', 'iptables', '-t', 'nat', '-D', 'POSTROUTING', '-s' "%s/%d" %(self.ipnet, self.cidr), '!', '-d', "%s/%d" %(self.ipnet, self.cidr), '-j', "MASQUERADE"])
+            subprocess.check_call(['sudo', '-n', '--', 'ip', 'link', 'set', self.name, 'down'])
+            subprocess.check_call(['sudo', '-n', '--', 'brctl', 'delbr', self.name])
         except:
             die("Unable to bring bridge <%s> down" % self.name)
 
@@ -638,25 +598,28 @@ class Cluster(object):
     def run(self):
         """Setup and run the cluster.
         """
-
         # enable the bridge
         self.enable_bridge()
 
         # Setup dnsmasq on the bridge
         self.enable_dnsmasq()
 
-        # create thread object and start it for each VM
+        # Launch the VMs
         for vm in self.vms:
-            if vm.idnum == 2:
-                vm.thread = RunVMInThread(vm)
-            else:
-                vm.thread = RunVMInThread(vm,vm.logf)
-            vm.thread.start()
+            vm.run()
 
-        # wait for all VM threads to finish
+        # Collect VMs as they finish
+        polling = True
+        while polling:
+            polling = False
+            for vm in self.vms:
+                if vm.proc.returncode == None:
+                    vm.proc.poll()
+                    polling = True
+
+        # Cleanup after the VMs
         for vm in self.vms:
-            if vm.thread.is_alive:
-                vm.thread.join()
+            vm.cleanup()
 
         # terminate dnsmasq
         self.disable_dnsmasq()
@@ -667,11 +630,6 @@ class Cluster(object):
 def cmd_start():
     """Start new virtual machines
     """
-
-    with open("./sysargs.txt","w") as f:
-        for i in range(len(sys.argv)):  
-            f.write(sys.argv[i]+"\n")
-        
     opt = OptionParser("Usage: %prog start [options] [number]",
         description="Start a virtual machine or cluster")
 
@@ -756,7 +714,7 @@ def cmd_start():
         
     if options.cluster:
         
-        cluster = Cluster(options.cluster,options)
+        cluster = Cluster(int(options.cluster),options)
 
         cluster.run()
 
