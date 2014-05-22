@@ -544,7 +544,7 @@ class Cluster(object):
             f.write("dhcp-no-override\n")
             f.write("dhcp-range=%s,%s\n" % (self.ipv6gen(128), self.ipv6gen(254)))
             f.write("dhcp-leasefile=%s\n" % self.dnsmasq_leases)
-            f.write("dhcp-lease-max=127\n")
+            f.write("dhcp-lease-max=383\n")
             f.write("dhcp-hostsfile=%s\n" % self.dnsmasq_hostsfile)
             f.write("addn-hosts=%s\n" % self.dnsmasq_addnhosts)
             f.write("enable-ra\n")
