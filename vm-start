@@ -2,7 +2,6 @@
 # Copyright (c) 2013 Datera, Inc. All rights reserved
 # Datera, Inc. Confidential and Propriatory
 
-import os.path 
 import getpass
 import threading
 
@@ -27,7 +26,6 @@ def lineno():
     return inspect.currentframe().f_back.f_lineno
 
 from vmcutils import *
-from vmbrtmpl import *
 
 from optparse import OptionParser, OptionGroup
 
@@ -171,8 +169,7 @@ def bridge_get():
             bridge.available = False
             bridges[key] = bridge
             break
-
-    if bridge == None:
+    else:
         die("No bridge entries available to start cluster")        
 
     db["bridges"] = bridges
@@ -337,6 +334,7 @@ class RunVMInThread(threading.Thread):
         self.log = log
         self.logf = None
         self.proc = None
+        self.rc = 0
 
     def run(self):
         """Start the VM inside the thread object.
@@ -350,42 +348,23 @@ class RunVMInThread(threading.Thread):
 
         # use subprocess.Popen to run the VM and target the output
         if self.log == "console":
-            self.proc = subprocess.Popen(
-                self.obj.command, bufsize=5000, stdin=None,
-                stdout=None, stderr=subprocess.STDOUT)
+            self.logf = None
         else:
             self.logf = open(self.log,"w")
-            self.proc = subprocess.Popen(
-                self.obj.command, bufsize=5000, stdin=None,
-                stdout=self.logf, stderr=subprocess.STDOUT)
+        
+        self.proc = subprocess.Popen(
+            self.obj.command, bufsize=0, stdin=None,
+            stdout=self.logf, stderr=subprocess.STDOUT)
 
         # indicate the VM has been started
         print "<%s> started as pid <%d> stdout <%s>\n" \
             % (self.obj.name, self.proc.pid, self.log),
 
-        # handle VM log output
-        #if self.log != "console":
-            # for the console, poll and post output until VM terminates
+        self.rc = self.proc.wait()
 
-            # JFR - per review comments on 4/11/14
-            # Kent says this is preferable... not sure if it works in all cases
-            # Replaced four lines with four
+        self.obj.cleanup()
 
-            #line = self.proc.stdout.readline()
-            #while self.proc.poll() == None:
-                #print "[%s]%s" % (self.obj.name,line),
-                #line = self.proc.stdout.readline()
-
-            #while True:
-                #line = self.proc.stdout.readline()
-                #if not line: 
-                    #break
-                #print "[%s]%s" % (self.obj.name,line),
-
-        #else:
-            # for a logfile, wait for VM to terminate and close the log file
-        self.proc.wait()
-        if self.log != "console":
+        if self.logf:
             self.logf.close()
 
         # indicate the VM has been terminated
@@ -400,21 +379,18 @@ class ClusteredVM(object):
     def __init__(self, vm_id, bridge, opts, vms_id, vm_tmpdir):
         """Initialize the VM object with its essential data.
         """
-        #print vm_id
-        #print bridge.__dict__
-        #print opts
-
         self.idnum    = vm_id
         self.vmsid    = vms_id
         self.idstr    = str(self.idnum)
         self.idhex    = hex(self.idnum+256)[-2:]
         self.bridge   = bridge
-        self.ipaddr   = ".".join(bridge.ipaddr.split('.')[0:3])+'.'+self.idstr
-        self.macaddr  = "DE:AD:BE:EF:%s:%s" % (bridge.idhex, self.idhex)
+        self.ipaddr   = bridge.ipgen(vm_id)
+        self.macaddr  = bridge.macgen(vm_id)
         self.name     = "vm%d-%s" % (self.idnum, bridge.name)
+        self.tapname  = self.name
         self.thread   = None
         self.status   = "inactive"
-        self.tmpdir   = vm_tmpdir 
+        self.tmpdir   = vm_tmpdir
         
         try:
             os.makedirs(self.tmpdir, 0700)
@@ -422,6 +398,12 @@ class ClusteredVM(object):
             die ("Failed to create tmpdir: "+self.tmpdir)
         
         self.logf = os.path.join(self.tmpdir,"console")
+
+        # Create the tap device owned by the current user
+        subprocess.check_call("sudo ip tuntap add dev %s mode tap user %d group %d" % 
+                              (self.tapname, os.getuid(), os.getgid()))
+        subprocess.check_call("sudo ip link set up %s" % self.tapname)
+        subprocess.check_call("sudo brctl addif %s %s" % (self.bridge, self.tapname))
 
         # setup run CD:
         if not opts.cdrom:
@@ -484,11 +466,19 @@ class ClusteredVM(object):
             cmd.extend(["-drive", "if=virtio,format=raw,cache=writeback,file="+drive])
         if self.iso:              # add cdrom
             cmd.extend(["-cdrom", self.iso])
-        cmd.extend(["-netdev","tap,id=eth0,script=%s,downscript=%s"
-            % (self.bridge.br_ifup,self.bridge.br_ifdn)])
+        cmd.extend(["-netdev","tap,id=eth0,ifname=%s,script=no,downscript=no" % self.tapname])
         cmd.extend(["-device","virtio-net-pci,netdev=eth0,mac="+self.macaddr])
         self.command = cmd
         #print self.command
+
+
+    def cleanup(self):
+        """Cleanup tasks for this vm after it has terminated
+        """
+        # Take down the tap device
+        subprocess.check_call("sudo ip link set down %s" % self.tapname)
+        subprocess.check_call("sudo brctl delif %s %s" % (self.bridge, self.tapname))
+        subprocess.check_call("sudo ip tuntap del dev %s mode tap" % self.tapname)
 
 
 class Cluster(object):
@@ -498,9 +488,9 @@ class Cluster(object):
     def __init__(self, num_of_vms, opts):
         """Initialize the cluster object with bridge information.
         """
-        
+
         bridge = bridge_get()
-        
+
         self.idnum    = bridge.br_num               # int version of id
         self.br_key   = bridge.br_key               # key of bridge
         self.idstr    = str(self.idnum)             # str version of id
@@ -508,26 +498,32 @@ class Cluster(object):
         self.name     = "vmbr%s" % self.idstr       # bridge name
         self.vms      = []                          # list of vms in cluster
 
-        # JFR - per review comments on 4/11/14
-        # Replaced my username with call to getpass.getuser()
-
         self.owner    = getpass.getuser()           # who "owns" this cluster
-        self.ipaddr   = "172.30.%s.1" % self.idstr  # bridge ip addresss
+
+        # IPv4 parameters
+        self.ipaddr   = self.ipgen(1)               # bridge ip addresss
+        self.ipnet    = self.ipgen(0)               # vm network base addresss
+        self.cidr     = 24                          # CIDR mask (netmask)
+
+        # IPv6 parameters
+        self.ipv6addr = self.ipv6gen(1)             # bridge IPv6 address
+        self.ipv6net  = self.ipv6gen(0)             # IPv6 network
+        self.v6cidr   = 120                         # IPv6 CIDR (netmask)
+
         self.status   = "inactive"                  # cluster status
         self.tmpdir   = opts.tmpdir
 
-        self.br_ifup = os.path.join(self.tmpdir,"vmbr-ifup")
-        self.br_ifdn = os.path.join(self.tmpdir,"vmbr-ifdn")
-        br_arg = {"bridge":self.name}
-        process_template(vmbr_ifup,self.br_ifup,br_arg)
-        process_template(vmbr_ifdn,self.br_ifdn,br_arg)
-        os.system('chmod +x %s' % self.br_ifup)
-        os.system('chmod +x %s' % self.br_ifdn)
+        # Set the dnsmasq file attributes and wipe the files
+        for dnattr in ["conf", "pid", "leases", "hostsfile", "addnhosts", "output"]:
+            dnfile=os.path.join(self.tmpdir, "%s.dnsmasq.%s" % (self.name, dnattr))
+            setattr(self, dnfile)
+            open(dnfile, 'w').close() # Truncate/create
+                    
 
         slotfile = os.path.join(self.tmpdir,'id')
         if os.path.exists(slotfile):
             os.remove(slotfile)
-        
+
         if os.path.exists(opts.indexfile):
             os.remove(opts.indexfile)
 
@@ -551,13 +547,73 @@ class Cluster(object):
             #die("Unable to create virtual machine <%s-vm%d>"
                     #% (self.name,vm+2))
 
+
+    # Network address generators indexed off node number for the MAC address,
+    # IPv4 and IPv6 addresses.
+    def macgen(self, node):
+        return "DE:AD:BE:EF:%s:%s" % (self.idhex, hex(node+256)[-2:])
+
+    def ipgen(self, node):
+        return "172.30.%d.%d" % (self.idnum, node)
+
+    def ipv6gen(self, node):
+        "fd84:c772:8103::ac1e:%s%s" % (self.idhex, hex(node+256)[-2:])
+
+
+    def enable_dnsmasq(self):
+        """Configure and start dnsmasq
+        
+        IPv4 will have explicit host entries (hostsfile).
+
+        IPv6 will use router advertisement to pick a random address
+        due to the difficulty of determining the DUID-LT in advance.
+        """
+        with open(self.dnsmasq_conf, "w") as f:
+            f.write("strict-order\n")
+            f.write("domain-needed\n")
+            f.write("expand-hosts\n")
+            f.write("domain=%s\n" % self.name)
+            f.write("expand-hosts\n")
+            f.write("local=/%s/\n" % self.name)
+            f.write("pid-file=%s\n" % self.dnsmasq_pid)
+            f.write("except-interface=lo\n")
+            f.write("bind-dynamic\n")
+            f.write("interface=%s\n" % self.name)
+            f.write("dhcp-leasefile=%s\n" % self.dnsmasq_leases)
+            f.write("dhcp-hostsfile=%s\n" % self.dnsmasq_hostsfile)
+            f.write("addn-hosts=%s\n" % self.dnsmasq_addnhosts)
+            f.write("enable-ra\n")
+
+        with open(self.dnsmasq_hostsfile, "w") as f:
+            for idx in range(253):
+                f.write("%s,%s,node%d" % (self.macgen(idx+2), self.ipgen(idx+2), idx+1))
+
+        cmd = ['sudo', '-n', '--', 'dnsmasq', '--keep-in-foreground',
+               "--conf-file=%s" % self.dnsmasq_conf, 
+               "--user=%s" % self.owner]
+        self.dnsmasq_daemon = subprocess.Popen(cmd, shell=False, close_fds=True,
+                                               stdin=open(os.devnull, 'r'),
+                                               stdout=open(self.dnsmasq_output, 'w'),
+                                               stderr=subprocess.STDOUT)
+
+    def disable_dnsmasq(self):
+        self.dnsmasq_daemon.terminate()
+        self.dnsmasq_daemon.wait()
+
     def enable_bridge(self):
         """Enable the bridge using bridge control commands.
         """
         try:
-            os.system("sudo brctl addbr %s" % self.name)
-            os.system("sudo ifconfig %s %s netmask 255.255.255.0" % (self.name,self.ipaddr))
-            self.owner = getpass.getuser()
+            subprocess.check_call("sudo brctl addbr %s" % self.name)
+            subprocess.check_call("sudo ip addr add %s/%d dev %s" % (self.ipaddr, self.cidr, self.name))
+            subprocess.check_call("sudo ip addr add %s/%d dev %s" % (self.ipv6addr, self.v6cidr, self.name))
+
+            # NAT IPv4 packets off the bridge.  The iptables
+            # configuration depends on iptables on the server not being
+            # used for anything else.
+            subprocess.check_call("sudo sysctl -w net.ipv4.ip_forward=1")
+            subprocess.check_call("sudo iptables -t nat -I POSTROUTING -s %s/%d ! -d %s/%d -j MASQUERADE" % (self.ipnet, self.cidr, self.ipnet, self.cidr ))
+
             self.status = "enabled"
         except:
             die("Unable to enable bridge <%s>" % self.name)
@@ -566,14 +622,13 @@ class Cluster(object):
         """Disable the bridge using bridge control commands.
         """
         try:
-            os.system("sudo ip link set %s down" % self.name)
+            # Note, we will leave ip forwarding enabled since there
+            # may be other bridges using it.
+            subprocess.check_call("sudo iptables -t nat -D POSTROUTING -s %s/%d ! -d %s/%d -j MASQUERADE" % (self.ipnet, self.cidr, self.ipnet, self.cidr ))
+            subprocess.check_call("sudo ip link set %s down" % self.name)
+            subprocess.check_call("sudo brctl delbr %s" % self.name)
         except:
             die("Unable to bring bridge <%s> down" % self.name)
-
-        try:
-            os.system("sudo brctl delbr %s" % self.name)
-        except:
-            die("Unable to delete bridge <%s>" % self.name)
 
         bridge_free(self.br_key)
 
@@ -587,6 +642,9 @@ class Cluster(object):
         # enable the bridge
         self.enable_bridge()
 
+        # Setup dnsmasq on the bridge
+        self.enable_dnsmasq()
+
         # create thread object and start it for each VM
         for vm in self.vms:
             if vm.idnum == 2:
@@ -599,6 +657,9 @@ class Cluster(object):
         for vm in self.vms:
             if vm.thread.is_alive:
                 vm.thread.join()
+
+        # terminate dnsmasq
+        self.disable_dnsmasq()
 
         # disable the bridge
         self.disable_bridge()
@@ -642,6 +703,10 @@ def cmd_start():
         default=DEFAULT_MEMORY,
         help="amount of memory to be allocated per VM")
 
+    opt.add_option("-C", "--core", dest="core",
+        default=None,
+        help="file used for log and core")
+
     opt.add_option("--cpus", dest="cpus",
         default="1",
         help="number of CPUs allocated per VM")
@@ -672,9 +737,8 @@ def cmd_start():
         help="use vde networking instead of user mode. This requires " +
         "a vde switch to be set up, and a dns setup to listen")
 
-    opt.add_option("-b", "--bridge", dest="bridge",
-        default="",
-        help="bridge number")
+    opt.add_option("--cluster", dest="cluster",
+        help="Start a cluster with the specified number of nodes")
 
     (options, args) = opt.parse_args()
 
@@ -690,9 +754,9 @@ def cmd_start():
     except OSError:
         die ("Failed to create tmpdir: "+options.tmpdir)
         
-    if options.bridge != "" and len(args) > 0:
+    if options.cluster:
         
-        cluster = Cluster(int(args[0]),options)
+        cluster = Cluster(options.cluster,options)
 
         cluster.run()
 
@@ -764,8 +828,22 @@ def cmd_start():
                             warning("fallocate error, trying dd")
                             if subprocess.call(["dd", "if=/dev/zero", "of="+name,
                                 "count=1", "bs="+size]):
-                                die ("error creating scratch drive")
+                               die ("error creating scratch drive '"+name+"'")
                         drives.append(name)
+
+            # generate log and core dump device
+            if options.core:
+                (name,size) = options.core.split(",")
+                if size==None:
+                    size="10G"
+                if subprocess.call(["fallocate", "-l", size, name]):
+                    warning("fallocate error, trying dd")
+                    if subprocess.call(["dd", "if=/dev/zero", "of="+name,
+                                        "count=1", "bs="+size]):
+                        die ("error creating core/log drive '"+name+"'")
+                if subprocess.call(["mkfs.ext4", "-U","11111111-2222-3333-4444-555555555555","-F",name]):
+                    die("mkfs.ext4 failed on '"+name+"'")
+
 
             # build qemu command and start
             cmd = ["qemu-system-x86_64"]
@@ -804,6 +882,9 @@ def cmd_start():
             if options.filesystems:
                 for fspath, fslabel in options.filesystems:
                     cmd.extend(["-virtfs", "local,path="+fspath+",mount_tag="+fslabel+",security_model=none,readonly"])
+            if options.core:
+               cmd.extend(["-drive", "format=raw,file="+options.core.split(",")[0]])
+
             for drive in drives:  # add scratch drives
                 cmd.extend(["-drive", "if=virtio,format=raw,cache=writeback,file="+drive])
 

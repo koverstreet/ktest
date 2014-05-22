@@ -112,7 +112,7 @@ parse_deps()
     MEM=""
     SCRATCH=""
     INFINIBAND=""
-    BRIDGE=""
+    VMCLUSTER=""
     VMCOUNT=""
 
     eval `$TEST deps`
@@ -193,7 +193,7 @@ parse_deps()
     fi
 
     if [ -n "$VMCOUNT" ]; then
-        BRIDGE=" -b 2 "
+        VMCLUSTER="--cluster $VMCOUNT"
     fi
 
     IFS=$OLDIFS
@@ -235,6 +235,11 @@ cmd_run()
     rm -f $WORK_DIRECTORY/modules/lib/modules/*/build
     rm -f $WORK_DIRECTORY/modules/lib/modules/*/source
 
+    echo "ADDING FILES:"
+    for f in $FILES; do
+	echo $f
+    done	
+
     $genisoimage_sudo genisoimage -quiet -R     \
     -input-charset utf-8                \
     -o $WORK_DIRECTORY/run.iso          \
@@ -247,12 +252,12 @@ cmd_run()
     -k $KERNEL_OUTPUT/arch/x86/boot/bzImage         \
     -c $WORK_DIRECTORY/run.iso                      \
     --id $WORK_DIRECTORY/id                         \
+    -C $WORK_DIRECTORY/logfs,10G                    \
     -m $MEM                                         \
     -s $SCRATCH                                     \
     $VDE                                            \
     $INFINIBAND                                     \
-    $BRIDGE                                         \
-    $VMCOUNT"
+    $VMCLUSTER"
 
     if [ -n "$TIMEOUT" ]; then
         check_timeout "$TIMEOUT" &

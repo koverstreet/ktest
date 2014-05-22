@@ -6,8 +6,8 @@ Source0: %{name}-%{version}.tar.gz
 License: Datera
 Group: tools
 BuildRoot: %{_tmppath}/%{name}-root
-Requires: realpath, minicom, genisoimage, socat
-BuildRequires: qemu, kvm, qemu-kvm, qemu-system-x86, linux-bcache, bcache-tools
+Requires: realpath, minicom, genisoimage, socat, bridge-utils, iproute, dnsmasq
+BuildRequires: qemu, kvm, qemu-kvm, qemu-system-x86, linux-bcache, bcache-tools, bridge-utils, iproute, dnsmasq
 
 %description
 kernel testing tool
