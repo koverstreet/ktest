@@ -1,0 +1,41 @@
+#!/bin/bash -e
+
+CONTAINER=ioctl_test
+
+if [ "$1" = "deps" ]; then
+    cat <<-ZZ
+REQUIRE=../test-libs.sh,make-bcache,../../../vm-tests/container_lib.sh,container-builder
+CONTAINER=$CONTAINER
+KERNEL_CONFIG_REQUIRE=MD,BCACHE
+MEM=256M
+SCRATCH=1G
+ZZ
+    exit
+fi
+
+set -o nounset
+
+. test-libs.sh
+. container_lib.sh
+
+copy_containers
+
+set -x
+
+make-bcache --bucket 64k --block 2k --cache /dev/vda
+echo /dev/vda > /sys/fs/bcache/register
+
+cd /root
+
+dd if=/dev/urandom of=foo bs=4096 count=1
+
+bch_ioctl()
+{
+    container_run ioctl_test /dev/bcache_extent0 $@
+}
+
+bch_ioctl write	0 0	    8 < foo
+bch_ioctl copy	0 0   1 0   8
+bch_ioctl read	1 0	    8 > bar
+
+diff -q foo bar && echo "TEST SUCCESS"

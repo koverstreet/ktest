@@ -10,6 +10,14 @@ VMSTART=$KTESTDIR/vm-start
 
 . $KTESTDIR/util.sh
 
+checkdep realpath
+checkdep genisoimage
+checkdep minicom
+checkdep socat
+checkdep gcc
+checkdep make
+checkdep qemu-system-x86_64 qemu-system-i386
+
 NJOBS=$((`grep ^processor /proc/cpuinfo |wc -l` * 2))
 INTERACTIVE=0
 TIMEOUT=""
@@ -428,13 +436,5 @@ if [ -d "$HOME/.ktest/tmp" ]; then
 else
     TMPDIR=/tmp
 fi
-
-checkdep realpath
-checkdep genisoimage
-checkdep minicom
-checkdep socat
-checkdep gcc
-checkdep make
-checkdep qemu-system-x86_64 qemu-system-i386
 
 eval $CMD $@
