@@ -322,7 +322,7 @@ class ClusteredVM(object):
     """Defines a virtual machine object.
     """
 
-    def __init__(self, vm_id, bridge, opts, vms_id, vm_tmpdir, vm_logfile=None):
+    def __init__(self, vm_id, bridge, opts, vms_id, vm_tmpdir, vm_console):
         """Initialize the VM object with its essential data.
         """
         self.idnum    = vm_id
@@ -337,31 +337,26 @@ class ClusteredVM(object):
         self.thread   = None
         self.status   = "inactive"
         self.tmpdir   = vm_tmpdir
+        self.console  = vm_console
         self.opts     = opts
-
-        if vm_logfile:
-            self.logfile  = vm_logfile
-            self.console  = "file:%s" % self.logfile
-        else:
-            self.logfile = None
-            self.console = "stdio"
 
         try:
             os.makedirs(self.tmpdir, 0700)
         except OSError:
             die ("Failed to create tmpdir: "+self.tmpdir)
 
-    def run(self):
-        opts = self.opts
-
+    def setup(self):
         # Create the tap device owned by the current user
         subprocess.check_call(['sudo', '-n', '--', 'ip', 'tuntap',
                                'add', 'dev', self.tapname,
                                'mode', 'tap',
                                'user', str(os.getuid()),
                                'group', str(os.getgid())])
-        subprocess.check_call(['sudo', '-n', '--', 'ip', 'link', 'set', 'up', self.tapname])
-        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addif', self.bridge.name, self.tapname])
+        subprocess.check_call(['sudo', '-n', '--', 'ip', 'link', 'set', 'dev', self.tapname, 'up'])
+        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addif', self.bridge.name, self.tapname])        
+
+    def run(self):
+        opts = self.opts
 
         # setup run CD:
         if not opts.cdrom:
@@ -434,10 +429,10 @@ class ClusteredVM(object):
     def cleanup(self):
         """Cleanup tasks for this vm after it has terminated
         """
-        # Take down the tap device
-        subprocess.check_call(['sudo', '-n', '--', 'ip', 'link', 'set', 'down', self.tapname])
-        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'delif', self.bridge, self.tapname])
-        subprocess.check_call(['sudo',' -n', '--', 'ip', 'tuntap', 'del', 'dev', self.tapname, 'mode', 'tap'])
+        # Take down the tap device.  It is not necessary to down the
+        # tap device or remove it from the bridge, that happens
+        # automatically.
+        subprocess.check_call(['sudo','-n', '--', 'ip', 'tuntap', 'del', 'dev', self.tapname, 'mode', 'tap'])
 
 
 class Cluster(object):
@@ -501,9 +496,9 @@ class Cluster(object):
                 appendfile(opts.indexfile, slot.vm_id)
 
             if vm == 0:
-                vm_console = None
+                vm_console = opts.console
             else:
-                vm_console = os.path.join(vm_tmpdir, "console")
+                vm_console = 'file:%s' % os.path.join(vm_tmpdir, "console")
 
             self.vms.append(ClusteredVM(vm+2, self, opts, slot, vm_tmpdir, vm_console))
 
@@ -511,7 +506,7 @@ class Cluster(object):
     # Network address generators indexed off node number for the MAC address,
     # IPv4 and IPv6 addresses.
     def macgen(self, node):
-        return "DE:AD:BE:EF:%s:%s" % (self.idhex, hex(node+256)[-2:])
+        return "de:ad:be:ef:%s:%s" % (self.idhex, hex(node+256)[-2:])
 
     def ipgen(self, node):
         return "172.30.%d.%d" % (self.idnum, node)
@@ -531,7 +526,6 @@ class Cluster(object):
         with open(self.dnsmasq_conf, "w") as f:
             f.write("strict-order\n")
             f.write("domain-needed\n")
-            f.write("expand-hosts\n")
             f.write("domain=%s\n" % self.name)
             f.write("expand-hosts\n")
             f.write("local=/%s/\n" % self.name)
@@ -539,39 +533,50 @@ class Cluster(object):
             f.write("except-interface=lo\n")
             f.write("bind-dynamic\n")
             f.write("interface=%s\n" % self.name)
+            f.write("dhcp-option=3\n")
+            f.write("dhcp-range=%s,%s\n" % (self.ipgen(128), self.ipgen(254)))
+            f.write("dhcp-no-override\n")
+            f.write("dhcp-range=%s,%s\n" % (self.ipv6gen(128), self.ipv6gen(254)))
             f.write("dhcp-leasefile=%s\n" % self.dnsmasq_leases)
+            f.write("dhcp-lease-max=383\n")
             f.write("dhcp-hostsfile=%s\n" % self.dnsmasq_hostsfile)
             f.write("addn-hosts=%s\n" % self.dnsmasq_addnhosts)
             f.write("enable-ra\n")
 
         with open(self.dnsmasq_hostsfile, "w") as f:
-            for idx in range(253):
-                f.write("%s,%s,node%d" % (self.macgen(idx+2), self.ipgen(idx+2), idx+1))
+            for idx in range(2, 127):
+                f.write("%s,%s,node%d\n" % (self.macgen(idx), self.ipgen(idx), idx-1))
 
-        cmd = ['sudo', '-n', '--', 'dnsmasq', '--keep-in-foreground',
+        cmd = ['sudo', '-n', '--', 'dnsmasq',
+               "--log-facility=-", '--log-queries',
                "--conf-file=%s" % self.dnsmasq_conf, 
                "--user=%s" % self.owner]
-        self.dnsmasq_daemon = subprocess.Popen(cmd, shell=False, close_fds=True,
-                                               stdin=open(os.devnull, 'r'),
-                                               stdout=open(self.dnsmasq_output, 'w'),
-                                               stderr=subprocess.STDOUT)
+        subprocess.check_call(cmd, shell=False, close_fds=True,
+                              stdin=open(os.devnull, 'r'),
+                              stdout=open(self.dnsmasq_output, 'w'),
+                              stderr=subprocess.STDOUT)
 
     def disable_dnsmasq(self):
-        self.dnsmasq_daemon.terminate()
-        self.dnsmasq_daemon.wait()
+        try:
+            with open(self.dnsmasq_pid, 'r') as f:
+                pid=int(f.read().strip())
+                os.kill(pid, signal.SIGTERM)
+        except:
+            warning("Failed to terminate dnsmasq")
 
     def enable_bridge(self):
         """Enable the bridge using bridge control commands.
         """
         try:
             subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addbr', self.name])
+            subprocess.check_call(['sudo', '-n', '--', 'ip', 'link', 'set', 'dev', self.name, 'up'])
             subprocess.check_call(['sudo', '-n', '--', 'ip', 'addr', 'add', "%s/%d" %(self.ipaddr, self.cidr), "dev", self.name])
             subprocess.check_call(['sudo', '-n', '--', 'ip', 'addr', 'add', "%s/%d" %(self.ipv6addr, self.v6cidr), "dev", self.name])
 
             # NAT IPv4 packets off the bridge.  The iptables
             # configuration depends on iptables on the server not being
             # used for anything else.
-            subprocess.check_call(['sudo', '-n', '--', 'sysctl', '-w', 'net.ipv4.ip_forward=1'])
+            subprocess.check_call(['sudo', '-n', '--', 'sysctl', '-q', '-w', 'net.ipv4.ip_forward=1'])
             subprocess.check_call(['sudo', '-n', '--', 'iptables', '-t', 'nat', '-I', 'POSTROUTING', '-s', "%s/%d" % (self.ipnet, self.cidr), '!', '-d', "%s/%d" %(self.ipnet, self.cidr), '-j', 'MASQUERADE'])
 
             self.status = "enabled"
@@ -581,23 +586,35 @@ class Cluster(object):
     def disable_bridge(self):
         """Disable the bridge using bridge control commands.
         """
-        try:
-            # Note, we will leave ip forwarding enabled since there
-            # may be other bridges using it.
-            subprocess.check_call(['sudo', '-n', '--', 'iptables', '-t', 'nat', '-D', 'POSTROUTING', '-s' "%s/%d" %(self.ipnet, self.cidr), '!', '-d', "%s/%d" %(self.ipnet, self.cidr), '-j', "MASQUERADE"])
-            subprocess.check_call(['sudo', '-n', '--', 'ip', 'link', 'set', self.name, 'down'])
-            subprocess.check_call(['sudo', '-n', '--', 'brctl', 'delbr', self.name])
-        except:
-            die("Unable to bring bridge <%s> down" % self.name)
+        # Note, we will leave ip forwarding enabled since there
+        # may be other bridges using it.
+        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'nat', '-D', 'POSTROUTING', '-s' "%s/%d" %(self.ipnet, self.cidr), '!', '-d', "%s/%d" %(self.ipnet, self.cidr), '-j', "MASQUERADE"])
+        subprocess.call(['sudo', '-n', '--', 'ip', 'link', 'set', 'dev', self.name, 'down'])
+
+        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'delbr', self.name])
 
         bridge_free(self.br_key)
 
         self.owner = None
         self.status = "disabled"
 
+
+    # Tear down VMs and networking on a signal or abort
+    def terminate_vms(self):
+        for vm in self.vms:
+            try:
+                vm.proc.terminate()
+            except:
+                pass
+
     def run(self):
         """Setup and run the cluster.
         """
+        for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGQUIT, signal.SIGILL,
+                    signal.SIGABRT, signal.SIGFPE, signal.SIGPIPE, signal.SIGTERM,
+                    signal.SIGUSR1, signal.SIGUSR2):
+            signal.signal(sig, lambda sig, frame: self.terminate_vms())
+
         # enable the bridge
         self.enable_bridge()
 
@@ -606,21 +623,41 @@ class Cluster(object):
 
         # Launch the VMs
         for vm in self.vms:
+            vm.setup()
             vm.run()
 
         # Collect VMs as they finish
         while True:
             for vm in self.vms:
+                vm.proc.poll()
+
+            for vm in self.vms:
                 if vm.proc.returncode == None:
-                    vm.proc.poll()
-                    break
+                    break # Re-poll
             else:
-                break
+                break # Abort the poll loop
             time.sleep(0.5)
 
         # Cleanup after the VMs
         for vm in self.vms:
-            vm.cleanup()
+            attempts=0
+            while True:
+                try:
+                    vm.cleanup()
+                    break
+                except Exception, e:
+                    attempts+=1
+                    if attempts > 10:
+                        warning("Failed to clean up VM %d" % vm.idnum)
+                        break
+                    else:
+                        time.sleep(0.5)
+
+        for vm in self.vms:
+            try:
+                vm_slot_put(vm.vmsid)
+            except:
+                warning("Failed to return the slot for %d" % vm.vmsid)
 
         # terminate dnsmasq
         self.disable_dnsmasq()
