@@ -415,9 +415,6 @@ while getopts "IhKb:k:i:t:j:w:vx" arg; do
         x)
             set -x
             ;;
-        v)
-            VDE="--vde"
-            ;;
     esac
 done
 shift $(( OPTIND - 1 ))

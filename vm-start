@@ -219,6 +219,7 @@ def vm_slot_put(id):
     vm.kernel   = None
     vm.tmpdir   = None
     vm.vde  = None
+    vm.ip   = None
 
     if vm.conx3_id is not None:
         vm_conx3_put(vm.conx3_id)
@@ -228,7 +229,7 @@ def vm_slot_put(id):
     d["free_vms"] =  sorted(free_vms, key=operator.attrgetter("vm_id"), reverse=True)
     closeLockedDb(d)
 
-def vm_slot_get(tmpdir, vde, conx3):
+def vm_slot_get(tmpdir, ip, conx3):
     try:
         user = os.environ["SUDO_USER"]
     except KeyError:
@@ -256,7 +257,13 @@ def vm_slot_get(tmpdir, vde, conx3):
     vm.owner    = user
     vm.tmpdir   = tmpdir
     vm.conx3_id = conx3_id
-    vm.vde  = vde
+
+    if ip:
+        vm.vde  = True
+        vm.ip   = ip
+    else:
+        vm.vde  = False
+        vm.ip   = None
 
     # save and free up database while launching vms
     d["free_vms"] = free_vms
@@ -489,7 +496,7 @@ class Cluster(object):
             vm_tmpdir = os.path.join(self.tmpdir,
                 vm_name+"-"+self.owner)
 
-            slot = vm_slot_get(vm_tmpdir, opts.vde, opts.conx3)
+            slot = vm_slot_get(vm_tmpdir, self.ipgen(vm+2), opts.conx3)
 
             appendfile(slotfile, slot.vm_id)
             if opts.indexfile:
@@ -743,11 +750,6 @@ def cmd_start():
         default=False, action="store_true",
         help="assign a virtual pci connect x3 nic for rdma")
 
-    opt.add_option("--vde", dest="vde",
-        action="store_true",
-        help="use vde networking instead of user mode. This requires " +
-        "a vde switch to be set up, and a dns setup to listen")
-
     opt.add_option("--cluster", dest="cluster",
         help="Start a cluster with the specified number of nodes")
 
@@ -804,7 +806,7 @@ def cmd_start():
                     signum = getattr(signal, i)
                     signal.signal(signum, sighandler)
 
-            vm = vm_slot_get(options.tmpdir, options.vde, options.conx3)
+            vm = vm_slot_get(options.tmpdir, None, options.conx3)
 
             idfile = os.path.join(options.tmpdir,'id')
 
@@ -869,8 +871,6 @@ def cmd_start():
             if options.kernel:
                 cmd.extend(["-kernel", options.kernel])
                 kernelParams = "console=ttyS0,115200 kgdboc=ttyS2,115200"
-                if options.vde:
-                    kernelParams += " ip="+vm.ip
                 if options.append:
                     kernelParams += " "+options.append
                 cmd.extend(["-append", kernelParams])
@@ -902,14 +902,8 @@ def cmd_start():
             if iso:              # add cdrom
                 cmd.extend(["-cdrom",iso])
  
-            if options.vde:   # enable vde networking
-                cmd.extend(["-netdev", "vde,id=vde_net,sock=/tmp/vde.ctl"])
-                cmd.extend(["-device", "virtio-net-pci,netdev=vde_net,mac="+vm.mac])
-                vm.vde = True
-            else:             # user networking instead
-                cmd.extend(["-net", "nic,model=virtio"])
-                cmd.extend(["-net", "user,host=10.0.2.2,restrict=off,hostfwd=tcp:127.0.0.1:" + str(vm.vm_id + 9000) + "-:22"])
-                vm.vde = False
+            cmd.extend(["-net", "nic,model=virtio"])
+            cmd.extend(["-net", "user,host=10.0.2.2,restrict=off,hostfwd=tcp:127.0.0.1:" + str(vm.vm_id + 9000) + "-:22"])
     
             if options.conx3:
                 print "Assigning vf: ", vm.conx3_id
@@ -921,7 +915,7 @@ def cmd_start():
 
             vm.pid = p.pid
             vm.status="running"
-            print GREEN+"Vm ID: "+str(vm.vm_id)+" IP: "+vm.ip+" MAC: "+vm.mac+NC
+            print GREEN+"Vm ID: "+str(vm.vm_id)+NC
     
             p.wait()
         except:
@@ -967,7 +961,7 @@ def cmd_ssh():
     if len(sys.argv) <= 1:
         die("Please provide a vm id to SSH to")
 
-    id = int(sys.argv[1])
+    id = int(sys.argv[1].split('/')[0])
     vm = vm_lookup(id)
 
     keyfile = os.path.dirname(os.path.realpath(__file__)) + "/id_dsa"
