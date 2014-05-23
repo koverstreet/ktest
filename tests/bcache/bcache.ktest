@@ -1,37 +1,31 @@
 #!/bin/bash
 
-if [ "$1" = "deps" ]; then
-    cat <<-ZZ
-REQUIRE=../test-libs.sh,make-bcache
-KERNEL_CONFIG_REQUIRE=MD,BCACHE
-MEM=256M
-SCRATCH=512M,2G,2G
-ZZ
-    exit
-fi
+require-lib ../test-libs.sh
+require-bin make-bcache
+require-kernel-config MD,BCACHE
 
-. test-libs.sh
+config-scratch-devs 512M,2G,2G
+config-mem 256M
 
-CACHE=vda
-BDEV="vdb vdc"
-DEV="bcache0 bcache1"
+main()
+{
+    CACHE=vda
+    BDEV="vdb vdc"
+    DEV="bcache0 bcache1"
 
-prep_bcache_devices || exit
+    prep_bcache_devices || exit
 
-cache_set_settings
-cached_dev_settings
+    cache_set_settings
+    cached_dev_settings
 
-prep_mounts || exit
+    prep_mounts || exit
 
-test_sysfs
+    test_sysfs
 
-test_shrink &
-test_fault &
-test_stress &
+    test_shrink &
+    test_fault &
+    test_stress &
 
-sleep 100
-echo "TEST SUCCESSFUL"
-#test_bcache_test &
-
-#test_stop &
-#test_powerfail
+    sleep 100
+    echo "TEST SUCCESSFUL"
+}

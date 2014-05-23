@@ -1,33 +1,16 @@
-#!/bin/bash -e
+#!/bin/bash
 
-if [ "$1" = "deps" ]; then
-	echo "REQUIRE=/src/ktest/ktest"
-	echo "LREQUIRE=/src/ktest/tests/test-libs.sh"
-	echo "MEM=512M"
-	echo "SCRATCH=2G"
-	exit
-fi
+require-lib tests/test-libs.sh
 
-. test-libs.sh
+config-mem 256M
 
-set -x
-set -e
-
-#echo "file extent-cache.c +p"		> /sys/kernel/debug/dynamic_debug/control
-
-CACHE="vda"
-
-udevadm settle
-
-echo
-
-
-set +e
-if sleep 300 ; then
-  exit 1
-  # this sleep must be killed via an ssh into the vm, 
-  # if not the test has failed
-else
-   echo TEST SUCCESS
-fi
-
+main()
+{
+    if sleep 300 ; then
+	exit 1
+	# this sleep must be killed via an ssh into the vm,
+	# if not the test has failed
+    else
+	echo TEST SUCCESS
+    fi
+}

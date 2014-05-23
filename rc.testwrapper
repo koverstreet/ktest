@@ -1,0 +1,50 @@
+#!/bin/bash
+#
+# Test wrapper run inside the VM
+
+set -o nounset
+set -o errexit
+
+require-lib()
+{
+    . `basename "$1"`
+}
+
+require-bin()
+{
+    return 0
+}
+
+require-container()
+{
+    return 0
+}
+
+require-kernel-config()
+{
+    return 0
+}
+
+config-scratch-devs()
+{
+    return 0
+}
+
+config-mem()
+{
+    return 0
+}
+
+config-infiniband()
+{
+    return 0
+}
+
+config-vmcount()
+{
+    return 0
+}
+
+. rc.test
+main || echo "TEST FAILED"
+exit 0

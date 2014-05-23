@@ -21,11 +21,11 @@ checkdep qemu-system-x86_64 qemu-system-i386
 NJOBS=$((`grep ^processor /proc/cpuinfo |wc -l` * 2))
 INTERACTIVE=0
 TIMEOUT=""
-VDE=""
 
 DIR=".ktest"
 KERNEL_SOURCE="."
 KERNEL_OUTPUT=""
+CONTAINER_SRC_DIR="/usr/share/DateraContainer"
 
 IMG="/var/lib/ktest/root"
 
@@ -34,13 +34,6 @@ if [ -f "$HOME/.ktest/root" ]; then
 fi
 
 trap 'stty sane > /dev/null 2>&1 || true' EXIT
-
-do_make()
-{
-    make -C "$KERNEL_SOURCE" O="$WORK_DIRECTORY" -j "$NJOBS"    \
-    INSTALL_MOD_PATH=modules                \
-    EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments" $@
-}
 
 check_mlxcard()
 {
@@ -62,11 +55,18 @@ check_timeout()
     kill $$
 }
 
+do_make()
+{
+    make -C "$KERNEL_SOURCE" O="$WORK_DIRECTORY" -j "$NJOBS"        \
+	INSTALL_MOD_PATH=modules                                    \
+	EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments" $@
+}
+
 build_kernel()
 {
     KERNEL_SOURCE=$1
     KERNEL_OUTPUT=$2
-    KERNEL_CONFIG_REQUIRE=$3
+    _KERNEL_CONFIG_REQUIRE=$3
 
     kconfig="$KERNEL_OUTPUT/.config"
     config_tool="$KERNEL_SOURCE/scripts/config"
@@ -77,14 +77,14 @@ build_kernel()
     if [ -n "$BUILD" ]; then
         [ -f "$kconfig" ] || cp "$KTESTDIR/defconfig" "$kconfig"
 
-        for req in $KERNEL_CONFIG_REQUIRE; do
+	for req in $_KERNEL_CONFIG_REQUIRE; do
             "$config_tool" --file "$kconfig" -e $req
         done
 
         do_make olddefconfig
     fi
 
-    for req in $KERNEL_CONFIG_REQUIRE; do
+    for req in $_KERNEL_CONFIG_REQUIRE; do
         c=`"$config_tool" --file "$kconfig" -s $req`
         if [ "$c" != "y" ]; then
             echo "Kernel config option $req not set"
@@ -101,106 +101,164 @@ build_kernel()
     do_make modules_install
 }
 
-parse_deps()
+parse_test_deps()
 {
     local TEST=$1
+    HAVE_CONTAINER=""
 
-    REQUIRE=""
-    LREQUIRE=""
-    KERNEL_CONFIG_REQUIRE=""
-    CONTAINER=""
-    MEM=""
-    SCRATCH=""
-    INFINIBAND=""
-    VMCLUSTER=""
-    VMCOUNT=""
+    _add-file()
+    {
+	local req=$1
+	local f=$2
 
-    eval `$TEST deps`
+	if [ ! -e "$f" ]; then
+	    echo "Dependency $req not found"
+	    exit
+	fi
 
-    if [ -z "$MEM" ]; then
-        echo "test must specify requirements"
-        exit 1
-    fi
+	FILES+=" `realpath $f`"
+    }
 
-    if [ -n "$INFINIBAND" ]; then
-        VMSTART="sudo $VMSTART"
-        INFINIBAND="--conx3"
-        check_mlxcard
-    fi
+    require-lib()
+    {
+	local req=$1
+	local f=$TESTDIR/$req
 
-    mkdir -p $WORK_DIRECTORY
-    rm -f $WORK_DIRECTORY/rc
-    cp -f $TEST $WORK_DIRECTORY/rc
-    if [ "$INTERACTIVE" = 1 ] ; then
-        echo /bin/bash >> $WORK_DIRECTORY/rc
-        echo "echo o > /proc/sysrq-trigger" >> $WORK_DIRECTORY/rc
-    fi
-    FILES=$WORK_DIRECTORY/rc
-    TESTDIR=`dirname $TEST`
+	_add-file "$req" "$f"
 
-    OLDIFS=$IFS
-    IFS=','
+	. $f deps
+    }
+
+    require-bin()
+    {
+	local req=$1
+	local f="`which $req`"
+
+	_add-file "$req" "$f"
+    }
+
+    require-container()
+    {
+	local req=$1
+	local cvf="$CONTAINER_SRC_DIR/${req}.version.txt"
+
+	if [ ! -e "$cvf" ]; then
+	    echo "Container version file not found: $cvf"
+	    exit 1
+	fi
+
+	local cv=$(cat "$cvf")
+	local cf="$CONTAINER_SRC_DIR/${req}-${cv}.tar.gz"
+
+	if [ ! -e "$cf" ]; then
+	    echo "Container file not found: $cf"
+	    exit 1
+	fi
+
+	local cdir="${req}-${cv}"
+	local containerdir="$WORK_DIRECTORY/container"
+
+	if [ -z "$HAVE_CONTAINER" ]; then
+	    FILES+=" $containerdir"
+	    genisoimage_sudo=sudo
+	    HAVE_CONTAINER=1
+	    sudo rm -rf $containerdir
+	    mkdir -p $containerdir
+	fi
+
+	sudo tar xz -C "$containerdir" -f "$cf"
+	if [ ! -d "$containerdir/$cdir" ]; then
+	    echo "Container '$req' does not unpack into expected directory '$cdir'"
+	    exit 1
+	fi
+	sudo ln -s "$cdir" "${containerdir}/${req}.chroot"
+    }
+
+    require-kernel-config()
+    {
+	if [ -n "$_KERNEL_CONFIG_REQUIRE" ]; then
+	    _KERNEL_CONFIG_REQUIRE+=","
+	fi
+
+	_KERNEL_CONFIG_REQUIRE+=$1
+    }
+
+    config-scratch-devs()
+    {
+	_SCRATCH="-s $1"
+    }
+
+    config-mem()
+    {
+	_MEM=$1
+    }
+
+    config-infiniband()
+    {
+	VMSTART="sudo $VMSTART"
+	_INFINIBAND="--conx3"
+	check_mlxcard
+    }
+
+    config-vmcount()
+    {
+	# what's going on here?
+	_VMCLUSTER="--cluster $1"
+    }
+
     PATH+=":/sbin:/usr/sbin:/usr/local/sbin"
 
-    for req in $REQUIRE; do
-        if [ -e "$TESTDIR/$req" ]; then
-            FILES+=" `realpath $TESTDIR/$req`"
-        elif f="`which $req`"; then
-            FILES+=" `realpath $f`"
-        else
-            echo "Dependency $req not found"
-            exit 1
-        fi
-    done
+    . $TEST deps
 
-    for req in $LREQUIRE; do
-        if [ ! -e "$req" ]; then
-            echo "Dependency $req not found"
-            exit 1
-        fi
-        FILES+=" `realpath $req`"
-    done
-
-    if [ -n "$CONTAINER" ]; then
-        containerdir="$WORK_DIRECTORY/container"
-        containersrc="/usr/share/DateraContainer"
-        sudo rm -rf $containerdir
-        for cname in $CONTAINER; do
-            mkdir -p $containerdir
-            cvf="$containersrc/${cname}.version.txt"
-            if [ ! -e "$cvf" ]; then
-                echo "Container version file not found: $cvf"
-                exit 1
-            fi
-            cv=$(cat "$cvf")
-            cf="$containersrc/${cname}-${cv}.tar.gz"
-            cdir="${cname}-${cv}"
-            if [ ! -e "$cf" ]; then
-                echo "Container file not found: $cf"
-                exit 1
-            fi
-            sudo tar xz -C "$containerdir" -f "$cf"
-            if [ ! -d "$containerdir/$cdir" ]; then
-                echo "Container '$cname' does not unpack into expected directory '$cdir'"
-                exit 1
-            fi
-            sudo ln -s "$cdir" "${containerdir}/${cname}.chroot"
-        done
-        if [ -d $containerdir ] ; then
-            FILES+=" $containerdir"
-            genisoimage_sudo=sudo
-        fi
+    if [ -z "$_MEM" ]; then
+	echo "test must specify requirements"
+	exit 1
     fi
+}
 
-    if [ -n "$VMCOUNT" ]; then
-        VMCLUSTER="--cluster $VMCOUNT"
+build_file_list()
+{
+    mkdir -p $WORK_DIRECTORY
+
+    if [ "$INTERACTIVE" = 0 ]; then
+	local TEST=$1
+
+	if [ -z "$TEST" ]; then
+	    echo "ktest: missing test"
+	    usage
+	    exit 1
+	fi
+
+	if [ ! -f "$TEST" ]; then
+	    echo "Test $TEST not found"
+	    exit 1
+	fi
+
+	TEST=`realpath "$TEST"`
+
+	local TESTDIR=`dirname $TEST`
+
+	install -m0755 $KTESTDIR/rc.testwrapper $WORK_DIRECTORY/rc
+	FILES=$WORK_DIRECTORY/rc
+
+	install -m0644 $TEST $WORK_DIRECTORY/rc.test
+	FILES+=" $WORK_DIRECTORY/rc.test"
+
+	parse_test_deps $TEST
+    else
+	install -m0755 $KTESTDIR/rc.interactive $WORK_DIRECTORY/rc
+	FILES="$WORK_DIRECTORY/rc"
+	_MEM="1G"
     fi
-
-    IFS=$OLDIFS
 }
 
 cmd_run()
 {
+    _KERNEL_CONFIG_REQUIRE=""
+    _MEM=""
+    _SCRATCH=""
+    _INFINIBAND=""
+    _VMCLUSTER=""
     genisoimage_sudo=""
     local ALARM=""
 
@@ -213,58 +271,37 @@ cmd_run()
         exit 1
     fi
 
-    TEST=$1
-    if [ -z "$TEST" ]; then
-        echo "ktest: missing test"
-        usage
-        exit 1
-    fi
+    build_file_list $@
 
-    if [ ! -f "$TEST" ]; then
-        echo "Test $TEST not found"
-        exit 1
-    fi
-
-    TEST=`realpath "$TEST"`
-
-    parse_deps $TEST
-
-    build_kernel "$KERNEL_SOURCE" "$KERNEL_OUTPUT" "$KERNEL_CONFIG_REQUIRE"
+    build_kernel "$KERNEL_SOURCE" "$KERNEL_OUTPUT" "$_KERNEL_CONFIG_REQUIRE"
 
     # Remove symlinks, they'll break genisoimage which is following symlinks
     rm -f $WORK_DIRECTORY/modules/lib/modules/*/build
     rm -f $WORK_DIRECTORY/modules/lib/modules/*/source
 
-    echo "ADDING FILES:"
-    for f in $FILES; do
-	echo $f
-    done	
-
-    $genisoimage_sudo genisoimage -quiet -R     \
-    -input-charset utf-8                \
-    -o $WORK_DIRECTORY/run.iso          \
-    $WORK_DIRECTORY/modules/lib $FILES || exit 1
+    $genisoimage_sudo genisoimage -quiet -R		\
+	-input-charset utf-8				\
+	-o $WORK_DIRECTORY/run.iso			\
+	$WORK_DIRECTORY/modules/lib $FILES || exit 1
 
     rm -rf $WORK_DIRECTORY/modules
 
-    vmstart_command="$VMSTART start                 \
-    -i $IMG -t $TMPDIR                              \
-    -k $KERNEL_OUTPUT/arch/x86/boot/bzImage         \
-    -c $WORK_DIRECTORY/run.iso                      \
-    --id $WORK_DIRECTORY/id                         \
-    -C $WORK_DIRECTORY/logfs,10G                    \
-    -m $MEM                                         \
-    -s $SCRATCH                                     \
-    $VDE                                            \
-    $INFINIBAND                                     \
-    $VMCLUSTER"
+    vmstart_command="$VMSTART start			\
+	-i $IMG -t $TMPDIR				\
+	-k $KERNEL_OUTPUT/arch/x86/boot/bzImage		\
+	-c $WORK_DIRECTORY/run.iso			\
+	--id $WORK_DIRECTORY/id				\
+	-m $_MEM					\
+	$_SCRATCH					\
+	$_INFINIBAND					\
+	$_VMCLUSTER"
 
     if [ -n "$TIMEOUT" ]; then
         check_timeout "$TIMEOUT" &
         ALARM=$!
     fi
 
-    if [ "$INTERACTIVE" = 1 ] ; then
+    if [ "$INTERACTIVE" = 1 ]; then
         $vmstart_command
     else
         $vmstart_command|{ \
