@@ -986,7 +986,7 @@ def vm_gdb(gdbsocket):
     os.execlp("gdb", "gdb",
           "-ex", "set remote interrupt-on-connect",
           "-ex", "target remote | socat UNIX-CONNECT:" +
-          vm.tmpdir + gdbsocket + ' -', sys.argv[2])
+          os.path.join(vm.tmpdir, gdbsocket) + ' -', sys.argv[2])
 
 
 def cmd_gdb():
