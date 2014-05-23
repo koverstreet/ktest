@@ -580,6 +580,7 @@ class Cluster(object):
             subprocess.check_call(['sudo', '-n', '--', 'brctl', 'sethello', self.name, '2'])
             subprocess.check_call(['sudo', '-n', '--', 'ip', 'tuntap','add', 'dev', self.name + "-host", 'mode', 'tap'])
             subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addif', self.name, self.name + "-host"])
+            subprocess.check_call(['sudo', '-n', '--', 'sysctl', '-q', '-w', "net.ipv6.conf.%s.accept_ra=0" % self.name, "net.ipv6.conf.%s.autoconf=0" % self.name])
             subprocess.check_call(['sudo', '-n', '--', 'ip', 'link', 'set', 'dev', self.name, 'up'])
             subprocess.check_call(['sudo', '-n', '--', 'ip', 'addr', 'add', "%s/%d" %(self.ipaddr, self.cidr), "dev", self.name])
             subprocess.check_call(['sudo', '-n', '--', 'ip', 'addr', 'add', "%s/%d" %(self.ipv6addr, self.v6cidr), "dev", self.name])
