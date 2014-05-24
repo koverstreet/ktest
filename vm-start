@@ -604,7 +604,7 @@ class Cluster(object):
         """
         # Note, we will leave ip forwarding enabled since there
         # may be other bridges using it.
-        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'nat', '-D', 'POSTROUTING', '-s' "%s/%d" %(self.ipnet, self.cidr), '!', '-d', "%s/%d" %(self.ipnet, self.cidr), '-j', "MASQUERADE"])
+        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'nat', '-D', 'POSTROUTING', '-s', "%s/%d" % (self.ipnet, self.cidr), '!', '-o', self.name, '-j', 'MASQUERADE'])
         subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-D', 'INPUT', '-i', self.name, '-j', 'ACCEPT'])
         subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-D', 'OUTPUT', '-o', self.name, '-j', 'ACCEPT'])
         subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-D', 'FORWARD', '-i', self.name, '-j', 'ACCEPT'])
