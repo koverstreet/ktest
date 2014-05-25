@@ -187,6 +187,9 @@ rsync -a -H -S "$MNT/etc/skel/" "$MNT/root/"
 mkdir -p "$MNT/root/.ssh"
 install -m0600 $KTESTDIR/id_dsa.pub "$MNT/root/.ssh/authorized_keys"
 
+mkdir -p "$MNT/etc/datera" "$MNT/var/datera" "$MNT/var/log/datera" "$MNT/var/log/core"
+chmod 777 "$MNT/var/log/datera" "$MNT/var/log/core"
+
 # Blank the root password and autologin to root on the console
 sed -i -e 's/root:[^:]*:/root::/' "$MNT"/etc/shadow
 mkdir -p '/etc/systemd/system/serial-getty@ttyS0.service.d'
