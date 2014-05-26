@@ -1,55 +1,28 @@
 #!/bin/bash
 
-if [ "$1" = "deps" ]; then
-	echo "REQUIRE=../test-libs.sh,make-bcache"
-	echo "MEM=256M"
-	echo "SCRATCH=1G,2G"
-	exit
-fi
+set -e
 
-. test-libs.sh
+require-lib ../test-libs.sh
+require-bin make-bcache
+require-kernel-config MD,BCACHE
 
-CACHE="vda vdb"
-DEV="bcache0"
+config-scratch-devs 2G,4G
+config-mem 256M
 
-cd /dev
+main()
+{
+    SIZE=small
+    FS=ext4
+    FLAGS="--bucket 64k --block 4k --discard --writeback --cache_replacement_policy=lru"
+    CACHE="/dev/vda"
+    BDEV=
+    TIER="/dev/vdb"
 
-make-bcache --bucket 64k --block 4k			\
-   --discard			                     \
-   --cache_replacement_policy=lru			\
-   --cache $CACHE					            \
+    setup_tracing 64 'bcache:*'
 
-for dev in $CACHE; do
-   echo /dev/$dev > /sys/fs/bcache/register
-done
+    setup_bcache
+    setup_flash_volume 1600M
+    test_stress
 
-
-rm -f /root/c
-ln -s /sys/fs/bcache/*-* /root/c
-
-test_sysfs
-
-cache_set_settings
-cached_dev_settings
-
-echo 1 > /root/c/cache1/tier
-#echo 1 > /root/c/meta_replicas
-#echo 1 > /root/c/data_replicas
-
-echo 1600M > /sys/fs/bcache/*/flash_vol_create
-
-udevadm settle
-prep_mkfs || exit $?
-
-#echo 4 > /root/c/meta_replicas
-#echo 4 > /root/c/data_replicas
-
-prep_mounts || exit
-
-test_shrink &
-test_fault &
-test_stress &
-#test_bcache_test &
-
-#test_stop &
-#test_powerfail
+    test_success
+}

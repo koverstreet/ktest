@@ -1,56 +1,28 @@
 #!/bin/bash
 
-if [ "$1" = "deps" ]; then
-    cat <<-ZZ
-REQUIRE=../test-libs.sh,make-bcache
-KERNEL_CONFIG_REQUIRE=MD,BCACHE
-MEM=256M
-SCRATCH=2G
-ZZ
-    exit
-fi
+set -e
 
-. test-libs.sh
+require-lib ../test-libs.sh
+require-bin make-bcache
+require-kernel-config MD,BCACHE
 
-CACHE=/dev/vda
-DEV=bcache0
+config-scratch-devs 4G
+config-mem 256M
 
-make-bcache --bucket 2M --block 2k			\
-	--discard					\
-	--cache_replacement_policy=lru			\
-	--cache $CACHE
+main()
+{
+    SIZE=small
+    FS=ext4
+    FLAGS="--bucket 512k --block 2k --discard --cache_replacement_policy=lru"
+    CACHE="/dev/vda"
+    BDEV=
+    TIER=
 
-for dev in $CACHE; do
-    echo $dev > /sys/fs/bcache/register
-done
+    setup_tracing 64 'bcache:*'
 
-rm -f /root/c
-ln -s /sys/fs/bcache/*-* /root/c
+    setup_bcache
+    setup_flash_volume 1400M
+    test_stress
 
-test_sysfs
-
-cache_set_settings
-
-for dev in $DEV; do
-    if [ ! -b $dev ]; then
-        echo 1900M > /sys/fs/bcache/*/flash_vol_create
-    fi
-done
-
-udevadm settle
-wait_on_dev bcache0
-
-test_fio $DEV &
-exit
-
-prep_mkfs || exit $?
-prep_mounts || exit
-
-test_shrink &
-test_fault &
-test_stress &
-#test_bcache_test &
-
-#test_stop &
-#test_powerfail
-
+    test_success
+}

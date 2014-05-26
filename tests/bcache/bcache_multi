@@ -1,34 +1,31 @@
 #!/bin/bash
 
-if [ "$1" = "deps" ]; then
-	echo "REQUIRE=../test-libs.sh,make-bcache"
-	echo "MEM=256M"
-	echo "SCRATCH=256M,256M,256M,256M,2G"
-	exit
-fi
+set -e
 
-. test-libs.sh
+require-lib ../test-libs.sh
+require-bin make-bcache
+require-kernel-config MD,BCACHE
 
-CACHE="vda vdb vdc vdd"
-BDEV="vde"
-DEV="bcache0"
+config-scratch-devs 256M,256M,256M,2G
+config-mem 256M
 
-prep_bcache_devices || exit
+main()
+{
+    SIZE=small
+    FS=ext4
+    FLAGS="--bucket 64k --block 4k --discard --writeback --cache_replacement_policy=lru"
+    CACHE="/dev/vda /dev/vdb /dev/vdc /dev/vdd"
+    BDEV="/dev/vde"
+    TIER=
 
-test_sysfs
+    setup_tracing 64 'bcache:*'
 
-cache_set_settings
-cached_dev_settings
+    setup_bcache
 
-#echo 4 > /root/c/meta_replicas
-#echo 4 > /root/c/data_replicas
+    echo 4 > /sys/fs/bcache/*/meta_replicas
+    echo 4 > /sys/fs/bcache/*/data_replicas
 
-prep_mounts || exit
+    test_stress
 
-test_shrink &
-test_fault &
-test_stress &
-#test_bcache_test &
-
-#test_stop &
-#test_powerfail
+    test_success
+}

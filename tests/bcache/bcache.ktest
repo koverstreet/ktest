@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -e
+
 require-lib ../test-libs.sh
 require-bin make-bcache
 require-kernel-config MD,BCACHE
@@ -9,23 +11,17 @@ config-mem 256M
 
 main()
 {
-    CACHE=vda
-    BDEV="vdb vdc"
-    DEV="bcache0 bcache1"
+    SIZE=small
+    FS=ext4
+    FLAGS="--bucket 64k --block 4k --discard --writeback --cache_replacement_policy=lru"
+    CACHE="/dev/vda"
+    BDEV="/dev/vdb /dev/vdc"
+    TIER=
 
-    prep_bcache_devices || exit
+    setup_tracing 64 'bcache:*'
 
-    cache_set_settings
-    cached_dev_settings
+    setup_bcache
+    test_stress
 
-    prep_mounts || exit
-
-    test_sysfs
-
-    test_shrink &
-    test_fault &
-    test_stress &
-
-    sleep 100
-    echo "TEST SUCCESSFUL"
+    test_success
 }

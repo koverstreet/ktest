@@ -1,35 +1,34 @@
 #!/bin/bash
 
-if [ "$1" = "deps" ]; then
-    cat <<-ZZ
-REQUIRE=../test-libs.sh,make-bcache
-KERNEL_CONFIG_REQUIRE=MD,BCACHE
-MEM=256M
-SCRATCH=256M,1G
-ZZ
-    exit
-fi
+set -e
 
-. test-libs.sh
+require-lib ../test-libs.sh
+require-bin make-bcache
+require-kernel-config MD,BCACHE
 
-CACHE=vda
-BDEV="vdb"
-DEV="bcache0"
+config-scratch-devs 256M,1G
+config-mem 256M
 
-prep_bcache_devices || exit
+main()
+{
+    SIZE=small
+    FS=ext4
+    FLAGS="--bucket 64k --block 4k --discard --writeback --cache_replacement_policy=lru"
+    CACHE="/dev/vda"
+    BDEV="/dev/vdb"
+    TIER=
 
-cache_set_settings
-cached_dev_settings
+    setup_tracing 64 'bcache:*'
 
-prep_mounts || exit
+    setup_bcache
+    test_stress &
 
-test_sysfs
+    sleep 20
 
-test_shrink &
-test_fault &
-test_stress &
+    killall fio bonnie++ dbench || true
+    sleep 1
 
-sleep 20
-jobs -x kill
+    test_stop
 
-test_stop
+    test_success
+}
