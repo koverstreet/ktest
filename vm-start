@@ -542,12 +542,11 @@ class Cluster(object):
             f.write("interface=%s\n" % self.name)
             f.write("dhcp-range=%s,%s\n" % (self.ipgen(128), self.ipgen(254)))
             f.write("dhcp-no-override\n")
-            f.write("dhcp-range=%s,%s\n" % (self.ipv6gen(128), self.ipv6gen(254)))
+            f.write("dhcp-range=%s,constructor:%s,slaac,ra-names,%d\n" % (self.ipv6gen(1), self.name, self.v6cidr))
             f.write("dhcp-leasefile=%s\n" % self.dnsmasq_leases)
             f.write("dhcp-lease-max=383\n")
             f.write("dhcp-hostsfile=%s\n" % self.dnsmasq_hostsfile)
             f.write("addn-hosts=%s\n" % self.dnsmasq_addnhosts)
-            f.write("enable-ra\n")
 
         with open(self.dnsmasq_hostsfile, "w") as f:
             for idx in range(2, 127):
