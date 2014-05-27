@@ -119,7 +119,7 @@ parse_test_deps()
 
 	if [ ! -e "$f" ]; then
 	    echo "Dependency $req not found"
-	    exit
+	    exit 1
 	fi
 
 	FILES+=" `realpath $f`"
@@ -129,6 +129,12 @@ parse_test_deps()
     {
 	local req=$1
 	local f=$TESTDIR/$req
+
+	if [ "${req:0:1}" = "/" ]; then
+	    local f=$req
+	else
+	    local f=$TESTDIR/$req
+	fi
 
 	_add-file "$req" "$f"
 
