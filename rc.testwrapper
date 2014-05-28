@@ -4,6 +4,7 @@
 
 set -o nounset
 set -o errexit
+set -o errtrace
 
 dmesg -n 7
 echo 1 > /proc/sys/kernel/sysrq
@@ -62,5 +63,13 @@ config-vmcount()
 }
 
 . rc.test
-main || echo "TEST FAILED"
+
+# We can't just do 'main || echo "TEST FAILED"' because
+# 'set -o errexit' is disabled in the first half of a ||,
+# and there is no way to re-enable it. However, ERR is
+# inherited by subshells with 'set -o errtrace'.
+
+trap 'echo "TEST FAILED"' ERR
+main
+
 exit 0

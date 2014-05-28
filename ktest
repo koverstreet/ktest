@@ -2,6 +2,7 @@
 
 set -o nounset
 set -o errexit
+set -o errtrace
 
 export PS4='+${LINENO}+ '
 
