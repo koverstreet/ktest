@@ -62,6 +62,11 @@ config-vmcount()
     return 0
 }
 
+config-timeout()
+{
+    return 0
+}
+
 . rc.test
 
 # We can't just do 'main || echo "TEST FAILED"' because
