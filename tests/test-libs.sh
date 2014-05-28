@@ -3,11 +3,6 @@
 # ktest framework.
 #
 
-set -e
-
-#dmesg -n 7
-#echo 1 > /proc/sys/kernel/sysrq
-
 #
 # Signal to ktest that test has completed successfully.
 #
