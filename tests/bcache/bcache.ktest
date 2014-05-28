@@ -7,6 +7,8 @@ require-kernel-config MD,BCACHE
 config-scratch-devs 512M,2G,2G
 config-mem 256M
 
+config-timeout 1200
+
 main()
 {
     SIZE=small
