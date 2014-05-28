@@ -69,9 +69,6 @@ wait_no_ip()
 
 # Bcache setup
 
-DEVICES=
-DEVICE_COUNT=0
-
 #
 # Set up a block device without bcache.
 #
@@ -96,7 +93,10 @@ setup_blkdev() {
 # bcache block devices.
 #
 setup_bcache() {
-    make_bcache_flags="$FLAGS --cache $CACHE"
+    DEVICES=
+    DEVICE_COUNT=0
+
+    make_bcache_flags="$FLAGS --wipe-bcache --cache $CACHE"
 
     if [ "$TIER" != "" ]; then
 	make_bcache_flags="$make_bcache_flags --tier 1 $TIER"
