@@ -1254,7 +1254,8 @@ def cmd_help():
     mon         connect to the qemu monitor
     list        list all running vms
     genips      generate a fresh vm database
-    gemconx3    update db with virtual rdma capable nic
+    genconx3    update db with virtual rdma capable nic
+    genbridges  generate a fresh bridges database
     help        print help for commands
     """
 
