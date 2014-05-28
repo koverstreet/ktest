@@ -5,6 +5,7 @@
 import getpass
 import sys
 import os
+import errno
 import fcntl
 import subprocess
 import shelve
@@ -1077,11 +1078,11 @@ def gendbs(dbname, description, lockfile, dbfile, callback):
             sys.exit(0)
 
     # make directory
-    if not os.path.isdir("/etc/vms"):
-        try:
-            os.mkdir("/etc/vms")
-        except OSError:
-             die("Failed to create /etc/vms")
+    try:
+        os.mkdir("/etc/vms")
+    except OSError as e:
+        if e.errno != errno.EEXIST:
+            die("Failed to create /etc/vms")
 
     lockFD = os.open(lockfile, os.O_RDWR | os.O_CREAT)
     try:
