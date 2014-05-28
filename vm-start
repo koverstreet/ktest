@@ -396,10 +396,7 @@ class ClusteredVM(object):
         cmd.extend(["-machine", "accel=kvm"])
         cmd.extend(["-pidfile", os.path.join(self.tmpdir,"pid",)])
         cmd.extend(["-m", opts.mem])
-        # LAPIC bug in qemu, shows up occasionally as a kernel panic.
-        # Use threads= for smp.
-        cmd.extend(["-smp", "1,cores=1,threads=" + opts.cpus])
-        #cmd.extend(["-vnc", "0.0.0.0:"+str(17100+vm.vm_id)])
+        cmd.extend(["-smp", "%d,sockets=%d" % (int(opts.cpus), int(opts.cpus))])
         if opts.kernel:
             cmd.extend(["-kernel", opts.kernel])
             kernelParams = "console=ttyS0,115200 kgdboc=ttyS2,115200"
@@ -862,10 +859,7 @@ def cmd_start():
             cmd.extend(["-machine", "accel=kvm"])
             cmd.extend(["-pidfile", options.tmpdir + "/pid"])
             cmd.extend(["-m", options.mem])
-            # LAPIC bug in qemu, shows up occasionally as a kernel panic.
-
-            cmd.extend(["-smp", "1,cores=1,threads=" + options.cpus])
-            #cmd.extend(["-vnc", "0.0.0.0:"+str(17100+vm.vm_id)])
+            cmd.extend(["-smp", "%d,sockets=%d" % (int(opts.cpus), int(opts.cpus))])
 
             if options.kernel:
                 cmd.extend(["-kernel", options.kernel])
