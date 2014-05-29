@@ -2,6 +2,7 @@
 
 set -o nounset
 set -o errexit
+set -o errtrace
 
 export PS4='+${LINENO}+ '
 
@@ -118,7 +119,7 @@ parse_test_deps()
 
 	if [ ! -e "$f" ]; then
 	    echo "Dependency $req not found"
-	    exit
+	    exit 1
 	fi
 
 	FILES+=" `realpath $f`"
@@ -128,6 +129,12 @@ parse_test_deps()
     {
 	local req=$1
 	local f=$TESTDIR/$req
+
+	if [ "${req:0:1}" = "/" ]; then
+	    local f=$req
+	else
+	    local f=$TESTDIR/$req
+	fi
 
 	_add-file "$req" "$f"
 
@@ -209,6 +216,11 @@ parse_test_deps()
     {
 	# what's going on here?
 	_VMCLUSTER="--cluster $1"
+    }
+
+    config-timeout()
+    {
+	TIMEOUT=$1
     }
 
     PATH+=":/sbin:/usr/sbin:/usr/local/sbin"
@@ -310,7 +322,8 @@ cmd_run()
 	fi
 
 	$vmstart_command|{ \
-	    sed -u -e '/TEST SUCCESS/q' 2>&1 | tee $WORK_DIRECTORY/log
+	    sed -u -e '/TEST \(SUCCESS\|FAILED\)/q' 2>&1 \
+		| tee $WORK_DIRECTORY/log
 	    stop_timeout
 	    $VMSTART stop `cat $WORK_DIRECTORY/id`
 	    stty sane 2> /dev/null || true

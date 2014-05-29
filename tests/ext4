@@ -1,27 +1,23 @@
 #!/bin/bash
 
-set -e
+require-lib ./test-libs.sh
+require-bin make-bcache
+require-kernel-config MD,EXT4_FS
 
-if [ "$1" = "deps" ]; then
-    cat <<-ZZ
-REQUIRE=test-libs.sh
-KERNEL_CONFIG_REQUIRE=EXT4_FS
-MEM=256M
-SCRATCH=2G
-ZZ
-    exit
-fi
+config-scratch-devs 2G
+config-mem 256M
 
-. test-libs.sh
+main()
+{
+    SIZE=small
+    FS=ext4
 
-SIZE=small
-FS=ext4
+    #echo "file inode.c +p"		> /sys/kernel/debug/dynamic_debug/control
+    #echo "file dirent.c +p"	> /sys/kernel/debug/dynamic_debug/control
+    #echo "file fs.c +p"		> /sys/kernel/debug/dynamic_debug/control
 
-#echo "file inode.c +p"		> /sys/kernel/debug/dynamic_debug/control
-#echo "file dirent.c +p"	> /sys/kernel/debug/dynamic_debug/control
-#echo "file fs.c +p"		> /sys/kernel/debug/dynamic_debug/control
+    setup_blkdev
+    test_stress
 
-setup_blkdev
-test_stress
-
-test_success
+    test_success
+}

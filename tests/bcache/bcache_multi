@@ -1,7 +1,5 @@
 #!/bin/bash
 
-set -e
-
 require-lib ../test-libs.sh
 require-bin make-bcache
 require-kernel-config MD,BCACHE
