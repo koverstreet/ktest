@@ -130,6 +130,15 @@ setup_bcache() {
     cache_set_settings
 }
 
+stop_bcache()
+{
+    for dev in $DEVICES; do
+	umount /mnt/$dev || true
+    done
+
+    echo 1 > /sys/fs/bcache/reboot
+}
+
 #
 # Set up file systems on all bcache block devices.
 # The FS variable should be set to one of the following:
@@ -382,36 +391,13 @@ test_fault()
 
 test_shrink()
 {
-    if [ -d /sys/fs/bcache/*-* ]; then
-	while true; do
-	    for file in /sys/fs/bcache/*-*/internal/prune_cache; do
-		echo 100000 > $file
-	    done
-	    sleep 0.5
+    while true; do
+	for file in $(find /sys/fs/bcache -name prune_cache); do
+	    echo 100000 > $file
 	done
-    fi
-}
-
-test_stop()
-{
-    sleep 4
-    cd /
-
-    for dev in $DEVICES; do
-	fuser -s -k -M /mnt/$dev
+	sleep 0.5
     done
-
-    sleep 2
-
-    for dev in $DEVICES; do
-	umount /mnt/$dev
-    done
-
-    #echo 1 > /sys/block/bcache0/bcache/stop
-    #echo 1 > /sys/block/bcache1/bcache/stop
-    echo 1 > /sys/fs/bcache/reboot
 }
-
 
 test_sync()
 {

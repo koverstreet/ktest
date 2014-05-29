@@ -24,6 +24,7 @@ main()
     echo 4 > /sys/fs/bcache/*/data_replicas
 
     test_stress
+    stop_bcache
 
     test_success
 }

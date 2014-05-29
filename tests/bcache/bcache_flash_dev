@@ -21,6 +21,7 @@ main()
     setup_bcache
     setup_flash_volume 1400M
     test_stress
+    stop_bcache
 
     test_success
 }
