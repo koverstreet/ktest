@@ -235,22 +235,17 @@ parse_test_deps()
 
 build_file_list()
 {
-    mkdir -p $WORK_DIRECTORY
+    if [ ! -f "$IMG" ] ; then
+        echo "VM root filesystem not found, use vm_create_image to create one"
+        exit 1
+    fi
 
-    if [ "$INTERACTIVE" = 0 ]; then
-	local TEST=$1
-
-	if [ -z "$TEST" ]; then
-	    echo "ktest: missing test"
-	    usage
-	    exit 1
-	fi
-
-	if [ ! -f "$TEST" ]; then
-	    echo "Test $TEST not found"
-	    exit 1
-	fi
-
+    if [ $# -eq 0 ]; then
+	install -m0755 $KTESTDIR/rc.interactive $WORK_DIRECTORY/rc
+	FILES="$WORK_DIRECTORY/rc"
+	_MEM="1G"
+    else
+	TEST=$1
 	TEST=`realpath "$TEST"`
 
 	local TESTDIR=`dirname $TEST`
@@ -262,31 +257,16 @@ build_file_list()
 	FILES+=" $WORK_DIRECTORY/rc.test"
 
 	parse_test_deps $TEST
-    else
-	install -m0755 $KTESTDIR/rc.interactive $WORK_DIRECTORY/rc
-	FILES="$WORK_DIRECTORY/rc"
-	_MEM="1G"
     fi
 }
 
-cmd_run()
+prepare_vm()
 {
+    # Might be overridden by test script
     _KERNEL_CONFIG_REQUIRE=""
-    _MEM=""
-    _SCRATCH=""
-    _INFINIBAND=""
-    _VMCLUSTER=""
     genisoimage_sudo=""
-    local ALARM=""
 
-    # JFR - per review comments on 4/11/14
-    # Removed extraneous filename empty-string check
-    # Claudio says the following works fine if the string is empty
-
-    if [ ! -f "$IMG" ] ; then
-        echo "VM root filesystem not found, use vm_create_image to create one"
-        exit 1
-    fi
+    mkdir -p $WORK_DIRECTORY
 
     build_file_list $@
 
@@ -302,6 +282,36 @@ cmd_run()
 	$WORK_DIRECTORY/modules/lib $FILES || exit 1
 
     rm -rf $WORK_DIRECTORY/modules
+}
+
+cmd_boot()
+{
+    prepare_vm
+
+    $VMSTART start					\
+	-i $IMG -t $TMPDIR				\
+	-k $KERNEL_OUTPUT/arch/x86/boot/bzImage		\
+	-c $WORK_DIRECTORY/run.iso			\
+	--id $WORK_DIRECTORY/id				\
+	-m 1G
+
+    stty sane 2> /dev/null || true
+}
+
+cmd_run()
+{
+    _MEM=""
+    _SCRATCH=""
+    _INFINIBAND=""
+    _VMCLUSTER=""
+
+    if [ -z "$1" ]; then
+	echo "ktest: missing test"
+	usage
+	exit 1
+    fi
+
+    prepare_vm $1
 
     vmstart_command="$VMSTART start			\
 	-i $IMG -t $TMPDIR				\
@@ -315,6 +325,7 @@ cmd_run()
 
     if [ "$INTERACTIVE" = 1 ]; then
         $vmstart_command
+	stty sane 2> /dev/null || true
     else
 	if [ -n "$TIMEOUT" ]; then
 	    check_timeout "$TIMEOUT" &
@@ -332,9 +343,7 @@ cmd_run()
 	    fi
 	    exit 0
 	}
-	wait
     fi
-    stty sane 2> /dev/null || true
 }
 
 cmd_ssh()
@@ -400,7 +409,8 @@ usage()
 {
     echo "ktest: Test kernels in virtual machines on a pool of remote servers"
     echo "Usage: ktest cmd [options] [n]"
-    echo "  run [options]: Run a kernel test"
+    echo "  boot        Boot a VM without running anything"
+    echo "  run <test>  Run a kernel test"
     echo "  ssh         Log in as root"
     echo "  gdb         Connect to kgdb"
     echo "  mon         Connect to qemu monitor"
@@ -408,7 +418,7 @@ usage()
     echo "  config      Run make nconfig"
     echo
     echo "  options:"
-    echo "      -x bash debug statements"
+    echo "      -x      bash debug statements"
     echo "      -k      kernel source dir"
     echo "      -b      bld directory for kernel (default: kernel_source/.ktest)"
     echo "      -w      work director (default: kernel build directory)"
@@ -416,7 +426,7 @@ usage()
     echo "      -i      VM root filesystem image (run cmd only)"
     echo "      -t      timout in seconds (run cmd only)"
     echo "      -j      j option to make (run cmd only)"
-    echo "      -I      interactive run (run cmd only)"
+    echo "      -I      disable timeout and VM stop on pass/fail (run cmd only)"
     echo "      -v run with vde networking (run cmd only)"
 }
 

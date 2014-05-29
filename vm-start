@@ -5,6 +5,7 @@
 import getpass
 import sys
 import os
+import errno
 import fcntl
 import subprocess
 import shelve
@@ -22,8 +23,6 @@ import inspect
 def lineno():
     """Returns the current line number in our program."""
     return inspect.currentframe().f_back.f_lineno
-
-from vmcutils import *
 
 from optparse import OptionParser, OptionGroup
 
@@ -397,10 +396,7 @@ class ClusteredVM(object):
         cmd.extend(["-machine", "accel=kvm"])
         cmd.extend(["-pidfile", os.path.join(self.tmpdir,"pid",)])
         cmd.extend(["-m", opts.mem])
-        # LAPIC bug in qemu, shows up occasionally as a kernel panic.
-        # Use threads= for smp.
-        cmd.extend(["-smp", "1,cores=1,threads=" + opts.cpus])
-        #cmd.extend(["-vnc", "0.0.0.0:"+str(17100+vm.vm_id)])
+        cmd.extend(["-smp", "%d,sockets=%d" % (int(opts.cpus), int(opts.cpus))])
         if opts.kernel:
             cmd.extend(["-kernel", opts.kernel])
             kernelParams = "console=ttyS0,115200 kgdboc=ttyS2,115200"
@@ -863,10 +859,7 @@ def cmd_start():
             cmd.extend(["-machine", "accel=kvm"])
             cmd.extend(["-pidfile", options.tmpdir + "/pid"])
             cmd.extend(["-m", options.mem])
-            # LAPIC bug in qemu, shows up occasionally as a kernel panic.
-
-            cmd.extend(["-smp", "1,cores=1,threads=" + options.cpus])
-            #cmd.extend(["-vnc", "0.0.0.0:"+str(17100+vm.vm_id)])
+            cmd.extend(["-smp", "%d,sockets=%d" % (int(options.cpus), int(options.cpus))])
 
             if options.kernel:
                 cmd.extend(["-kernel", options.kernel])
@@ -1044,6 +1037,73 @@ def cmd_list():
         for br in bridges:
             print br.br_name+"\t"+str(br.available)
     
+
+def gendbs(dbname, description, lockfile, dbfile, callback):
+    """Generic function to generate database files (union of duplicated code).
+
+    cmdname       Name of the database being created (ips, bridges)
+    description   Help text
+    lockfile      Name of the lockfile to be created
+    dbfile        Name of the database file to be created
+    callback      callable object to populate the database
+                  (passed an open shelve object as its argument)
+    """
+    opt=OptionParser("usage: %prog vm gen" + dbname,
+                     description=description)
+    opt.add_option("-s", "--safe", dest="safe",
+                   default=False, action="store_true",
+                   help="Automatic, but only if the lock and dbfile do not exist")
+    opt.add_option("-f", "--force", dest="force",
+                   default=False, action="store_true",
+                   help="Automatic, force overwrite")
+    (options, args) = opt.parse_args()
+
+    if options.force and options.safe:
+        die("--safe and --force are mutually exclusive")
+
+    if os.geteuid() != 0:
+        die("Root permissions are required")
+
+    if not (options.force or options.safe):
+        check = raw_input("This will overwrite any current %s database files. Are you sure? (y): " % dbname)
+        if check != "y":
+            sys.exit(0)
+
+    # make directory
+    try:
+        os.mkdir("/etc/vms")
+    except OSError as e:
+        if e.errno != errno.EEXIST:
+            die("Failed to create /etc/vms")
+
+    lockFD = os.open(lockfile, os.O_RDWR | os.O_CREAT)
+    try:
+        if options.safe:
+            fcntl.flock(lockFD, fcntl.LOCK_EX)
+            if os.path.exists(dbfile):
+                print "Already setup"
+                return
+
+        os.fchmod(lockFD, 0666)
+        os.lseek(lockFD, 0, os.SEEK_SET)
+        os.ftruncate(lockFD, 0)
+        os.write(lockFD, "used for locking access to %s database file" % dbname)
+
+        db = shelve.open(dbfile)
+        db["sess_id"]=1000
+
+        callback(db)
+
+        db.close()
+        os.chmod(dbfile, 0666)
+
+        print "Setup completed"
+
+    finally:
+        # This will implicitly release the lock
+        os.close(lockFD)
+
+
 def cmd_genips():
     """
     Generates a new set of new IP Macaddress combinations for
@@ -1054,53 +1114,25 @@ def cmd_genips():
     any of the config files get screwed up.
     """
 
-    opt=OptionParser("usage: %prog vm genips",
-             description="""Generate a new IP/MAC file""")
-    (options, args) = opt.parse_args()
+    def ips_generator(d):
+        free_vms = []
 
-    if os.geteuid() != 0:
-        die("You need root permissions to do this, laterz!")
+        for i in range (0, 100):
+            #generate IP file
+            vm_num = str(i).zfill(2)
+            name = "vm"+vm_num
+            ip = "172.20.0."+str(i+100)
+            mac = "DE:AD:BE:EF:01:"+vm_num
 
-    check = raw_input("This will overwrite any current vm list files. Are you sure? (y): ")
-    if check != "y":
-        sys.exit(0)
+            #generate ips dict
+            vm = Domain(i, ip, mac)
+            free_vms.insert(0, vm)
 
-    # make directory
-    if not os.path.isdir("/etc/vms"):
-        try:
-            os.mkdir("/etc/vms")
-        except OSError:
-             die("Failed to create /etc/vms")
+        d["free_vms"] = free_vms
+        d["running_vms"] = []
 
-    # generate database files:
-    name = "ips"
+    gendbs("ips", "Generate a new IP/MAC file", IP_FILE_LOCK, IP_FILE_DICT, ips_generator)
 
-    d = shelve.open(IP_FILE_DICT)
-    d["sess_id"] = 1000
-    free_vms = []
-    lock = open(IP_FILE_LOCK, "w")
-    lock.write("used for locking access to vm database file")
-
-    for i in range (0, 100):
-        #generate IP file
-        vm_num = str(i).zfill(2)
-        name = "vm"+vm_num
-        ip = "172.20.0."+str(i+100)
-        mac = "DE:AD:BE:EF:01:"+vm_num
-
-        #generate ips dict
-        vm = Domain(i, ip, mac)
-        free_vms.insert(0, vm)
-
-    d["free_vms"] = free_vms
-    d["running_vms"] = []
-    d.close()
-    lock.close()
-
-    os.chmod(IP_FILE_DICT, 0666)
-    os.chmod(IP_FILE_LOCK, 0666)
-
-    print "Setup completed"
 
 def cmd_genbridges():
     """
@@ -1110,45 +1142,18 @@ def cmd_genbridges():
     any of the config files get screwed up.
     """
 
-    opt=OptionParser("usage: %prog genbridges",
-             description="""Generate a new bridge file""")
-    (options, args) = opt.parse_args()
+    def bridges_generator(db):
+        bridges = {}
 
-    if os.geteuid() != 0:
-        die("You need root permissions to do this, laterz!")
+        for br_num in range (1,10):
+            #generate bridge file
+            br_key = str(br_num)
+            br_name = "br"+br_key
+            bridges[br_key] = Bridge(br_key,br_num,br_name)
 
-    check = raw_input("This will overwrite any current bridge list files. Are you sure? (y): ")
-    if check != "y":
-        sys.exit(0)
+        db["bridges"] = bridges
 
-    # make directory
-    if not os.path.isdir("/etc/vms"):
-        try:
-            os.mkdir("/etc/vms")
-        except OSError:
-             die("Failed to create /etc/vms")
-
-    # generate database files:
-    db = shelve.open(BR_FILE_DICT)
-    db["sess_id"] = 1000
-    bridges = {}
-    lock = open(BR_FILE_LOCK, "w")
-    lock.write("Used for locking access to vm database file")
-
-    for br_num in range (1,10):
-        #generate bridge file
-        br_key = str(br_num)
-        br_name = "br"+br_key
-        bridges[br_key] = Bridge(br_key,br_num,br_name)
-
-    db["bridges"] = bridges
-    db.close()
-    lock.close()
-
-    os.chmod(BR_FILE_DICT, 0666)
-    os.chmod(BR_FILE_LOCK, 0666)
-
-    print "Bridge setup completed"
+    gendbs("bridges", "Generate a new bridge file", BR_FILE_LOCK, BR_FILE_DICT, bridges_generator)
 
 
 def cmd_genconx3():
@@ -1243,7 +1248,8 @@ def cmd_help():
     mon         connect to the qemu monitor
     list        list all running vms
     genips      generate a fresh vm database
-    gemconx3    update db with virtual rdma capable nic
+    genconx3    update db with virtual rdma capable nic
+    genbridges  generate a fresh bridges database
     help        print help for commands
     """
 
