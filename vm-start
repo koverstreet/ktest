@@ -859,7 +859,7 @@ def cmd_start():
             cmd.extend(["-machine", "accel=kvm"])
             cmd.extend(["-pidfile", options.tmpdir + "/pid"])
             cmd.extend(["-m", options.mem])
-            cmd.extend(["-smp", "%d,sockets=%d" % (int(opts.cpus), int(opts.cpus))])
+            cmd.extend(["-smp", "%d,sockets=%d" % (int(options.cpus), int(options.cpus))])
 
             if options.kernel:
                 cmd.extend(["-kernel", options.kernel])
