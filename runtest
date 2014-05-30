@@ -14,7 +14,7 @@ if [ "$srcdir" = "" ] ; then
    # is stored is the srcdir.
 fi
 
-opt="-w . -K -b $KERNEL -k $KERNEL -t 120"
+opt="-w . -K -b $KERNEL -k $KERNEL"
 
 ( 
    sleep 30

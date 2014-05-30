@@ -13,7 +13,7 @@ fi
 set -e
 dir=`expr "$test" : "$srcdir/\(.*\)"`
 env
-$srcdir/ktest run -w $dir.dir -K -b $KERNEL -k $KERNEL -t 600 $srcdir/$test
+$srcdir/ktest run -w $dir.dir -K -b $KERNEL -k $KERNEL $srcdir/$test
 
 duration=$((`date +%s` -  $start))
 

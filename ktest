@@ -44,10 +44,9 @@ IMG="/var/lib/ktest/root"
                         #       defaults: /var/lib/ktest/root
                         #       auto-override: $HOME/.ktest/root
 TIMEOUT=""              # kills test after $TIMEOUT seconds
-                        #       sets with: -t <seconds>
-                        #       defaults: 0
                         #       can be overridden by config-timeout from test 
                         #       ignored completely with -I
+                        #       defaults: 0
 BUILD=1                 # if set to 1, kernel will build
                         #       ignored with: -K (sets to 0)
 INTERACTIVE=0           # if set to 1, timeout is ignored completely
@@ -79,7 +78,7 @@ fi
 CMD="cmd_$1"
 shift
 
-while getopts "IhKb:k:i:t:j:w:vx" arg; do
+while getopts "IhKb:k:i:j:w:vx" arg; do
     case $arg in
         h)
             usage
@@ -93,9 +92,6 @@ while getopts "IhKb:k:i:t:j:w:vx" arg; do
             ;;
         i)
             IMG=$OPTARG
-            ;;
-        t)
-            TIMEOUT=$OPTARG
             ;;
         b)
             KERNEL_OUTPUT=$OPTARG
@@ -521,7 +517,6 @@ usage()
     echo "      -w      work director (default: kernel build directory)"
     echo "      -K      don't build kernel (run cmd only)"
     echo "      -i      VM root filesystem image (run cmd only)"
-    echo "      -t      timout in seconds (run cmd only)"
     echo "      -j      j option to make (run cmd only)"
     echo "      -I      disable timeout and VM stop on pass/fail (run cmd only)"
     echo "      -v      run with vde networking (run cmd only)"

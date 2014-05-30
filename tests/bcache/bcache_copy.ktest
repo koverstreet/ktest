@@ -10,6 +10,8 @@ require-container ioctl_test
 config-scratch-devs 1G
 config-mem 256M
 
+config-timeout 600
+
 main()
 {
     copy_containers
