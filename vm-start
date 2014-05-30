@@ -417,7 +417,7 @@ class ClusteredVM(object):
             cmd.extend(["-drive", "format=raw,snapshot=on,file="+opts.image])
         if opts.filesystems:
             for fspath, fslabel in opts.filesystems:
-                cmd.extend(["-virtfs", "local,path="+fspath+",mount_tag="+fslabel+",security_model=none,readonly"])
+                cmd.extend(["-virtfs", "local,path="+fspath+",mount_tag="+fslabel+",security_model=none"])
         for drive in self.drives:  # add scratch drives
             cmd.extend(["-drive", "if=virtio,format=raw,cache=writeback,file="+drive])
         if self.iso:              # add cdrom
@@ -885,7 +885,7 @@ def cmd_start():
                 cmd.extend(["-drive", "format=raw,snapshot=on,file="+options.image])
             if options.filesystems:
                 for fspath, fslabel in options.filesystems:
-                    cmd.extend(["-virtfs", "local,path="+fspath+",mount_tag="+fslabel+",security_model=none,readonly"])
+                    cmd.extend(["-virtfs", "local,path="+fspath+",mount_tag="+fslabel+",security_model=none"])
             if options.core:
                cmd.extend(["-drive", "format=raw,file="+options.core.split(",")[0]])
 
