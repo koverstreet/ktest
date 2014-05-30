@@ -118,7 +118,7 @@ class Domain:
                 expath = os.path.basename(os.readlink("/proc/%d/exe" % pid))
                 if expath[:11] == "qemu-system":
                     return True
-        except (OSError, ValueError) as e:
+        except (OSError, IOError, ValueError) as e:
             pass
 
         return False
