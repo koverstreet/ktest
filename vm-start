@@ -49,8 +49,6 @@ GREEN='\033[32m'
 CYAN='\033[36m'
 NC='\033[0m'
 
-DEVNULL = open(os.devnull, "wb")
-
 def randstr(size=8, chars=string.letters + string.digits):
     return "".join(random.choice(chars) for x in range(size))
 
@@ -114,11 +112,16 @@ class Domain:
 
     def exists(self):
         """Does the VM this represents actually exists?"""
-        if subprocess.call(['pgrep', '--pidfile', self.tmpdir + '/pid',
-            'qemu-system-x86'],
-            stdout=DEVNULL, stderr=DEVNULL):
-            return False
-        return True
+        try:
+            with open(self.tmpdir + "/pid", 'r') as f:
+                pid=int(f.read().strip())
+                expath = os.path.basename(os.readlink("/proc/%d/exe" % pid))
+                if expath == "qemu-system-x86":
+                    return True
+        except (OSError,ValueError):
+            pass
+
+        return False
 
 def bridge_free(br_key):
     db = openLockedDb(BR_FILE_LOCK, BR_FILE_DICT)
