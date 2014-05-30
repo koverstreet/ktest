@@ -2,6 +2,8 @@
 
 KERNEL=/usr/share/DateraContainer/kernel
 
+local start=`date +%s`
+
 test="$1"
 if [ "$srcdir" = "" ] ; then
    srcdir=`dirname $0`
@@ -12,4 +14,8 @@ set -e
 dir=`expr "$test" : "$srcdir/\(.*\)"`
 env
 $srcdir/ktest run -w $dir.dir -K -b $KERNEL -k $KERNEL -t 600 $srcdir/$test
+
+duration=$((`date +%s` -  $start))
+
+echo [$test] test finished at `date +%s` -- `date` after $duration seconds
 exit 0
