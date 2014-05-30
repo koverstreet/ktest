@@ -17,12 +17,8 @@ import string
 import random
 import re
 import datetime
-import select
-import inspect
-
-def lineno():
-    """Returns the current line number in our program."""
-    return inspect.currentframe().f_back.f_lineno
+import logging
+import traceback
 
 from optparse import OptionParser, OptionGroup
 
@@ -48,30 +44,12 @@ DEFAULT_MEMORY = "1G"               # how much memory to give the vms
 DEFAULT_TMP = "/tmp"                # default directory for tmps
 DEFAULT_TIMEOUT = 10*60             # timeout: 10 mins
 
-USER_NETWORKING = True
-
 # colors:
 GREEN='\033[32m'
 CYAN='\033[36m'
 NC='\033[0m'
 
 DEVNULL = open(os.devnull, "wb")
-
-DEBUG = False
-
-"""
-Print Error:
-"""
-def die(msg, exitStatus=1):
-    print >> sys.stderr, "[error] "+msg
-    sys.exit(exitStatus)
-
-def warning(msg):
-    print >> sys.stderr, "[warning] "+msg
-
-def debug(msg):
-    if DEBUG:
-        print >> sys.stderr, "[debug] "+msg
 
 def randstr(size=8, chars=string.letters + string.digits):
     return "".join(random.choice(chars) for x in range(size))
@@ -82,12 +60,11 @@ def readfile(filename):
     return line
 
 def writefile(filename, line):
-    debug("in writefile - writing <%s> into %s" % (line,filename))
+    logging.debug("in writefile - writing <%s> into %s" % (line,filename))
     with open(filename, 'w') as f:
         f.write(str(line)+"\n")
 
 def appendfile(filename, line):
-
     newline = ""
     if os.path.exists(filename):
         with open(filename, 'r') as f:
@@ -96,7 +73,7 @@ def appendfile(filename, line):
             newline += "/"
                    
     newline += str(line)
-    debug("in appendfile - writing <%s> into %s" % (newline,filename))
+    logging.debug("in appendfile - writing <%s> into %s" % (newline,filename))
     with open(filename, 'w') as f:
         f.write(newline+"\n")  
 
@@ -167,7 +144,7 @@ def bridge_get():
             bridges[key] = bridge
             break
     else:
-        die("No bridge entries available to start cluster")        
+        raise RuntimeError("No bridge entries available to start cluster")        
 
     db["bridges"] = bridges
     closeLockedDb(db)
@@ -186,7 +163,7 @@ def vm_conx3_get():
     free_conx3 = db["free_conx3"]
     if len(free_conx3) == 0:
         closeLockedDb(db)
-        die("Not enough virtual connect x3 to start a vms")
+        raise RuntimeError("Not enough virtual connect x3 to start a vms")
     print free_conx3
     conx3_id = free_conx3.pop()
     while conx3_id=="08:02.0":
@@ -248,7 +225,7 @@ def vm_slot_get(tmpdir, ip, conx3):
         closeLockedDb(d)
         if conx3_id is not None:
             vm_conx3_put(vm.conx3_id)
-        die("No vm entries available to start a vm")
+        raise RuntimeError("No vm entries available to start a vm")
 
     # get vm entr, mark for setup
     vm = free_vms.pop()
@@ -282,7 +259,7 @@ def vm_lookup(id):
     # make sure we actually found some
     if not vm:
         closeLockedDb(d)
-        die("vm " + str(id) + " not running")
+        raise RuntimeError("vm " + str(id) + " not running")
 
     closeLockedDb(d)
     return vm
@@ -303,7 +280,7 @@ def vm_cleanup(vmdir):
     ids = ids.split("/")
     
     if ids[0] == "":
-        die("No ids found in <%s>!" % idfile)
+        raise RuntimeError("No ids found in <%s>!" % idfile)
     
     pid = "NONE"
     try:
@@ -372,7 +349,7 @@ class ClusteredVM(object):
             if subprocess.call(["genisoimage", "-quiet", "-R",
                                 "-input-charset", "utf-8", "-o",
                                 self.iso, opts.cdrom]):
-                die("Could not create cdrom from dir: "+opts.cdrom)
+                raise RuntimeError("Could not create cdrom from dir: "+opts.cdrom)
         else:
             self.iso = opts.cdrom
 
@@ -563,7 +540,7 @@ class Cluster(object):
                 pid=int(f.read().strip())
                 os.kill(pid, signal.SIGTERM)
         except:
-            warning("Failed to terminate dnsmasq")
+            logging.warning("Failed to terminate dnsmasq")
 
     def enable_bridge(self):
         """Enable the bridge using bridge control commands.
@@ -592,7 +569,7 @@ class Cluster(object):
 
             self.status = "enabled"
         except:
-            die("Unable to enable bridge <%s>" % self.name)
+            raise RuntimeError("Unable to enable bridge <%s>" % self.name)
 
     def disable_bridge(self):
         """Disable the bridge using bridge control commands.
@@ -666,7 +643,7 @@ class Cluster(object):
                 except Exception, e:
                     attempts+=1
                     if attempts > 10:
-                        warning("Failed to clean up VM %d" % vm.idnum)
+                        logging.warning("Failed to clean up VM %d" % vm.idnum)
                         break
                     else:
                         time.sleep(0.5)
@@ -675,7 +652,7 @@ class Cluster(object):
             try:
                 vm_slot_put(vm.vmsid)
             except:
-                warning("Failed to return the slot for %d" % vm.vmsid)
+                logging.warning("Failed to return the slot for %d" % vm.vmsid)
 
         # terminate dnsmasq
         self.disable_dnsmasq()
@@ -688,6 +665,10 @@ def cmd_start():
     """
     opt = OptionParser("Usage: %prog start [options] [number]",
         description="Start a virtual machine or cluster")
+
+    opt.add_option("-d", "--debug", dest="debug",
+                   default=False, action="store_true",
+        help="enable debugging")
 
     opt.add_option("-i", "--image", dest="image",
         help="boot image of the virtual machine(s)")
@@ -751,6 +732,9 @@ def cmd_start():
 
     (options, args) = opt.parse_args()
 
+    if options.debug:
+        logging.getLogger().setLevel("DEBUG")
+
     tmpdate = datetime.datetime.strftime(
         datetime.datetime.today(),"%Y%m%d-%H%M%S")
     
@@ -777,15 +761,15 @@ def cmd_start():
             die ("Requires an image to boot")
 
         if not os.path.isfile(options.image):
-            die("Cannot find base image file: "+options.image)
+            raise RuntimeError("Cannot find base image file: "+options.image)
 
         #if not options.kernel:
 
         if options.kernel and not os.path.isfile(options.kernel):
-            die("Cannot find kernel file: "+options.kernel)
+            raise RuntimeError("Cannot find kernel file: "+options.kernel)
 
         if options.initrd and not os.path.isfile(options.initrd):
-            die("Cannot find initrd file: "+options.initrd)
+            raise RuntimeError("Cannot find initrd file: "+options.initrd)
 
         try:
             caught_signal = False
@@ -818,7 +802,7 @@ def cmd_start():
                 if subprocess.call(["genisoimage", "-quiet", "-R",
                     "-input-charset",
                     "utf-8", "-o", iso, options.cdrom]):
-                    die("Could not create cdrom from dir: "+options.cdrom)
+                    raise RuntimeError("Could not create cdrom from dir: "+options.cdrom)
             else:
                 iso=options.cdrom
 
@@ -834,7 +818,7 @@ def cmd_start():
                         i += 1
 
                         if subprocess.call(["fallocate", "-l", size, name]):
-                            warning("fallocate error, trying dd")
+                            logging.warning("fallocate error, trying dd")
                             if subprocess.call(["dd", "if=/dev/zero", "of="+name,
                                 "count=1", "bs="+size]):
                                die ("error creating scratch drive '"+name+"'")
@@ -846,12 +830,12 @@ def cmd_start():
                 if size==None:
                     size="10G"
                 if subprocess.call(["fallocate", "-l", size, name]):
-                    warning("fallocate error, trying dd")
+                    logging.warning("fallocate error, trying dd")
                     if subprocess.call(["dd", "if=/dev/zero", "of="+name,
                                         "count=1", "bs="+size]):
                         die ("error creating core/log drive '"+name+"'")
                 if subprocess.call(["mkfs.ext4", "-U","11111111-2222-3333-4444-555555555555","-F",name]):
-                    die("mkfs.ext4 failed on '"+name+"'")
+                    raise RuntimeError("mkfs.ext4 failed on '"+name+"'")
 
 
             # build qemu command and start
@@ -902,7 +886,7 @@ def cmd_start():
                 print "Assigning vf: ", vm.conx3_id
                 cmd.extend(["-device", "pci-assign,host="+str(vm.conx3_id)])
         
-            warning("Executing: "+str(cmd))
+            logging.warning("Executing: "+str(cmd))
             
             p = subprocess.Popen(cmd, shell=False)
 
@@ -924,10 +908,18 @@ def cmd_stop():
     opt = OptionParser("Usage: %prog stop [options] [id]",
         description="Stop a vm by its id or its ip address")
 
+    opt.add_option("-d", "--debug", dest="debug",
+                   default=False, action="store_true",
+        help="enable debugging")
+
     opt.add_option("-i", "--ip", dest="ipaddr",
       help="The ip address of the vm")
 
     (opts, args) = opt.parse_args()
+
+    if opts.debug:
+        logging.getLogger().setLevel("DEBUG")
+
 
     if opts.ipaddr:
         os.system(
@@ -936,7 +928,7 @@ def cmd_stop():
     else:
 
         if len(args) == 0:
-            die("Please provide a vm id or ip address to stop")
+            raise RuntimeError("Please provide a vm id or ip address to stop")
 
         ids = args[0].split("/") 
         
@@ -952,7 +944,7 @@ def cmd_ssh():
     """ssh into a virtual machine"""
 
     if len(sys.argv) <= 1:
-        die("Please provide a vm id to SSH to")
+        raise RuntimeError("Please provide a vm id to SSH to")
 
     id = int(sys.argv[1].split('/')[0])
     vm = vm_lookup(id)
@@ -973,7 +965,7 @@ def cmd_ssh():
 
 def vm_gdb(gdbsocket):
     if len(sys.argv) <= 2:
-        die("Please provide a vm ID and a vmlinux file")
+        raise RuntimeError("Please provide a vm ID and a vmlinux file")
 
     vm = vm_lookup(int(sys.argv[1]))
     os.execlp("gdb", "gdb",
@@ -992,7 +984,7 @@ def cmd_kgdb():
 
 def cmd_mon():
     if len(sys.argv)<=1:
-        die("Please provide a vm id")
+        raise RuntimeError("Please provide a vm id")
 
     vm = vm_lookup(int(sys.argv[1]))
 
@@ -1006,7 +998,15 @@ def cmd_list():
     """List out running VMs"""
     opt=OptionParser("usage: %prog vm list [session_id]",
              description="""List out running VMs""")
+
+    opt.add_option("-d", "--debug", dest="debug",
+                   default=False, action="store_true",
+        help="enable debugging")
+
     (options, args) = opt.parse_args()
+
+    if options.debug:
+        logging.getLogger().setLevel("DEBUG")
 
     if len(args) == 0 or args[0] == "vms":
         
@@ -1052,6 +1052,11 @@ def gendbs(dbname, description, lockfile, dbfile, callback):
     """
     opt=OptionParser("usage: %prog vm gen" + dbname,
                      description=description)
+
+    opt.add_option("-d", "--debug", dest="debug",
+                   default=False, action="store_true",
+        help="enable debugging")
+
     opt.add_option("-s", "--safe", dest="safe",
                    default=False, action="store_true",
                    help="Automatic, but only if the lock and dbfile do not exist")
@@ -1060,11 +1065,14 @@ def gendbs(dbname, description, lockfile, dbfile, callback):
                    help="Automatic, force overwrite")
     (options, args) = opt.parse_args()
 
+    if options.debug:
+        logging.getLogger().setLevel("DEBUG")
+
     if options.force and options.safe:
-        die("--safe and --force are mutually exclusive")
+        raise RuntimeError("--safe and --force are mutually exclusive")
 
     if os.geteuid() != 0:
-        die("Root permissions are required")
+        raise RuntimeError("Root permissions are required")
 
     if not (options.force or options.safe):
         check = raw_input("This will overwrite any current %s database files. Are you sure? (y): " % dbname)
@@ -1076,7 +1084,7 @@ def gendbs(dbname, description, lockfile, dbfile, callback):
         os.mkdir("/etc/vms")
     except OSError as e:
         if e.errno != errno.EEXIST:
-            die("Failed to create /etc/vms")
+            raise RuntimeError("Failed to create /etc/vms")
 
     lockFD = os.open(lockfile, os.O_RDWR | os.O_CREAT)
     try:
@@ -1257,24 +1265,34 @@ def cmd_help():
 
 """Main program."""
 
-# if there is no command or args, print error message
-if len(sys.argv) == 1:
-    cmd_help()
-    die("Please provide a command and appropriate arguments.")
+# Configure logging
+logging.basicConfig(stream=sys.stderr,format='%(levelname)s: %(message)s',level=logging.WARNING)
 
-# if first arg is a help option or command, print help and exit
-if sys.argv[1] in ["-h", "--help", "help"]:
-    cmd_help()
-    sys.exit(0)
-
-# try to find the command in the global namespace
 try:
-    _cmd_name = "cmd_" + sys.argv[1]
-    _cmd_func = getattr(sys.modules[__name__], _cmd_name)
-except AttributeError:
-    die("<%s> is not a valid command.\n" % sys.argv[1] +
-      "Try 'vm-cluster help' for more info.")
+    # if there is no command or args, print error message
+    if len(sys.argv) == 1:
+        cmd_help()
+        raise RuntimeError("Please provide a command and appropriate arguments.")
 
-# remove the command from argv and execute the command function
-sys.argv.pop(1)
-_cmd_func()
+    # if first arg is a help option or command, print help and exit
+    if sys.argv[1] in ["-h", "--help", "help"]:
+        cmd_help()
+        sys.exit(0)
+
+    # try to find the command in the global namespace
+    try:
+        _cmd_name = "cmd_" + sys.argv[1]
+        _cmd_func = getattr(sys.modules[__name__], _cmd_name)
+    except AttributeError:
+        raise RuntimeError("<%s> is not a valid command.\n" % sys.argv[1] +
+          "Try 'vm-cluster help' for more info.")
+
+    # remove the command from argv and execute the command function
+    sys.argv.pop(1)
+    _cmd_func()
+except Exception as e:
+    logging.error("%s: %s" % (type(e).__name__, e))
+    logging.debug(traceback.format_exc())
+    sys.exit(1)
+
+sys.exit(0)
