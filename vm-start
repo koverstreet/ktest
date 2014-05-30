@@ -999,6 +999,8 @@ def cmd_mon():
     os.execlp("minicom", "minicom",
           "-D", "unix#" + vm.tmpdir + "mon")
 
+def cmd_ls():
+    return cmd_list()
 
 def cmd_list():
     """List out running VMs"""
