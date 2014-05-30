@@ -326,10 +326,7 @@ class ClusteredVM(object):
         self.console  = vm_console
         self.opts     = opts
 
-        try:
-            os.makedirs(self.tmpdir, 0700)
-        except OSError:
-            raise RuntimeError("Failed to create tmpdir: "+self.tmpdir)
+        os.makedirs(self.tmpdir, 0700)
 
     def setup(self):
         # Create the tap device owned by the current user
@@ -548,31 +545,28 @@ class Cluster(object):
     def enable_bridge(self):
         """Enable the bridge using bridge control commands.
         """
-        try:
-            subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addbr', self.name])
-            subprocess.check_call(['sudo', '-n', '--', 'brctl', 'stp', self.name, 'on'])
-            subprocess.check_call(['sudo', '-n', '--', 'brctl', 'setfd', self.name, '2'])
-            subprocess.check_call(['sudo', '-n', '--', 'brctl', 'sethello', self.name, '2'])
-            subprocess.check_call(['sudo', '-n', '--', 'ip', 'tuntap','add', 'dev', self.name + "-host", 'mode', 'tap'])
-            subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addif', self.name, self.name + "-host"])
-            subprocess.check_call(['sudo', '-n', '--', 'sysctl', '-q', '-w', "net.ipv6.conf.%s.accept_ra=0" % self.name, "net.ipv6.conf.%s.autoconf=0" % self.name])
-            subprocess.check_call(['sudo', '-n', '--', 'ip', 'link', 'set', 'dev', self.name, 'up'])
-            subprocess.check_call(['sudo', '-n', '--', 'ip', 'addr', 'add', "%s/%d" %(self.ipaddr, self.cidr), "dev", self.name])
-            subprocess.check_call(['sudo', '-n', '--', 'ip', 'addr', 'add', "%s/%d" %(self.ipv6addr, self.v6cidr), "dev", self.name])
+        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addbr', self.name])
+        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'stp', self.name, 'on'])
+        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'setfd', self.name, '2'])
+        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'sethello', self.name, '2'])
+        subprocess.check_call(['sudo', '-n', '--', 'ip', 'tuntap','add', 'dev', self.name + "-host", 'mode', 'tap'])
+        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addif', self.name, self.name + "-host"])
+        subprocess.check_call(['sudo', '-n', '--', 'sysctl', '-q', '-w', "net.ipv6.conf.%s.accept_ra=0" % self.name, "net.ipv6.conf.%s.autoconf=0" % self.name])
+        subprocess.check_call(['sudo', '-n', '--', 'ip', 'link', 'set', 'dev', self.name, 'up'])
+        subprocess.check_call(['sudo', '-n', '--', 'ip', 'addr', 'add', "%s/%d" %(self.ipaddr, self.cidr), "dev", self.name])
+        subprocess.check_call(['sudo', '-n', '--', 'ip', 'addr', 'add', "%s/%d" %(self.ipv6addr, self.v6cidr), "dev", self.name])
 
-            # NAT IPv4 packets off the bridge if supported.  The iptables
-            # configuration depends on iptables on the server not being
-            # used for anything else.
-            subprocess.call(['sudo', '-n', '--', 'sysctl', '-q', '-w', 'net.ipv4.ip_forward=1'])
-            subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'nat', '-I', 'POSTROUTING', '-s', "%s/%d" % (self.ipnet, self.cidr), '!', '-o', self.name, '-j', 'MASQUERADE'])
-            subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-I', 'INPUT', '-i', self.name, '-j', 'ACCEPT'])
-            subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-I', 'OUTPUT', '-o', self.name, '-j', 'ACCEPT'])
-            subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-I', 'FORWARD', '-i', self.name, '-j', 'ACCEPT'])
-            subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-I', 'FORWARD', '-o', self.name, '-j', 'ACCEPT'])
+        # NAT IPv4 packets off the bridge if supported.  The iptables
+        # configuration depends on iptables on the server not being
+        # used for anything else.
+        subprocess.call(['sudo', '-n', '--', 'sysctl', '-q', '-w', 'net.ipv4.ip_forward=1'])
+        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'nat', '-I', 'POSTROUTING', '-s', "%s/%d" % (self.ipnet, self.cidr), '!', '-o', self.name, '-j', 'MASQUERADE'])
+        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-I', 'INPUT', '-i', self.name, '-j', 'ACCEPT'])
+        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-I', 'OUTPUT', '-o', self.name, '-j', 'ACCEPT'])
+        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-I', 'FORWARD', '-i', self.name, '-j', 'ACCEPT'])
+        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-I', 'FORWARD', '-o', self.name, '-j', 'ACCEPT'])
 
-            self.status = "enabled"
-        except:
-            raise RuntimeError("Unable to enable bridge <%s>" % self.name)
+        self.status = "enabled"
 
     def disable_bridge(self):
         """Disable the bridge using bridge control commands.
@@ -745,10 +739,7 @@ def cmd_start():
         options.tmpfs,"vm-%s-%s" % (tmpdate, randstr()))
 
     # generate tmp dir
-    try:
-        os.makedirs(options.tmpdir, 0700)
-    except OSError:
-        raise RuntimeError("Failed to create tmpdir: "+options.tmpdir)
+    os.makedirs(options.tmpdir, 0700)
         
     if options.cluster:
         
@@ -1087,7 +1078,7 @@ def gendbs(dbname, description, lockfile, dbfile, callback):
         os.mkdir("/etc/vms")
     except OSError as e:
         if e.errno != errno.EEXIST:
-            raise RuntimeError("Failed to create /etc/vms")
+            raise
 
     lockFD = os.open(lockfile, os.O_RDWR | os.O_CREAT)
     try:
