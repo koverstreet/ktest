@@ -111,14 +111,14 @@ class Domain:
         self.conx3_id = None     # dev id of the virtual pci x3 Connect X3 card
 
     def exists(self):
-        """Does the VM this represents actually exists?"""
+        """Does the VM this represents actually exist?"""
         try:
             with open(self.tmpdir + "/pid", 'r') as f:
                 pid=int(f.read().strip())
                 expath = os.path.basename(os.readlink("/proc/%d/exe" % pid))
-                if expath == "qemu-system-x86":
+                if expath[:11] == "qemu-system":
                     return True
-        except (OSError,ValueError):
+        except (OSError, ValueError) as e:
             pass
 
         return False
@@ -329,7 +329,7 @@ class ClusteredVM(object):
         try:
             os.makedirs(self.tmpdir, 0700)
         except OSError:
-            die ("Failed to create tmpdir: "+self.tmpdir)
+            raise RuntimeError("Failed to create tmpdir: "+self.tmpdir)
 
     def setup(self):
         # Create the tap device owned by the current user
@@ -366,9 +366,9 @@ class ClusteredVM(object):
                     name = os.path.join(self.tmpdir,"disk-"+str(i))
                     i += 1
                     if subprocess.call(["fallocate", "-l", size, name]):
-                        warning ("Error creating a "+size+" scratch drive with fallocate. Trying dd")
+                        logging.warning("Error creating a "+size+" scratch drive with fallocate. Trying dd")
                         if subprocess.call(["dd", "if=/dev/zero", "of="+name, "count=1", "bs="+size]):
-                            die ("Error creating a "+size+" scratch drive with dd")
+                            raise RuntimeError("Error creating a "+size+" scratch drive with dd")
                     self.drives.append(name)
 
         # build qemu command and start
@@ -748,7 +748,7 @@ def cmd_start():
     try:
         os.makedirs(options.tmpdir, 0700)
     except OSError:
-        die ("Failed to create tmpdir: "+options.tmpdir)
+        raise RuntimeError("Failed to create tmpdir: "+options.tmpdir)
         
     if options.cluster:
         
@@ -761,7 +761,7 @@ def cmd_start():
         # path for single vm
 
         if not options.image:
-            die ("Requires an image to boot")
+            raise RuntimeError("Requires an image to boot")
 
         if not os.path.isfile(options.image):
             raise RuntimeError("Cannot find base image file: "+options.image)
@@ -824,7 +824,7 @@ def cmd_start():
                             logging.warning("fallocate error, trying dd")
                             if subprocess.call(["dd", "if=/dev/zero", "of="+name,
                                 "count=1", "bs="+size]):
-                               die ("error creating scratch drive '"+name+"'")
+                               raise RuntimeError("error creating scratch drive '"+name+"'")
                         drives.append(name)
 
             # generate log and core dump device
@@ -836,7 +836,7 @@ def cmd_start():
                     logging.warning("fallocate error, trying dd")
                     if subprocess.call(["dd", "if=/dev/zero", "of="+name,
                                         "count=1", "bs="+size]):
-                        die ("error creating core/log drive '"+name+"'")
+                        raise RuntimeError("error creating core/log drive '"+name+"'")
                 if subprocess.call(["mkfs.ext4", "-U","11111111-2222-3333-4444-555555555555","-F",name]):
                     raise RuntimeError("mkfs.ext4 failed on '"+name+"'")
 
