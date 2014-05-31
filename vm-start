@@ -1010,9 +1010,6 @@ def cmd_check():
             raise RuntimeError("ConnectX3 is not available")
 
 
-def cmd_ls():
-    return cmd_list()
-
 def cmd_list():
     """List out running VMs"""
     opt=OptionParser("usage: %prog vm list [session_id]",
@@ -1066,6 +1063,7 @@ def cmd_list():
         for card in cards:
             print card
 
+cmd_ls = cmd_list
 
 def gendbs(dbname, description, lockfile, dbfile, callback):
     """Generic function to generate database files (union of duplicated code).
