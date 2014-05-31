@@ -1240,6 +1240,7 @@ def cmd_help():
     gdb         connect to gbd
     kgdb        connect to kgdb
     mon         connect to the qemu monitor
+    check       check whether there are free resources
     list        list all running vms
     genips      generate a fresh vm database
     genbridges  generate a fresh bridges database
