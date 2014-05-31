@@ -25,6 +25,8 @@ from optparse import OptionParser, OptionGroup
 # script directory and path
 DIR=os.path.dirname(__file__)       # path to script directory
 
+MAX_VMS = 100                       # Max number of VMs. Currently this is pretty arbitrary.
+
 # global info file settings:
 IP_FILE = "/etc/vms/ips"
 IP_FILE_LOCK = IP_FILE+".lock"      # File to lock access to VM list
@@ -38,8 +40,6 @@ CX3_DEVICE_IDS = [ 0x1004 ]
 BR_FILE = "/etc/vms/bridges"
 BR_FILE_LOCK = BR_FILE+".lock"      # File to lock access to bridge info
 BR_FILE_DICT = BR_FILE+".dict"      # Shelf file to store bridge info
-
-MAX_VMS = 100                       # Max number of VMs. Currently this is pretty arbitrary.
 
 DEFAULT_MEMORY = "1G"               # how much memory to give the vms
 DEFAULT_TMP = "/tmp"                # default directory for tmps
@@ -102,10 +102,10 @@ class Bridge:
 
 class Domain:
     """Represents a single virtual machine"""
-    def __init__ (self, vm_id, ip, mac):
+    def __init__ (self, vm_id):
         self.vm_id = vm_id         # id number for this vm
-        self.ip = ip               # ip address
-        self.mac = mac             # mac addresss
+        self.ip = None               # ip address
+        self.mac = None             # mac addresss
         self.owner = None          # who started this machine
         self.name = "vm"+str(vm_id)   # name of the vm, can be custom
         self.tmpdir  = None        # the location of dir to store scratch drives
@@ -166,20 +166,6 @@ def vm_slot_put(id):
     running_vms.remove(vm)
     d["running_vms"] = running_vms
 
-    vm.state    = "stopped"
-    vm.owner    = None
-    vm.pid  = None
-    vm.name = "vm"+str(vm.vm_id)
-    vm.base = None
-    vm.kernel   = None
-    vm.tmpdir   = None
-    vm.vde  = None
-    vm.ip   = None
-    vm.conx3_id = None
-
-    free_vms = d["free_vms"]
-    free_vms.append(vm)
-    d["free_vms"] =  sorted(free_vms, key=operator.attrgetter("vm_id"), reverse=True)
     closeLockedDb(d)
 
 def vm_slot_get(tmpdir, ip, conx3):
@@ -190,11 +176,17 @@ def vm_slot_get(tmpdir, ip, conx3):
 
     #load database:
     d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
-    free_vms = d["free_vms"]
     running_vms=d["running_vms"]
 
     # check to make sure we have a free vm entry
-    if len(free_vms) == 0:
+    free_vmids=range(MAX_VMS)
+    for vm in running_vms:
+        try:
+            free_vmids.remove(vm.vm_id)
+        except ValueError:
+            pass
+
+    if len(free_vmids) == 0:
         closeLockedDb(d)
         raise RuntimeError("No vm entries available to start a vm")
 
@@ -211,22 +203,14 @@ def vm_slot_get(tmpdir, ip, conx3):
     else:
         conx3_id = None
 
+
     # get vm entr, mark for setup
-    vm = free_vms.pop()
+    vm = Domain(free_vmids[0])
     vm.state    = "setup"
     vm.owner    = user
     vm.tmpdir   = tmpdir
     vm.conx3_id = conx3_id
-
-    if ip:
-        vm.vde  = True
-        vm.ip   = ip
-    else:
-        vm.vde  = False
-        vm.ip   = None
-
-    # save and free up database while launching vms
-    d["free_vms"] = free_vms
+    vm.ip       = ip
 
     running_vms.append(vm)
     d["running_vms"] = running_vms
@@ -906,8 +890,6 @@ def cmd_stop():
 
         ids = args[0].split("/") 
         
-        print ids       
-        
         for id in ids:
             vm = vm_lookup(int(id))
             pid = readfile(vm.tmpdir + '/pid')
@@ -926,7 +908,7 @@ def cmd_ssh():
     keyfile = os.path.dirname(os.path.realpath(__file__)) + "/id_dsa"
     os.system("chmod 600 " + keyfile)
 
-    if vm.vde:
+    if vm.ip and (vm.ip[:7]!='172.20.'):
         cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o",
             "UserKnownHostsFile=/dev/null", "-i", keyfile, "root@"+vm.ip]
     else:
@@ -983,9 +965,9 @@ def cmd_check():
 
     if len(args) == 0 or args[0] == "vms":
         d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
-        free_vms=d["free_vms"]
+        running_vms = d["running_vms"]
         closeLockedDb(d)
-        if len(free_vms) == 0:
+        if (MAX_VMS - len(running_vms)) == 0:
             raise RuntimeError("No VMs available")
         
     elif args[0] == "bridges":
@@ -1150,20 +1132,6 @@ def cmd_genips():
     """
 
     def ips_generator(d):
-        free_vms = []
-
-        for i in range (0, 100):
-            #generate IP file
-            vm_num = str(i).zfill(2)
-            name = "vm"+vm_num
-            ip = "172.20.0."+str(i+100)
-            mac = "DE:AD:BE:EF:01:"+vm_num
-
-            #generate ips dict
-            vm = Domain(i, ip, mac)
-            free_vms.insert(0, vm)
-
-        d["free_vms"] = free_vms
         d["running_vms"] = []
 
     gendbs("ips", "Generate a new IP/MAC file", IP_FILE_LOCK, IP_FILE_DICT, ips_generator)
