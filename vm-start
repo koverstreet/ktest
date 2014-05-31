@@ -687,7 +687,6 @@ def cmd_start():
         action="store_true",
         help="use writeback")
 
-
     opt.add_option("--fs", dest="filesystems",
         action="append", nargs=2,
         help="mount a directory (first argument) as " +

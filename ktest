@@ -19,20 +19,114 @@ checkdep gcc
 checkdep make
 checkdep qemu-system-x86_64 qemu-system-i386
 
-NJOBS=$((`grep ^processor /proc/cpuinfo |wc -l` * 2))
-INTERACTIVE=0
-TIMEOUT=""
 
-DIR=".ktest"
-KERNEL_SOURCE="."
-KERNEL_OUTPUT=""
-CONTAINER_SRC_DIR="/usr/share/DateraContainer"
-
+DEFAULT_DIR=".ktest"    # default path for building others
+KERNEL_SOURCE="."       # dir of kernel source
+                        #       set with: -k <path>
+                        #       defaults: current directory
+KERNEL_OUTPUT=""        # dir where the kernel will get built
+                        #       set with: -b <path>
+                        #       default: $KERNEL_SOURCE/$DEFAULT_DIR
+WORK_DIR=""             # dir where vm meta data (id, logs, etc) gets stored
+                        #       set with: -w <path>
+                        #       defaults: $KERNEL_OUTPUT
+LOG_OUTPUT="log.output" # file name were test output is logged too
+                        #       path: $WORK_DIR/$LOG_OUTPUT
+LOG_INTERNAL="log.internal" 
+                        # dir name which is mapped with virtfs to inside vm at /var/log/datera
+                        #       path: $WORK_DIR/$LOG_INTERNAL
+SCRATCH_DIR="/tmp"      # dir where scratch drives are created
+                        #       defaults: /tmp
+                        #       auto-override: $HOME/.ktest/tmp
 IMG="/var/lib/ktest/root"
+                        # root image that will be booted
+                        #       set with: -i <path>
+                        #       defaults: /var/lib/ktest/root
+                        #       auto-override: $HOME/.ktest/root
+TIMEOUT=""              # kills test after $TIMEOUT seconds
+                        #       sets with: -t <seconds>
+                        #       defaults: 0
+                        #       can be overridden by config-timeout from test 
+                        #       ignored completely with -I
+BUILD=1                 # if set to 1, kernel will build
+                        #       ignored with: -K (sets to 0)
+INTERACTIVE=0           # if set to 1, timeout is ignored completely
+                        #       sets with: -I
+NJOBS=$((`grep ^processor /proc/cpuinfo |wc -l` * 2))
+                        # number of jobs to passed to make during kernel compile
+                        #       sets with: -j
+                        #       defaults to 2 * number of processor
+CONTAINER_SRC_DIR="/usr/share/DateraContainer"
+                        # dir which contains the datera containers, not user settable 
 
+# root image auto-override
 if [ -f "$HOME/.ktest/root" ]; then
     IMG="$HOME/.ktest/root"
 fi
+
+# scratch drive dir auto-override
+if [ -d "$HOME/.ktest/tmp" ]; then
+    SCRATCH_DIR=$HOME/.ktest/tmp
+fi
+
+#prints usage if no args
+if [[ $# -lt 1 ]]; then
+    usage
+    exit 1
+fi
+
+#parse command and shift for rest of arg parsing
+CMD="cmd_$1"
+shift
+
+while getopts "IhKb:k:i:t:j:w:vx" arg; do
+    case $arg in
+        h)
+            usage
+            exit 0
+            ;;
+        k)
+            KERNEL_SOURCE=`realpath "$OPTARG"`
+            ;;
+        K)
+            BUILD=""
+            ;;
+        i)
+            IMG=$OPTARG
+            ;;
+        t)
+            TIMEOUT=$OPTARG
+            ;;
+        b)
+            KERNEL_OUTPUT=$OPTARG
+            ;;
+        j)
+            NJOBS=$OPTARG
+            ;;
+        I)
+            INTERACTIVE=1
+            ;;
+        w)
+            WORK_DIR=$OPTARG
+            ;;
+        x)
+            set -x
+            ;;
+    esac
+done
+shift $(( OPTIND - 1 ))
+
+# sets default kernel output dir
+if [ -z "$KERNEL_OUTPUT" ]; then
+    KERNEL_OUTPUT="$KERNEL_SOURCE/$DEFAULT_DIR"
+fi
+
+# sets default work dir
+if [ -z "$WORK_DIR" ] ; then
+   WORK_DIR=$KERNEL_OUTPUT
+fi
+mkdir -p "$WORK_DIR"
+WORK_DIR=`realpath "$WORK_DIR"`
 
 trap 'stty sane > /dev/null 2>&1 || true' EXIT
 
@@ -49,7 +143,7 @@ check_timeout()
     TIMEOUT=$1
 
     sleep $TIMEOUT
-    $VMSTART stop `cat $WORK_DIRECTORY/id`
+    $VMSTART stop `cat $WORK_DIR/id`
     stty sane 2> /dev/null || true
     pkill -g $$
 }
@@ -61,7 +155,7 @@ stop_timeout()
 
 do_make()
 {
-    make -C "$KERNEL_SOURCE" O="$WORK_DIRECTORY" -j "$NJOBS"        \
+    make -C "$KERNEL_SOURCE" O="$WORK_DIR" -j "$NJOBS"        \
 	INSTALL_MOD_PATH=modules                                    \
 	EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments" $@
 }
@@ -166,7 +260,7 @@ parse_test_deps()
 	fi
 
 	local cdir="${req}-${cv}"
-	local containerdir="$WORK_DIRECTORY/container"
+	local containerdir="$WORK_DIR/container"
 
 	if [ -z "$HAVE_CONTAINER" ]; then
 	    FILES+=" $containerdir"
@@ -239,8 +333,8 @@ build_file_list()
     fi
 
     if [ $# -eq 0 ]; then
-	install -m0755 $KTESTDIR/rc.interactive $WORK_DIRECTORY/rc
-	FILES="$WORK_DIRECTORY/rc"
+	install -m0755 $KTESTDIR/rc.interactive $WORK_DIR/rc
+	FILES="$WORK_DIR/rc"
 	_MEM="1G"
     else
 	TEST=$1
@@ -248,11 +342,11 @@ build_file_list()
 
 	local TESTDIR=`dirname $TEST`
 
-	install -m0755 $KTESTDIR/rc.testwrapper $WORK_DIRECTORY/rc
-	FILES=$WORK_DIRECTORY/rc
+	install -m0755 $KTESTDIR/rc.testwrapper $WORK_DIR/rc
+	FILES=$WORK_DIR/rc
 
-	install -m0644 $TEST $WORK_DIRECTORY/rc.test
-	FILES+=" $WORK_DIRECTORY/rc.test"
+	install -m0644 $TEST $WORK_DIR/rc.test
+	FILES+=" $WORK_DIR/rc.test"
 
 	parse_test_deps $TEST
     fi
@@ -264,22 +358,22 @@ prepare_vm()
     _KERNEL_CONFIG_REQUIRE=""
     genisoimage_sudo=""
 
-    mkdir -p $WORK_DIRECTORY
+    mkdir -p $WORK_DIR
 
     build_file_list $@
 
     build_kernel "$KERNEL_SOURCE" "$KERNEL_OUTPUT" "$_KERNEL_CONFIG_REQUIRE"
 
     # Remove symlinks, they'll break genisoimage which is following symlinks
-    rm -f $WORK_DIRECTORY/modules/lib/modules/*/build
-    rm -f $WORK_DIRECTORY/modules/lib/modules/*/source
+    rm -f $WORK_DIR/modules/lib/modules/*/build
+    rm -f $WORK_DIR/modules/lib/modules/*/source
 
     $genisoimage_sudo genisoimage -quiet -R		\
 	-input-charset utf-8				\
-	-o $WORK_DIRECTORY/run.iso			\
-	$WORK_DIRECTORY/modules/lib $FILES || exit 1
+	-o $WORK_DIR/run.iso			\
+	$WORK_DIR/modules/lib $FILES || exit 1
 
-    rm -rf $WORK_DIRECTORY/modules
+    rm -rf $WORK_DIR/modules
 }
 
 cmd_boot()
@@ -287,10 +381,10 @@ cmd_boot()
     prepare_vm
 
     $VMSTART start					\
-	-i $IMG -t $TMPDIR				\
+	-i $IMG -t $SCRATCH_DIR				\
 	-k $KERNEL_OUTPUT/arch/x86/boot/bzImage		\
-	-c $WORK_DIRECTORY/run.iso			\
-	--id $WORK_DIRECTORY/id				\
+	-c $WORK_DIR/run.iso			\
+	--id $WORK_DIR/id				\
 	-m 1G
 
     stty sane 2> /dev/null || true
@@ -312,10 +406,10 @@ cmd_run()
     prepare_vm $1
 
     vmstart_command="$VMSTART start			\
-	-i $IMG -t $TMPDIR				\
+	-i $IMG -t $SCRATCH_DIR				\
 	-k $KERNEL_OUTPUT/arch/x86/boot/bzImage		\
-	-c $WORK_DIRECTORY/run.iso			\
-	--id $WORK_DIRECTORY/id				\
+	-c $WORK_DIR/run.iso			\
+	--id $WORK_DIR/id				\
 	-m $_MEM					\
 	$_SCRATCH					\
 	$_INFINIBAND					\
@@ -332,11 +426,11 @@ cmd_run()
 
 	$vmstart_command|{ \
 	    sed -u -e '/TEST \(SUCCESS\|FAILED\)/q' 2>&1 \
-		| tee $WORK_DIRECTORY/log
+		| tee $WORK_DIR/$LOG_OUTPUT
 	    stop_timeout
-	    $VMSTART stop `cat $WORK_DIRECTORY/id`
+	    $VMSTART stop `cat $WORK_DIR/id`
 	    stty sane 2> /dev/null || true
-	    if ! grep -q "TEST SUCCESS" $WORK_DIRECTORY/log ; then
+	    if ! grep -q "TEST SUCCESS" $WORK_DIR/$LOG_OUTPUT ; then
 		exit 1
 	    fi
 	    exit 0
@@ -346,27 +440,27 @@ cmd_run()
 
 cmd_ssh()
 {
-    $VMSTART ssh `cat $WORK_DIRECTORY/id` "$@"
+    $VMSTART ssh `cat $WORK_DIR/id` "$@"
 }
 
 cmd_stop()
 {
-    exec $VMSTART ssh `cat $WORK_DIRECTORY/id`
+    exec $VMSTART ssh `cat $WORK_DIR/id`
 }
 
 cmd_gdb()
 {
-    exec $VMSTART gdb `cat $WORK_DIRECTORY/id` $KERNEL_OUTPUT/vmlinux
+    exec $VMSTART gdb `cat $WORK_DIR/id` $KERNEL_OUTPUT/vmlinux
 }
 
 cmd_kgdb()
 {
-    exec $VMSTART kgdb `cat $WORK_DIRECTORY/id` $KERNEL_OUTPUT/vmlinux
+    exec $VMSTART kgdb `cat $WORK_DIR/id` $KERNEL_OUTPUT/vmlinux
 }
 
 cmd_mon()
 {
-    exec $VMSTART mon `cat $WORK_DIRECTORY/id`
+    exec $VMSTART mon `cat $WORK_DIR/id`
 }
 
 cmd_lcov()
@@ -374,9 +468,9 @@ cmd_lcov()
     checkdep lcov
 
     gcov_in=/sys/kernel/debug/gcov/`realpath $KERNEL_OUTPUT`
-    gcov_out=$WORK_DIRECTORY/gcov
-    info=$WORK_DIRECTORY/gcov.info
-    html=$WORK_DIRECTORY/gcov.html
+    gcov_out=$WORK_DIR/gcov
+    info=$WORK_DIR/gcov.info
+    html=$WORK_DIR/gcov.html
 
     mkdir -p $gcov_out
 
@@ -409,7 +503,7 @@ usage()
     echo "Usage: ktest cmd [options] [n]"
     echo "  boot        Boot a VM without running anything"
     echo "  run <test>  Run a kernel test"
-    echo "  ssh         Log in as root"
+    echo "  ssh         Login as root"
     echo "  gdb         Connect to kgdb"
     echo "  mon         Connect to qemu monitor"
     echo "  oldconfig   Run make oldconfig"
@@ -425,75 +519,13 @@ usage()
     echo "      -t      timout in seconds (run cmd only)"
     echo "      -j      j option to make (run cmd only)"
     echo "      -I      disable timeout and VM stop on pass/fail (run cmd only)"
-    echo "      -v run with vde networking (run cmd only)"
+    echo "      -v      run with vde networking (run cmd only)"
 }
 
-if [[ $# -lt 1 ]]; then
-    usage
-    exit 1
-fi
-
-CMD="cmd_$1"
-shift
-
+# checks if command is valid
 if [ "`type -t "$CMD"`" != "function" ]; then
     usage
     exit 1
-fi
-
-BUILD=1
-WORK_DIRECTORY=""
-
-while getopts "IhKb:k:i:t:j:w:vx" arg; do
-    case $arg in
-        h)
-            usage
-            exit 0
-            ;;
-        k)
-            KERNEL_SOURCE=`realpath "$OPTARG"`
-            ;;
-        K)
-            BUILD=""
-            ;;
-        i)
-            IMG=$OPTARG
-            ;;
-        t)
-            TIMEOUT=$OPTARG
-            ;;
-        b)
-            KERNEL_OUTPUT=$OPTARG
-            ;;
-        j)
-            NJOBS=$OPTARG
-            ;;
-        I)
-            INTERACTIVE=1
-            ;;
-        w)
-            WORK_DIRECTORY=$OPTARG
-            ;;
-        x)
-            set -x
-            ;;
-    esac
-done
-shift $(( OPTIND - 1 ))
-
-if [ -z "$KERNEL_OUTPUT" ]; then
-    KERNEL_OUTPUT="$KERNEL_SOURCE/$DIR"
-fi
-if [ -z "$WORK_DIRECTORY" ] ; then
-   WORK_DIRECTORY=$KERNEL_OUTPUT
-fi
-mkdir -p "$WORK_DIRECTORY"
-WORK_DIRECTORY=`realpath "$WORK_DIRECTORY"`
-
-if [ -d "$HOME/.ktest/tmp" ]; then
-    TMPDIR=$HOME/.ktest/tmp
-else
-    TMPDIR=/tmp
 fi
 
 eval $CMD $@
