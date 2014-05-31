@@ -38,12 +38,10 @@ trap 'stty sane > /dev/null 2>&1 || true' EXIT
 
 check_mlxcard()
 {
-    if ! lspci | grep -q Mellanox; then
-        echo "no infiniband card present"
+    if ! $VMSTART check conx3; then
+        echo "no free infiniband card present"
         exit 1
     fi
-
-    $VMSTART genconx3 > /dev/null 2>&1
 }
 
 check_timeout()

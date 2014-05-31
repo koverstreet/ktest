@@ -30,9 +30,10 @@ IP_FILE = "/etc/vms/ips"
 IP_FILE_LOCK = IP_FILE+".lock"      # File to lock access to VM list
 IP_FILE_DICT = IP_FILE+".dict"      # Shelf file to store vm list
 
-CX3_FILE = "/etc/vms/pci_connectx3"
-CX3_FILE_LOCK = CX3_FILE+".lock"    # File to lock access to PCI_CONNECTX3 info
-CX3_FILE_DICT = CX3_FILE+".dict"    # Shelf file to store PCI_CONNECTX3 info
+# Locate available ConnectX-3 virtual interfaces
+CX3_PCI_STUB_DIR="/sys/bus/pci/drivers/pci-stub"
+CX3_VENDOR_IDS = [ 0x15b3 ]
+CX3_DEVICE_IDS = [ 0x1004 ]
 
 BR_FILE = "/etc/vms/bridges"
 BR_FILE_LOCK = BR_FILE+".lock"      # File to lock access to bridge info
@@ -108,7 +109,7 @@ class Domain:
         self.owner = None          # who started this machine
         self.name = "vm"+str(vm_id)   # name of the vm, can be custom
         self.tmpdir  = None        # the location of dir to store scratch drives
-        self.conx3_id = None     # dev id of the virtual pci x3 Connect X3 card
+        self.conx3_id = None       # dev id of the virtual pci x3 Connect X3 card
 
     def exists(self):
         """Does the VM this represents actually exist?"""
@@ -153,31 +154,6 @@ def bridge_get():
     closeLockedDb(db)
     return bridge
 
-
-def vm_conx3_put(conx3_id):
-    db = openLockedDb(CX3_FILE_LOCK, CX3_FILE_DICT)
-    free_conx3 = db["free_conx3"]
-    free_conx3.append(conx3_id)
-    db["free_conx3"] = free_conx3
-    closeLockedDb(db)
-
-def vm_conx3_get():
-    db = openLockedDb(CX3_FILE_LOCK, CX3_FILE_DICT)
-    free_conx3 = db["free_conx3"]
-    if len(free_conx3) == 0:
-        closeLockedDb(db)
-        raise RuntimeError("Not enough virtual connect x3 to start a vms")
-    print free_conx3
-    conx3_id = free_conx3.pop()
-    while conx3_id=="08:02.0":
-       conx3_id = free_conx3.pop()
-       # this device is incorrectly reported one that can be used,
-       # however it does not work si we just drop it.
-    print "conx3_id=",conx3_id
-    db["free_conx3"] = free_conx3
-    closeLockedDb(db)
-    return conx3_id
-
 def vm_slot_put(id):
     d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
     running_vms = d["running_vms"]
@@ -199,9 +175,7 @@ def vm_slot_put(id):
     vm.tmpdir   = None
     vm.vde  = None
     vm.ip   = None
-
-    if vm.conx3_id is not None:
-        vm_conx3_put(vm.conx3_id)
+    vm.conx3_id = None
 
     free_vms = d["free_vms"]
     free_vms.append(vm)
@@ -214,21 +188,28 @@ def vm_slot_get(tmpdir, ip, conx3):
     except KeyError:
         user = os.environ["USER"]
 
-    if conx3:
-        conx3_id = vm_conx3_get()
-    else:
-        conx3_id = None
-
     #load database:
     d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
     free_vms = d["free_vms"]
+    running_vms=d["running_vms"]
 
     # check to make sure we have a free vm entry
     if len(free_vms) == 0:
         closeLockedDb(d)
-        if conx3_id is not None:
-            vm_conx3_put(vm.conx3_id)
         raise RuntimeError("No vm entries available to start a vm")
+
+    if conx3:
+        cards = list_conx3()
+        logging.debug("CX3 cards detected: %s" % ' '.join(cards))
+        for vm in running_vms:
+            if vm.conx3_id in cards:
+                cards.remove(vm.conx3_id)
+        if len(cards) == 0:
+            raise RuntimeError("ConnectX3 was requested but none available")
+        logging.debug("Assigning CX3 card %s" % cards[0])
+        conx3_id = cards[0]
+    else:
+        conx3_id = None
 
     # get vm entr, mark for setup
     vm = free_vms.pop()
@@ -247,7 +228,6 @@ def vm_slot_get(tmpdir, ip, conx3):
     # save and free up database while launching vms
     d["free_vms"] = free_vms
 
-    running_vms=d["running_vms"]
     running_vms.append(vm)
     d["running_vms"] = running_vms
 
@@ -985,6 +965,51 @@ def cmd_mon():
     os.execlp("minicom", "minicom",
           "-D", "unix#" + vm.tmpdir + "mon")
 
+def cmd_check():
+    """Check if a specific resource is available
+    """
+
+    opt=OptionParser("usage: %prog vm list [session_id]",
+             description="""List out running VMs""")
+
+    opt.add_option("-d", "--debug", dest="debug",
+                   default=False, action="store_true",
+        help="enable debugging")
+
+    (options, args) = opt.parse_args()
+
+    if options.debug:
+        logging.getLogger().setLevel("DEBUG")
+
+    if len(args) == 0 or args[0] == "vms":
+        d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
+        free_vms=d["free_vms"]
+        closeLockedDb(d)
+        if len(free_vms) == 0:
+            raise RuntimeError("No VMs available")
+        
+    elif args[0] == "bridges":
+        d = openLockedDb(BR_FILE_LOCK, BR_FILE_DICT)
+        bridges = d["bridges"]
+        closeLockedDb(d)
+        avail = False
+        for bridge in bridges.itervalues():
+            avail |= bridge.available
+        if not avail:
+            raise RuntimeError("No bridges available")
+
+    elif args[0] == "conx3":
+        d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
+        running_vms=d["running_vms"]
+        closeLockedDb(d)
+        cards = list_conx3()
+        for vm in running_vms:
+            if vm.conx3_id in cards:
+                cards.remove(vm.conx3_id)
+        if len(cards) == 0:
+            raise RuntimeError("ConnectX3 is not available")
+
+
 def cmd_ls():
     return cmd_list()
 
@@ -996,6 +1021,7 @@ def cmd_list():
     opt.add_option("-d", "--debug", dest="debug",
                    default=False, action="store_true",
         help="enable debugging")
+
 
     (options, args) = opt.parse_args()
 
@@ -1032,7 +1058,14 @@ def cmd_list():
         print "------\t----------"
         for br in bridges:
             print br.br_name+"\t"+str(br.available)
-    
+
+    elif args[0] == "conx3":
+        cards = list_conx3()
+        print "Cards"
+        print "-------"
+        for card in cards:
+            print card
+
 
 def gendbs(dbname, description, lockfile, dbfile, callback):
     """Generic function to generate database files (union of duplicated code).
@@ -1160,82 +1193,41 @@ def cmd_genbridges():
     gendbs("bridges", "Generate a new bridge file", BR_FILE_LOCK, BR_FILE_DICT, bridges_generator)
 
 
-def cmd_genconx3():
-    """
-    Generates a new set of detached virtual Mellanox X3 card
-    provided the machine has one. Updates the existing database.
-    Your vm can use rdma functionality with this card.
-    """
+def list_conx3():
+    """Return the device IDs of all Mellanox ConnectX-3 Virtual Functions
+       on the system which are detached from the Mellanox driver and
+       are usable for VMs.
+    
+    Note:
 
-    p = subprocess.Popen(['lspci', '-vvv'], bufsize=-1, stdout=subprocess.PIPE)
-    flag = 0
-    phys_dev = ""
-    for line in p.stdout:
-        if flag == 0:
-            if re.search("Mellanox", line):
-                entries = re.split('\W+', line)
-                searchStr = entries[0] + ':0'
-                phys_dev = entries[0] + ':' + entries[1] + '.' + entries[2]
-                print phys_dev
-                flag = 1
-        if flag == 1:
-            if re.search("Number of VFs:", line):
-                entries = re.split(',', line)
-                entry = re.split(':', entries[0])
-                num_vfs='num_vfs=' + str(int(entry[1]))
-                entry = re.split(':', entries[1])
-                probe_vf='probe_vf=' + str(int(entry[1]))
-                entry = re.split(':', entries[2])
-            # Number of VFs: 0
-            if int(entry[1]) == 0:
-                print "SR-IOV is not yet enabled!"
-                subprocess.call(['rmmod', 'mlx4_ib', 'mlx4_core'])
-                print num_vfs + ' ' + probe_vf
-                subprocess.call(['modprobe', '-v', 'mlx4_core', num_vfs, probe_vf])
-            else:
-                print "SR-IOV enabled!"
-            break
-    p.kill()
-    p.wait()
+    This requires system preparation to create the virtual, detached cards.
 
-    if flag == 1:
-        d = shelve.open(CX3_FILE_DICT)
-        free_conx3 = []
-        lock = open(CX3_FILE_LOCK, "w")
-        lock.write("used for locking access to pci connect x3 nic database file")
-        p = subprocess.Popen(['lspci', '-n'], bufsize=-1, stdout=subprocess.PIPE)
-        flag = 0
-        for line in p.stdout:
-            m = re.match(searchStr, line)
-            if m:
-                entries = re.split(' ', line)
-                #entries[0] is the vf id
-                #entries[2] is the vendor and the device id
-                if not re.match(phys_dev, entries[0]):
-                    if flag == 0:
-                        entry = re.split('[:\n]', entries[2])
-                        vend_dev_id = entry[0] + ' ' + entry[1]
-                        f = open('/sys/bus/pci/drivers/pci-stub/new_id', 'w')
-                        f.write(vend_dev_id)
-                        f.close()
-                        flag = 1
-                    fn = '/sys/bus/pci/devices/0000:' + entries[0] + '/driver/unbind'
-                    devid = '0000:' + entries[0]
-                    f = open(fn, 'w')
-                    f.write(devid)
-                    f.close()
-                    f = open('/sys/bus/pci/drivers/pci-stub/bind', 'w')
-                    f.write(devid)
-                    f.close()
-                    # populate the connect x3 pci cards db with these devids
-                    free_conx3.append(entries[0])
-                    d["free_conx3"] = free_conx3
-                    print d["free_conx3"]
-        d["free_conx3"] = free_conx3
-        d.close()
-        lock.close()
-        p.kill()
-        p.wait()
+    On the debian machines, /etc/rc.local should use the following commands to reserve
+    virtual functions for VMs:
+    rmmod mlx4_ib
+    rmmod mlx4_core
+    echo '15b3 1004' > /sys/bus/pci/drivers/pci-stub/new_id
+    modprobe mlx4_core num_vfs=16 probe_vf=16
+
+    As we get new versions of the cards, the above stanza and this
+    code needs to be updated to reflect proper PCI device IDs.
+    """
+    cards=[]
+
+    for ent in os.listdir(CX3_PCI_STUB_DIR):
+        devent = os.path.join(CX3_PCI_STUB_DIR, ent)
+        try:
+            with open(os.path.join(devent, "vendor")) as f:
+                dev_vendor = int(f.read().strip(),16)
+            with open(os.path.join(devent, "device")) as f:
+                dev_device = int(f.read().strip(),16)
+            if ((dev_vendor in CX3_VENDOR_IDS) and (dev_device in CX3_DEVICE_IDS)):
+                cards.append(':'.join(ent.split(':')[1:]))
+        except IOError as e:
+            if e.errno not in (errno.ENOENT, errno.ENOTDIR):
+                raise
+
+    return cards
 
 
 def cmd_help():
@@ -1252,7 +1244,6 @@ def cmd_help():
     mon         connect to the qemu monitor
     list        list all running vms
     genips      generate a fresh vm database
-    genconx3    update db with virtual rdma capable nic
     genbridges  generate a fresh bridges database
     help        print help for commands
     """
