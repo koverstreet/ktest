@@ -10,7 +10,7 @@ test_success() {
     echo "TEST SUCCESSFUL"
 }
 
-export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}+ '
+export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]}()}+ '
 
 # Wait for an IP or IPv6 address to show
 # up on a specific device.

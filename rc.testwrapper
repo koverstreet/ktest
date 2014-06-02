@@ -74,7 +74,11 @@ config-timeout()
 # and there is no way to re-enable it. However, ERR is
 # inherited by subshells with 'set -o errtrace'.
 
-trap 'echo "TEST FAILED"' ERR
+trap 'echo -n "TEST " ; echo FAILED' ERR
+# splitting this up makes sure that even if -x is enabled
+# the magic string does not show up just because this line
+# is executed.
+
 main
 
 exit 0
