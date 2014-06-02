@@ -6,25 +6,14 @@ set -o nounset
 set -o errexit
 set -o errtrace
 
-dmesg -n 7
-echo 1 > /proc/sys/kernel/sysrq
-
-ln -sf /sys/kernel/debug/tracing/ /root/t || true
-
-# mount /var/log device if it exists
-if [ -b /dev/disk/by-uuid/11111111-2222-3333-4444-555555555555 ] ; then
-    systemctl stop rsyslog
-    mount /dev/disk/by-uuid/11111111-2222-3333-4444-555555555555 /var/log
-    systemctl start rsyslog
-    mkdir -p /var/log/core
-    echo 1 > /proc/sys/fs/suid_dumpable
-    echo /var/log/core/core.%e.PID%p.SIG%s.TIME%t > /proc/sys/kernel/core_pattern
-    ulimit -c unlimited
-fi
-
-# mounts dateras logging into directory shared with host
-mkdir -p /var/log/datera
+echo "mount logfs"
+LOGDIR=/var/log/datera
+mkdir -p $LOGDIR
 mount -t 9p -o trans=virtio logfs /var/log/datera
+
+echo 1 > /proc/sys/fs/suid_dumpable
+echo $LOGDIR/core.%e.PID%p.SIG%s.TIME%t > /proc/sys/kernel/core_pattern
+ulimit -c unlimited
 
 require-lib()
 {
@@ -78,11 +67,24 @@ config-timeout()
 # and there is no way to re-enable it. However, ERR is
 # inherited by subshells with 'set -o errtrace'.
 
-trap 'echo -n "TEST " ; echo FAILED' ERR
-# splitting this up makes sure that even if -x is enabled
-# the magic string does not show up just because this line
-# is executed.
+failure()
+{
+    echo -n "Saving trace to $LOGDIR/trace.txt... "
+    cp /sys/kernel/debug/tracing/trace $LOGDIR/trace.txt
+    echo "done"
 
+    echo -n "Saving sysfs to $LOGDIR/sysfs.txt... "
+    for file in $(find /sys -type f -perm u+r); do
+	echo -n "$file: "; cat $file
+    done > $LOGDIR/sysfs.txt
+    echo "done"
+
+    umount $LOGDIR
+    echo TEST FAILED
+}
+
+trap failure ERR
 main
 
+umount $LOGDIR
 exit 0

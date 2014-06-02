@@ -33,7 +33,8 @@ WORK_DIR=""             # dir where vm meta data (id, logs, etc) gets stored
 LOG_OUTPUT="log.output" # file name were test output is logged too
                         #       path: $WORK_DIR/$LOG_OUTPUT
 LOG_INTERNAL="log.internal" 
-                        # dir name which is mapped with virtfs to inside vm at /var/log/datera
+                        # dir name which is mapped with virtfs to inside vm
+                        # at /var/log/datera
                         #       path: $WORK_DIR/$LOG_INTERNAL
 SCRATCH_DIR="/tmp"      # dir where scratch drives are created
                         #       defaults: /tmp
@@ -383,8 +384,9 @@ cmd_boot()
     $VMSTART start					\
 	-i $IMG -t $SCRATCH_DIR				\
 	-k $KERNEL_OUTPUT/arch/x86/boot/bzImage		\
-	-c $WORK_DIR/run.iso			\
+	-c $WORK_DIR/run.iso				\
 	--id $WORK_DIR/id				\
+	--fs $WORK_DIR/$LOG_INTERNAL logfs		\
 	-m 1G
 
     stty sane 2> /dev/null || true
@@ -408,10 +410,10 @@ cmd_run()
     vmstart_command="$VMSTART start			\
 	-i $IMG -t $SCRATCH_DIR				\
 	-k $KERNEL_OUTPUT/arch/x86/boot/bzImage		\
-	-c $WORK_DIR/run.iso			        \
+	-c $WORK_DIR/run.iso				\
 	--id $WORK_DIR/id				\
 	-m $_MEM					\
-        --fs $WORK_DIR/$LOG_INTERNAL logfs              \
+	--fs $WORK_DIR/$LOG_INTERNAL logfs		\
 	$_SCRATCH					\
 	$_INFINIBAND					\
 	$_VMCLUSTER"

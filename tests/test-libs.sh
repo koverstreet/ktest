@@ -300,7 +300,7 @@ test_fio()
 	# Our default working directory (/cdrom) is not writable,
 	# fio wants to write files when verify_dump is set, so
 	# change to a different directory.
-	cd /
+	cd $LOGDIR
 
 	case $SIZE in
 	    small) loops=1 ;;
