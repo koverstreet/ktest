@@ -57,7 +57,7 @@ NJOBS=$((`grep ^processor /proc/cpuinfo |wc -l` * 2))
                         #       sets with: -j
                         #       defaults to 2 * number of processor
 CONTAINER_SRC_DIR="/usr/share/DateraContainer"
-                        # dir which contains the datera containers, not user settable 
+                        # dir which contains the datera containers
 
 # root image auto-override
 if [ -f "$HOME/.ktest/root" ]; then
@@ -374,6 +374,10 @@ prepare_vm()
 	$WORK_DIR/modules/lib $FILES || exit 1
 
     rm -rf $WORK_DIR/modules
+
+    # setup directory where logfs will be mounted from
+    mkdir -p $WORK_DIR/$LOG_INTERNAL
+    rm -rf $WORK_DIR/$LOG_INTERNAL/*
 }
 
 cmd_boot()
@@ -408,9 +412,10 @@ cmd_run()
     vmstart_command="$VMSTART start			\
 	-i $IMG -t $SCRATCH_DIR				\
 	-k $KERNEL_OUTPUT/arch/x86/boot/bzImage		\
-	-c $WORK_DIR/run.iso			\
+	-c $WORK_DIR/run.iso			        \
 	--id $WORK_DIR/id				\
 	-m $_MEM					\
+        --fs $WORK_DIR/$LOG_INTERNAL logfs              \
 	$_SCRATCH					\
 	$_INFINIBAND					\
 	$_VMCLUSTER"

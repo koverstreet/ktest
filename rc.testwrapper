@@ -22,6 +22,10 @@ if [ -b /dev/disk/by-uuid/11111111-2222-3333-4444-555555555555 ] ; then
     ulimit -c unlimited
 fi
 
+# mounts dateras logging into directory shared with host
+mkdir -p /var/log/datera
+mount -t 9p -o trans=virtio logfs /var/log/datera
+
 require-lib()
 {
     . `basename "$1"`
