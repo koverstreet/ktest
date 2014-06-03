@@ -1,0 +1,35 @@
+#!/bin/bash
+
+set -e
+
+require-lib ../test-libs.sh
+require-bin make-bcache
+require-kernel-config MD,BCACHE
+
+config-scratch-devs 2G,4G
+config-mem 256M
+
+main()
+{
+    SIZE=small
+    FS=ext4
+    FLAGS="--bucket 64k --block 4k --discard --writeback --cache_replacement_policy=lru"
+    CACHE="/dev/vda"
+    BDEV=
+    TIER="/dev/vdb"
+
+    setup_tracing 64 'bcache:*'
+
+    if echo /dev/vda > /sys/fs/bcache/register; then
+	echo /dev/vdb > /sys/fs/bcache/register
+
+        test_success
+    else
+	setup_bcache
+	setup_flash_volume 1600M
+
+        #test_stress &
+        sleep 2
+        echo b > /proc/sysrq-trigger
+    fi
+}
