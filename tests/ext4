@@ -1,8 +1,6 @@
 #!/bin/bash
 
 require-lib ./test-libs.sh
-require-bin make-bcache
-require-kernel-config MD,EXT4_FS
 
 config-scratch-devs 2G
 config-mem 256M

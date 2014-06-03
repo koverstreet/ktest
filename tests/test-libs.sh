@@ -3,6 +3,9 @@
 # ktest framework.
 #
 
+require-bin make-bcache
+require-kernel-config MD,BCACHE,BCACHE_DEBUG,CLOSURE_DEBUG
+
 #
 # Signal to ktest that test has completed successfully.
 #
