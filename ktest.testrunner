@@ -2,7 +2,7 @@
 
 KERNEL=/usr/share/DateraContainer/kernel
 
-local start=`date +%s`
+start=`date +%s`
 
 test="$1"
 if [ "$srcdir" = "" ] ; then
