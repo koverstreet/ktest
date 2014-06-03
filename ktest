@@ -301,7 +301,7 @@ parse_test_deps()
 
     . $TEST deps
 
-    if [ -z "$_MEM" ]; then
+    if [ -z "$_MEM" -o -z "$TIMEOUT" ]; then
 	echo "test must specify requirements"
 	exit 1
     fi
