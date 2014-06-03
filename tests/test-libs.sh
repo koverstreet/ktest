@@ -10,7 +10,7 @@ require-kernel-config MD,BCACHE,BCACHE_DEBUG,CLOSURE_DEBUG
 # Signal to ktest that test has completed successfully.
 #
 test_success() {
-    echo "TEST SUCCESSFUL"
+    echo "TEST SUCCESS"
 }
 
 export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]}()}+ '

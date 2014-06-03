@@ -135,21 +135,6 @@ check_mlxcard()
     fi
 }
 
-check_timeout()
-{
-    TIMEOUT=$1
-
-    sleep $TIMEOUT
-    $VMSTART stop `cat $WORK_DIR/id`
-    stty sane 2> /dev/null || true
-    pkill -g $$
-}
-
-stop_timeout()
-{
-    pkill -g $$ sleep || true
-}
-
 do_make()
 {
     make -C "$KERNEL_SOURCE" O="$WORK_DIR" -j "$NJOBS"        \
@@ -416,28 +401,26 @@ cmd_run()
 	--fs $WORK_DIR/$LOG_INTERNAL logfs		\
 	$_SCRATCH					\
 	$_INFINIBAND					\
-	$_VMCLUSTER"
+	$_VMCLUSTER" </dev/null 2>&1
 
     if [ "$INTERACTIVE" = 1 ]; then
-        $vmstart_command
-	stty sane 2> /dev/null || true
+	# prevent qemu from seeing the terminal via stdout and mucking with tty
+	# settings
+	$vmstart_command|cat
     else
-	if [ -n "$TIMEOUT" ]; then
-	    check_timeout "$TIMEOUT" &
-	    trap "stop_timeout" EXIT
-	fi
+	[ -p "$WORK_DIR/output" ] || mkfifo "$WORK_DIR/output"
 
-	$vmstart_command|{ \
-	    sed -u -e '/TEST \(SUCCESS\|FAILED\)/q' 2>&1 \
-		| tee $WORK_DIR/$LOG_OUTPUT
-	    stop_timeout
-	    $VMSTART stop `cat $WORK_DIR/id`
-	    stty sane 2> /dev/null || true
-	    if ! grep -q "TEST SUCCESS" $WORK_DIR/$LOG_OUTPUT ; then
-		exit 1
-	    fi
-	    exit 0
-	}
+	$vmstart_command > "$WORK_DIR/output" &
+
+	err=1
+	timeout $TIMEOUT				\
+	    sed -u -e '/TEST SUCCESS/ { p; Q0 }'	\
+		   -e '/TEST FAILED/  { p; Q1 }'	\
+		   < "$WORK_DIR/output" && err=0
+
+	$VMSTART stop `cat $WORK_DIR/id`
+
+	exit $err
     fi
 }
 
