@@ -15,3 +15,7 @@ if [ -b /dev/disk/by-uuid/11111111-2222-3333-4444-555555555555 ] ; then
     echo /var/log/core/core.%e.PID%p.SIG%s.TIME%t > /proc/sys/kernel/core_pattern
     ulimit -c unlimited
 fi
+
+echo "mount logfs"
+mkdir -p /var/log/datera
+mount -t 9p -o trans=virtio logfs /var/log/datera
