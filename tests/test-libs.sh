@@ -76,11 +76,6 @@ wait_no_ip()
 # Set up a block device without bcache.
 #
 setup_blkdev() {
-    if [ "$DEVICES" != "" ]; then
-	echo "Block devices already set up"
-	exit 1
-    fi
-
     DEVICES=/dev/vda
 }
 
@@ -158,6 +153,13 @@ setup_fs() {
 		mount $dev /mnt/$dev -t ext4 -o errors=panic
 	    done
 	    ;;
+	xfs)
+	    for dev in $DEVICES; do
+		mkdir -p /mnt/$dev
+		mkfs.xfs $dev
+		mount $dev /mnt/$dev -t xfs -o wsync
+	    done
+	    ;;
 	bcachefs)
 	    # Hack -- when using bcachefs we don't have a backing
 	    # device or a flash only volume, but we have to invent
@@ -176,6 +178,7 @@ setup_fs() {
 	    mount -t bcachefs $uuid /mnt/$dev -o errors=panic
 	    ;;
 	*)
+	    echo "Unsupported file system type: $FS"
 	    exit 1
 	    ;;
     esac

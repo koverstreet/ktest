@@ -1,0 +1,24 @@
+#!/bin/bash
+
+require-lib ./test-libs.sh
+require-kernel-config XFS_FS
+
+config-scratch-devs 2G
+config-mem 256M
+
+config-timeout 600
+
+main()
+{
+    SIZE=small
+    FS=xfs
+
+    #echo "file inode.c +p"		> /sys/kernel/debug/dynamic_debug/control
+    #echo "file dirent.c +p"	> /sys/kernel/debug/dynamic_debug/control
+    #echo "file fs.c +p"		> /sys/kernel/debug/dynamic_debug/control
+
+    setup_blkdev
+    test_stress
+
+    test_success
+}
