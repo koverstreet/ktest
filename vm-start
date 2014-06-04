@@ -1046,6 +1046,55 @@ def cmd_list():
 
 cmd_ls = cmd_list
 
+def cmd_purge():
+    """Purge entries from a partially broken database"""
+
+    opt=OptionParser("usage: %prog purge [object, object, ...]",
+             description="""Purge entries from a partially broken database""")
+
+    opt.add_option("-d", "--debug", dest="debug",
+                   default=False, action="store_true",
+        help="enable debugging")
+
+    (options, args) = opt.parse_args()
+
+    if options.debug:
+        logging.getLogger().setLevel("DEBUG")
+
+    vms_by_id=[]
+    vms_by_name=[]
+    brs_by_name=[]
+    for entry in args:
+        if (entry[:2] == "vm") and entry[2:].isdigit():
+            vms_by_name.append(entry)
+        elif (entry[:2] == "br") and entry[2:].isdigit():
+            brs_by_name.append(entry)
+        elif entry.isdigit():
+            vms_by_id.append(int(entry))
+        else:
+            raise ValueError("Cannot infer type of entry: %s" % entry)
+
+    vmdb = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
+    running_vms = vmdb["running_vms"]
+    new_vms = []
+    for vm in running_vms:
+        if (vm.vm_id not in vms_by_id) and (vm.name not in vms_by_name):
+            new_vms.append(vm)
+
+    vmdb["running_vms"] = new_vms
+    closeLockedDb(vmdb)
+
+    brdb = openLockedDb(BR_FILE_LOCK, BR_FILE_DICT)
+    bridges = brdb["bridges"]
+    for bridge in bridges.itervalues():
+        if bridge.br_name in brs_by_name:
+            bridge.available = True
+
+    brdb["bridges"]=bridges
+    closeLockedDb(brdb)
+    
+
+
 def gendbs(dbname, description, lockfile, dbfile, callback):
     """Generic function to generate database files (union of duplicated code).
 
