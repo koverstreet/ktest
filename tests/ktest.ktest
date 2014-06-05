@@ -11,7 +11,5 @@ main()
 	exit 1
 	# this sleep must be killed via an ssh into the vm,
 	# if not the test has failed
-    else
-	echo TEST SUCCESS
     fi
 }

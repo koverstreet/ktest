@@ -50,6 +50,8 @@ TIMEOUT=""              # kills test after $TIMEOUT seconds
                         #       defaults: 0
 BUILD=1                 # if set to 1, kernel will build
                         #       ignored with: -K (sets to 0)
+COVERAGE=0		# if set to 1, kernel will be built with
+			#	coverage enabled (only if -K is not set)
 INTERACTIVE=0           # if set to 1, timeout is ignored completely
                         #       sets with: -I
 NJOBS=$((`grep ^processor /proc/cpuinfo |wc -l` * 2))
@@ -79,36 +81,39 @@ fi
 CMD="cmd_$1"
 shift
 
-while getopts "IhKb:k:i:j:w:vx" arg; do
+while getopts "IhKcb:k:i:j:w:vx" arg; do
     case $arg in
-        h)
-            usage
-            exit 0
-            ;;
-        k)
-            KERNEL_SOURCE=`realpath "$OPTARG"`
-            ;;
-        K)
-            BUILD=""
-            ;;
-        i)
-            IMG=$OPTARG
-            ;;
-        b)
-            KERNEL_OUTPUT=$OPTARG
-            ;;
-        j)
-            NJOBS=$OPTARG
-            ;;
-        I)
-            INTERACTIVE=1
-            ;;
-        w)
-            WORK_DIR=$OPTARG
-            ;;
-        x)
-            set -x
-            ;;
+	h)
+	    usage
+	    exit 0
+	    ;;
+	k)
+	    KERNEL_SOURCE=`realpath "$OPTARG"`
+	    ;;
+	K)
+	    BUILD=""
+	    ;;
+	c)
+	    COVERAGE=1
+	    ;;
+	i)
+	    IMG=$OPTARG
+	    ;;
+	b)
+	    KERNEL_OUTPUT=$OPTARG
+	    ;;
+	j)
+	    NJOBS=$OPTARG
+	    ;;
+	I)
+	    INTERACTIVE=1
+	    ;;
+	w)
+	    WORK_DIR=$OPTARG
+	    ;;
+	x)
+	    set -x
+	    ;;
     esac
 done
 shift $(( OPTIND - 1 ))
@@ -338,6 +343,11 @@ prepare_vm()
     _KERNEL_CONFIG_REQUIRE=""
     genisoimage_sudo=""
 
+    if [ "$COVERAGE" = 1 ]; then
+	_KERNEL_CONFIG_REQUIRE+="GCOV_KERNEL"
+	_KERNEL_CONFIG_REQUIRE+=",GCOV_FORMAT_AUTODETECT"
+    fi
+
     mkdir -p $WORK_DIR
 
     build_file_list $@
@@ -358,6 +368,26 @@ prepare_vm()
     # setup directory where logfs will be mounted from
     mkdir -p $WORK_DIR/$LOG_INTERNAL
     rm -rf $WORK_DIR/$LOG_INTERNAL/*
+}
+
+run_lcov()
+{
+    checkdep lcov
+
+    gcov_dir=$WORK_DIR/$LOG_INTERNAL/gcov
+    info=$WORK_DIR/gcov.info
+    html=$WORK_DIR/gcov.html
+
+    echo "If lcov fails, run this:"
+    echo "    sudo yum install perl-Digest-MD5"
+    echo
+
+    lcov --directory "$gcov_dir" --capture --output-file "$info"
+    genhtml --output-directory "$html" "$info"
+
+    echo
+    echo "LCOV report:"
+    echo    file://$html/index.html
 }
 
 cmd_boot()
@@ -405,6 +435,10 @@ cmd_run()
 	# prevent qemu from seeing the terminal via stdout and mucking with tty
 	# settings
 	$vmstart_command|cat
+
+	if [ "$COVERAGE" = 1 ]; then
+	    run_lcov
+	fi
     else
 	[ -p "$WORK_DIR/output" ] || mkfifo "$WORK_DIR/output"
 
@@ -417,6 +451,10 @@ cmd_run()
 		   < "$WORK_DIR/output" && err=0
 
 	$VMSTART stop `cat $WORK_DIR/id`
+
+	if [ "$COVERAGE" = 1 ]; then
+	    run_lcov
+	fi
 
 	exit $err
     fi
@@ -447,30 +485,6 @@ cmd_mon()
     exec $VMSTART mon `cat $WORK_DIR/id`
 }
 
-cmd_lcov()
-{
-    checkdep lcov
-
-    gcov_in=/sys/kernel/debug/gcov/`realpath $KERNEL_OUTPUT`
-    gcov_out=$WORK_DIR/gcov
-    info=$WORK_DIR/gcov.info
-    html=$WORK_DIR/gcov.html
-
-    mkdir -p $gcov_out
-
-    cmd_ssh mkdir -p /tmp/gcov
-    cmd_ssh cp -a "$gcov_in/*" /tmp/gcov
-    cmd_ssh "(cd /tmp/gcov; tar cf - .)"    \
-        |(cd "$gcov_out"; tar xf -)
-
-    lcov --directory "$gcov_out" --capture --output-file $info
-    genhtml --output-directory $html $info
-
-    echo
-    echo "LCOV report:"
-    echo    file://$html/index.html
-}
-
 cmd_oldconfig()
 {
     do_make oldconfig
@@ -496,9 +510,10 @@ usage()
     echo "  options:"
     echo "      -x      bash debug statements"
     echo "      -k      kernel source dir"
-    echo "      -b      bld directory for kernel (default: kernel_source/.ktest)"
-    echo "      -w      work director (default: kernel build directory)"
+    echo "      -b      build directory for kernel (default: kernel_source/.ktest)"
+    echo "      -w      work directory (default: kernel build directory)"
     echo "      -K      don't build kernel (run cmd only)"
+    echo "      -c      enable coverage (only valid without -K)"
     echo "      -i      VM root filesystem image (run cmd only)"
     echo "      -j      j option to make (run cmd only)"
     echo "      -I      disable timeout and VM stop on pass/fail (run cmd only)"

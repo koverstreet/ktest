@@ -62,6 +62,15 @@ config-timeout()
 
 . rc.test
 
+finish_test()
+{
+    # Code coverage
+    gcov_dir=/sys/kernel/debug/gcov
+    test -d $gcov_dir && cp -dR $gcov_dir $LOGDIR
+
+    umount $LOGDIR
+}
+
 # We can't just do 'main || echo "TEST FAILED"' because
 # 'set -o errexit' is disabled in the first half of a ||,
 # and there is no way to re-enable it. However, ERR is
@@ -79,12 +88,13 @@ failure()
     done > $LOGDIR/sysfs.txt
     echo "done"
 
-    umount $LOGDIR
+    finish_test
     echo TEST FAILED
 }
 
 trap failure ERR
 main
 
-umount $LOGDIR
+finish_test
+echo "TEST SUCCESS"
 exit 0

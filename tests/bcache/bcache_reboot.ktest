@@ -22,8 +22,6 @@ main()
 
     if echo /dev/vda > /sys/fs/bcache/register; then
 	echo /dev/vdb > /sys/fs/bcache/register
-
-        test_success
     else
 	setup_bcache
 	setup_flash_volume 1600M

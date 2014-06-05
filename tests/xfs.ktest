@@ -19,6 +19,4 @@ main()
 
     setup_blkdev
     test_stress
-
-    test_success
 }

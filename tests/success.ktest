@@ -8,5 +8,5 @@ config-timeout 20
 
 main()
 {
-    test_success
+    true
 }

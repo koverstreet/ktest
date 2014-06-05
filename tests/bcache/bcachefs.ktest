@@ -31,6 +31,4 @@ main()
 
     #test_stress
     test_fsx
-
-    test_success
 }

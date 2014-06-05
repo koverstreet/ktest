@@ -46,6 +46,4 @@ main()
 
     echo "we should only have one extent device"
     [ "$(ls /dev/bcache_extent* | wc -l)" -eq "1" ]
-
-    test_success
 }

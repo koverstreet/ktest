@@ -21,6 +21,4 @@ main()
     setup_bcache
     test_stress
     stop_bcache
-
-    test_success
 }
