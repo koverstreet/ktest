@@ -1,6 +1,6 @@
 #!/bin/bash
 
-require-lib tests/test-libs.sh
+require-lib test-libs.sh
 
 config-mem 256M
 config-timeout 300

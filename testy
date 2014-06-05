@@ -1,0 +1,129 @@
+#!/bin/bash
+#
+# testy - given a list of files to test, run tests that apply to those files (or
+# optionally just print them out)
+
+set -o nounset
+set -o errexit
+set -o pipefail
+
+KTESTDIR=$(dirname $(readlink -f "$0"))
+
+DRYRUN=0
+KTESTARGS=""
+
+read_tests()
+{
+    # For every pattern/test in the test list, if $file matches the pattern
+    # print out the corresponding test:
+
+    local file=$1
+    local dir=$2
+    local testlist=$3
+
+    sed -e 's/#.*//' "$testlist"				\
+	|while read line; do
+	    [ -z "$line" ] && continue
+
+	    set $line
+	    pattern=$1
+	    shift
+
+	    if [ "$pattern" = "." ]; then
+		echo "$dir/$@"
+		continue
+	    fi
+
+	    fileglob=$dir/$pattern
+	    fileglob=${fileglob##./}
+
+	    for i in $fileglob; do
+		if [[ "${file##$i}" != "$file" ]]; then
+		    echo "$dir/$@"
+		    break
+		fi
+	    done
+	done
+}
+
+get_tests()
+{
+    # Given a list of files to test, find test lists in the same directory as
+    # the file to test or any parent directory
+
+    for i in $@; do
+	local file=$i
+	local dir=$i
+
+	while true; do
+	    dir=$(dirname "$dir")
+	    testlist="$dir/tests"
+
+	    if [ -f "$testlist" ]; then
+		read_tests "$file" "$dir" "$testlist"
+	    fi
+
+	    if [ "$dir" = "/" -o "$dir" = "." ]; then
+		break
+	    fi
+	done
+    done
+}
+
+usage()
+{
+    echo "testy: find and run tests for a list of files to test"
+    echo "Usage: testy [options] <files>.."
+    echo "  -n	    don't run tests, just print them out"
+}
+
+while getopts "hnk:Ki:b:j:w:x" arg; do
+    case $arg in
+	h)
+	    usage
+	    exit 1
+	    ;;
+	n)
+	    DRYRUN=1
+	    ;;
+	k)
+	    KTESTARGS+=" -k $OPTARG"
+	    ;;
+	K)
+	    KTESTARGS+=" -K"
+	    ;;
+	i)
+	    KTESTARGS+=" -i $OPTARG"
+	    ;;
+	b)
+	    KTESTARGS+=" -b $OPTARG"
+	    ;;
+	j)
+	    KTESTARGS+=" -j $OPTARG"
+	    ;;
+	w)
+	    KTESTARGS+=" -w $OPTARG"
+	    ;;
+	x)
+	    set -x
+	    ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+get_tests $@|sort|uniq						\
+    |while read testfile; do
+	if [ "$DRYRUN" == 0 ]; then
+	    testname=`basename "$testfile"`
+	    starttime=`date +%s`
+
+	    $KTESTDIR/ktest run $KTESTARGS "$testfile"		\
+		|sed -u -e "s/^/[$testname] /"
+
+	    duration=$((`date +%s` -  $starttime))
+
+	    echo [$testname] test finished at `date +%s` -- `date` after $duration seconds
+	else
+	    echo $testfile
+	fi
+    done

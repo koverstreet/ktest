@@ -22,7 +22,7 @@ opt="-w . -K -b $KERNEL -k $KERNEL"
 ) &
 pid="$!"
 
-$srcdir/ktest run $opt $srcdir/runtest.ktest
+$srcdir/ktest run $opt $srcdir/tests/ktest.ktest
 ret="$?"
 
 sleep 5 

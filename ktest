@@ -148,13 +148,13 @@ build_kernel()
     KERNEL_OUTPUT=$2
     _KERNEL_CONFIG_REQUIRE=$3
 
-    kconfig="$KERNEL_OUTPUT/.config"
-    config_tool="$KERNEL_SOURCE/scripts/config"
-
-    OLDIFS=$IFS
-    IFS=','
-
     if [ -n "$BUILD" ]; then
+	local kconfig="$KERNEL_OUTPUT/.config"
+	local config_tool="$KERNEL_SOURCE/scripts/config"
+
+	local OLDIFS=$IFS
+	IFS=','
+
         [ -f "$kconfig" ] || cp "$KTESTDIR/defconfig" "$kconfig"
 
 	for req in $_KERNEL_CONFIG_REQUIRE; do
@@ -162,19 +162,17 @@ build_kernel()
         done
 
         do_make olddefconfig
-    fi
 
-    for req in $_KERNEL_CONFIG_REQUIRE; do
-        c=`"$config_tool" --file "$kconfig" -s $req`
-        if [ "$c" != "y" ]; then
-            echo "Kernel config option $req not set"
-            exit 1
-        fi
-    done
+	for req in $_KERNEL_CONFIG_REQUIRE; do
+	    c=`"$config_tool" --file "$kconfig" -s $req`
+	    if [ "$c" != "y" ]; then
+		echo "Kernel config option $req not set"
+		exit 1
+	    fi
+	done
 
-    IFS=$OLDIFS
+	IFS=$OLDIFS
 
-    if [ -n "$BUILD" ]; then
         do_make || exit 1
     fi
 

@@ -1,0 +1,12 @@
+#!/bin/bash
+
+require-lib test-libs.sh
+
+config-mem 256M
+
+config-timeout 20
+
+main()
+{
+    test_success
+}
