@@ -63,6 +63,12 @@ get_tests()
 		read_tests "$file" "$dir" "$testlist"
 	    fi
 
+	    testlist="$dir/tests.testy"
+
+	    if [ -f "$testlist" ]; then
+		read_tests "$file" "$dir" "$testlist"
+	    fi
+
 	    if [ "$dir" = "/" -o "$dir" = "." ]; then
 		break
 	    fi
