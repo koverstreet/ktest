@@ -1,2 +1,5 @@
+ktest		tests/ktest
+vm-start	tests/vm-start
+
 ktest		../vm-tests/*/*.ktest
 vm-start	../vm-tests/*/*.ktest

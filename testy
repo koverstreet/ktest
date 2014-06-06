@@ -9,6 +9,9 @@ set -o pipefail
 
 KTESTDIR=$(dirname $(readlink -f "$0"))
 
+# hack:
+ACTEST="/src/appliance-clustest/actest -w workdir.$$$$ -i /usr/share/DateraAppliance/DaterOS-sda.raw -x"
+
 DRYRUN=0
 KTESTARGS=""
 
@@ -55,14 +58,13 @@ get_tests()
 	local file=$i
 	local dir=$i
 
+	find "$file" -name tests.testy 2>/dev/null|		\
+	    while read testlist; do
+		read_tests "$file" "$dir" "$testlist"
+	    done
+
 	while true; do
 	    dir=$(dirname "$dir")
-	    testlist="$dir/tests"
-
-	    if [ -f "$testlist" ]; then
-		read_tests "$file" "$dir" "$testlist"
-	    fi
-
 	    testlist="$dir/tests.testy"
 
 	    if [ -f "$testlist" ]; then
@@ -74,6 +76,23 @@ get_tests()
 	    fi
 	done
     done
+}
+
+run_test()
+{
+    local testfile=$1
+
+    case "$testfile" in
+	*.ktest)
+	    $KTESTDIR/ktest run $KTESTARGS "$testfile"
+	    ;;
+	*.actest)
+	    $ACTEST "$testfile"
+	    ;;
+	*)
+	    "$testfile"
+	    ;;
+    esac
 }
 
 usage()
@@ -123,7 +142,7 @@ get_tests $@|sort|uniq						\
 	    testname=`basename "$testfile"`
 	    starttime=`date +%s`
 
-	    $KTESTDIR/ktest run $KTESTARGS "$testfile"		\
+	    run_test "$testfile"				\
 		|sed -u -e "s/^/[$testname] /"
 
 	    duration=$((`date +%s` -  $starttime))
