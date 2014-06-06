@@ -420,7 +420,9 @@ cmd_run()
 
     prepare_vm $1
 
-    vmstart_command="$VMSTART start			\
+    [ -p "$WORK_DIR/output" ] || mkfifo "$WORK_DIR/output"
+
+    $VMSTART start					\
 	-i $IMG -t $SCRATCH_DIR				\
 	-k $KERNEL_OUTPUT/arch/x86/boot/bzImage		\
 	-c $WORK_DIR/run.iso				\
@@ -429,35 +431,24 @@ cmd_run()
 	--fs $WORK_DIR/$LOG_INTERNAL logfs		\
 	$_SCRATCH					\
 	$_INFINIBAND					\
-	$_VMCLUSTER" </dev/null 2>&1
+	$_VMCLUSTER </dev/null 2>&1 > "$WORK_DIR/output" &
+
+    err=0
 
     if [ "$INTERACTIVE" = 1 ]; then
-	# prevent qemu from seeing the terminal via stdout and mucking with tty
-	# settings
-	$vmstart_command|cat
-
-	if [ "$COVERAGE" = 1 ]; then
-	    run_lcov
-	fi
+	cat "$WORK_DIR/output"
     else
-	[ -p "$WORK_DIR/output" ] || mkfifo "$WORK_DIR/output"
-
-	$vmstart_command > "$WORK_DIR/output" &
-
-	err=1
 	timeout $TIMEOUT				\
 	    sed -u -e '/TEST SUCCESS/ { p; Q0 }'	\
 		   -e '/TEST FAILED/  { p; Q1 }'	\
-		   < "$WORK_DIR/output" && err=0
+		   < "$WORK_DIR/output" || err=1
 
 	$VMSTART stop `cat $WORK_DIR/id`
-
-	if [ "$COVERAGE" = 1 ]; then
-	    run_lcov
-	fi
-
-	exit $err
     fi
+
+    [ "$COVERAGE" = 1 ] && run_lcov
+
+    exit $err
 }
 
 cmd_ssh()
