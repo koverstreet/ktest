@@ -1,3 +1,9 @@
+#!/bin/bash
+
+set -o nounset
+set -o errexit
+set -o pipefail
+
 # Warning: this test has currently several timers and requires that
 # - the vm gets up and fully initialized in less than 30 seconds
 # - the kill process ends and is no longer killable 5 seconds after
@@ -7,28 +13,24 @@
 # replaced with code that checks if everything is ready.
 
 KERNEL=/usr/share/DateraContainer/kernel
-set -x
-if [ "$srcdir" = "" ] ; then
-   srcdir=`dirname $0`
-   # if no srcdir is given assume that the directory where this script
-   # is stored is the srcdir.
-fi
+KTESTDIR=/src/ktest
+KTEST=$KTESTDIR/ktest
 
-opt="-w . -K -b $KERNEL -k $KERNEL"
+opt="-w workdir.$$ -K -b $KERNEL -k $KERNEL"
 
 ( 
-   sleep 30
-   echo 'killall sleep' | $srcdir/ktest ssh $opt 
+   sleep 10
+   echo 'killall sleep' | $KTEST ssh $opt
 ) &
 pid="$!"
 
-$srcdir/ktest run $opt $srcdir/tests/ktest.ktest
+$KTEST run $opt $KTESTDIR/tests/ktest.ktest
 ret="$?"
 
 sleep 5 
 # give the the kill process some time to exit
 
-if kill $pid > /dev/null 2>&1 ; then
+if kill $pid > /dev/null 2>&1; then
    ret=1
    # if the test passed the kill process should not exist anymore
 fi

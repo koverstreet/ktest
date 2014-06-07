@@ -10,9 +10,10 @@ set -o pipefail
 KTESTDIR=$(dirname $(readlink -f "$0"))
 
 # hack:
-ACTEST="/src/appliance-clustest/actest -w workdir.$$$$ -i /usr/share/DateraAppliance/DaterOS-sda.raw -x"
+ACTEST="/src/appliance-clustest/actest -w workdir.$$ -i /usr/share/DateraAppliance/DaterOS-sda.raw -x"
 
 DRYRUN=0
+PRIORITY=0
 KTESTARGS=""
 
 read_tests()
@@ -21,28 +22,26 @@ read_tests()
     # print out the corresponding test:
 
     local file=$1
-    local dir=$2
-    local testlist=$3
+    local testlist=$2
+    local dir=`dirname $testlist`
 
     sed -e 's/#.*//' "$testlist"				\
 	|while read line; do
 	    [ -z "$line" ] && continue
 
 	    set $line
+	    priority=$1
+	    shift
 	    pattern=$1
 	    shift
 
-	    if [ "$pattern" = "." ]; then
-		echo "$dir/$@"
-		continue
-	    fi
+	    (($priority > $PRIORITY)) && continue
 
-	    fileglob=$dir/$pattern
-	    fileglob=${fileglob##./}
-
-	    for i in $fileglob; do
-		if [[ "${file##$i}" != "$file" ]]; then
-		    echo "$dir/$@"
+	    for i in `echo $dir/$pattern|sed -e 's_/\.$__'`; do
+		if [ "$file" = "$i" -o				\
+		     "${i##$file/}" != "$i" -o			\
+		     "${file##$i/}" != "$file" ]; then
+		    readlink -f $dir/$@
 		    break
 		fi
 	    done
@@ -55,12 +54,12 @@ get_tests()
     # the file to test or any parent directory
 
     for i in $@; do
-	local file=$i
-	local dir=$i
+	local file=`readlink -fn "$i"`
+	local dir=$file
 
-	find "$file" -name tests.testy 2>/dev/null|		\
+	(find "$file" -name tests.testy 2>/dev/null || true)|		\
 	    while read testlist; do
-		read_tests "$file" "$dir" "$testlist"
+		read_tests "$file" "$testlist"
 	    done
 
 	while true; do
@@ -68,7 +67,7 @@ get_tests()
 	    testlist="$dir/tests.testy"
 
 	    if [ -f "$testlist" ]; then
-		read_tests "$file" "$dir" "$testlist"
+		read_tests "$file" "$testlist"
 	    fi
 
 	    if [ "$dir" = "/" -o "$dir" = "." ]; then
@@ -102,7 +101,7 @@ usage()
     echo "  -n	    don't run tests, just print them out"
 }
 
-while getopts "hnk:Ki:b:j:w:x" arg; do
+while getopts "hnp:k:Ki:b:j:w:x" arg; do
     case $arg in
 	h)
 	    usage
@@ -110,6 +109,9 @@ while getopts "hnk:Ki:b:j:w:x" arg; do
 	    ;;
 	n)
 	    DRYRUN=1
+	    ;;
+	p)
+	    PRIORITY=$OPTARG
 	    ;;
 	k)
 	    KTESTARGS+=" -k $OPTARG"
@@ -142,13 +144,20 @@ get_tests $@|sort|uniq						\
 	    testname=`basename "$testfile"`
 	    starttime=`date +%s`
 
-	    run_test "$testfile"				\
-		|sed -u -e "s/^/[$testname] /"
+	    ret=1
+
+	    run_test "$testfile" 2>&1				\
+		|sed -u -e "s/^/[$testname] /" && ret=0
 
 	    duration=$((`date +%s` -  $starttime))
 
 	    echo [$testname] test finished at `date +%s` -- `date` after $duration seconds
+
+	    if [ "$ret" = 1 ]; then
+		echo echo [$testname] FAILED
+		exit $ret
+	    fi
 	else
-	    echo $testfile
+	    echo "$testfile"
 	fi
     done

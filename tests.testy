@@ -1,5 +1,5 @@
-ktest		tests/ktest
-vm-start	tests/vm-start
+0	ktest			tests/ktest
+0	vm-start		tests/ktest
 
-ktest		../vm-tests/*/*.ktest
-vm-start	../vm-tests/*/*.ktest
+0	ktest			../vm-tests/*/*.ktest
+0	vm-start		../vm-tests/*/*.ktest
