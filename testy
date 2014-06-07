@@ -146,16 +146,17 @@ get_tests $@|sort|uniq						\
 
 	    ret=1
 
-	    run_test "$testfile" 2>&1				\
-		|sed -u -e "s/^/[$testname] /" && ret=0
+	    run_test "$testfile" > /tmp/$testname.log 2>&1 && ret=0
 
 	    duration=$((`date +%s` -  $starttime))
 
-	    echo [$testname] test finished at `date +%s` -- `date` after $duration seconds
 
 	    if [ "$ret" = 1 ]; then
-		echo echo [$testname] FAILED
+                sed "s/^/[$testname] /" /tmp/$testname.log
+                echo [$testname] FAILURE: test finished at `date +%s` -- `date` after $duration seconds
 		exit $ret
+            else
+                echo [$testname] SUCCESS: test finished at `date +%s` -- `date` after $duration seconds
 	    fi
 	else
 	    echo "$testfile"
