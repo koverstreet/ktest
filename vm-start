@@ -26,6 +26,7 @@ from optparse import OptionParser, OptionGroup
 DIR=os.path.dirname(__file__)       # path to script directory
 
 MAX_VMS = 100                       # Max number of VMs. Currently this is pretty arbitrary.
+MAX_BRIDGES = 100
 
 # global info file settings:
 IP_FILE = "/etc/vms/ips"
@@ -1196,7 +1197,7 @@ def cmd_genbridges():
     def bridges_generator(db):
         bridges = {}
 
-        for br_num in range (1,10):
+        for br_num in range (1,100):
             #generate bridge file
             br_key = str(br_num)
             br_name = "br"+br_key
