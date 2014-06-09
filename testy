@@ -42,7 +42,10 @@ read_tests()
 		if [ "$file" = "$i" -o				\
 		     "${i##$file/}" != "$i" -o			\
 		     "${file##$i/}" != "$file" ]; then
-		    readlink -f $dir/$@
+		    if ! readlink -e $dir/$@; then
+			echo "test $dir/$@ not found"
+			exit 1
+		    fi
 		    break
 		fi
 	    done
@@ -71,7 +74,7 @@ get_tests()
 		read_tests "$file" "$testlist"
 	    fi
 
-	    if [ "$dir" = "/" -o "$dir" = "." ]; then
+	    if [ "$dir" = "/" ]; then
 		break
 	    fi
 	done
@@ -138,6 +141,7 @@ while getopts "hnp:k:Ki:b:j:w:x" arg; do
 	    ;;
 	x)
 	    set -x
+	    KTESTARGS+=" -x"
 	    ;;
     esac
 done
