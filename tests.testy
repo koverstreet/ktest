@@ -1,5 +1,5 @@
 #0	ktest			tests/ktest
 #0	vm-start		tests/ktest
 
-0	ktest			../vm-tests/single-dcp/*.ktest
-0	vm-start		../vm-tests/single-dcp/*.ktest
+0	ktest			../vm-tests/single-dcp/gui.ktest
+0	vm-start		../vm-tests/single-dcp/gui.ktest
