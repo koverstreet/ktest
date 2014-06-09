@@ -33,12 +33,16 @@ read_tests()
 	    set $line
 	    priority=$1
 	    shift
-	    pattern=$1
+	    pattern=$dir/$1
 	    shift
 
 	    (($priority > $PRIORITY)) && continue
 
-	    for i in `echo $dir/$pattern|sed -e 's_/\.$__'`; do
+	    # strip off a trailing / or /. from $pattern
+	    pattern=${pattern%/}
+	    pattern=${pattern%/.}
+
+	    for i in $pattern; do
 		if [ "$file" = "$i" -o				\
 		     "${i##$file/}" != "$i" -o			\
 		     "${file##$i/}" != "$file" ]; then
