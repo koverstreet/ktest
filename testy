@@ -10,11 +10,12 @@ set -o pipefail
 KTESTDIR=$(dirname $(readlink -f "$0"))
 
 # hack:
-ACTEST="/src/appliance-clustest/actest -w workdir.$$ -i /usr/share/DateraAppliance/DaterOS-sda.raw -x"
+ACTEST="/src/appliance-clustest/actest -i /usr/share/DateraAppliance/DaterOS-sda.raw"
 
 DRYRUN=0
 PRIORITY=0
 KTESTARGS=""
+WORKDIR=""
 
 read_tests()
 {
@@ -41,7 +42,10 @@ read_tests()
 		if [ "$file" = "$i" -o				\
 		     "${i##$file/}" != "$i" -o			\
 		     "${file##$i/}" != "$file" ]; then
-		    readlink -f $dir/$@
+		    if ! readlink -e $dir/$@; then
+			echo "test $dir/$@ not found"
+			exit 1
+		    fi
 		    break
 		fi
 	    done
@@ -70,7 +74,7 @@ get_tests()
 		read_tests "$file" "$testlist"
 	    fi
 
-	    if [ "$dir" = "/" -o "$dir" = "." ]; then
+	    if [ "$dir" = "/" ]; then
 		break
 	    fi
 	done
@@ -81,12 +85,15 @@ run_test()
 {
     local testfile=$1
 
+    # hack
+    [ -n "$WORKDIR" ] && sudo rm -rf $WORKDIR
+
     case "$testfile" in
 	*.ktest)
 	    $KTESTDIR/ktest run $KTESTARGS "$testfile"
 	    ;;
 	*.actest)
-	    $ACTEST "$testfile"
+	    $ACTEST -w $WORKDIR "$testfile"
 	    ;;
 	*)
 	    "$testfile"
@@ -129,36 +136,37 @@ while getopts "hnp:k:Ki:b:j:w:x" arg; do
 	    KTESTARGS+=" -j $OPTARG"
 	    ;;
 	w)
+	    WORKDIR=$OPTARG
 	    KTESTARGS+=" -w $OPTARG"
 	    ;;
 	x)
 	    set -x
+	    KTESTARGS+=" -x"
 	    ;;
     esac
 done
 shift $((OPTIND - 1))
 
-get_tests $@|sort|uniq						\
-    |while read testfile; do
-	if [ "$DRYRUN" == 0 ]; then
-	    testname=`basename "$testfile"`
-	    starttime=`date +%s`
+tests_to_run=`get_tests $@|sort|uniq`
 
-	    ret=1
+if [ "$DRYRUN" == 0 ]; then
+    for testfile in $tests_to_run; do
+	testname=`basename "$testfile"`
+	starttime=`date +%s`
+	ret=1
 
-	    run_test "$testfile" > /tmp/$testname.log 2>&1 && ret=0
+	run_test "$testfile" > /tmp/$testname.log 2>&1 && ret=0
 
-	    duration=$((`date +%s` -  $starttime))
+	duration=$((`date +%s` -  $starttime))
 
-
-	    if [ "$ret" = 1 ]; then
-                sed "s/^/[$testname] /" /tmp/$testname.log
-                echo [$testname] FAILURE: test finished at `date +%s` -- `date` after $duration seconds
-		exit $ret
-            else
-                echo [$testname] SUCCESS: test finished at `date +%s` -- `date` after $duration seconds
-	    fi
+	if [ "$ret" = 1 ]; then
+	    sed "s/^/[$testname] /" /tmp/$testname.log
+	    echo [$testname] FAILURE: test finished at `date +%s` -- `date` after $duration seconds
+	    exit $ret
 	else
-	    echo "$testfile"
+	    echo [$testname] SUCCESS: test finished at `date +%s` -- `date` after $duration seconds
 	fi
     done
+else
+    echo $tests_to_run
+fi

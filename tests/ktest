@@ -19,7 +19,7 @@ KTEST=$KTESTDIR/ktest
 opt="-w workdir.$$ -K -b $KERNEL -k $KERNEL"
 
 ( 
-   sleep 10
+   sleep 20
    echo 'killall sleep' | $KTEST ssh $opt
 ) &
 pid="$!"
