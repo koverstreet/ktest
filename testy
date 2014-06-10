@@ -119,6 +119,7 @@ while getopts "hnp:k:Ki:b:j:w:x" arg; do
 	    ;;
 	p)
 	    PRIORITY=$OPTARG
+	    KTESTARGS+=" -p $OPTARG"
 	    ;;
 	k)
 	    KTESTARGS+=" -k $OPTARG"

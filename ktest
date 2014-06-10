@@ -20,6 +20,7 @@ checkdep make
 checkdep qemu-system-x86_64 qemu-system-i386
 
 
+PRIORITY="0"		# hint for how long test should run
 DEFAULT_DIR=".ktest"    # default path for building others
 KERNEL_SOURCE="."       # dir of kernel source
                         #       set with: -k <path>
@@ -105,11 +106,14 @@ fi
 CMD="cmd_$1"
 shift
 
-while getopts "IhKc:b:k:i:j:w:vx" arg; do
+while getopts "hp:k:Kc:i:b:j:Iw:vx" arg; do
     case $arg in
 	h)
 	    usage
 	    exit 0
+	    ;;
+	p)
+	    PRIORITY=$OPTARG
 	    ;;
 	k)
 	    KERNEL_SOURCE=`realpath "$OPTARG"`
@@ -220,6 +224,8 @@ parse_test_deps()
 {
     local TEST=$1
     HAVE_CONTAINER=""
+
+    ktest_priority=$PRIORITY
 
     _add-file()
     {
@@ -454,15 +460,16 @@ cmd_run()
 
     [ -p "$WORK_DIR/output" ] || mkfifo "$WORK_DIR/output"
 
-    $VMSTART start					\
-	-i $IMG -t $SCRATCH_DIR				\
-	-k $KERNEL_OUTPUT/arch/x86/boot/bzImage		\
-	-c $WORK_DIR/run.iso				\
-	--id $WORK_DIR/id				\
-	-m $_MEM					\
-	--fs $WORK_DIR/$LOG_INTERNAL logfs		\
-	$_SCRATCH					\
-	$_INFINIBAND					\
+    $VMSTART start						\
+	--append="root=/dev/sda rw ktest.priority=$PRIORITY"	\
+	-i $IMG -t $SCRATCH_DIR					\
+	-k $KERNEL_OUTPUT/arch/x86/boot/bzImage			\
+	-c $WORK_DIR/run.iso					\
+	--id $WORK_DIR/id					\
+	-m $_MEM						\
+	--fs $WORK_DIR/$LOG_INTERNAL logfs			\
+	$_SCRATCH						\
+	$_INFINIBAND						\
 	$_VMCLUSTER </dev/null 2>&1 > "$WORK_DIR/output" &
 
     err=0

@@ -15,6 +15,14 @@ echo 1 > /proc/sys/fs/suid_dumpable
 echo $LOGDIR/core.%e.PID%p.SIG%s.TIME%t > /proc/sys/kernel/core_pattern
 ulimit -c unlimited
 
+for i in `cat /proc/cmdline`; do
+    case $i in
+	ktest.*)
+	    export ktest_${i##ktest.}
+	    ;;
+    esac
+done
+
 require-lib()
 {
     . `basename "$1"`
@@ -60,41 +68,33 @@ config-timeout()
     return 0
 }
 
-. rc.test
+set +e
 
-finish_test()
-{
-    # Code coverage
-    gcov_dir=/sys/kernel/debug/gcov
-    test -d $gcov_dir && cp -dR $gcov_dir $LOGDIR
+(set -e; . rc.test; main)
+ret=$?
 
-    umount $LOGDIR
-}
+set -e
 
-# We can't just do 'main || echo "TEST FAILED"' because
-# 'set -o errexit' is disabled in the first half of a ||,
-# and there is no way to re-enable it. However, ERR is
-# inherited by subshells with 'set -o errtrace'.
+echo -n "Saving trace to $LOGDIR/trace.txt... "
+cp /sys/kernel/debug/tracing/trace $LOGDIR/trace.txt
+echo "done"
 
-failure()
-{
-    echo -n "Saving trace to $LOGDIR/trace.txt... "
-    cp /sys/kernel/debug/tracing/trace $LOGDIR/trace.txt
-    echo "done"
+echo -n "Saving sysfs to $LOGDIR/sysfs.txt... "
+for file in $(find /sys -type f -perm u+r); do
+    echo -n "$file: "; cat $file
+done > $LOGDIR/sysfs.txt
+echo "done"
 
-    echo -n "Saving sysfs to $LOGDIR/sysfs.txt... "
-    for file in $(find /sys -type f -perm u+r); do
-	echo -n "$file: "; cat $file
-    done > $LOGDIR/sysfs.txt
-    echo "done"
+# Code coverage
+gcov_dir=/sys/kernel/debug/gcov
+test -d $gcov_dir && cp -dR $gcov_dir $LOGDIR
 
-    finish_test
-    echo TEST FAILED
-}
+umount $LOGDIR
 
-trap failure ERR
-main
+if [ $ret = 0 ]; then
+    echo "TEST SUCCESS"
+else
+    echo "TEST FAILED"
+fi
 
-finish_test
-echo "TEST SUCCESS"
 exit 0
