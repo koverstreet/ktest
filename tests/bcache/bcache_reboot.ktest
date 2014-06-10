@@ -1,33 +1,58 @@
 #!/bin/bash
 
-set -e
-
 require-lib ../test-libs.sh
-require-bin make-bcache
-require-kernel-config MD,BCACHE
 
 config-scratch-devs 2G,4G
 config-mem 256M
 
+nr_iterations=$((($ktest_priority + 1) * 5))
+config-timeout $(($nr_iterations * 60))
+
 main()
 {
-    SIZE=small
+    iteration=$([ -e /iteration ] && cat /iteration || echo 0)
+
+    echo "TEST ITERATION $iteration of $nr_iterations"
+
+    [ $iteration = $nr_iterations ] && exit 0
+
+    echo $((iteration + 1)) > /iteration
+
+    SIZE=large
     FS=ext4
-    FLAGS="--bucket 64k --block 4k --discard --writeback --cache_replacement_policy=lru"
+    FLAGS="--bucket 32k --block 4k --discard --writeback --cache_replacement_policy=lru"
     CACHE="/dev/vda"
     BDEV=
     TIER="/dev/vdb"
 
     setup_tracing 64 'bcache:*'
 
-    if echo /dev/vda > /sys/fs/bcache/register; then
-	echo /dev/vdb > /sys/fs/bcache/register
-    else
+    if [ $iteration = 0 ]; then
 	setup_bcache
 	setup_flash_volume 1600M
 
-        #test_stress &
-        sleep 2
-        echo b > /proc/sysrq-trigger
+	mkdir /mnt/bcache0
+	mkfs.ext4 /dev/bcache0
+    else
+	echo /dev/vda > /sys/fs/bcache/register
+	echo /dev/vdb > /sys/fs/bcache/register
+
+	cache_set_settings
     fi
+
+    mount /dev/bcache0 /mnt/bcache0 -t ext4 -o errors=panic
+
+    test_sysfs
+
+    test_shrink &
+    test_fault &
+    test_sync &
+    test_drop_caches &
+
+    DEVICES=bcache0
+    test_dbench &
+    test_bonnie &
+
+    sleep 30
+    echo b > /proc/sysrq-trigger
 }
