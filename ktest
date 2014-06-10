@@ -32,7 +32,7 @@ WORK_DIR=""             # dir where vm meta data (id, logs, etc) gets stored
                         #       defaults: $KERNEL_OUTPUT
 LOG_OUTPUT="log.output" # file name were test output is logged too
                         #       path: $WORK_DIR/$LOG_OUTPUT
-LOG_INTERNAL="log.internal" 
+LOG_INTERNAL="log.internal"
                         # dir name which is mapped with virtfs to inside vm
                         # at /var/log/datera
                         #       path: $WORK_DIR/$LOG_INTERNAL
@@ -45,13 +45,12 @@ IMG="/var/lib/ktest/root"
                         #       defaults: /var/lib/ktest/root
                         #       auto-override: $HOME/.ktest/root
 TIMEOUT=""              # kills test after $TIMEOUT seconds
-                        #       can be overridden by config-timeout from test 
+                        #       can be overridden by config-timeout from test
                         #       ignored completely with -I
                         #       defaults: 0
 BUILD=1                 # if set to 1, kernel will build
                         #       ignored with: -K (sets to 0)
-COVERAGE=0		# if set to 1, kernel will be built with
-			#	coverage enabled (only if -K is not set)
+COVERAGE=""		# list of directories to enable code coverage for
 INTERACTIVE=0           # if set to 1, timeout is ignored completely
                         #       sets with: -I
 NJOBS=$((`grep ^processor /proc/cpuinfo |wc -l` * 2))
@@ -60,6 +59,31 @@ NJOBS=$((`grep ^processor /proc/cpuinfo |wc -l` * 2))
                         #       defaults to 2 * number of processor
 CONTAINER_SRC_DIR="/usr/share/DateraContainer"
                         # dir which contains the datera containers
+
+usage()
+{
+    echo "ktest: Test kernels in virtual machines on a pool of remote servers"
+    echo "Usage: ktest cmd [options] [n]"
+    echo "  boot        Boot a VM without running anything"
+    echo "  run <test>  Run a kernel test"
+    echo "  ssh         Login as root"
+    echo "  gdb         Connect to kgdb"
+    echo "  mon         Connect to qemu monitor"
+    echo "  oldconfig   Run make oldconfig"
+    echo "  config      Run make nconfig"
+    echo
+    echo "  options:"
+    echo "      -x       bash debug statements"
+    echo "      -k <dir> kernel source dir"
+    echo "      -b <dir> build directory for kernel (default: kernel_source/.ktest)"
+    echo "      -w <dir> work directory (default: kernel build directory)"
+    echo "      -K       don't build kernel (run cmd only)"
+    echo "      -c <dir> enable coverage for this dir (only valid without -K)"
+    echo "      -i <dir> VM root filesystem image (run cmd only)"
+    echo "      -j <num> j option to make (run cmd only)"
+    echo "      -I       disable timeout and VM stop on pass/fail (run cmd only)"
+    echo "      -v       run with vde networking (run cmd only)"
+}
 
 # root image auto-override
 if [ -f "$HOME/.ktest/root" ]; then
@@ -81,7 +105,7 @@ fi
 CMD="cmd_$1"
 shift
 
-while getopts "IhKcb:k:i:j:w:vx" arg; do
+while getopts "IhKc:b:k:i:j:w:vx" arg; do
     case $arg in
 	h)
 	    usage
@@ -94,7 +118,14 @@ while getopts "IhKcb:k:i:j:w:vx" arg; do
 	    BUILD=""
 	    ;;
 	c)
-	    COVERAGE=1
+	    if [ -n "COVERAGE" ]; then
+		COVERAGE+=" "
+	    fi
+	    # Strip trailing / from directory name
+	    OPTARG=$(echo $OPTARG | sed -e 's/\/$//')
+	    # Substitute _ for /
+	    OPTARG=$(echo $OPTARG | sed -e 's/\//_/g')
+	    COVERAGE+=GCOV_PROFILE_$OPTARG=y
 	    ;;
 	i)
 	    IMG=$OPTARG
@@ -142,8 +173,9 @@ check_mlxcard()
 
 do_make()
 {
-    make -C "$KERNEL_SOURCE" O="$WORK_DIR" -j "$NJOBS"        \
-	INSTALL_MOD_PATH=modules                                    \
+    make -C "$KERNEL_SOURCE" O="$WORK_DIR" -j "$NJOBS"			\
+	$COVERAGE							\
+	INSTALL_MOD_PATH=modules					\
 	EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments" $@
 }
 
@@ -343,7 +375,7 @@ prepare_vm()
     _KERNEL_CONFIG_REQUIRE=""
     genisoimage_sudo=""
 
-    if [ "$COVERAGE" = 1 ]; then
+    if [ -n "$COVERAGE" ]; then
 	_KERNEL_CONFIG_REQUIRE+="GCOV_KERNEL"
 	_KERNEL_CONFIG_REQUIRE+=",GCOV_FORMAT_AUTODETECT"
     fi
@@ -446,7 +478,7 @@ cmd_run()
 	$VMSTART stop `cat $WORK_DIR/id`
     fi
 
-    [ "$COVERAGE" = 1 ] && run_lcov
+    [ -n "$COVERAGE" ] && run_lcov
 
     exit $err
 }
@@ -484,31 +516,6 @@ cmd_oldconfig()
 cmd_config()
 {
     do_make nconfig
-}
-
-usage()
-{
-    echo "ktest: Test kernels in virtual machines on a pool of remote servers"
-    echo "Usage: ktest cmd [options] [n]"
-    echo "  boot        Boot a VM without running anything"
-    echo "  run <test>  Run a kernel test"
-    echo "  ssh         Login as root"
-    echo "  gdb         Connect to kgdb"
-    echo "  mon         Connect to qemu monitor"
-    echo "  oldconfig   Run make oldconfig"
-    echo "  config      Run make nconfig"
-    echo
-    echo "  options:"
-    echo "      -x      bash debug statements"
-    echo "      -k      kernel source dir"
-    echo "      -b      build directory for kernel (default: kernel_source/.ktest)"
-    echo "      -w      work directory (default: kernel build directory)"
-    echo "      -K      don't build kernel (run cmd only)"
-    echo "      -c      enable coverage (only valid without -K)"
-    echo "      -i      VM root filesystem image (run cmd only)"
-    echo "      -j      j option to make (run cmd only)"
-    echo "      -I      disable timeout and VM stop on pass/fail (run cmd only)"
-    echo "      -v      run with vde networking (run cmd only)"
 }
 
 # checks if command is valid
