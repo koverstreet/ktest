@@ -23,8 +23,10 @@ read_tests()
     # print out the corresponding test:
 
     local file=$1
-    local testlist=$2
-    local dir=`dirname $testlist`
+    local dir=$2
+    local testlist="$dir/tests.testy"
+
+    [ -e "$testlist" ] || return 0
 
     sed -e 's/#.*//' "$testlist"				\
 	|while read line; do
@@ -62,27 +64,19 @@ get_tests()
     # the file to test or any parent directory
 
     for i in $@; do
-	readlink -e "$i" > /dev/null || continue
+	[ -e "$i" ] || continue
 
 	local file=`readlink -fn "$i"`
-	local dir=$file
+	local dir="$file"
 
-	(find "$file" -name tests.testy 2>/dev/null || true)	\
+	(find "$dir" -name tests.testy 2>/dev/null || true)	\
 	    |while read testlist; do
-		read_tests "$file" "$testlist"
+		read_tests "$file" `dirname "$testlist"`
 	    done
 
-	while true; do
+	while [ "$dir" != "/" ]; do
 	    dir=$(dirname "$dir")
-	    testlist="$dir/tests.testy"
-
-	    if [ -f "$testlist" ]; then
-		read_tests "$file" "$testlist"
-	    fi
-
-	    if [ "$dir" = "/" ]; then
-		break
-	    fi
+	    read_tests "$file" "$dir"
 	done
     done
 }
