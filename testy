@@ -33,12 +33,16 @@ read_tests()
 	    set $line
 	    priority=$1
 	    shift
-	    pattern=$1
+	    pattern=$dir/$1
 	    shift
 
 	    (($priority > $PRIORITY)) && continue
 
-	    for i in `echo $dir/$pattern|sed -e 's_/\.$__'`; do
+	    # strip off a trailing / or /. from $pattern
+	    pattern=${pattern%/}
+	    pattern=${pattern%/.}
+
+	    for i in $pattern; do
 		if [ "$file" = "$i" -o				\
 		     "${i##$file/}" != "$i" -o			\
 		     "${file##$i/}" != "$file" ]; then
@@ -58,11 +62,13 @@ get_tests()
     # the file to test or any parent directory
 
     for i in $@; do
+	readlink -e "$i" > /dev/null || continue
+
 	local file=`readlink -fn "$i"`
 	local dir=$file
 
-	(find "$file" -name tests.testy 2>/dev/null || true)|		\
-	    while read testlist; do
+	(find "$file" -name tests.testy 2>/dev/null || true)	\
+	    |while read testlist; do
 		read_tests "$file" "$testlist"
 	    done
 
