@@ -122,14 +122,14 @@ while getopts "hp:k:Kc:i:b:j:Iw:vx" arg; do
 	    BUILD=""
 	    ;;
 	c)
-	    if [ -n "COVERAGE" ]; then
-		COVERAGE+=" "
+	    if [ ! -d "$OPTARG" ]; then
+		echo "$OPTARG must be a directory"
+		exit 1
 	    fi
-	    # Strip trailing / from directory name
-	    OPTARG=$(echo $OPTARG | sed -e 's/\/$//')
-	    # Substitute _ for /
-	    OPTARG=$(echo $OPTARG | sed -e 's/\//_/g')
-	    COVERAGE+=GCOV_PROFILE_$OPTARG=y
+
+	    # Strip trailing / from directory name, substitute _ for /
+	    OPTARG=$(echo ${OPTARG%/}|tr / _)
+	    COVERAGE+=" GCOV_PROFILE_$OPTARG=y"
 	    ;;
 	i)
 	    IMG=$OPTARG
@@ -404,8 +404,8 @@ prepare_vm()
     rm -rf $WORK_DIR/modules
 
     # setup directory where logfs will be mounted from
+    rm -rf $WORK_DIR/$LOG_INTERNAL
     mkdir -p $WORK_DIR/$LOG_INTERNAL
-    rm -rf $WORK_DIR/$LOG_INTERNAL/*
 }
 
 run_lcov()
