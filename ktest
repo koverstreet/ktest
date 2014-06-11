@@ -281,7 +281,8 @@ cmd_run()
 
     prepare_vm "$1"
 
-    [ -p "$WORK_DIR/output" ] || mkfifo "$WORK_DIR/output"
+    rm -f "$WORK_DIR/output"
+    mkfifo "$WORK_DIR/output"
 
     # shellcheck disable=SC2086
     $VMSTART start						\
