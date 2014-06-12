@@ -1,0 +1,31 @@
+#!/bin/bash
+
+require-lib ../test-libs.sh
+
+config-scratch-devs 512M,2G,2G
+config-mem 256M
+
+config-timeout 1200
+
+main()
+{
+    SIZE=small
+    FS=ext4
+    FLAGS="--bucket 64k --block 4k --discard --writeback --cache_replacement_policy=lru"
+    CACHE="/dev/vda"
+    BDEV="/dev/vdb /dev/vdc"
+    TIER=
+
+    setup_tracing 64 'bcache:*'
+
+    (
+	sleep 10
+	echo "doing unregister"
+	echo 1 > /sys/fs/bcache/*/unregister
+	echo "unregister done"
+    )&
+
+    setup_bcache
+    test_stress
+    stop_bcache
+}
