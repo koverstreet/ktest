@@ -369,6 +369,8 @@ class ClusteredVM(object):
         cmd.extend(["-netdev","tap,id=eth0,ifname=%s,script=no,downscript=no" % self.tapname])
         cmd.extend(["-device","virtio-net-pci,netdev=eth0,mac="+self.macaddr])
 
+        cmd.extend(["-device", "virtio-rng-pci"])
+
         self.proc = subprocess.Popen(cmd, shell=False, close_fds=True)
 
         return self.proc
@@ -846,6 +848,8 @@ def cmd_start():
                 print "Assigning vf: ", vm.conx3_id
                 cmd.extend(["-device", "pci-assign,host="+str(vm.conx3_id)])
         
+            cmd.extend(["-device", "virtio-rng-pci"])
+
             logging.warning("Executing: "+str(cmd))
             
             p = subprocess.Popen(cmd, shell=False)
