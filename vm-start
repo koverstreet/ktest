@@ -51,6 +51,8 @@ GREEN='\033[32m'
 CYAN='\033[36m'
 NC='\033[0m'
 
+FNULL=open(os.devnull, 'rw'),
+
 def randstr(size=8, chars=string.letters + string.digits):
     return "".join(random.choice(chars) for x in range(size))
 
@@ -495,7 +497,7 @@ class Cluster(object):
                "--conf-file=%s" % self.dnsmasq_conf, 
                "--user=%s" % self.owner]
         subprocess.check_call(cmd, shell=False, close_fds=True,
-                              stdin=open(os.devnull, 'r'),
+                              stdin=FNULL,
                               stdout=open(self.dnsmasq_output, 'w'),
                               stderr=subprocess.STDOUT)
 
@@ -857,7 +859,9 @@ def cmd_start():
             pass
     
     vm_cleanup(options.tmpdir)
-    subprocess.call(["stty", "sane"])
+    subprocess.call(["stty", "sane"],
+                    stdout=FNULL,
+                    stderr=subprocess.STDOUT)
 
 def cmd_stop():
     """Stop virtual machines by id or ipaddr

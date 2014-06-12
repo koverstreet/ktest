@@ -416,12 +416,14 @@ run_lcov()
     info=$WORK_DIR/gcov.info
     html=$WORK_DIR/gcov.html
 
-    echo "If lcov fails, run this:"
-    echo "    sudo yum install perl-Digest-MD5"
-    echo
 
-    lcov --directory "$gcov_dir" --capture --output-file "$info"
-    genhtml --output-directory "$html" "$info"
+    if ! lcov --directory "$gcov_dir"			\
+	--capture --output-file "$info" > /dev/null; then
+	echo "lcov error, you may need to install perl-digest-MD5"
+	echo "    sudo yum install perl-Digest-MD5"
+    fi
+
+    genhtml --output-directory "$html" "$info" > /dev/null
 
     echo
     echo "LCOV report:"
