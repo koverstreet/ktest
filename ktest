@@ -417,22 +417,31 @@ run_lcov()
 {
     checkdep lcov
 
-    gcov_dir=$WORK_DIR/$LOG_INTERNAL/gcov
-    info=$WORK_DIR/gcov.info
-    html=$WORK_DIR/gcov.html
+    echo "You may need to install perl-digest-MD5 for lcov"
+    echo "    sudo yum install perl-Digest-MD5"
 
+    local gcov_out=$WORK_DIR/gcov
 
-    if ! lcov --directory "$gcov_dir"			\
-	--capture --output-file "$info" > /dev/null; then
-	echo "lcov error, you may need to install perl-digest-MD5"
-	echo "    sudo yum install perl-Digest-MD5"
-    fi
+    rm -rf $gcov_out
+    mkdir $gcov_out
 
+    local info=$gcov_out/gcov.info
+    local html=$gcov_out/gcov.html
+    local tracefiles=""
+
+    for i in $WORK_DIR/$LOG_INTERNAL/gcov.*; do
+	local out=$gcov_out/`basename $i`.info
+	tracefiles+=" --add-tracefile $out"
+
+	lcov --capture --quiet				\
+	    --directory "$i" --output-file $out
+    done
+
+    lcov --quiet --output-file $info $tracefiles
     genhtml --output-directory "$html" "$info" > /dev/null
 
     echo
-    echo "LCOV report:"
-    echo    file://$html/index.html
+    echo "LCOV report: file://$html/index.html"
 }
 
 cmd_boot()

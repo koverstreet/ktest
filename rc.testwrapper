@@ -37,8 +37,38 @@ fi
 
 echo "TEST REBOOT $NR_REBOOTS"
 
+copy_to_host()
+{
+    cat /sys/kernel/debug/tracing/trace >> $LOGDIR/trace.txt
+
+    for file in $(find /sys -type f -perm u+r); do
+	echo -n "$file: "; cat $file
+    done >> $LOGDIR/sysfs.txt
+
+    # Code coverage
+    gcov_dir=/sys/kernel/debug/gcov
+
+    if [ -d $gcov_dir ]; then
+	# find a destination dir that doesn't exist, so we can copy multiple
+	# sets of gcov data from different tests/reboots and merge them later
+
+	for i in {0..99}; do
+	    dst=$LOGDIR/gcov.$i
+
+	    if [ ! -d $dst ]; then
+		cp -dR $gcov_dir $dst
+		break
+	    fi
+	done
+    fi
+
+    umount $LOGDIR
+}
+
 do_reboot()
 {
+    copy_to_host
+
     echo $((NR_REBOOTS + 1)) | dd of=/EXPECTED_REBOOT oflag=direct
     echo b > /proc/sysrq-trigger
 }
@@ -98,21 +128,7 @@ set -e
 # XXX: check dmesg for warnings, oopses, slab corruption, etc. before signaling
 # success
 
-echo -n "Saving trace to $LOGDIR/trace.txt... "
-cp /sys/kernel/debug/tracing/trace $LOGDIR/trace.txt
-echo "done"
-
-echo -n "Saving sysfs to $LOGDIR/sysfs.txt... "
-for file in $(find /sys -type f -perm u+r); do
-    echo -n "$file: "; cat $file
-done > $LOGDIR/sysfs.txt
-echo "done"
-
-# Code coverage
-gcov_dir=/sys/kernel/debug/gcov
-test -d $gcov_dir && cp -dR $gcov_dir $LOGDIR
-
-umount $LOGDIR
+copy_to_host
 
 if [ $ret = 0 ]; then
     echo "TEST SUCCESS"
