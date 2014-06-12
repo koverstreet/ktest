@@ -23,6 +23,26 @@ for i in `cat /proc/cmdline`; do
     esac
 done
 
+NR_REBOOTS=$([ -e /NR_REBOOTS ] && cat /NR_REBOOTS || echo 0)
+
+EXPECTED_REBOOT=$([ -e /EXPECTED_REBOOT ] && cat /EXPECTED_REBOOT || echo 0)
+
+echo $((NR_REBOOTS + 1)) > /NR_REBOOTS
+
+if [ $NR_REBOOTS != $EXPECTED_REBOOT ]; then
+    echo "UNEXPECTED REBOOT"
+    echo "TEST FAILED"
+    exit 1
+fi
+
+echo "TEST REBOOT $NR_REBOOTS"
+
+do_reboot()
+{
+    echo $((NR_REBOOTS + 1)) | dd of=/EXPECTED_REBOOT oflag=direct
+    echo b > /proc/sysrq-trigger
+}
+
 require-lib()
 {
     . `basename "$1"`
@@ -74,6 +94,9 @@ set +e
 ret=$?
 
 set -e
+
+# XXX: check dmesg for warnings, oopses, slab corruption, etc. before signaling
+# success
 
 echo -n "Saving trace to $LOGDIR/trace.txt... "
 cp /sys/kernel/debug/tracing/trace $LOGDIR/trace.txt
