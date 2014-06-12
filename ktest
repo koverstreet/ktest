@@ -342,8 +342,13 @@ parse_test_deps()
 
     . $TEST deps
 
-    if [ -z "$_MEM" -o -z "$TIMEOUT" ]; then
-	echo "test must specify requirements"
+    if [ -z "$_MEM" ]; then
+	echo "test must specify config-mem"
+	exit 1
+    fi
+
+    if [ -z "$TIMEOUT" ]; then
+	echo "test must specify config-timeout"
 	exit 1
     fi
 }
