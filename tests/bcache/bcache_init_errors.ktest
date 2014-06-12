@@ -1,0 +1,61 @@
+#!/bin/bash
+
+require-lib ../test-libs.sh
+
+require-kernel-config DYNAMIC_FAULT
+
+config-scratch-devs 2G,4G
+config-mem 256M
+config-timeout 300
+
+main()
+{
+    SIZE=large
+    FS=ext4
+    FLAGS="--bucket 32k --block 4k --discard --writeback --cache_replacement_policy=lru"
+    CACHE="/dev/vda"
+    BDEV=
+    TIER="/dev/vdb"
+
+    setup_tracing 64 'bcache:*'
+
+    if [ $NR_REBOOTS = 0 ]; then
+	setup_bcache
+	setup_flash_volume 1600M
+
+	mkdir /mnt/bcache0
+	mkfs.ext4 /dev/bcache0
+
+	mount /dev/bcache0 /mnt/bcache0 -t ext4 -o errors=panic
+
+	test_sysfs
+
+	test_shrink &
+	test_sync &
+	test_drop_caches &
+
+	DEVICES=bcache0
+	test_dbench &
+	test_bonnie &
+
+	sleep 10
+	do_reboot
+    else
+	for id in {0..99}; do
+	    control=/sys/kernel/debug/dynamic_fault/control
+	    fault=cache_set_init_$id
+
+	    grep -q $fault $control || exit 0
+
+	    echo "TESTING FAULT $id"
+	    echo "func $fault +f" > $control
+
+	    echo /dev/vda > /sys/fs/bcache/register || true
+	    echo /dev/vdb > /sys/fs/bcache/register || true
+
+	    echo "func $fault -f" > $control
+
+	    sleep 5
+	done
+    fi
+}
