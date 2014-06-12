@@ -16,6 +16,7 @@ DRYRUN=0
 PRIORITY=0
 KTESTARGS=""
 WORKDIR=""
+KEEP_GOING=0
 
 read_tests()
 {
@@ -108,7 +109,7 @@ usage()
     echo "  -n	    don't run tests, just print them out"
 }
 
-while getopts "hnp:k:Ki:b:j:w:x" arg; do
+while getopts "hnfp:k:Ki:b:j:w:x" arg; do
     case $arg in
 	h)
 	    usage
@@ -116,6 +117,9 @@ while getopts "hnp:k:Ki:b:j:w:x" arg; do
 	    ;;
 	n)
 	    DRYRUN=1
+	    ;;
+	f)
+	    KEEP_GOING=1
 	    ;;
 	p)
 	    PRIORITY=$OPTARG
@@ -149,21 +153,21 @@ done
 shift $((OPTIND - 1))
 
 tests_to_run=`get_tests $@|sort|uniq`
+ret=0
 
 if [ "$DRYRUN" == 0 ]; then
     for testfile in $tests_to_run; do
 	testname=`basename "$testfile"`
 	starttime=`date +%s`
-	ret=1
 
-	run_test "$testfile" > /tmp/$testname.log 2>&1 && ret=0
+	run_test "$testfile" > /tmp/$testname.log 2>&1 || ret=1
 
 	duration=$((`date +%s` -  $starttime))
 
-	if [ "$ret" = 1 ]; then
-	    sed "s/^/[$testname] /" /tmp/$testname.log
+	if [ $ret = 1 ]; then
+	    sed "s/^/[$testname] /" $testname.log
 	    echo [$testname] FAILURE: test finished at `date +%s` -- `date` after $duration seconds
-	    exit $ret
+	    [ $KEEP_GOING = 0 ] && break
 	else
 	    echo [$testname] SUCCESS: test finished at `date +%s` -- `date` after $duration seconds
 	fi
@@ -171,3 +175,5 @@ if [ "$DRYRUN" == 0 ]; then
 else
     echo $tests_to_run
 fi
+
+exit $ret
