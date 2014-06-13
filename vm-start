@@ -51,7 +51,7 @@ GREEN='\033[32m'
 CYAN='\033[36m'
 NC='\033[0m'
 
-FNULL=open(os.devnull, 'rw'),
+FNULL=open(os.devnull, 'rw')
 
 def randstr(size=8, chars=string.letters + string.digits):
     return "".join(random.choice(chars) for x in range(size))
