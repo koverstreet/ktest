@@ -3,3 +3,15 @@ cscope*
 tags
 *.tags
 *.pyc
+.DS_Store
+Makefile.in
+aclocal.m4
+autom4te.cache
+config.guess
+config.h.in
+config.sub
+configure
+install-sh
+ltmain.sh
+m4
+missing
