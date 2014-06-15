@@ -6,8 +6,11 @@
 set -o nounset
 set -o errexit
 set -o pipefail
+export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]}()}+ '
+set -x 
+# enabled to debug some random test failures
 
-KTESTDIR=$(dirname $(readlink -f "$0"))
+KTESTDIR=$(dirname "$(readlink -f "$0")")
 
 # hack:
 ACTEST="/src/appliance-clustest/actest -i /usr/share/DateraAppliance/DaterOS-sda.raw"
@@ -33,13 +36,13 @@ read_tests()
 	|while read line; do
 	    [ -z "$line" ] && continue
 
-	    set $line
+	    set "$line"
 	    priority=$1
 	    shift
 	    pattern=$dir/$1
 	    shift
 
-	    (($priority > $PRIORITY)) && continue
+	    ((priority > PRIORITY)) && continue
 
 	    # strip off a trailing / or /. from $pattern
 	    pattern=${pattern%/}
@@ -49,8 +52,8 @@ read_tests()
 		if [ "$file" = "$i" -o				\
 		     "${i##$file/}" != "$i" -o			\
 		     "${file##$i/}" != "$file" ]; then
-		    if ! readlink -e $dir/$@; then
-			echo "test $dir/$@ not found"
+		    if ! readlink -e "$dir/$1" ; then
+			echo "test $dir/$1 not found"
 			exit 1
 		    fi
 		    break
@@ -64,15 +67,15 @@ get_tests()
     # Given a list of files to test, find test lists in the same directory as
     # the file to test or any parent directory
 
-    for i in $@; do
+    for i in "$@" ; do
 	[ -e "$i" ] || continue
 
-	local file=`readlink -fn "$i"`
+        local file=$(readlink -fn "$i")
 	local dir="$file"
 
 	(find "$dir" -name tests.testy 2>/dev/null || true)	\
 	    |while read testlist; do
-		read_tests "$file" `dirname "$testlist"`
+		read_tests "$file" "$(dirname "$testlist")"
 	    done
 
 	while [ "$dir" != "/" ]; do
@@ -91,10 +94,10 @@ run_test()
 
     case "$testfile" in
 	*.ktest)
-	    $KTESTDIR/ktest run $KTESTARGS "$testfile"
+	    "$KTESTDIR/ktest" run "$KTESTARGS" "$testfile"
 	    ;;
 	*.actest)
-	    $ACTEST -w $WORKDIR "$testfile"
+	    $ACTEST -w "$WORKDIR" "$testfile"
 	    ;;
 	*)
 	    "$testfile"
@@ -152,28 +155,28 @@ while getopts "hnfp:k:Ki:b:j:w:x" arg; do
 done
 shift $((OPTIND - 1))
 
-tests_to_run=`get_tests $@|sort|uniq`
+tests_to_run=$(get_tests "$@"|sort -u)
 ret=0
 
 if [ "$DRYRUN" == 0 ]; then
     for testfile in $tests_to_run; do
-	testname=`basename "$testfile"`
-	starttime=`date +%s`
+        testname=$(basename "$testfile")
+	starttime=$(date +%s)
 
-	run_test "$testfile" > /tmp/$testname.log 2>&1 || ret=1
+	run_test "$testfile" > "/tmp/$testname.log" 2>&1 || ret=1
 
-	duration=$((`date +%s` -  $starttime))
+	duration=$(($(date +%s) - starttime))
 
 	if [ $ret = 1 ]; then
-	    sed "s/^/[$testname] /" $testname.log
-	    echo [$testname] FAILURE: test finished at `date +%s` -- `date` after $duration seconds
+	    sed "s/^/[$testname] /" "$testname.log"
+	    echo "[$testname] FAILURE: test finished at $(date +%s) -- $(date) after $duration seconds"
 	    [ $KEEP_GOING = 0 ] && break
 	else
-	    echo [$testname] SUCCESS: test finished at `date +%s` -- `date` after $duration seconds
+	    echo "[$testname] SUCCESS: test finished at $(date +%s) -- $(date) after $duration seconds"
 	fi
     done
 else
-    echo $tests_to_run
+    echo "$tests_to_run"
 fi
 
 exit $ret
