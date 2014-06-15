@@ -95,7 +95,7 @@ run_test()
 
     case "$testfile" in
 	*.ktest)
-	    "$KTESTDIR/ktest" run "$KTESTARGS" "$testfile"
+	    "$KTESTDIR/ktest" run $KTESTARGS "$testfile"
 	    ;;
 	*.actest)
 	    $ACTEST -w "$WORKDIR" "$testfile"
