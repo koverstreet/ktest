@@ -26,6 +26,7 @@ from optparse import OptionParser, OptionGroup
 DIR=os.path.dirname(__file__)       # path to script directory
 
 MAX_VMS = 100                       # Max number of VMs. Currently this is pretty arbitrary.
+MAX_BRIDGES = 100
 
 # global info file settings:
 IP_FILE = "/etc/vms/ips"
@@ -49,6 +50,8 @@ DEFAULT_TIMEOUT = 10*60             # timeout: 10 mins
 GREEN='\033[32m'
 CYAN='\033[36m'
 NC='\033[0m'
+
+FNULL=open(os.devnull, 'rw')
 
 def randstr(size=8, chars=string.letters + string.digits):
     return "".join(random.choice(chars) for x in range(size))
@@ -366,6 +369,8 @@ class ClusteredVM(object):
         cmd.extend(["-netdev","tap,id=eth0,ifname=%s,script=no,downscript=no" % self.tapname])
         cmd.extend(["-device","virtio-net-pci,netdev=eth0,mac="+self.macaddr])
 
+        cmd.extend(["-device", "virtio-rng-pci"])
+
         self.proc = subprocess.Popen(cmd, shell=False, close_fds=True)
 
         return self.proc
@@ -494,7 +499,7 @@ class Cluster(object):
                "--conf-file=%s" % self.dnsmasq_conf, 
                "--user=%s" % self.owner]
         subprocess.check_call(cmd, shell=False, close_fds=True,
-                              stdin=open(os.devnull, 'r'),
+                              stdin=FNULL,
                               stdout=open(self.dnsmasq_output, 'w'),
                               stderr=subprocess.STDOUT)
 
@@ -843,6 +848,8 @@ def cmd_start():
                 print "Assigning vf: ", vm.conx3_id
                 cmd.extend(["-device", "pci-assign,host="+str(vm.conx3_id)])
         
+            cmd.extend(["-device", "virtio-rng-pci"])
+
             logging.warning("Executing: "+str(cmd))
             
             p = subprocess.Popen(cmd, shell=False)
@@ -856,7 +863,9 @@ def cmd_start():
             pass
     
     vm_cleanup(options.tmpdir)
-    subprocess.call(["stty", "sane"])
+    subprocess.call(["stty", "sane"],
+                    stdout=FNULL,
+                    stderr=subprocess.STDOUT)
 
 def cmd_stop():
     """Stop virtual machines by id or ipaddr
@@ -1196,7 +1205,7 @@ def cmd_genbridges():
     def bridges_generator(db):
         bridges = {}
 
-        for br_num in range (1,10):
+        for br_num in range (1,100):
             #generate bridge file
             br_key = str(br_num)
             br_name = "br"+br_key

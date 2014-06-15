@@ -24,6 +24,7 @@ checkdep make
 checkdep qemu-system-x86_64 qemu-system-i386
 
 
+PRIORITY="0"		# hint for how long test should run
 DEFAULT_DIR=".ktest"    # default path for building others
 KERNEL_SOURCE="."       # dir of kernel source
                         #       set with: -k <path>
@@ -34,7 +35,7 @@ KERNEL_OUTPUT=""        # dir where the kernel will get built
 WORK_DIR=""             # dir where vm meta data (id, logs, etc) gets stored
                         #       set with: -w <path>
                         #       defaults: $KERNEL_OUTPUT
-LOG_INTERNAL="log.internal" 
+LOG_INTERNAL="log.internal"
                         # dir name which is mapped with virtfs to inside vm
                         # at /var/log/datera
                         #       path: $WORK_DIR/$LOG_INTERNAL
@@ -47,13 +48,12 @@ IMG="/var/lib/ktest/root"
                         #       defaults: /var/lib/ktest/root
                         #       auto-override: $HOME/.ktest/root
 TIMEOUT=""              # kills test after $TIMEOUT seconds
-                        #       can be overridden by config-timeout from test 
+                        #       can be overridden by config-timeout from test
                         #       ignored completely with -I
                         #       defaults: 0
 BUILD=1                 # if set to 1, kernel will build
                         #       ignored with: -K (sets to 0)
-COVERAGE=0		# if set to 1, kernel will be built with
-			#	coverage enabled (only if -K is not set)
+COVERAGE=""		# list of directories to enable code coverage for
 INTERACTIVE=0           # if set to 1, timeout is ignored completely
                         #       sets with: -I
 NJOBS=$(($(grep -c '^processor' /proc/cpuinfo) * 2))
@@ -76,16 +76,16 @@ usage()
     echo "  config      Run make nconfig"
     echo
     echo "  options:"
-    echo "      -x      bash debug statements"
-    echo "      -k      kernel source dir"
-    echo "      -b      build directory for kernel (default: kernel_source/.ktest)"
-    echo "      -w      work directory (default: kernel build directory)"
-    echo "      -K      don't build kernel (run cmd only)"
-    echo "      -c      enable coverage (only valid without -K)"
-    echo "      -i      VM root filesystem image (run cmd only)"
-    echo "      -j      j option to make (run cmd only)"
-    echo "      -I      disable timeout and VM stop on pass/fail (run cmd only)"
-    echo "      -v      run with vde networking (run cmd only)"
+    echo "      -x       bash debug statements"
+    echo "      -k <dir> kernel source dir"
+    echo "      -b <dir> build directory for kernel (default: kernel_source/.ktest)"
+    echo "      -w <dir> work directory (default: kernel build directory)"
+    echo "      -K       don't build kernel (run cmd only)"
+    echo "      -c <dir> enable coverage for this dir (only valid without -K)"
+    echo "      -i <dir> VM root filesystem image (run cmd only)"
+    echo "      -j <num> j option to make (run cmd only)"
+    echo "      -I       disable timeout and VM stop on pass/fail (run cmd only)"
+    echo "      -v       run with vde networking (run cmd only)"
 }
 
 # root image auto-override
@@ -108,11 +108,14 @@ fi
 CMD="cmd_$1"
 shift
 
-while getopts "IhKcb:k:i:j:w:vx" arg; do
+while getopts "hp:k:Kc:i:b:j:Iw:vx" arg; do
     case $arg in
 	h)
 	    usage
 	    exit 0
+	    ;;
+	p)
+	    PRIORITY=$OPTARG
 	    ;;
 	k)
             KERNEL_SOURCE=$(realpath "$OPTARG")
@@ -121,7 +124,14 @@ while getopts "IhKcb:k:i:j:w:vx" arg; do
 	    BUILD=""
 	    ;;
 	c)
-	    COVERAGE=1
+	    if [ ! -d "$OPTARG" ]; then
+		echo "$OPTARG must be a directory"
+		exit 1
+	    fi
+
+	    # Strip trailing / from directory name, substitute _ for /
+	    OPTARG=$(echo "${OPTARG%/}"|tr / _)
+	    COVERAGE+=" GCOV_PROFILE_$OPTARG=y"
 	    ;;
 	i)
 	    IMG=$OPTARG
@@ -169,8 +179,9 @@ check_mlxcard()
 
 do_make()
 {
-    make -C "$KERNEL_SOURCE" O="$WORK_DIR" -j "$NJOBS"        \
-	INSTALL_MOD_PATH=modules                                    \
+    make -C "$KERNEL_SOURCE" O="$WORK_DIR" -j "$NJOBS"			\
+	"$COVERAGE"							\
+	INSTALL_MOD_PATH=modules					\
 	EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments" "$@"
 }
 
@@ -215,6 +226,9 @@ parse_test_deps()
 {
     local TEST=$1
     HAVE_CONTAINER=""
+
+    # shellcheck disable=SC2034
+    ktest_priority=$PRIORITY
 
     _add-file()
     {
@@ -331,8 +345,13 @@ parse_test_deps()
 
     . "$TEST" deps
 
-    if [ -z "$_MEM" -o -z "$TIMEOUT" ]; then
-	echo "test must specify requirements"
+    if [ -z "$_MEM" ]; then
+	echo "test must specify config-mem"
+	exit 1
+    fi
+
+    if [ -z "$TIMEOUT" ]; then
+	echo "test must specify config-timeout"
 	exit 1
     fi
 }
@@ -370,7 +389,7 @@ prepare_vm()
     _KERNEL_CONFIG_REQUIRE=""
     genisoimage_sudo=""
 
-    if [ "$COVERAGE" = 1 ]; then
+    if [ -n "$COVERAGE" ]; then
 	_KERNEL_CONFIG_REQUIRE+="GCOV_KERNEL"
 	_KERNEL_CONFIG_REQUIRE+=",GCOV_FORMAT_AUTODETECT"
     fi
@@ -393,35 +412,47 @@ prepare_vm()
     rm -rf "$WORK_DIR/modules"
 
     # setup directory where logfs will be mounted from
+    rm -rf "$WORK_DIR/$LOG_INTERNAL"
     mkdir -p "$WORK_DIR/$LOG_INTERNAL"
-    rm -rf "$WORK_DIR/$LOG_INTERNAL"/*
 }
 
 run_lcov()
 {
     checkdep lcov
 
-    gcov_dir="$WORK_DIR/$LOG_INTERNAL/gcov"
-    info="$WORK_DIR/gcov.info"
-    html="$WORK_DIR/gcov.html"
-
-    echo "If lcov fails, run this:"
+    echo "You may need to install perl-digest-MD5 for lcov"
     echo "    sudo yum install perl-Digest-MD5"
-    echo
 
-    lcov --directory "$gcov_dir" --capture --output-file "$info"
-    genhtml --output-directory "$html" "$info"
+    local gcov_out=$WORK_DIR/gcov
+
+    rm -rf "$gcov_out"
+    mkdir "$gcov_out"
+
+    local info=$gcov_out/gcov.info
+    local html=$gcov_out/gcov.html
+    local tracefiles=""
+
+    for i in $WORK_DIR/$LOG_INTERNAL/gcov.*; do
+        local out=$gcov_out/$(basename "$i").info
+	tracefiles+=" --add-tracefile $out"
+
+	lcov --capture --quiet				\
+	    --directory "$i" --output-file "$out"
+    done
+
+    lcov --quiet --output-file "$info" "$tracefiles"
+    genhtml --output-directory "$html" "$info" > /dev/null
 
     echo
-    echo "LCOV report:"
-    echo "  file://$html/index.html"
+    echo "LCOV report: file://$html/index.html"
 }
 
 cmd_boot()
 {
     prepare_vm
 
-    "$VMSTART" start					\
+    # shellcheck disable=SC2086
+    $VMSTART start					\
 	-i "$IMG" -t "$SCRATCH_DIR"				\
 	-k "$KERNEL_OUTPUT/arch/x86/boot/bzImage"		\
 	-c "$WORK_DIR/run.iso"				\
@@ -449,15 +480,16 @@ cmd_run()
 
     [ -p "$WORK_DIR/output" ] || mkfifo "$WORK_DIR/output"
 
-    "$VMSTART" start					\
-	-i "$IMG" -t "$SCRATCH_DIR"				\
-	-k "$KERNEL_OUTPUT/arch/x86/boot/bzImage"		\
-	-c "$WORK_DIR/run.iso"				\
-	--id "$WORK_DIR/id"				\
-	-m "$_MEM"					\
-	--fs "$WORK_DIR/$LOG_INTERNAL" logfs		\
-	"$_SCRATCH"					\
-	"$_INFINIBAND"					\
+    $VMSTART start						\
+	--append="root=/dev/sda rw ktest.priority=$PRIORITY"	\
+	-i "$IMG" -t "$SCRATCH_DIR"					\
+	-k "$KERNEL_OUTPUT/arch/x86/boot/bzImage"			\
+	-c "$WORK_DIR/run.iso"					\
+	--id "$WORK_DIR/id"					\
+	-m "$_MEM"						\
+	--fs "$WORK_DIR/$LOG_INTERNAL" logfs			\
+	"$_SCRATCH"						\
+	"$_INFINIBAND"						\
 	"$_VMCLUSTER" </dev/null 2>&1 > "$WORK_DIR/output" &
 
     err=0
@@ -470,37 +502,41 @@ cmd_run()
 		   -e '/TEST FAILED/  { p; Q1 }'	\
 		   < "$WORK_DIR/output" || err=1
 
-	"$VMSTART" stop "$(cat "$WORK_DIR/id")"
+	$VMSTART stop "$(cat "$WORK_DIR/id")"
     fi
 
-    [ "$COVERAGE" = 1 ] && run_lcov
+    [ -n "$COVERAGE" ] && run_lcov
 
     exit $err
 }
 
 cmd_ssh()
 {
-    "$VMSTART" ssh "$(cat "$WORK_DIR/id")" "$@"
+    $VMSTART ssh "$(cat "$WORK_DIR/id")" "$@"
 }
 
 cmd_stop()
 {
-    exec "$VMSTART" ssh "$(cat "$WORK_DIR/id")"
+    # shellcheck disable=SC2086
+    exec $VMSTART ssh "$(cat "$WORK_DIR/id")"
 }
 
 cmd_gdb()
 {
-    exec "$VMSTART" gdb "$(cat "$WORK_DIR/id")" "$KERNEL_OUTPUT/vmlinux"
+    # shellcheck disable=SC2086
+    exec $VMSTART gdb "$(cat "$WORK_DIR/id")" "$KERNEL_OUTPUT/vmlinux"
 }
 
 cmd_kgdb()
 {
-    exec "$VMSTART" kgdb "$(cat "$WORK_DIR/id")" "$KERNEL_OUTPUT/vmlinux"
+    # shellcheck disable=SC2086
+    exec $VMSTART kgdb "$(cat "$WORK_DIR/id")" "$KERNEL_OUTPUT/vmlinux"
 }
 
 cmd_mon()
 {
-    exec "$VMSTART" mon "$(cat "$WORK_DIR/id")"
+    # shellcheck disable=SC2086
+    exec $VMSTART mon "$(cat "$WORK_DIR/id")"
 }
 
 cmd_oldconfig()

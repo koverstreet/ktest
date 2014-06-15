@@ -10,11 +10,13 @@ set -o pipefail
 KTESTDIR=$(dirname $(readlink -f "$0"))
 
 # hack:
-ACTEST="/src/appliance-clustest/actest -w workdir.$$ -i /usr/share/DateraAppliance/DaterOS-sda.raw -x"
+ACTEST="/src/appliance-clustest/actest -i /usr/share/DateraAppliance/DaterOS-sda.raw"
 
 DRYRUN=0
 PRIORITY=0
 KTESTARGS=""
+WORKDIR=""
+KEEP_GOING=0
 
 read_tests()
 {
@@ -22,8 +24,10 @@ read_tests()
     # print out the corresponding test:
 
     local file=$1
-    local testlist=$2
-    local dir=`dirname $testlist`
+    local dir=$2
+    local testlist="$dir/tests.testy"
+
+    [ -e "$testlist" ] || return 0
 
     sed -e 's/#.*//' "$testlist"				\
 	|while read line; do
@@ -32,16 +36,23 @@ read_tests()
 	    set $line
 	    priority=$1
 	    shift
-	    pattern=$1
+	    pattern=$dir/$1
 	    shift
 
 	    (($priority > $PRIORITY)) && continue
 
-	    for i in `echo $dir/$pattern|sed -e 's_/\.$__'`; do
+	    # strip off a trailing / or /. from $pattern
+	    pattern=${pattern%/}
+	    pattern=${pattern%/.}
+
+	    for i in $pattern; do
 		if [ "$file" = "$i" -o				\
 		     "${i##$file/}" != "$i" -o			\
 		     "${file##$i/}" != "$file" ]; then
-		    readlink -f $dir/$@
+		    if ! readlink -e $dir/$@; then
+			echo "test $dir/$@ not found"
+			exit 1
+		    fi
 		    break
 		fi
 	    done
@@ -54,25 +65,19 @@ get_tests()
     # the file to test or any parent directory
 
     for i in $@; do
-	local file=`readlink -fn "$i"`
-	local dir=$file
+	[ -e "$i" ] || continue
 
-	(find "$file" -name tests.testy 2>/dev/null || true)|		\
-	    while read testlist; do
-		read_tests "$file" "$testlist"
+	local file=`readlink -fn "$i"`
+	local dir="$file"
+
+	(find "$dir" -name tests.testy 2>/dev/null || true)	\
+	    |while read testlist; do
+		read_tests "$file" `dirname "$testlist"`
 	    done
 
-	while true; do
+	while [ "$dir" != "/" ]; do
 	    dir=$(dirname "$dir")
-	    testlist="$dir/tests.testy"
-
-	    if [ -f "$testlist" ]; then
-		read_tests "$file" "$testlist"
-	    fi
-
-	    if [ "$dir" = "/" -o "$dir" = "." ]; then
-		break
-	    fi
+	    read_tests "$file" "$dir"
 	done
     done
 }
@@ -81,12 +86,15 @@ run_test()
 {
     local testfile=$1
 
+    # hack
+    [ -n "$WORKDIR" ] && sudo rm -rf $WORKDIR
+
     case "$testfile" in
 	*.ktest)
 	    $KTESTDIR/ktest run $KTESTARGS "$testfile"
 	    ;;
 	*.actest)
-	    $ACTEST "$testfile"
+	    $ACTEST -w $WORKDIR "$testfile"
 	    ;;
 	*)
 	    "$testfile"
@@ -101,7 +109,7 @@ usage()
     echo "  -n	    don't run tests, just print them out"
 }
 
-while getopts "hnp:k:Ki:b:j:w:x" arg; do
+while getopts "hnfp:k:Ki:b:j:w:x" arg; do
     case $arg in
 	h)
 	    usage
@@ -110,8 +118,12 @@ while getopts "hnp:k:Ki:b:j:w:x" arg; do
 	n)
 	    DRYRUN=1
 	    ;;
+	f)
+	    KEEP_GOING=1
+	    ;;
 	p)
 	    PRIORITY=$OPTARG
+	    KTESTARGS+=" -p $OPTARG"
 	    ;;
 	k)
 	    KTESTARGS+=" -k $OPTARG"
@@ -129,36 +141,39 @@ while getopts "hnp:k:Ki:b:j:w:x" arg; do
 	    KTESTARGS+=" -j $OPTARG"
 	    ;;
 	w)
+	    WORKDIR=$OPTARG
 	    KTESTARGS+=" -w $OPTARG"
 	    ;;
 	x)
 	    set -x
+	    KTESTARGS+=" -x"
 	    ;;
     esac
 done
 shift $((OPTIND - 1))
 
-get_tests $@|sort|uniq						\
-    |while read testfile; do
-	if [ "$DRYRUN" == 0 ]; then
-	    testname=`basename "$testfile"`
-	    starttime=`date +%s`
+tests_to_run=`get_tests $@|sort|uniq`
+ret=0
 
-	    ret=1
+if [ "$DRYRUN" == 0 ]; then
+    for testfile in $tests_to_run; do
+	testname=`basename "$testfile"`
+	starttime=`date +%s`
 
-	    run_test "$testfile" > /tmp/$testname.log 2>&1 && ret=0
+	run_test "$testfile" > /tmp/$testname.log 2>&1 || ret=1
 
-	    duration=$((`date +%s` -  $starttime))
+	duration=$((`date +%s` -  $starttime))
 
-
-	    if [ "$ret" = 1 ]; then
-                sed "s/^/[$testname] /" /tmp/$testname.log
-                echo [$testname] FAILURE: test finished at `date +%s` -- `date` after $duration seconds
-		exit $ret
-            else
-                echo [$testname] SUCCESS: test finished at `date +%s` -- `date` after $duration seconds
-	    fi
+	if [ $ret = 1 ]; then
+	    sed "s/^/[$testname] /" $testname.log
+	    echo [$testname] FAILURE: test finished at `date +%s` -- `date` after $duration seconds
+	    [ $KEEP_GOING = 0 ] && break
 	else
-	    echo "$testfile"
+	    echo [$testname] SUCCESS: test finished at `date +%s` -- `date` after $duration seconds
 	fi
     done
+else
+    echo $tests_to_run
+fi
+
+exit $ret

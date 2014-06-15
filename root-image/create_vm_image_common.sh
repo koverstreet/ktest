@@ -73,7 +73,7 @@ finish_umount_image()
     i=0
     while [ $i -lt 10 ]; do
         awk '{print $2}' /proc/mounts | grep ^"$MNT"/ | sort -r | {
-            while read i_MNT; do do
+            while read i_MNT; do
                 umount -n "$i_MNT" &>/dev/null || :
             done
         }

@@ -8,7 +8,16 @@ KTESTDIR=$VM_IMAGE_DIR/..
 
 . $KTESTDIR/util.sh
 
+. $VM_IMAGE_DIR/create_vm_image_common.sh
+
 checkdep yum rpm
+
+# This bootstrap can only run with the versions
+# of yum+rpm on RHEL 7 or a later Fedora, not on debian.
+source /etc/os-release
+test "$ID" = "rhel"
+test "$VERSION_ID" = "7.0"
+
 
 COREPKGS="basesystem bash biosdevname btrfs-progs coreutils"
 COREPKGS+=" curl dhclient e2fsprogs filesystem glibc hostname"
@@ -29,7 +38,7 @@ PACKAGES+=" libunwind libunwind-devel"
 PACKAGES+=" libuuid libuuid-devel uuid-perl"
 PACKAGES+=" net-tools htop python-magic"
 
-create_mount_image
+create_mount_image "$@"
 
 mkdir -p "${MNT}/dev/pts" "${MNT}/dev/shm"
 ln -s /proc/self/fd/0 "${MNT}/dev/stdin"
