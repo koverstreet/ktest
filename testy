@@ -36,7 +36,8 @@ read_tests()
 	|while read line; do
 	    [ -z "$line" ] && continue
 
-	    set "$line"
+            # shellcheck disable=SC2086
+	    set $line
 	    priority=$1
 	    shift
 	    pattern=$dir/$1
