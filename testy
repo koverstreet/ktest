@@ -169,7 +169,7 @@ if [ "$DRYRUN" == 0 ]; then
 	duration=$(($(date +%s) - starttime))
 
 	if [ $ret = 1 ]; then
-	    sed "s/^/[$testname] /" "$testname.log"
+	    sed "s/^/[$testname] /" "/tmp/$testname.log"
 	    echo "[$testname] FAILURE: test finished at $(date +%s) -- $(date) after $duration seconds"
 	    [ $KEEP_GOING = 0 ] && break
 	else
