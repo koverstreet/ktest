@@ -179,8 +179,9 @@ check_mlxcard()
 
 do_make()
 {
+    # shellcheck disable=SC2086
     make -C "$KERNEL_SOURCE" O="$WORK_DIR" -j "$NJOBS"			\
-	"$COVERAGE"							\
+	$COVERAGE							\
 	INSTALL_MOD_PATH=modules					\
 	EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments" "$@"
 }
