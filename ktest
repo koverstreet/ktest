@@ -405,10 +405,11 @@ prepare_vm()
     rm -f "$WORK_DIR"/modules/lib/modules/*/build
     rm -f "$WORK_DIR"/modules/lib/modules/*/source
 
+    # shellcheck disable=SC2086
     $genisoimage_sudo genisoimage -quiet -R		\
 	-input-charset utf-8				\
 	-o "$WORK_DIR/run.iso"			\
-	"$WORK_DIR/modules/lib" "$FILES" || exit 1
+	"$WORK_DIR/modules/lib" $FILES || exit 1
 
     rm -rf "$WORK_DIR/modules"
 
