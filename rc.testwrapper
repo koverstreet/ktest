@@ -62,7 +62,14 @@ copy_to_host()
 	done
     fi
 
-    umount $LOGDIR
+    (
+        set +e
+        fuser -INT -k $LOGDIR $LOGDIR/*
+        sync
+        sleep 1
+        fuser -k $LOGDIR $LOGDIR/*
+        umount $LOGDIR
+    )
 }
 
 do_reboot()
