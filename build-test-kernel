@@ -1,0 +1,248 @@
+#!/bin/bash
+
+set -o nounset
+set -o errexit
+set -o errtrace
+
+KTESTDIR=$(dirname "$(readlink -f "$0")")
+KTEST=$KTESTDIR/ktest
+
+. "$KTESTDIR/util.sh"
+. "$KTESTDIR/parse-test.sh"
+
+checkdep genisoimage
+checkdep minicom
+checkdep socat
+checkdep gcc
+checkdep make
+checkdep qemu-system-x86_64 qemu-system-i386
+
+PRIORITY="0"		# hint for how long test should run
+KTESTARGS=""
+DEFAULT_DIR=".ktest"	# default path for building others
+KERNEL_SOURCE="."	# dir of kernel source
+			#       set with: -k <path>
+			#       defaults: current directory
+KERNEL_OUTPUT=""	# dir where the kernel will get built
+			#       set with: -b <path>
+			#       default: $KERNEL_SOURCE/$DEFAULT_DIR
+WORK_DIR=""		# dir where vm meta data (id, logs, etc) gets stored
+			#       set with: -w <path>
+			#       defaults: $KERNEL_OUTPUT
+BUILD=1			# if set to 1, kernel will build
+			#       ignored with: -K (sets to 0)
+COVERAGE=""		# list of directories to enable code coverage for
+NJOBS=$(($(grep -c '^processor' /proc/cpuinfo) * 2))
+			# number of jobs to passed to make during kernel compile
+			#       sets with: -j
+			#       defaults to 2 * number of processor
+
+# config files:
+[ -f "$KTESTDIR/ktestrc" ]	&& . "$KTESTDIR/ktestrc"
+[ -f /etc/ktestrc ]		&& . /etc/ktestrc
+[ -f "$HOME/.ktestrc" ]		&& . "$HOME/.ktestrc"
+
+usage()
+{
+    echo "build-test-kernel: Run generic virtual machine tests"
+    echo "Usage: build-test-kernel cmd [options]"
+    echo "  boot        Boot a VM without running anything"
+    echo "  run <test>  Run a kernel test"
+    echo "  ssh         Login as root"
+    echo "  gdb         Connect to kgdb"
+    echo "  mon         Connect to qemu monitor"
+    echo "  oldconfig   Run make oldconfig"
+    echo "  config      Run make nconfig"
+    echo
+    echo "  options:"
+    echo "      -x       bash debug statements"
+    echo "      -k <dir> kernel source dir"
+    echo "      -b <dir> build directory for kernel (default: kernel_source/.ktest)"
+    echo "      -w <dir> work directory (default: kernel build directory)"
+    echo "      -K       don't build kernel (run cmd only)"
+    echo "      -c <dir> enable coverage for this dir (only valid without -K)"
+    echo "      -i <dir> VM root filesystem image (run cmd only)"
+    echo "      -j <num> j option to make (run cmd only)"
+    echo "      -I       disable timeout and VM stop on pass/fail (run cmd only)"
+}
+
+#prints usage if no args
+if [[ $# -lt 1 ]]; then
+    usage
+    exit 1
+fi
+
+#parse command and shift for rest of arg parsing
+CMD="$1"
+shift
+
+while getopts "hp:k:Kc:i:b:j:Iw:x" arg; do
+    case $arg in
+	h)
+	    usage
+	    exit 0
+	    ;;
+	p)
+	    PRIORITY=$OPTARG
+	    KTESTARGS+=" -p $OPTARG"
+	    ;;
+	k)
+	    KERNEL_SOURCE=$(readlink -e "$OPTARG")
+	    ;;
+	K)
+	    BUILD=""
+	    ;;
+	c)
+	    if [ ! -d "$OPTARG" ]; then
+		echo "$OPTARG must be a directory"
+		exit 1
+	    fi
+
+	    checkdep lcov
+
+	    # Strip trailing / from directory name, substitute _ for /
+	    OPTARG=$(echo "${OPTARG%/}"|tr / _)
+	    COVERAGE+=" GCOV_PROFILE_$OPTARG=y"
+	    ;;
+	i)
+	    KTESTARGS+=" -i $OPTARG"
+	    ;;
+	b)
+	    KERNEL_OUTPUT=$OPTARG
+	    ;;
+	j)
+	    NJOBS=$OPTARG
+	    ;;
+	I)
+	    KTESTARGS+=" -I"
+	    ;;
+	w)
+	    WORK_DIR=$OPTARG
+	    ;;
+	x)
+	    KTESTARGS+=" -x"
+	    set -x
+	    ;;
+    esac
+done
+shift $(( OPTIND - 1 ))
+
+# set default parameters:
+[ -z "$WORK_DIR" ] && WORK_DIR=$KERNEL_SOURCE/$DEFAULT_DIR
+
+mkdir -p "$WORK_DIR"
+WORK_DIR=$(readlink -f "$WORK_DIR")
+
+[ -z "$KERNEL_OUTPUT" ] && KERNEL_OUTPUT=$WORK_DIR/kpkg
+
+run_ktest()
+{
+    arg=$1
+    shift
+
+    # shellcheck disable=SC2086
+    exec "$KTEST" "$arg" $KTESTARGS -k "$KERNEL_OUTPUT" -w "$WORK_DIR" "$@"
+}
+
+do_make()
+{
+    # shellcheck disable=SC2086
+    make -C "$KERNEL_SOURCE" O="$WORK_DIR" -j "$NJOBS"			\
+	$COVERAGE							\
+	INSTALL_MOD_PATH="$KERNEL_OUTPUT"				\
+	EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments" "$@"
+}
+
+build_kernel()
+{
+    rm -rf "$KERNEL_OUTPUT"
+    mkdir -p "$KERNEL_OUTPUT"
+
+    local kconfig="$WORK_DIR/.config"
+    local config_tool="$KERNEL_SOURCE/scripts/config"
+
+    local OLDIFS=$IFS
+    IFS=','
+
+    [ -f "$kconfig" ] || cp "$KTESTDIR/defconfig" "$kconfig"
+
+    for req in $_KERNEL_CONFIG_REQUIRE; do
+	if [ -n "$req" ]; then
+	    "$config_tool" --file "$kconfig" -e "$req"
+	fi
+    done
+
+    do_make olddefconfig
+
+    for req in $_KERNEL_CONFIG_REQUIRE; do
+	if [ -n "$req" ]; then
+	    c=$("$config_tool" --file "$kconfig" -s "$req")
+	    if [ "$c" != "y" ]; then
+		echo "Kernel config option $req not set"
+		exit 1
+	    fi
+	fi
+    done
+
+    IFS=$OLDIFS
+
+    do_make
+
+    install -m0644 "$WORK_DIR/vmlinux" "$KERNEL_OUTPUT/vmlinux"
+    install -m0644 "$WORK_DIR/arch/x86/boot/bzImage" "$KERNEL_OUTPUT/vmlinuz"
+    install -m0644 "$WORK_DIR/.config" "$KERNEL_OUTPUT/config"
+
+    do_make modules_install
+
+    # Remove symlinks, they'll break genisoimage which is following symlinks
+    rm -f "$KERNEL_OUTPUT"/modules/lib/modules/*/build
+    rm -f "$KERNEL_OUTPUT"/modules/lib/modules/*/source
+}
+
+cmd_boot()
+{
+    _KERNEL_CONFIG_REQUIRE=""
+
+    [ -n "$BUILD" ] && build_kernel
+    run_ktest boot
+}
+
+cmd_run()
+{
+    local TEST=$1
+
+    if [ -z "$1" ]; then
+	echo "build-test-kernel: missing test"
+	usage
+	exit 1
+    fi
+
+    parse_test_deps "$TEST"
+
+    if [ -n "$COVERAGE" ]; then
+	_KERNEL_CONFIG_REQUIRE+=",GCOV_KERNEL"
+	_KERNEL_CONFIG_REQUIRE+=",GCOV_FORMAT_AUTODETECT"
+    fi
+
+    [ -n "$BUILD" ] && build_kernel
+
+    run_ktest run "$TEST"
+}
+
+cmd_oldconfig()
+{
+    do_make oldconfig
+}
+
+cmd_config()
+{
+    do_make nconfig
+}
+
+# checks if command is valid
+if [ "$(type -t "cmd_$CMD")" == "function" ]; then
+    eval "cmd_$CMD" "$@"
+else
+    run_ktest "$CMD" "$@"
+fi
+

@@ -4,7 +4,6 @@ set -o nounset
 set -o errexit
 set -o errtrace
 
-shellcheck "$0" 
 # check for typical shell script errors
 
 export PS4='+${LINENO}+ '
@@ -12,29 +11,24 @@ export PS4='+${LINENO}+ '
 KTESTDIR=$(dirname "$(readlink -f "$0")")
 VMSTART=$KTESTDIR/vm-start
 
-shellcheck "$KTESTDIR/util.sh" 
 . "$KTESTDIR/util.sh"
+. "$KTESTDIR/parse-test.sh"
 
-checkdep realpath
+if which shellcheck > /dev/null 2>&1; then
+    shellcheck "$0"
+    shellcheck "$KTESTDIR/util.sh"
+fi
+
 checkdep genisoimage
 checkdep minicom
 checkdep socat
-checkdep gcc
-checkdep make
 checkdep qemu-system-x86_64 qemu-system-i386
 
-
 PRIORITY="0"		# hint for how long test should run
-DEFAULT_DIR=".ktest"    # default path for building others
-KERNEL_SOURCE="."       # dir of kernel source
-                        #       set with: -k <path>
-                        #       defaults: current directory
-KERNEL_OUTPUT=""        # dir where the kernel will get built
+KERNEL=""		# dir that has the kernel to run
                         #       set with: -b <path>
-                        #       default: $KERNEL_SOURCE/$DEFAULT_DIR
 WORK_DIR=""             # dir where vm meta data (id, logs, etc) gets stored
                         #       set with: -w <path>
-                        #       defaults: $KERNEL_OUTPUT
 LOG_INTERNAL="log.internal"
                         # dir name which is mapped with virtfs to inside vm
                         # at /var/log/datera
@@ -47,46 +41,14 @@ IMG="/var/lib/ktest/root"
                         #       set with: -i <path>
                         #       defaults: /var/lib/ktest/root
                         #       auto-override: $HOME/.ktest/root
-TIMEOUT=""              # kills test after $TIMEOUT seconds
-                        #       can be overridden by config-timeout from test
-                        #       ignored completely with -I
-                        #       defaults: 0
-BUILD=1                 # if set to 1, kernel will build
-                        #       ignored with: -K (sets to 0)
-COVERAGE=""		# list of directories to enable code coverage for
 INTERACTIVE=0           # if set to 1, timeout is ignored completely
                         #       sets with: -I
-NJOBS=$(($(grep -c '^processor' /proc/cpuinfo) * 2))
-                        # number of jobs to passed to make during kernel compile
-                        #       sets with: -j
-                        #       defaults to 2 * number of processor
-CONTAINER_SRC_DIR="/usr/share/DateraContainer"
-                        # dir which contains the datera containers
+CONTAINER_SRC_DIR=""	# dir which contains the datera containers
 
-usage()
-{
-    echo "ktest: Test kernels in virtual machines on a pool of remote servers"
-    echo "Usage: ktest cmd [options] [n]"
-    echo "  boot        Boot a VM without running anything"
-    echo "  run <test>  Run a kernel test"
-    echo "  ssh         Login as root"
-    echo "  gdb         Connect to kgdb"
-    echo "  mon         Connect to qemu monitor"
-    echo "  oldconfig   Run make oldconfig"
-    echo "  config      Run make nconfig"
-    echo
-    echo "  options:"
-    echo "      -x       bash debug statements"
-    echo "      -k <dir> kernel source dir"
-    echo "      -b <dir> build directory for kernel (default: kernel_source/.ktest)"
-    echo "      -w <dir> work directory (default: kernel build directory)"
-    echo "      -K       don't build kernel (run cmd only)"
-    echo "      -c <dir> enable coverage for this dir (only valid without -K)"
-    echo "      -i <dir> VM root filesystem image (run cmd only)"
-    echo "      -j <num> j option to make (run cmd only)"
-    echo "      -I       disable timeout and VM stop on pass/fail (run cmd only)"
-    echo "      -v       run with vde networking (run cmd only)"
-}
+# config files:
+[ -f "$KTESTDIR/ktestrc" ]	&& . "$KTESTDIR/ktestrc"
+[ -f /etc/ktestrc ]		&& . /etc/ktestrc
+[ -f "$HOME/.ktestrc" ]		&& . "$HOME/.ktestrc"
 
 # root image auto-override
 if [ -f "$HOME/.ktest/root" ]; then
@@ -98,6 +60,24 @@ if [ -d "$HOME/.ktest/tmp" ]; then
     SCRATCH_DIR=$HOME/.ktest/tmp
 fi
 
+usage()
+{
+    echo "ktest: Run generic virtual machine tests"
+    echo "Usage: ktest cmd [options]"
+    echo "  boot        Boot a VM without running anything"
+    echo "  run <test>  Run a kernel test"
+    echo "  ssh         Login as root"
+    echo "  gdb         Connect to kgdb"
+    echo "  mon         Connect to qemu monitor"
+    echo
+    echo "  options:"
+    echo "      -x       bash debug statements"
+    echo "      -b <dir> build directory for kernel (default: kernel_source/.ktest)"
+    echo "      -w <dir> work directory (default: kernel build directory)"
+    echo "      -i <dir> VM root filesystem image (run cmd only)"
+    echo "      -I       disable timeout and VM stop on pass/fail (run cmd only)"
+}
+
 #prints usage if no args
 if [[ $# -lt 1 ]]; then
     usage
@@ -108,7 +88,7 @@ fi
 CMD="cmd_$1"
 shift
 
-while getopts "hp:k:Kc:i:b:j:Iw:vx" arg; do
+while getopts "hp:i:k:Iw:x" arg; do
     case $arg in
 	h)
 	    usage
@@ -117,30 +97,11 @@ while getopts "hp:k:Kc:i:b:j:Iw:vx" arg; do
 	p)
 	    PRIORITY=$OPTARG
 	    ;;
-	k)
-            KERNEL_SOURCE=$(realpath "$OPTARG")
-	    ;;
-	K)
-	    BUILD=""
-	    ;;
-	c)
-	    if [ ! -d "$OPTARG" ]; then
-		echo "$OPTARG must be a directory"
-		exit 1
-	    fi
-
-	    # Strip trailing / from directory name, substitute _ for /
-	    OPTARG=$(echo "${OPTARG%/}"|tr / _)
-	    COVERAGE+=" GCOV_PROFILE_$OPTARG=y"
-	    ;;
 	i)
 	    IMG=$OPTARG
 	    ;;
-	b)
-	    KERNEL_OUTPUT=$OPTARG
-	    ;;
-	j)
-	    NJOBS=$OPTARG
+	k)
+	    KERNEL=$OPTARG
 	    ;;
 	I)
 	    INTERACTIVE=1
@@ -155,224 +116,35 @@ while getopts "hp:k:Kc:i:b:j:Iw:vx" arg; do
 done
 shift $(( OPTIND - 1 ))
 
-# sets default kernel output dir
-if [ -z "$KERNEL_OUTPUT" ]; then
-    KERNEL_OUTPUT="$KERNEL_SOURCE/$DEFAULT_DIR"
+if [ -z "$KERNEL" ]; then
+    echo "Required parameter -b missing: kernel to boot"
+    exit 1
 fi
 
-# sets default work dir
-if [ -z "$WORK_DIR" ] ; then
-   WORK_DIR=$KERNEL_OUTPUT
-fi
+[ -z "$WORK_DIR" ] && WORK_DIR="./ktest.$$"
+
 mkdir -p "$WORK_DIR"
-WORK_DIR=$(realpath "$WORK_DIR")
+WORK_DIR=$(readlink -e "$WORK_DIR")
 
 trap 'stty sane > /dev/null 2>&1 || true' EXIT
 
 check_mlxcard()
 {
     if ! $VMSTART check conx3; then
-        echo "no free infiniband card present"
-        exit 1
-    fi
-}
-
-do_make()
-{
-    # shellcheck disable=SC2086
-    make -C "$KERNEL_SOURCE" O="$WORK_DIR" -j "$NJOBS"			\
-	$COVERAGE							\
-	INSTALL_MOD_PATH=modules					\
-	EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments" "$@"
-}
-
-build_kernel()
-{
-    KERNEL_SOURCE=$1
-    KERNEL_OUTPUT=$2
-    _KERNEL_CONFIG_REQUIRE=$3
-
-    if [ -n "$BUILD" ]; then
-	local kconfig="$KERNEL_OUTPUT/.config"
-	local config_tool="$KERNEL_SOURCE/scripts/config"
-
-	local OLDIFS=$IFS
-	IFS=','
-
-        [ -f "$kconfig" ] || cp "$KTESTDIR/defconfig" "$kconfig"
-
-	for req in $_KERNEL_CONFIG_REQUIRE; do
-            "$config_tool" --file "$kconfig" -e "$req"
-        done
-
-        do_make olddefconfig
-
-	for req in $_KERNEL_CONFIG_REQUIRE; do
-            c=$("$config_tool" --file "$kconfig" -s "$req")
-	    if [ "$c" != "y" ]; then
-		echo "Kernel config option $req not set"
-		exit 1
-	    fi
-	done
-
-	IFS=$OLDIFS
-
-        do_make || exit 1
-    fi
-
-    do_make modules_install
-}
-
-parse_test_deps()
-{
-    local TEST=$1
-    HAVE_CONTAINER=""
-
-    # shellcheck disable=SC2034
-    ktest_priority=$PRIORITY
-
-    _add-file()
-    {
-	local req=$1
-	local f=$2
-
-	if [ ! -e "$f" ]; then
-	    echo "Dependency $req not found"
-	    exit 1
-	fi
-
-	FILES+=" $(realpath "$f")"
-    }
-
-    require-lib()
-    {
-	local req="$1"
-	local f="$TESTDIR/$req"
-
-	if [ "${req:0:1}" = "/" ]; then
-	    local f="$req"
-	else
-	    local f="$TESTDIR/$req"
-	fi
-
-	_add-file "$req" "$f"
-
-	. "$f" deps
-    }
-
-    require-bin()
-    {
-	local req=$1
-        local f="$(which "$req")"
-
-	_add-file "$req" "$f"
-    }
-
-    require-container()
-    {
-	local req=$1
-	local cvf="$CONTAINER_SRC_DIR/${req}.version.txt"
-
-	if [ ! -e "$cvf" ]; then
-	    echo "Container version file not found: $cvf"
-	    exit 1
-	fi
-
-	local cv=$(cat "$cvf")
-	local cf="$CONTAINER_SRC_DIR/${req}-${cv}.tar.gz"
-
-	if [ ! -e "$cf" ]; then
-	    echo "Container file not found: $cf"
-	    exit 1
-	fi
-
-	local cdir="${req}-${cv}"
-	local containerdir="$WORK_DIR/container"
-
-	if [ -z "$HAVE_CONTAINER" ]; then
-	    FILES+=" $containerdir"
-	    genisoimage_sudo=sudo
-	    HAVE_CONTAINER=1
-	    sudo rm -rf "$containerdir"
-	    mkdir -p "$containerdir"
-	fi
-
-	sudo tar xz -C "$containerdir" -f "$cf"
-	if [ ! -d "$containerdir/$cdir" ]; then
-	    echo "Container '$req' does not unpack into expected directory '$cdir'"
-	    exit 1
-	fi
-	sudo ln -s "$cdir" "${containerdir}/${req}.chroot"
-    }
-
-    require-kernel-config()
-    {
-	if [ -n "$_KERNEL_CONFIG_REQUIRE" ]; then
-	    _KERNEL_CONFIG_REQUIRE+=","
-	fi
-
-	_KERNEL_CONFIG_REQUIRE+="$1"
-    }
-
-    config-scratch-devs()
-    {
-	_SCRATCH="-s $1"
-    }
-
-    config-mem()
-    {
-	_MEM=$1
-    }
-
-    config-infiniband()
-    {
-	VMSTART="sudo $VMSTART"
-	_INFINIBAND="--conx3"
-	check_mlxcard
-    }
-
-    config-vmcount()
-    {
-	# what's going on here?
-	_VMCLUSTER="--cluster $1"
-    }
-
-    config-timeout()
-    {
-	TIMEOUT=$1
-    }
-
-    PATH+=":/sbin:/usr/sbin:/usr/local/sbin"
-
-    . "$TEST" deps
-
-    if [ -z "$_MEM" ]; then
-	echo "test must specify config-mem"
-	exit 1
-    fi
-
-    if [ -z "$TIMEOUT" ]; then
-	echo "test must specify config-timeout"
+	echo "no free infiniband card present"
 	exit 1
     fi
 }
 
 build_file_list()
 {
-    if [ ! -f "$IMG" ] ; then
-        echo "VM root filesystem not found, use vm_create_image to create one"
-        exit 1
-    fi
-
     if [ $# -eq 0 ]; then
 	install -m0755 "$KTESTDIR/rc.interactive" "$WORK_DIR/rc"
 	FILES="$WORK_DIR/rc"
 	_MEM="1G"
     else
 	TEST=$1
-        TEST="$(realpath "$TEST")"
-
-        local TESTDIR="$(dirname "$TEST")"
+	TEST=$(readlink -e "$TEST")
 
 	install -m0755 "$KTESTDIR/rc.testwrapper" "$WORK_DIR/rc"
 	FILES="$WORK_DIR/rc"
@@ -381,47 +153,79 @@ build_file_list()
 	FILES+=" $WORK_DIR/rc.test"
 
 	parse_test_deps "$TEST"
+
+	if [ -n "$_INFINIBAND" ]; then
+	    VMSTART="sudo $VMSTART"
+	    check_mlxcard
+	fi
+
+	local containerdir="$WORK_DIR/container"
+
+	if [ -n "$_CONTAINERS" ]; then
+	    FILES+=" $containerdir"
+	    genisoimage_sudo=sudo
+	    sudo rm -rf "$containerdir"
+	    mkdir -p "$containerdir"
+	fi
+
+	for req in $_CONTAINERS; do
+	    local cvf="$CONTAINER_SRC_DIR/${req}.version.txt"
+
+	    if [ ! -e "$cvf" ]; then
+		echo "Container version file not found: $cvf"
+		exit 1
+	    fi
+
+	    local cv=$(cat "$cvf")
+	    local cf="$CONTAINER_SRC_DIR/${req}-${cv}.tar.gz"
+
+	    if [ ! -e "$cf" ]; then
+		echo "Container file not found: $cf"
+		exit 1
+	    fi
+
+	    local cdir="${req}-${cv}"
+	    local containerdir="$WORK_DIR/container"
+
+	    sudo tar xz -C "$containerdir" -f "$cf"
+	    if [ ! -d "$containerdir/$cdir" ]; then
+		echo "Container '$req' does not unpack into expected directory '$cdir'"
+		exit 1
+	    fi
+	    sudo ln -s "$cdir" "${containerdir}/${req}.chroot"
+	done
     fi
 }
 
 prepare_vm()
 {
-    # Might be overridden by test script
-    _KERNEL_CONFIG_REQUIRE=""
-    genisoimage_sudo=""
-
-    if [ -n "$COVERAGE" ]; then
-	_KERNEL_CONFIG_REQUIRE+="GCOV_KERNEL"
-	_KERNEL_CONFIG_REQUIRE+=",GCOV_FORMAT_AUTODETECT"
+    if [ ! -f "$IMG" ] ; then
+	echo "VM root filesystem not found, use vm_create_image to create one"
+	exit 1
     fi
 
-    mkdir -p "$WORK_DIR"
-
-    build_file_list "$@"
-
-    build_kernel "$KERNEL_SOURCE" "$KERNEL_OUTPUT" "$_KERNEL_CONFIG_REQUIRE"
-
-    # Remove symlinks, they'll break genisoimage which is following symlinks
-    rm -f "$WORK_DIR"/modules/lib/modules/*/build
-    rm -f "$WORK_DIR"/modules/lib/modules/*/source
-
-    # shellcheck disable=SC2086
-    $genisoimage_sudo genisoimage -quiet -R		\
-	-input-charset utf-8				\
-	-o "$WORK_DIR/run.iso"			\
-	"$WORK_DIR/modules/lib" $FILES || exit 1
-
-    rm -rf "$WORK_DIR/modules"
+    # Might be overridden by test script
+    genisoimage_sudo=""
 
     # setup directory where logfs will be mounted from
     rm -rf "$WORK_DIR/$LOG_INTERNAL"
     mkdir -p "$WORK_DIR/$LOG_INTERNAL"
+
+    build_file_list "$@"
+
+    # shellcheck disable=SC2086
+    $genisoimage_sudo genisoimage -quiet -R		\
+	-input-charset utf-8				\
+	-o "$WORK_DIR/run.iso"				\
+	"$KERNEL/lib" $FILES || exit 1
+
+    if [ -n "$genisoimage_sudo" ]; then
+	$genisoimage_sudo chown "$USER" "$WORK_DIR/run.iso"
+    fi
 }
 
 run_lcov()
 {
-    checkdep lcov
-
     echo "You may need to install perl-digest-MD5 for lcov"
     echo "    sudo yum install perl-Digest-MD5"
 
@@ -442,7 +246,10 @@ run_lcov()
 	    --directory "$i" --output-file "$out"
     done
 
-    lcov --quiet --output-file "$info" "$tracefiles"
+    [ -n "$tracefiles" ] || return
+
+    # shellcheck disable=SC2086
+    lcov --quiet --output-file "$info" $tracefiles
     genhtml --output-directory "$html" "$info" > /dev/null
 
     echo
@@ -455,8 +262,8 @@ cmd_boot()
 
     # shellcheck disable=SC2086
     $VMSTART start					\
-	-i "$IMG" -t "$SCRATCH_DIR"				\
-	-k "$KERNEL_OUTPUT/arch/x86/boot/bzImage"		\
+	-i "$IMG" -t "$SCRATCH_DIR"			\
+	-k "$KERNEL/vmlinuz"				\
 	-c "$WORK_DIR/run.iso"				\
 	--id "$WORK_DIR/id"				\
 	--fs "$WORK_DIR/$LOG_INTERNAL" logfs		\
@@ -467,11 +274,6 @@ cmd_boot()
 
 cmd_run()
 {
-    _MEM=""
-    _SCRATCH=""
-    _INFINIBAND=""
-    _VMCLUSTER=""
-
     if [ -z "$1" ]; then
 	echo "ktest: missing test"
 	usage
@@ -482,24 +284,25 @@ cmd_run()
 
     [ -p "$WORK_DIR/output" ] || mkfifo "$WORK_DIR/output"
 
+    # shellcheck disable=SC2086
     $VMSTART start						\
 	--append="root=/dev/sda rw ktest.priority=$PRIORITY"	\
-	-i "$IMG" -t "$SCRATCH_DIR"					\
-	-k "$KERNEL_OUTPUT/arch/x86/boot/bzImage"			\
+	-i "$IMG" -t "$SCRATCH_DIR"				\
+	-k "$KERNEL/vmlinuz"				\
 	-c "$WORK_DIR/run.iso"					\
 	--id "$WORK_DIR/id"					\
 	-m "$_MEM"						\
 	--fs "$WORK_DIR/$LOG_INTERNAL" logfs			\
-	"$_SCRATCH"						\
-	"$_INFINIBAND"						\
-	"$_VMCLUSTER" </dev/null 2>&1 > "$WORK_DIR/output" &
+	$_SCRATCH						\
+	$_INFINIBAND						\
+	$_VMCLUSTER </dev/null 2>&1 > "$WORK_DIR/output" &
 
     err=0
 
     if [ "$INTERACTIVE" = 1 ]; then
 	cat "$WORK_DIR/output"
     else
-	timeout "$TIMEOUT"				\
+	timeout "$_TIMEOUT"				\
 	    sed -u -e '/TEST SUCCESS/ { p; Q0 }'	\
 		   -e '/TEST FAILED/  { p; Q1 }'	\
 		   < "$WORK_DIR/output" || err=1
@@ -507,7 +310,7 @@ cmd_run()
 	$VMSTART stop "$(cat "$WORK_DIR/id")"
     fi
 
-    [ -n "$COVERAGE" ] && run_lcov
+    run_lcov
 
     exit $err
 }
@@ -519,36 +322,22 @@ cmd_ssh()
 
 cmd_stop()
 {
-    # shellcheck disable=SC2086
-    exec $VMSTART ssh "$(cat "$WORK_DIR/id")"
+    exec "$VMSTART" ssh "$(cat "$WORK_DIR/id")"
 }
 
 cmd_gdb()
 {
-    # shellcheck disable=SC2086
-    exec $VMSTART gdb "$(cat "$WORK_DIR/id")" "$KERNEL_OUTPUT/vmlinux"
+    exec "$VMSTART" gdb "$(cat "$WORK_DIR/id")" "$KERNEL/vmlinux"
 }
 
 cmd_kgdb()
 {
-    # shellcheck disable=SC2086
-    exec $VMSTART kgdb "$(cat "$WORK_DIR/id")" "$KERNEL_OUTPUT/vmlinux"
+    exec "$VMSTART" kgdb "$(cat "$WORK_DIR/id")" "$KERNEL/vmlinux"
 }
 
 cmd_mon()
 {
-    # shellcheck disable=SC2086
-    exec $VMSTART mon "$(cat "$WORK_DIR/id")"
-}
-
-cmd_oldconfig()
-{
-    do_make oldconfig
-}
-
-cmd_config()
-{
-    do_make nconfig
+    exec "$VMSTART" mon "$(cat "$WORK_DIR/id")"
 }
 
 # checks if command is valid
