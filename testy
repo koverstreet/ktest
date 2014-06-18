@@ -161,12 +161,14 @@ if [ "$DRYRUN" == 0 ]; then
     for testfile in $tests_to_run; do
         testname=$(basename "$testfile")
 	starttime=$(date +%s)
+	failed=0
 
-	run_test "$testfile" > "/tmp/$testname.log" 2>&1 || ret=1
+	run_test "$testfile" > "/tmp/$testname.log" 2>&1 || failed=1
 
 	duration=$(($(date +%s) - starttime))
 
-	if [ $ret = 1 ]; then
+	if [ $failed = 1 ]; then
+	    ret=1
 	    sed "s/^/[$testname] /" "/tmp/$testname.log"
 	    echo "[$testname] FAILURE: test finished at $(date +%s) -- $(date) after $duration seconds"
 	    [ $KEEP_GOING = 0 ] && break
