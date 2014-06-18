@@ -734,11 +734,11 @@ def cmd_start():
             raise RuntimeError("Cannot find initrd file: "+options.initrd)
 
         try:
-            caught_signal = False
+            caught_signal = [False]
 
             def sighandler(signum, stack):
-                if not caught_signal:
-                    caught_signal = True
+                if not caught_signal[0]:
+                    caught_signal[0] = True
                     raise Exception("signal caught")
 
             for i in [x for x in dir(signal) if x.startswith("SIG")]:
@@ -859,6 +859,7 @@ def cmd_start():
             print GREEN+"Vm ID: "+str(vm.vm_id)+NC
     
             p.wait()
+            caught_signal[0] = True
         except:
             pass
     
@@ -866,6 +867,11 @@ def cmd_start():
     subprocess.call(["stty", "sane"],
                     stdout=FNULL,
                     stderr=subprocess.STDOUT)
+
+    try:
+        sys.stdout.flush()
+    except:
+        pass
 
 def cmd_stop():
     """Stop virtual machines by id or ipaddr
