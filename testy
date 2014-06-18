@@ -52,7 +52,7 @@ read_tests()
 		     "${i##$file/}" != "$i" -o			\
 		     "${file##$i/}" != "$file" ]; then
 		    if ! readlink -e "$dir/$1" ; then
-			echo "test $dir/$1 not found"
+			echo "test $dir/$1 not found" >&2
 			exit 1
 		    fi
 		    break
@@ -154,11 +154,16 @@ while getopts "hnfp:k:Ki:b:j:w:x" arg; do
 done
 shift $((OPTIND - 1))
 
-tests_to_run=$(get_tests "$@"|sort -u)
-ret=0
+tests_failed=$(mktemp)
+tests_to_run=$(mktemp)
+
+# If get_tests fail we want the whole script to fail, so we can't call
+# it from $(...) -- redirect output to a file then read the file later
+# instead.
+get_tests "$@" > "$tests_to_run"
 
 if [ "$DRYRUN" == 0 ]; then
-    for testfile in $tests_to_run; do
+    sort -u "$tests_to_run"|while read testfile; do
         testname=$(basename "$testfile")
 	starttime=$(date +%s)
 	failed=0
@@ -168,7 +173,9 @@ if [ "$DRYRUN" == 0 ]; then
 	duration=$(($(date +%s) - starttime))
 
 	if [ $failed = 1 ]; then
-	    ret=1
+	    # Note that we're on the right hand side of |, so we can't just
+	    # set a variable and test it at the end of the loop...
+	    echo "$testname" >> "$tests_failed"
 	    sed "s/^/[$testname] /" "/tmp/$testname.log"
 	    echo "[$testname] FAILURE: test finished at $(date +%s) -- $(date) after $duration seconds"
 	    [ $KEEP_GOING = 0 ] && break
@@ -177,7 +184,10 @@ if [ "$DRYRUN" == 0 ]; then
 	fi
     done
 else
-    echo "$tests_to_run"
+    sort -u "$tests_to_run"
 fi
 
-exit $ret
+rm "$tests_to_run"
+
+# Exit with failure if some tests failed
+test -z "$(cat "$tests_failed")"
