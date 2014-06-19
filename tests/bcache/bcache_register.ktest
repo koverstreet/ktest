@@ -32,9 +32,6 @@ main()
     echo "unregister"
     echo > /sys/fs/bcache/*/unregister
 
-    echo "wait for things to settle"
-    sleep 30
-
     echo "cache set should go away"
     ls /sys/fs/bcache/*-*-* && false
 
