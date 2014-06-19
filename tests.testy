@@ -3,3 +3,6 @@
 
 0	ktest			../vm-tests/single-dcp/gui.ktest
 0	vm-start		../vm-tests/single-dcp/gui.ktest
+
+0	testy			../appliance-clustest/basic.actest
+0	vm-start		../appliance-clustest/basic-cluster.actest
