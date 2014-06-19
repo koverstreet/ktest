@@ -165,7 +165,8 @@ tests_to_run=$(mktemp)
 get_tests "$@" > "$tests_to_run"
 
 if [ "$DRYRUN" == 0 ]; then
-    sort -u "$tests_to_run"|while read testfile; do
+    # shellcheck disable=SC2013
+    for testfile in $(sort -u "$tests_to_run"); do
         testname=$(basename "$testfile")
 	starttime=$(date +%s)
 	failed=0
