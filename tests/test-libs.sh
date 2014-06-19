@@ -377,6 +377,7 @@ test_fault()
     [ -f /sys/kernel/debug/dynamic_fault/control ] || return
 
     while true; do
+	echo "file alloc.c +o"	> /sys/kernel/debug/dynamic_fault/control
 	echo "file btree.c +o"	> /sys/kernel/debug/dynamic_fault/control
 	echo "file bset.c +o"	> /sys/kernel/debug/dynamic_fault/control
 	echo "file io.c +o"	> /sys/kernel/debug/dynamic_fault/control
