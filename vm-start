@@ -293,17 +293,36 @@ class ClusteredVM(object):
         self.console  = vm_console
         self.opts     = opts
 
+        self.tapdevs = []
+        for iface_idx in range(int(self.opts.interfaces)):
+            iface_name=self.tapname
+            if iface_idx > 0:
+                iface_name+="-"+str(iface_idx)
+            self.tapdevs.append(iface_name)
+
         os.makedirs(self.tmpdir, 0700)
 
     def setup(self):
-        # Create the tap device owned by the current user
-        subprocess.check_call(['sudo', '-n', '--', 'ip', 'tuntap',
-                               'add', 'dev', self.tapname,
-                               'mode', 'tap',
-                               'user', str(os.getuid()),
-                               'group', str(os.getgid())])
-        subprocess.check_call(['sudo', '-n', '--', 'ip', 'link', 'set', 'dev', self.tapname, 'up'])
-        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addif', self.bridge.name, self.tapname])        
+        for iface_name in self.tapdevs:
+            # Create the tap device owned by the current user
+            subprocess.check_call(['sudo', '-n', '--', 'ip', 'tuntap',
+                                   'add', 'dev', iface_name,
+                                   'mode', 'tap',
+                                   'user', str(os.getuid()),
+                                   'group', str(os.getgid())])
+            subprocess.check_call(['sudo', '-n', '--', 'ip', 'link', 'set', 'dev', iface_name, 'up'])
+            subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addif', self.bridge.name, iface_name])        
+
+
+    def cleanup(self):
+        """Cleanup tasks for this vm after it has terminated
+        """
+        # Take down the tap device.  It is not necessary to down the
+        # tap device or remove it from the bridge, that happens
+        # automatically.
+        for iface_name in self.tapdevs:
+            subprocess.check_call(['sudo','-n', '--', 'ip', 'tuntap', 'del', 'dev', iface_name, 'mode', 'tap'])
+
 
     def run(self):
         opts = self.opts
@@ -366,22 +385,21 @@ class ClusteredVM(object):
             cmd.extend(["-drive", "if=virtio,format=raw,cache=writeback,file="+drive])
         if self.iso:              # add cdrom
             cmd.extend(["-cdrom", self.iso])
-        cmd.extend(["-netdev","tap,id=eth0,ifname=%s,script=no,downscript=no" % self.tapname])
-        cmd.extend(["-device","virtio-net-pci,netdev=eth0,mac="+self.macaddr])
+
+        for td_idx in range(len(self.tapdevs)):
+            ethdev = "eth%d" % td_idx
+            iface_name = self.tapdevs[td_idx]
+            cmd.extend(["-netdev","tap,id="+ethdev+",ifname="+iface_name+",script=no,downscript=no"])
+            if td_idx == 0:
+                cmd.extend(["-device","virtio-net-pci,netdev="+ethdev+",mac="+self.macaddr])
+            else:
+                cmd.extend(["-device","virtio-net-pci,netdev="+ethdev])
 
         cmd.extend(["-device", "virtio-rng-pci"])
 
         self.proc = subprocess.Popen(cmd, shell=False, close_fds=True)
 
         return self.proc
-
-    def cleanup(self):
-        """Cleanup tasks for this vm after it has terminated
-        """
-        # Take down the tap device.  It is not necessary to down the
-        # tap device or remove it from the bridge, that happens
-        # automatically.
-        subprocess.check_call(['sudo','-n', '--', 'ip', 'tuntap', 'del', 'dev', self.tapname, 'mode', 'tap'])
 
 
 class Cluster(object):
@@ -694,6 +712,10 @@ def cmd_start():
 
     opt.add_option("--cluster", dest="cluster",
         help="Start a cluster with the specified number of nodes")
+
+    opt.add_option("--interfaces", dest="interfaces",
+                   default="1",
+                   help="Specify the number of interfaces on the cluster nodes")
 
     (options, args) = opt.parse_args()
 
