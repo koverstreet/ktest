@@ -17,6 +17,7 @@ VMSTART=$KTESTDIR/vm-start
 if which shellcheck > /dev/null 2>&1; then
     shellcheck "$0"
     shellcheck "$KTESTDIR/util.sh"
+    shellcheck -exclude=SC2034 "$KTESTDIR/parse-test.sh"
 fi
 
 checkdep genisoimage
