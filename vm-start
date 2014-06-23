@@ -280,11 +280,8 @@ class ClusteredVM(object):
         """
         self.idnum    = vm_id
         self.vmsid    = vms_id
-        self.idstr    = str(self.idnum)
-        self.idhex    = hex(self.idnum+256)[-2:]
         self.bridge   = bridge
         self.ipaddr   = bridge.ipgen(vm_id)
-        self.macaddr  = bridge.macgen(vm_id)
         self.name     = "vm%d-%s" % (self.idnum, bridge.name)
         self.tapname  = self.name
         self.thread   = None
@@ -298,20 +295,24 @@ class ClusteredVM(object):
             iface_name=self.tapname
             if iface_idx > 0:
                 iface_name+="-"+str(iface_idx)
-            self.tapdevs.append(iface_name)
+            self.tapdevs.append({
+                "name": iface_name,
+                "eth": "eth%d" % iface_idx,
+                "mac": bridge.macgen(vm_id, iface_idx),
+            })
 
         os.makedirs(self.tmpdir, 0700)
 
     def setup(self):
-        for iface_name in self.tapdevs:
+        for td in self.tapdevs:
             # Create the tap device owned by the current user
             subprocess.check_call(['sudo', '-n', '--', 'ip', 'tuntap',
-                                   'add', 'dev', iface_name,
+                                   'add', 'dev', td["name"],
                                    'mode', 'tap',
                                    'user', str(os.getuid()),
                                    'group', str(os.getgid())])
-            subprocess.check_call(['sudo', '-n', '--', 'ip', 'link', 'set', 'dev', iface_name, 'up'])
-            subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addif', self.bridge.name, iface_name])        
+            subprocess.check_call(['sudo', '-n', '--', 'ip', 'link', 'set', 'dev', td["name"], 'up'])
+            subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addif', self.bridge.name, td["name"]])        
 
 
     def cleanup(self):
@@ -320,8 +321,8 @@ class ClusteredVM(object):
         # Take down the tap device.  It is not necessary to down the
         # tap device or remove it from the bridge, that happens
         # automatically.
-        for iface_name in self.tapdevs:
-            subprocess.check_call(['sudo','-n', '--', 'ip', 'tuntap', 'del', 'dev', iface_name, 'mode', 'tap'])
+        for td in self.tapdevs:
+            subprocess.check_call(['sudo','-n', '--', 'ip', 'tuntap', 'del', 'dev', td["name"], 'mode', 'tap'])
 
 
     def run(self):
@@ -386,15 +387,10 @@ class ClusteredVM(object):
         if self.iso:              # add cdrom
             cmd.extend(["-cdrom", self.iso])
 
-        for td_idx in range(len(self.tapdevs)):
-            ethdev = "eth%d" % td_idx
-            iface_name = self.tapdevs[td_idx]
-            cmd.extend(["-netdev","tap,id="+ethdev+",ifname="+iface_name+",script=no,downscript=no"])
-            if td_idx == 0:
-                cmd.extend(["-device","virtio-net-pci,netdev="+ethdev+",mac="+self.macaddr])
-            else:
-                cmd.extend(["-device","virtio-net-pci,netdev="+ethdev])
-
+        for td in self.tapdevs:
+            cmd.extend(["-netdev","tap,id="+td["eth"]+",ifname="+td["name"]+",script=no,downscript=no"])
+            cmd.extend(["-device","virtio-net-pci,netdev="+td["eth"]+",mac="+td["mac"]])
+            
         cmd.extend(["-device", "virtio-rng-pci"])
 
         self.proc = subprocess.Popen(cmd, shell=False, close_fds=True)
@@ -414,9 +410,7 @@ class Cluster(object):
 
         self.idnum    = bridge.br_num               # int version of id
         self.br_key   = bridge.br_key               # key of bridge
-        self.idstr    = str(self.idnum)             # str version of id
-        self.idhex    = hex(self.idnum+256)[-2:]    # hex version of id
-        self.name     = "vmbr%s" % self.idstr       # bridge name
+        self.name     = "vmbr%d" % self.idnum       # bridge name
         self.vms      = []                          # list of vms in cluster
 
         self.owner    = getpass.getuser()           # who "owns" this cluster
@@ -472,14 +466,14 @@ class Cluster(object):
 
     # Network address generators indexed off node number for the MAC address,
     # IPv4 and IPv6 addresses.
-    def macgen(self, node):
-        return "de:ad:be:ef:%s:%s" % (self.idhex, hex(node+256)[-2:])
+    def macgen(self, node, ifnum=0):
+        return "de:ad:be:%0.2x:%0.2x:%0.2x" % (ifnum, self.idnum, node)
 
     def ipgen(self, node):
         return "172.30.%d.%d" % (self.idnum, node)
 
     def ipv6gen(self, node):
-        return "fd84:c772:8103:fa%s::%s" % (self.idhex, hex(node+256)[-2:])
+        return "fd84:c772:8103:%0.4x::%0.4x" % (0xfa00 + self.idnum, node)
 
 
     def enable_dnsmasq(self):
