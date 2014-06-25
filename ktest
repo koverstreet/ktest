@@ -229,6 +229,8 @@ run_lcov()
 {
     which lcov >/dev/null 2>&1 || return 0
 
+    [ -d "$WORK_DIR/$LOG_INTERNAL/gcov.0" ] || return 0
+
     local gcov_out=$WORK_DIR/gcov
 
     rm -rf "$gcov_out"
@@ -289,7 +291,7 @@ cmd_run()
     $VMSTART start						\
 	--append="root=/dev/sda rw ktest.priority=$PRIORITY"	\
 	-i "$IMG" -t "$SCRATCH_DIR"				\
-	-k "$KERNEL/vmlinuz"				\
+	-k "$KERNEL/vmlinuz"					\
 	-c "$WORK_DIR/run.iso"					\
 	--id "$WORK_DIR/id"					\
 	-m "$_MEM"						\
