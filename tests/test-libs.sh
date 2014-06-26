@@ -73,44 +73,38 @@ setup_blkdev() {
     DEVICES=/dev/vda
 }
 
+add_device() {
+    DEVICES="$DEVICES /dev/bcache$DEVICE_COUNT"
+    DEVICE_COUNT=$(($DEVICE_COUNT + 1))
+}
+
+#
+# Registers all bcache devices.
 #
 # Should be called after setting FLAGS, CACHE, BDEV and TIER variables
 # FLAGS -- flags for make-bcache, such as --block, --discard, --writeback
 # CACHE -- one or more cache devices in tier 0
 # BDEV -- zero or more backing devices
 # TIER -- zero or more cache devices in tier 1
-# This script only supports one of BDEV or TIER to be set at a time.
+# VOLUME -- zero or one sizes for flash only volume
+#
+# BDEV and VOLUME are mutually exclusive.
 #
 # Upon successful completion, the DEVICES variable is set to a list of
 # bcache block devices.
 #
-setup_bcache() {
+existing_bcache() {
+    for device in $CACHE $TIER $BDEV; do
+	echo $device > /sys/fs/bcache/register
+    done
+
     DEVICES=
     DEVICE_COUNT=0
 
-    make_bcache_flags="$FLAGS --wipe-bcache --cache $CACHE"
-
-    if [ "$TIER" != "" ]; then
-	make_bcache_flags="$make_bcache_flags --tier 1 $TIER"
-    fi
-
-    if [ "$BDEV" != "" ]; then
-	make_bcache_flags="$make_bcache_flags --bdev $BDEV"
-
-	# If we have one or more backing devices, then we get
-	# one bcacheN per backing device.
-	for device in $BDEV; do
-	    DEVICES="$DEVICES /dev/bcache$DEVICE_COUNT"
-	    DEVICE_COUNT=$(($DEVICE_COUNT + 1))
-	done
-
-	cached_dev_settings
-    fi
-
-    make-bcache $make_bcache_flags
-
-    for device in $CACHE $TIER $BDEV; do
-	echo $device > /sys/fs/bcache/register
+    # If we have one or more backing devices, then we get
+    # one bcacheN per backing device.
+    for device in $BDEV; do
+	add_device
     done
 
     udevadm settle
@@ -120,6 +114,38 @@ setup_bcache() {
     done
 
     cache_set_settings
+
+    # Set up flash-only volumes.
+    for volume in ${VOLUME:=}; do
+	add_device
+    done
+
+    cached_dev_settings
+}
+
+#
+# Registers all bcache devices after running make-bcache.
+#
+setup_bcache() {
+    make_bcache_flags="$FLAGS --wipe-bcache --cache $CACHE"
+
+    if [ "$TIER" != "" ]; then
+	make_bcache_flags="$make_bcache_flags --tier 1 $TIER"
+    fi
+
+    if [ "$BDEV" != "" ]; then
+	make_bcache_flags="$make_bcache_flags --bdev $BDEV"
+    fi
+
+    make-bcache $make_bcache_flags
+
+    existing_bcache
+
+    for size in ${VOLUME:=}; do
+	for file in /sys/fs/bcache/*/flash_vol_create; do
+	    echo $size > $file
+	done
+    done
 }
 
 stop_fs()
@@ -137,25 +163,24 @@ stop_bcache()
 }
 
 #
-# Set up file systems on all bcache block devices.
+# Mount file systems on all bcache block devices.
 # The FS variable should be set to one of the following:
 # - none -- no file system setup, test doesn't need one
-# - ext4 -- ext4 file system created on a flash-only volume
-# - bcachefs -- bcachefs created, no flash-only volume is needed
+# - ext4 -- ext4 file system on bcache device
+# - xfs -- xfs file system on bcache device
+# - bcachefs -- bcachefs on cache set
 #
-setup_fs() {
+existing_fs() {
     case $FS in
 	ext4)
 	    for dev in $DEVICES; do
 		mkdir -p /mnt/$dev
-		mkfs.ext4 $dev
 		mount $dev /mnt/$dev -t ext4 -o errors=panic
 	    done
 	    ;;
 	xfs)
 	    for dev in $DEVICES; do
 		mkdir -p /mnt/$dev
-		mkfs.xfs $dev
 		mount $dev /mnt/$dev -t xfs -o wsync
 	    done
 	    ;;
@@ -181,18 +206,32 @@ setup_fs() {
 	    exit 1
 	    ;;
     esac
+
 }
 
-setup_flash_volume() {
-    size=$1
-    for file in /sys/fs/bcache/*/flash_vol_create; do
-	echo $size > $file
-
-	DEVICES=/dev/bcache$DEVICE_COUNT
-	DEVICE_COUNT=$(($DEVICE_COUNT + 1))
-    done
-
-    cached_dev_settings
+#
+# Set up file systems on all bcache block devices and mount them.
+#
+setup_fs() {
+    case $FS in
+	ext4)
+	    for dev in $DEVICES; do
+		mkfs.ext4 $dev
+	    done
+	    ;;
+	xfs)
+	    for dev in $DEVICES; do
+		mkfs.xfs $dev
+	    done
+	    ;;
+	bcachefs)
+	    ;;
+	*)
+	    echo "Unsupported file system type: $FS"
+	    exit 1
+	    ;;
+    esac
+    existing_fs
 }
 
 cache_set_settings()

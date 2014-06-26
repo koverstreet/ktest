@@ -16,17 +16,14 @@ main()
     CACHE="/dev/vda"
     BDEV=
     TIER="/dev/vdb"
+    VOLUME=1600M
 
     setup_tracing 64 'bcache:*'
 
     if [ $NR_REBOOTS = 0 ]; then
 	setup_bcache
-	setup_flash_volume 1600M
     else
-	echo /dev/vda > /sys/fs/bcache/register
-	echo /dev/vdb > /sys/fs/bcache/register
-
-	cache_set_settings
+	existing_bcache
     fi
 
     [ $NR_REBOOTS = $nr_iterations ] && exit 0
@@ -40,6 +37,5 @@ main()
     test_sync &
     test_drop_caches &
 
-    DEVICES=bcache0
     test_fio
 }

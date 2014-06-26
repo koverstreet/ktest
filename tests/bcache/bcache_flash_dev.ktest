@@ -14,12 +14,12 @@ main()
     FLAGS="--bucket 512k --block 2k --discard --cache_replacement_policy=lru"
     CACHE="/dev/vda"
     BDEV=
+    VOLUME=1400M
     TIER=
 
     setup_tracing 64 'bcache:*'
 
     setup_bcache
-    setup_flash_volume 1400M
     test_stress
     stop_bcache
 }

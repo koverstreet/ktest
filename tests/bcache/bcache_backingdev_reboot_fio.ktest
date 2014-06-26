@@ -22,10 +22,7 @@ main()
     if [ $NR_REBOOTS = 0 ]; then
 	setup_bcache
     else
-	echo /dev/vda > /sys/fs/bcache/register
-	echo /dev/vdb > /sys/fs/bcache/register
-
-	cache_set_settings
+	existing_bcache
     fi
 
     [ $NR_REBOOTS = $nr_iterations ] && exit 0
