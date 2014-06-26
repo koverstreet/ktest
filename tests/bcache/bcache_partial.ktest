@@ -1,0 +1,23 @@
+#!/bin/bash
+
+require-lib ../test-libs.sh
+
+config-scratch-devs 512M,2G,2G
+config-mem 256M
+
+config-timeout 60
+
+main()
+{
+    setup_tracing 64 'bcache:*'
+
+    make-bcache -C /dev/vda /dev/vdb /dev/vdc
+    make-bcache --wipe-bcache -C /dev/vdc
+
+    echo /dev/vda > /sys/fs/bcache/register
+    echo /dev/vdb > /sys/fs/bcache/register
+    echo > /sys/fs/bcache/*/unregister
+    echo /dev/vdc > /sys/fs/bcache/register
+    echo > /sys/fs/bcache/*/unregister
+    echo > /sys/fs/bcache/reboot
+}
