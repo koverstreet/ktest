@@ -75,6 +75,13 @@ parse_test_deps()
     config-infiniband()
     {
 	_INFINIBAND="--conx3"
+
+	require-kernel-config MLX4_EN
+	require-kernel-config MLX4_INFINIBAND
+	require-kernel-config INFINIBAND_MTHCA
+	require-kernel-config INFINIBAND_USER_MAD
+	require-kernel-config INFINIBAND_USER_ACCESS
+	require-kernel-config INFINIBAND_IPOIB
     }
 
     config-vmcount()

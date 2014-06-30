@@ -19,6 +19,9 @@ import re
 import datetime
 import logging
 import traceback
+import atexit
+
+from contextlib import contextmanager
 
 from optparse import OptionParser, OptionGroup
 
@@ -26,7 +29,8 @@ from optparse import OptionParser, OptionGroup
 DIR=os.path.dirname(__file__)       # path to script directory
 
 MAX_VMS = 100                       # Max number of VMs. Currently this is pretty arbitrary.
-MAX_BRIDGES = 100
+MAX_BRIDGES = 256
+MIN_BRIDGE = 101
 
 # global info file settings:
 IP_FILE = "/etc/vms/ips"
@@ -37,10 +41,6 @@ IP_FILE_DICT = IP_FILE+".dict"      # Shelf file to store vm list
 CX3_PCI_STUB_DIR="/sys/bus/pci/drivers/pci-stub"
 CX3_VENDOR_IDS = [ 0x15b3 ]
 CX3_DEVICE_IDS = [ 0x1004 ]
-
-BR_FILE = "/etc/vms/bridges"
-BR_FILE_LOCK = BR_FILE+".lock"      # File to lock access to bridge info
-BR_FILE_DICT = BR_FILE+".dict"      # Shelf file to store bridge info
 
 DEFAULT_MEMORY = "1G"               # how much memory to give the vms
 DEFAULT_TMP = "/tmp"                # default directory for tmps
@@ -95,14 +95,6 @@ def closeLockedDb(db):
     fcntl.flock(db.lockFD, fcntl.LOCK_UN)
     os.close(db.lockFD)
 
-class Bridge:
-    """Represents a single bridge"""
-    def __init__ (self, br_key, br_num, br_name):
-        self.br_key = br_key       # string bridge key
-        self.br_num = br_num       # integer bridge number
-        self.br_name = br_name     # bridge name
-        self.available = True      # available?
-
 class Domain:
     """Represents a single virtual machine"""
     def __init__ (self, vm_id):
@@ -110,16 +102,23 @@ class Domain:
         self.ip = None               # ip address
         self.mac = None             # mac addresss
         self.owner = None          # who started this machine
+        self.pid = None            # PID of the running qemu process
         self.name = "vm"+str(vm_id)   # name of the vm, can be custom
         self.tmpdir  = None        # the location of dir to store scratch drives
         self.conx3_id = None       # dev id of the virtual pci x3 Connect X3 card
 
+    def __getattr__(self, name):
+        """Fixup old versions of this clas saved in the DB"""
+        if name in ("ip", "mac", "owner", "pid", "tmpdir", "conx3_id"):
+            return None
+        else:
+            raise AttributeError("%s instance has no attribute '%s'" % (self.__class__.__name__, name))
+
     def exists(self):
         """Does the VM this represents actually exist?"""
         try:
-            with open(self.tmpdir + "/pid", 'r') as f:
-                pid=int(f.read().strip())
-                expath = os.path.basename(os.readlink("/proc/%d/exe" % pid))
+            if self.pid is not None:
+                expath = os.path.basename(os.readlink("/proc/%d/exe" % self.pid))
                 if expath[:11] == "qemu-system":
                     return True
         except (OSError, IOError, ValueError) as e:
@@ -127,35 +126,16 @@ class Domain:
 
         return False
 
-def bridge_free(br_key):
-    db = openLockedDb(BR_FILE_LOCK, BR_FILE_DICT)
-    bridges = db["bridges"]
-
-    bridges[br_key].available = True
-
-    db["bridges"] = bridges
-    closeLockedDb(db)
-    
-def bridge_get():
-    db = openLockedDb(BR_FILE_LOCK, BR_FILE_DICT)
-    bridges = db["bridges"]
-
-    keys = bridges.keys()
-    keys.sort()
-    
-    bridge = None
-    for key in keys:
-        if bridges[key].available:
-            bridge = bridges[key]
-            bridge.available = False
-            bridges[key] = bridge
-            break
-    else:
-        raise RuntimeError("No bridge entries available to start cluster")        
-
-    db["bridges"] = bridges
-    closeLockedDb(db)
-    return bridge
+@contextmanager
+def vm_slot_update(id):
+    d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
+    running_vms = d["running_vms"]
+    vm = next((vm for vm in running_vms if vm.vm_id == id), None)
+    try:
+        yield vm
+        d["running_vms"] = running_vms
+    finally:
+        closeLockedDb(d)
 
 def vm_slot_put(id):
     d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
@@ -225,13 +205,12 @@ def vm_lookup(id):
     d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
     running_vms = d["running_vms"]
     vm = next((vm for vm in running_vms if vm.vm_id == id), None)
+    closeLockedDb(d)
 
     # make sure we actually found some
     if not vm:
-        closeLockedDb(d)
         raise RuntimeError("vm " + str(id) + " not running")
 
-    closeLockedDb(d)
     return vm
 
 
@@ -280,30 +259,38 @@ class ClusteredVM(object):
         """
         self.idnum    = vm_id
         self.vmsid    = vms_id
-        self.idstr    = str(self.idnum)
-        self.idhex    = hex(self.idnum+256)[-2:]
         self.bridge   = bridge
         self.ipaddr   = bridge.ipgen(vm_id)
-        self.macaddr  = bridge.macgen(vm_id)
         self.name     = "vm%d-%s" % (self.idnum, bridge.name)
         self.tapname  = self.name
-        self.thread   = None
-        self.status   = "inactive"
         self.tmpdir   = vm_tmpdir
         self.console  = vm_console
         self.opts     = opts
 
         os.makedirs(self.tmpdir, 0700)
 
-    def setup(self):
-        # Create the tap device owned by the current user
-        subprocess.check_call(['sudo', '-n', '--', 'ip', 'tuntap',
-                               'add', 'dev', self.tapname,
-                               'mode', 'tap',
-                               'user', str(os.getuid()),
-                               'group', str(os.getgid())])
-        subprocess.check_call(['sudo', '-n', '--', 'ip', 'link', 'set', 'dev', self.tapname, 'up'])
-        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addif', self.bridge.name, self.tapname])        
+        self.tapdevs = []
+        for iface_idx in range(int(self.opts.interfaces)):
+            iface_name=self.tapname
+            if iface_idx > 0:
+                iface_name+="-"+str(iface_idx)
+
+            td = { "name": iface_name,
+                   "eth": "eth%d" % iface_idx,
+                   "mac": bridge.macgen(vm_id, iface_idx) }
+            self.tapdevs.append(td)
+
+            subprocess.call(['sudo','-n', '--', 'ip', 'tuntap', 'del', 'dev', td["name"], 'mode', 'tap'], stdout=FNULL, stderr=FNULL)
+            subprocess.check_call(['sudo', '-n', '--', 'ip', 'tuntap',
+                                   'add', 'dev', td["name"],
+                                   'mode', 'tap',
+                                   'user', str(os.getuid()),
+                                   'group', str(os.getgid())])
+            atexit.register(subprocess.call, ['sudo','-n', '--', 'ip', 'tuntap', 'del', 'dev', td["name"], 'mode', 'tap'])
+
+            subprocess.check_call(['sudo', '-n', '--', 'ip', 'link', 'set', 'dev', td["name"], 'up'])
+            subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addif', self.bridge.name, td["name"]])
+
 
     def run(self):
         opts = self.opts
@@ -366,54 +353,50 @@ class ClusteredVM(object):
             cmd.extend(["-drive", "if=virtio,format=raw,cache=writeback,file="+drive])
         if self.iso:              # add cdrom
             cmd.extend(["-cdrom", self.iso])
-        cmd.extend(["-netdev","tap,id=eth0,ifname=%s,script=no,downscript=no" % self.tapname])
-        cmd.extend(["-device","virtio-net-pci,netdev=eth0,mac="+self.macaddr])
 
+        for td in self.tapdevs:
+            cmd.extend(["-netdev","tap,id="+td["eth"]+",ifname="+td["name"]+",script=no,downscript=no"])
+            cmd.extend(["-device","virtio-net-pci,netdev="+td["eth"]+",mac="+td["mac"]])
+            
         cmd.extend(["-device", "virtio-rng-pci"])
 
         self.proc = subprocess.Popen(cmd, shell=False, close_fds=True)
 
-        return self.proc
+        with vm_slot_update(self.vmsid.vm_id) as vm:
+            vm.pid = self.proc.pid
 
-    def cleanup(self):
-        """Cleanup tasks for this vm after it has terminated
-        """
-        # Take down the tap device.  It is not necessary to down the
-        # tap device or remove it from the bridge, that happens
-        # automatically.
-        subprocess.check_call(['sudo','-n', '--', 'ip', 'tuntap', 'del', 'dev', self.tapname, 'mode', 'tap'])
+        return self.proc
 
 
 class Cluster(object):
     """Defines a cluster of VMs attachd to a single virtual bridge.
     """
 
+    SIGSET = (signal.SIGHUP,
+              signal.SIGINT,
+              signal.SIGQUIT,
+              signal.SIGILL,
+              signal.SIGABRT,
+              signal.SIGFPE,
+              signal.SIGPIPE,
+              signal.SIGTERM,
+              signal.SIGUSR1,
+              signal.SIGUSR2)
+
     def __init__(self, num_of_vms, opts):
         """Initialize the cluster object with bridge information.
         """
 
-        bridge = bridge_get()
+        # Allow exit handlers to be called
+        for sig in self.SIGSET:
+            signal.signal(sig, lambda sig, frame: sys.exit(127))
 
-        self.idnum    = bridge.br_num               # int version of id
-        self.br_key   = bridge.br_key               # key of bridge
-        self.idstr    = str(self.idnum)             # str version of id
-        self.idhex    = hex(self.idnum+256)[-2:]    # hex version of id
-        self.name     = "vmbr%s" % self.idstr       # bridge name
+        # Find an unused bridge and set self.name and self.idnum
+        self.bridge_allocate()
+
         self.vms      = []                          # list of vms in cluster
-
         self.owner    = getpass.getuser()           # who "owns" this cluster
 
-        # IPv4 parameters
-        self.ipaddr   = self.ipgen(1)               # bridge ip addresss
-        self.ipnet    = self.ipgen(0)               # vm network base addresss
-        self.cidr     = 24                          # CIDR mask (netmask)
-
-        # IPv6 parameters
-        self.ipv6addr = self.ipv6gen(1)             # bridge IPv6 address
-        self.ipv6net  = self.ipv6gen(0)             # IPv6 network
-        self.v6cidr   = 64                          # IPv6 CIDR (netmask)
-
-        self.status   = "inactive"                  # cluster status
         self.tmpdir   = opts.tmpdir
 
         # Set the dnsmasq file attributes and wipe the files
@@ -454,14 +437,66 @@ class Cluster(object):
 
     # Network address generators indexed off node number for the MAC address,
     # IPv4 and IPv6 addresses.
-    def macgen(self, node):
-        return "de:ad:be:ef:%s:%s" % (self.idhex, hex(node+256)[-2:])
+    def bridge_allocate(self):
+        self.cidr = 24
+        self.v6cidr = 64
+
+        for idnum in range(MIN_BRIDGE, MAX_BRIDGES):
+            try:
+                brname = "vmbr%d" % idnum
+                subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addbr', brname], stdout=FNULL, stderr=FNULL)
+                atexit.register(subprocess.call, ['sudo', '-n', '--', 'brctl', 'delbr', brname])
+                self.name = brname
+                self.idnum = idnum
+                break
+            except subprocess.CalledProcessError:
+                pass
+        else:
+            raise RuntimeError("No bridge entries available to start cluster")
+
+        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'stp', brname, 'on'])
+        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'setfd', brname, '2'])
+        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'sethello', brname, '2'])
+        
+        subprocess.check_call(['sudo', '-n', '--', 'ip', 'tuntap','add', 'dev', brname + "-host", 'mode', 'tap'])
+        atexit.register(subprocess.call, ['sudo', '-n', '--', 'ip', 'tuntap','del', 'dev', brname + "-host", 'mode', 'tap'])
+        
+        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addif', brname, brname + "-host"])
+        subprocess.check_call(['sudo', '-n', '--', 'sysctl', '-q', '-w', "net.ipv6.conf.%s.accept_ra=0" % brname, "net.ipv6.conf.%s.autoconf=0" % brname])
+
+        subprocess.check_call(['sudo', '-n', '--', 'ip', 'link', 'set', 'dev', brname, 'up'])
+        atexit.register(subprocess.call, ['sudo', '-n', '--', 'ip', 'link', 'set', 'dev', brname, 'down'])
+
+        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-I', 'INPUT', '-i', brname, '-j', 'ACCEPT'])
+        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-I', 'OUTPUT', '-o', brname, '-j', 'ACCEPT'])
+        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-I', 'FORWARD', '-i', brname, '-j', 'ACCEPT'])
+        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-I', 'FORWARD', '-o', brname, '-j', 'ACCEPT'])
+
+        atexit.register(subprocess.call, ['sudo', '-n', '--', 'iptables', '-t', 'filter', '-D', 'INPUT', '-i', brname, '-j', 'ACCEPT'])
+        atexit.register(subprocess.call, ['sudo', '-n', '--', 'iptables', '-t', 'filter', '-D', 'OUTPUT', '-o', brname, '-j', 'ACCEPT'])
+        atexit.register(subprocess.call, ['sudo', '-n', '--', 'iptables', '-t', 'filter', '-D', 'FORWARD', '-i', brname, '-j', 'ACCEPT'])
+        atexit.register(subprocess.call, ['sudo', '-n', '--', 'iptables', '-t', 'filter', '-D', 'FORWARD', '-o', brname, '-j', 'ACCEPT'])
+
+        # NAT IPv4 packets off the bridge if supported.  The iptables
+        # configuration depends on iptables on the server not being
+        # used for anything else.
+        subprocess.call(['sudo', '-n', '--', 'sysctl', '-q', '-w', 'net.ipv4.ip_forward=1'])
+
+        subprocess.check_call(['sudo', '-n', '--', 'ip', 'addr', 'add', "%s/%d" %(self.ipgen(1), self.cidr), "dev", brname])
+        subprocess.check_call(['sudo', '-n', '--', 'ip', 'addr', 'add', "%s/%d" %(self.ipv6gen(1), self.v6cidr), "dev", brname])
+
+        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'nat', '-I', 'POSTROUTING', '-s', "%s/%d" % (self.ipgen(0), self.cidr), '!', '-o', brname, '-j', 'MASQUERADE'])
+
+        atexit.register(subprocess.call, ['sudo', '-n', '--', 'iptables', '-t', 'nat', '-D', 'POSTROUTING', '-s', "%s/%d" % (self.ipgen(0), self.cidr), '!', '-o', brname, '-j', 'MASQUERADE'])
+
+    def macgen(self, node, ifnum=0):
+        return "de:ad:be:%0.2x:%0.2x:%0.2x" % (ifnum, self.idnum, node)
 
     def ipgen(self, node):
         return "172.30.%d.%d" % (self.idnum, node)
 
     def ipv6gen(self, node):
-        return "fd84:c772:8103:fa%s::%s" % (self.idhex, hex(node+256)[-2:])
+        return "fd84:c772:8103:%0.4x::%0.4x" % (0xfa00 + self.idnum, node)
 
 
     def enable_dnsmasq(self):
@@ -480,7 +515,7 @@ class Cluster(object):
             f.write("local=/%s/\n" % self.name)
             f.write("pid-file=%s\n" % self.dnsmasq_pid)
             f.write("except-interface=lo\n")
-            f.write("bind-dynamic\n")
+            f.write("bind-interfaces\n")
             f.write("interface=%s\n" % self.name)
             f.write("dhcp-range=%s,%s\n" % (self.ipgen(128), self.ipgen(254)))
             f.write("dhcp-no-override\n")
@@ -503,61 +538,26 @@ class Cluster(object):
                               stdout=open(self.dnsmasq_output, 'w'),
                               stderr=subprocess.STDOUT)
 
-    def disable_dnsmasq(self):
+        # Wait up to 1 minute for dnsmasq to stabilize
+        etime = time.time() + 60.0
+        while (time.time() <= etime):
+            time.sleep(1.0)
+            try:
+                with open(self.dnsmasq_pid, 'r') as f:
+                    pid=int(f.read().strip())
+                    if pid > 0:
+                        atexit.register(self.disable_dnsmasq, pid)
+                        break
+            except (OSError, IOError):
+                pass
+        else:
+            raise RuntimeError("Dnsmasq failed to start in time")
+
+    def disable_dnsmasq(self, pid):
         try:
-            with open(self.dnsmasq_pid, 'r') as f:
-                pid=int(f.read().strip())
-                os.kill(pid, signal.SIGTERM)
+            os.kill(pid, signal.SIGKILL)
         except:
             logging.warning("Failed to terminate dnsmasq")
-
-    def enable_bridge(self):
-        """Enable the bridge using bridge control commands.
-        """
-        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addbr', self.name])
-        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'stp', self.name, 'on'])
-        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'setfd', self.name, '2'])
-        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'sethello', self.name, '2'])
-        subprocess.check_call(['sudo', '-n', '--', 'ip', 'tuntap','add', 'dev', self.name + "-host", 'mode', 'tap'])
-        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addif', self.name, self.name + "-host"])
-        subprocess.check_call(['sudo', '-n', '--', 'sysctl', '-q', '-w', "net.ipv6.conf.%s.accept_ra=0" % self.name, "net.ipv6.conf.%s.autoconf=0" % self.name])
-        subprocess.check_call(['sudo', '-n', '--', 'ip', 'link', 'set', 'dev', self.name, 'up'])
-        subprocess.check_call(['sudo', '-n', '--', 'ip', 'addr', 'add', "%s/%d" %(self.ipaddr, self.cidr), "dev", self.name])
-        subprocess.check_call(['sudo', '-n', '--', 'ip', 'addr', 'add', "%s/%d" %(self.ipv6addr, self.v6cidr), "dev", self.name])
-
-        # NAT IPv4 packets off the bridge if supported.  The iptables
-        # configuration depends on iptables on the server not being
-        # used for anything else.
-        subprocess.call(['sudo', '-n', '--', 'sysctl', '-q', '-w', 'net.ipv4.ip_forward=1'])
-        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'nat', '-I', 'POSTROUTING', '-s', "%s/%d" % (self.ipnet, self.cidr), '!', '-o', self.name, '-j', 'MASQUERADE'])
-        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-I', 'INPUT', '-i', self.name, '-j', 'ACCEPT'])
-        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-I', 'OUTPUT', '-o', self.name, '-j', 'ACCEPT'])
-        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-I', 'FORWARD', '-i', self.name, '-j', 'ACCEPT'])
-        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-I', 'FORWARD', '-o', self.name, '-j', 'ACCEPT'])
-
-        self.status = "enabled"
-
-    def disable_bridge(self):
-        """Disable the bridge using bridge control commands.
-        """
-        # Note, we will leave ip forwarding enabled since there
-        # may be other bridges using it.
-        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'nat', '-D', 'POSTROUTING', '-s', "%s/%d" % (self.ipnet, self.cidr), '!', '-o', self.name, '-j', 'MASQUERADE'])
-        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-D', 'INPUT', '-i', self.name, '-j', 'ACCEPT'])
-        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-D', 'OUTPUT', '-o', self.name, '-j', 'ACCEPT'])
-        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-D', 'FORWARD', '-i', self.name, '-j', 'ACCEPT'])
-        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-D', 'FORWARD', '-o', self.name, '-j', 'ACCEPT'])
-
-        subprocess.call(['sudo', '-n', '--', 'ip', 'link', 'set', 'dev', self.name, 'down'])
-
-        subprocess.call(['sudo', '-n', '--', 'ip', 'tuntap','del', 'dev', self.name + "-host", 'mode', 'tap'])
-
-        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'delbr', self.name])
-
-        bridge_free(self.br_key)
-
-        self.owner = None
-        self.status = "disabled"
 
 
     # Tear down VMs and networking on a signal or abort
@@ -571,20 +571,14 @@ class Cluster(object):
     def run(self):
         """Setup and run the cluster.
         """
-        for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGQUIT, signal.SIGILL,
-                    signal.SIGABRT, signal.SIGFPE, signal.SIGPIPE, signal.SIGTERM,
-                    signal.SIGUSR1, signal.SIGUSR2):
+        for sig in self.SIGSET:
             signal.signal(sig, lambda sig, frame: self.terminate_vms())
-
-        # enable the bridge
-        self.enable_bridge()
 
         # Setup dnsmasq on the bridge
         self.enable_dnsmasq()
 
         # Launch the VMs
         for vm in self.vms:
-            vm.setup()
             vm.run()
 
         # Collect VMs as they finish
@@ -599,32 +593,11 @@ class Cluster(object):
                 break # Abort the poll loop
             time.sleep(0.5)
 
-        # Cleanup after the VMs
-        for vm in self.vms:
-            attempts=0
-            while True:
-                try:
-                    vm.cleanup()
-                    break
-                except Exception, e:
-                    attempts+=1
-                    if attempts > 10:
-                        logging.warning("Failed to clean up VM %d" % vm.idnum)
-                        break
-                    else:
-                        time.sleep(0.5)
-
         for vm in self.vms:
             try:
                 vm_slot_put(vm.vmsid)
             except:
                 logging.warning("Failed to return the slot for %d" % vm.vmsid)
-
-        # terminate dnsmasq
-        self.disable_dnsmasq()
-
-        # disable the bridge
-        self.disable_bridge()
 
 def cmd_start():
     """Start new virtual machines
@@ -694,6 +667,10 @@ def cmd_start():
 
     opt.add_option("--cluster", dest="cluster",
         help="Start a cluster with the specified number of nodes")
+
+    opt.add_option("--interfaces", dest="interfaces",
+                   default="1",
+                   help="Specify the number of interfaces on the cluster nodes")
 
     (options, args) = opt.parse_args()
 
@@ -854,8 +831,9 @@ def cmd_start():
             
             p = subprocess.Popen(cmd, shell=False)
 
-            vm.pid = p.pid
-            vm.status="running"
+            with vm_slot_update(vm.vm_id) as vm:
+                vm.pid = p.pid
+
             print GREEN+"Vm ID: "+str(vm.vm_id)+NC
     
             p.wait()
@@ -906,8 +884,8 @@ def cmd_stop():
         
         for id in ids:
             vm = vm_lookup(int(id))
-            pid = readfile(vm.tmpdir + '/pid')
-            os.kill(int(pid), signal.SIGKILL)
+            if (vm.pid is not None) and vm.exists():
+                os.kill(vm.pid, signal.SIGKILL)
 
 
 def cmd_ssh():
@@ -918,6 +896,9 @@ def cmd_ssh():
 
     id = int(sys.argv[1].split('/')[0])
     vm = vm_lookup(id)
+
+    if not vm.exists():
+        raise RuntimeError("VM is not running")
 
     keyfile = os.path.dirname(os.path.realpath(__file__)) + "/id_dsa"
     os.system("chmod 600 " + keyfile)
@@ -983,15 +964,14 @@ def cmd_check():
         closeLockedDb(d)
         if (MAX_VMS - len(running_vms)) == 0:
             raise RuntimeError("No VMs available")
-        
+
     elif args[0] == "bridges":
-        d = openLockedDb(BR_FILE_LOCK, BR_FILE_DICT)
-        bridges = d["bridges"]
-        closeLockedDb(d)
-        avail = False
-        for bridge in bridges.itervalues():
-            avail |= bridge.available
-        if not avail:
+        for br_id in range(MAX_BRIDGES):
+            try:
+                subprocess.check_call(['/sbin/brctl', 'showmacs', "vmbr%d" % br_id], stdout=FNULL, stderr=FNULL)
+            except subprocess.CalledProcessError:
+                break
+        else:
             raise RuntimeError("No bridges available")
 
     elif args[0] == "conx3":
@@ -1030,27 +1010,26 @@ def cmd_list():
     
         running_vms = sorted(running_vms, key=operator.attrgetter("owner", "vm_id"))
     
-        print "Domain\tIP\t\tConX3 id\tOwner\tDead"
-        print "------\t------------\t--------\t-----\t----"
+        print "Domain\tIP\t\tConX3 id\tOwner\tPID"
+        print "------\t------------\t--------\t-----\t-----"
     
         for vm in running_vms:
-            mia=" " if vm.exists() == True else "X"
+            vpid=str(vm.pid) if vm.exists() == True else "DEAD"
             print (str(vm.name) + "\t" + str(vm.ip) + "\t" +
-                str(vm.conx3_id) + "\t\t" +
-                str(vm.owner) + "\t" + mia)
+                   str(vm.conx3_id) + "\t\t" +
+                   str(vm.owner) + "\t" + vpid)
 
     elif args[0] == "bridges":
-        d = openLockedDb(BR_FILE_LOCK, BR_FILE_DICT)
-        bridges = d["bridges"]
-        closeLockedDb(d)
-
-        bridges = bridges.values()
-       
-        bridges = sorted(bridges, key=operator.attrgetter("br_name"))
-        print "Bridge\tAvailable?"
-        print "------\t----------"
-        for br in bridges:
-            print br.br_name+"\t"+str(br.available)
+        print "bridge name\tbridge id"
+        for br_id in range(MAX_BRIDGES):
+            try:
+                brout=subprocess.check_output(['/sbin/brctl', 'show', "vmbr%d" % br_id], stderr=FNULL)
+                for l in brout.split("\n"):
+                    m = re.match('^(vmbr\d+)\s+([0-9a-f]+\.[0-9a-f]+)', l)
+                    if m:
+                        print "%s\t\t%s" % (m.group(1), m.group(2))
+            except subprocess.CalledProcessError:
+                pass
 
     elif args[0] == "conx3":
         cards = list_conx3()
@@ -1082,31 +1061,49 @@ def cmd_purge():
     for entry in args:
         if (entry[:2] == "vm") and entry[2:].isdigit():
             vms_by_name.append(entry)
-        elif (entry[:2] == "br") and entry[2:].isdigit():
+        elif (entry[:4] == "vmbr") and entry[4:].isdigit():
             brs_by_name.append(entry)
         elif entry.isdigit():
             vms_by_id.append(int(entry))
         else:
             raise ValueError("Cannot infer type of entry: %s" % entry)
 
+    # Copied from all the atexit.register calls in the bridge code
+    for brname in brs_by_name:
+        for vmif in range(MAX_VMS):
+            logging.debug("Purging: vm%d-%s" % (vmif, brname))
+            subprocess.call(['sudo','-n', '--', 'ip', 'tuntap', 'del', 'dev', "vm%d-%s" % (vmif, brname), 'mode', 'tap'])
+            for vmidx in range(1,8):
+                logging.debug("Purging: vm%d-%s-%d" % (vmif, brname, vmidx))
+                subprocess.call(['sudo','-n', '--', 'ip', 'tuntap', 'del', 'dev', "vm%d-%s-%d" % (vmif, brname, vmidx), 'mode', 'tap'])
+
+        # The MASQUERADE rule is a bit more complicated, let that leak for now
+        # Tearing down dnsmasq is more complicated as well
+        logging.debug("Purging iptables rules for %s" % brname)
+        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-D', 'INPUT', '-i', brname, '-j', 'ACCEPT'], stdout=FNULL, stderr=FNULL)
+        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-D', 'OUTPUT', '-o', brname, '-j', 'ACCEPT'], stdout=FNULL, stderr=FNULL)
+        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-D', 'FORWARD', '-i', brname, '-j', 'ACCEPT'], stdout=FNULL, stderr=FNULL)
+        subprocess.call(['sudo', '-n', '--', 'iptables', '-t', 'filter', '-D', 'FORWARD', '-o', brname, '-j', 'ACCEPT'], stdout=FNULL, stderr=FNULL)
+
+        logging.debug("Purging host interface for %s" % brname)
+        subprocess.call(['sudo', '-n', '--', 'ip', 'tuntap','del', 'dev', brname + "-host", 'mode', 'tap'], stdout=FNULL, stderr=FNULL)
+
+        logging.debug("Purging bridge %s" % brname)
+        subprocess.call(['sudo', '-n', '--', 'ip', 'link', 'set', 'dev', brname, 'down'], stdout=FNULL, stderr=FNULL)
+        subprocess.call(['sudo', '-n', '--', 'brctl', 'delbr', brname], stdout=FNULL, stderr=FNULL)
+
     vmdb = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
     running_vms = vmdb["running_vms"]
     new_vms = []
     for vm in running_vms:
-        if (vm.vm_id not in vms_by_id) and (vm.name not in vms_by_name):
+        if (vm.vm_id in vms_by_id) or (vm.name in vms_by_name):
+            if (vm.pid is not None) and vm.exists():
+                os.kill(vm.pid, signal.SIGKILL)
+        else:
             new_vms.append(vm)
 
     vmdb["running_vms"] = new_vms
     closeLockedDb(vmdb)
-
-    brdb = openLockedDb(BR_FILE_LOCK, BR_FILE_DICT)
-    bridges = brdb["bridges"]
-    for bridge in bridges.itervalues():
-        if bridge.br_name in brs_by_name:
-            bridge.available = True
-
-    brdb["bridges"]=bridges
-    closeLockedDb(brdb)
     
 
 
@@ -1200,28 +1197,6 @@ def cmd_genips():
     gendbs("ips", "Generate a new IP/MAC file", IP_FILE_LOCK, IP_FILE_DICT, ips_generator)
 
 
-def cmd_genbridges():
-    """
-    Generates a new set of bridges
-
-    For use when setting up networking on a new machine, or if
-    any of the config files get screwed up.
-    """
-
-    def bridges_generator(db):
-        bridges = {}
-
-        for br_num in range (1,100):
-            #generate bridge file
-            br_key = str(br_num)
-            br_name = "br"+br_key
-            bridges[br_key] = Bridge(br_key,br_num,br_name)
-
-        db["bridges"] = bridges
-
-    gendbs("bridges", "Generate a new bridge file", BR_FILE_LOCK, BR_FILE_DICT, bridges_generator)
-
-
 def list_conx3():
     """Return the device IDs of all Mellanox ConnectX-3 Virtual Functions
        on the system which are detached from the Mellanox driver and
@@ -1274,7 +1249,6 @@ def cmd_help():
     check       check whether there are free resources
     list        list all running vms
     genips      generate a fresh vm database
-    genbridges  generate a fresh bridges database
     help        print help for commands
     """
 
