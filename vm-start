@@ -454,9 +454,8 @@ class Cluster(object):
         else:
             raise RuntimeError("No bridge entries available to start cluster")
 
-        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'stp', brname, 'on'])
-        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'setfd', brname, '2'])
-        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'sethello', brname, '2'])
+        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'stp', brname, 'off'])
+        subprocess.check_call(['sudo', '-n', '--', 'brctl', 'setfd', brname, '0'])
         
         subprocess.check_call(['sudo', '-n', '--', 'ip', 'tuntap','add', 'dev', brname + "-host", 'mode', 'tap'])
         atexit.register(subprocess.call, ['sudo', '-n', '--', 'ip', 'tuntap','del', 'dev', brname + "-host", 'mode', 'tap'])
