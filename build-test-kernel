@@ -239,6 +239,11 @@ cmd_config()
     do_make nconfig
 }
 
+cmd_help()
+{
+    usage
+}
+
 # checks if command is valid
 if [ "$(type -t "cmd_$CMD")" == "function" ]; then
     eval "cmd_$CMD" "$@"
