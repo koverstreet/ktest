@@ -5,6 +5,7 @@
 
 require-bin make-bcache
 require-kernel-config MD,BCACHE,BCACHE_DEBUG,CLOSURE_DEBUG
+require-kernel-config DYNAMIC_FAULT
 
 export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]}()}+ '
 
