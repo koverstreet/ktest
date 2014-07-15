@@ -269,7 +269,7 @@ test_bonnie()
 	esac
 
 	for dev in $DEVICES; do
-	    bonnie++ -x $loops -u root -d /mnt/$dev &
+	    bonnie++ -x $loops -r 128 -u root -d /mnt/$dev &
 	done
 
 	test_wait
