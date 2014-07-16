@@ -254,8 +254,8 @@ run_lcov()
     echo "    sudo yum install perl-Digest-MD5"
 
     # shellcheck disable=SC2086
-    lcov --quiet --output-file "$info" $tracefiles
-    genhtml --output-directory "$html" "$info" > /dev/null
+    lcov --quiet --output-file "$info" $tracefiles || true
+    genhtml --output-directory "$html" "$info" > /dev/null || true
 
     echo
     echo "LCOV report: file://$html/index.html"
