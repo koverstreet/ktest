@@ -122,12 +122,17 @@ setup_bcache() {
     cache_set_settings
 }
 
-stop_bcache()
+stop_fs()
 {
     for dev in $DEVICES; do
 	umount /mnt/$dev || true
     done
 
+}
+
+stop_bcache()
+{
+    stop_fs
     echo 1 > /sys/fs/bcache/reboot
 }
 
