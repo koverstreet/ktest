@@ -73,28 +73,29 @@ reposdir=${CHROOTPATH}/etc/yum.repos.d
 ZZ
 
 cat >> $MNT/etc/yum.repos.d/install.repo <<-ZZ
-[rhel-7-mirror]
-name=rhel-7-mirror
-baseurl=http://mirrors.daterainc.com/mirrors/rhel-7-mirror
-enabled=1
+[centos-7-os]
+name=centos-7-os
+baseurl=http://mirrors.daterainc.com/mirrors/centos-7/os/x86_64/
 gpgcheck=0
 
-[rhel-7-debug]
-name=rhel-7-debug
-baseurl=http://mirrors.daterainc.com/mirrors/rhel-7-debug
-enabled=1
+[centos-7-extras]
+name=centos-7-extras
+baseurl=http://mirrors.daterainc.com/mirrors/centos-7/extras/x86_64/
+gpgcheck=0
+
+[centos-7-updates]
+name=centos-7-updates
+baseurl=http://mirrors.daterainc.com/mirrors/centos-7/updates/x86_64/
 gpgcheck=0
 
 [epel-7-x86_64]
 name=epel-7-x86_64
-baseurl=http://mirrors.daterainc.com/mirrors/epel-7-x86_64
-enabled=1
+baseurl=http://mirrors.daterainc.com/mirrors/epel-7-x86_64/
 gpgcheck=0
 
-[rhel-7-ports]
-name=rhel-7-ports
-baseurl=http://mirrors.daterainc.com/mirrors/rhel-7-ports
-enabled=1
+[centos-7-ports]
+name=centos-7-ports
+baseurl=http://mirrors.daterainc.com/mirrors/centos-7-ports/
 gpgcheck=0
 ZZ
 
