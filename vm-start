@@ -872,9 +872,9 @@ def cmd_stop():
 
 
     if opts.ipaddr:
-        os.system(
-          "ssh -o StrictHostKeyChecking=no -i id_dsa %s 'shutdown -h now'"
-          % opts.ipaddr)
+        cmd="ssh -o StrictHostKeyChecking=no -i id_dsa %s 'shutdown -h now'" % opts.ipaddr
+        logging.debug("os.system(\""+cmd+"\")")
+        os.system(cmd)
     else:
 
         if len(args) == 0:
@@ -884,6 +884,7 @@ def cmd_stop():
         
         for id in ids:
             vm = vm_lookup(int(id))
+            logging.debug("killing vm "+id+": pid="+str(vm.pid)+"  exists="+str(vm.exists()))
             if (vm.pid is not None) and vm.exists():
                 os.kill(vm.pid, signal.SIGKILL)
 
