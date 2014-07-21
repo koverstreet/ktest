@@ -3,7 +3,7 @@
 require-lib ../test-libs.sh
 
 config-scratch-devs 512M,2G,2G
-config-mem 256M
+config-mem 512M
 
 config-timeout 1200
 

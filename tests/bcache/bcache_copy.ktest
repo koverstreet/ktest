@@ -6,7 +6,7 @@ require-lib ../../../vm-tests/container_lib.sh
 require-container ioctl_test
 
 config-scratch-devs 1G
-config-mem 256M
+config-mem 512M
 
 config-timeout 600
 

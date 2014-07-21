@@ -5,7 +5,7 @@ require-lib ../test-libs.sh
 require-kernel-config DYNAMIC_FAULT
 
 config-scratch-devs 2G,4G
-config-mem 256M
+config-mem 512M
 config-timeout 300
 
 main()

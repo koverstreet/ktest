@@ -2,7 +2,7 @@
 
 require-lib test-libs.sh
 
-config-mem 256M
+config-mem 512M
 config-timeout 300
 
 main()

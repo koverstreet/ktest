@@ -3,7 +3,7 @@
 require-lib ../test-libs.sh
 
 config-scratch-devs 2G,4G
-config-mem 256M
+config-mem 512M
 
 nr_iterations=$((($ktest_priority + 1) * 5))
 config-timeout $(($nr_iterations * 60))
