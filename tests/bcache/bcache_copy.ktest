@@ -30,5 +30,5 @@ main()
     bch_ioctl copy	0 0   1 0   8
     bch_ioctl read	1 0	    8 > bar
 
-    diff -q foo bar && echo "TEST SUCCESS"
+    diff -q foo bar
 }
