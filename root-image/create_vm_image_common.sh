@@ -54,8 +54,8 @@ finish_umount_image()
 {
     cp $VM_IMAGE_DIR/fstab "$MNT/etc/fstab"
 
-    touch $VM_IMAGE_DIR/etc/resolv.conf
-    chmod 644 $VM_IMAGE_DIR/etc/resolv.conf
+    touch $MNT/etc/resolv.conf
+    chmod 644 $MNT/etc/resolv.conf
 
     # Blank the root password
     sed -i -e 's/root:[^:]*:/root::/' "$MNT"/etc/shadow
