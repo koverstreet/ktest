@@ -15,7 +15,12 @@ main()
     make-bcache --wipe-bcache -C /dev/vdc
 
     echo /dev/vda > /sys/fs/bcache/register
+
+    # Make sure we can write to sysfs without panicing
     echo 100M > /sys/fs/bcache/*/flash_vol_create || true
+
+    # Make sure we can read from sysfs without panicing
+    test_sysfs
 
     echo /dev/vdb > /sys/fs/bcache/register
     echo > /sys/fs/bcache/*/unregister

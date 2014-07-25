@@ -412,7 +412,7 @@ test_fsx()
 test_sysfs()
 {
     if [ -d /sys/fs/bcache/*-* ]; then
-	find -H /sys/fs/bcache/*-*/* -type f -perm -0400 -exec cat {} \; \
+	find -H /sys/fs/bcache/ -type f -perm -0400 -exec cat {} \; \
 	    > /dev/null
     fi
 }
