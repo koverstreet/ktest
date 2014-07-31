@@ -4,6 +4,7 @@
 #
 
 require-bin make-bcache
+require-bin bcachectl
 require-kernel-config MD,BCACHE,BCACHE_DEBUG,CLOSURE_DEBUG
 require-kernel-config DYNAMIC_FAULT
 
@@ -94,9 +95,7 @@ add_device() {
 # bcache block devices.
 #
 existing_bcache() {
-    for device in $CACHE $TIER $BDEV; do
-	echo $device > /sys/fs/bcache/register
-    done
+    bcachectl register $CACHE $TIER $BDEV
 
     DEVICES=
     DEVICE_COUNT=0
