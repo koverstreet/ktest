@@ -296,6 +296,7 @@ cmd_run()
 	--id "$WORK_DIR/id"					\
 	-m "$_MEM"						\
 	--fs "$WORK_DIR/$LOG_INTERNAL" logfs			\
+	--cpus 6						\
 	$_SCRATCH						\
 	$_INFINIBAND						\
 	$_VMCLUSTER </dev/null 2>&1 > "$WORK_DIR/output" &
