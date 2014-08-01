@@ -37,5 +37,5 @@ main()
     test_sync &
     test_drop_caches &
 
-    test_fio
+    test_fio || true
 }
