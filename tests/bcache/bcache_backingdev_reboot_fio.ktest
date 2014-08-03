@@ -37,4 +37,9 @@ main()
     test_drop_caches &
 
     test_fio || true
+
+    # Make sure we reboot and don't just exit
+    while true; do
+	sleep 1000
+    done
 }
