@@ -988,7 +988,23 @@ def cmd_check():
 
 
 def cmd_list():
-    """List out running VMs"""
+    """List out running VMs
+
+    8/5/14 - jfr
+
+    Added a --json option for vm-start list command to create output
+    as a json-formatted string.  This allows you to	avoid parsing
+    the output of the vm-start list	command	to get info about
+    running	vms.  Just pipe	the output of vm-start back to a
+    program	as a string and	use a json.load	method or function to
+    convert	it into	the appropriate	internal format	(supported by
+    any language that supports json). Works for vms, bridges and
+    conx3. 	Vms are	returned as a nested set of dictionaries, one
+    for each vm, bridges are returned as key/value pairs, one for
+    each bridge, and conx3 cards are returned as a "cards"/list
+    pair where the list contains the list of conx3 cards.
+    """
+
     opt=OptionParser("usage: %prog vm list [session_id]",
              description="""List out running VMs""")
 
