@@ -73,11 +73,11 @@ def appendfile(filename, line):
             newline = f.read()
             newline = newline.strip()
             newline += "/"
-                   
+
     newline += str(line)
     logging.debug("in appendfile - writing <%s> into %s" % (newline,filename))
     with open(filename, 'w') as f:
-        f.write(newline+"\n")  
+        f.write(newline+"\n")
 
 """
 Functions of opening shelf to lock while
@@ -218,19 +218,19 @@ def vm_cleanup(vmdir):
 
     idfile = os.path.join(vmdir,"id")
     pidfile = os.path.join(vmdir,"pid")
-        
+
     ids = ""
     try:
         with open(idfile,"r") as f:
             ids = f.read()
     except:
         pass
-    
+
     ids = ids.split("/")
-    
+
     if ids[0] == "":
         raise RuntimeError("No ids found in <%s>!" % idfile)
-    
+
     pid = "NONE"
     try:
         pid = readfile(pidfile)
@@ -357,7 +357,7 @@ class ClusteredVM(object):
         for td in self.tapdevs:
             cmd.extend(["-netdev","tap,id="+td["eth"]+",ifname="+td["name"]+",script=no,downscript=no"])
             cmd.extend(["-device","virtio-net-pci,netdev="+td["eth"]+",mac="+td["mac"]])
-            
+
         cmd.extend(["-device", "virtio-rng-pci"])
 
         self.proc = subprocess.Popen(cmd, shell=False, close_fds=True)
@@ -456,10 +456,10 @@ class Cluster(object):
 
         subprocess.check_call(['sudo', '-n', '--', 'brctl', 'stp', brname, 'off'])
         subprocess.check_call(['sudo', '-n', '--', 'brctl', 'setfd', brname, '0'])
-        
+
         subprocess.check_call(['sudo', '-n', '--', 'ip', 'tuntap','add', 'dev', brname + "-host", 'mode', 'tap'])
         atexit.register(subprocess.call, ['sudo', '-n', '--', 'ip', 'tuntap','del', 'dev', brname + "-host", 'mode', 'tap'])
-        
+
         subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addif', brname, brname + "-host"])
         subprocess.check_call(['sudo', '-n', '--', 'sysctl', '-q', '-w', "net.ipv6.conf.%s.accept_ra=0" % brname, "net.ipv6.conf.%s.autoconf=0" % brname])
 
@@ -500,7 +500,7 @@ class Cluster(object):
 
     def enable_dnsmasq(self):
         """Configure and start dnsmasq
-        
+
         IPv4 will have explicit host entries (hostsfile).
 
         IPv6 will use router advertisement to pick a random address
@@ -531,7 +531,7 @@ class Cluster(object):
 
         cmd = ['sudo', '-n', '--', 'dnsmasq',
                "--log-facility=-", '--log-queries',
-               "--conf-file=%s" % self.dnsmasq_conf, 
+               "--conf-file=%s" % self.dnsmasq_conf,
                "--user=%s" % self.owner]
         subprocess.check_call(cmd, shell=False, close_fds=True,
                               stdin=FNULL,
@@ -679,15 +679,15 @@ def cmd_start():
 
     tmpdate = datetime.datetime.strftime(
         datetime.datetime.today(),"%Y%m%d-%H%M%S")
-    
+
     options.tmpdir = os.path.join(
         options.tmpfs,"vm-%s-%s" % (tmpdate, randstr()))
 
     # generate tmp dir
     os.makedirs(options.tmpdir, 0700)
-        
+
     if options.cluster:
-        
+
         cluster = Cluster(int(options.cluster),options)
 
         cluster.run()
@@ -800,7 +800,7 @@ def cmd_start():
             cmd.extend(["-serial",  "unix:" + options.tmpdir + "/kgdb,server,nowait"])
             cmd.extend(["-monitor", "unix:" + options.tmpdir + "/mon,server,nowait"])
             cmd.extend(["-gdb", "unix:" + options.tmpdir + "/gdb,server,nowait"])
-    
+
             # Drives:
             if options.persistant:
                 cmd.extend(["-drive", "format=raw,file="+options.image])
@@ -817,30 +817,30 @@ def cmd_start():
 
             if iso:              # add cdrom
                 cmd.extend(["-cdrom",iso])
- 
+
             cmd.extend(["-net", "nic,model=virtio"])
             cmd.extend(["-net", "user,host=10.0.2.2,restrict=off,hostfwd=tcp:127.0.0.1:" + str(vm.vm_id + 9000) + "-:22"])
-    
+
             if options.conx3:
                 print "Assigning vf: ", vm.conx3_id
                 cmd.extend(["-device", "pci-assign,host="+str(vm.conx3_id)])
-        
+
             cmd.extend(["-device", "virtio-rng-pci"])
 
             logging.warning("Executing: "+str(cmd))
-            
+
             p = subprocess.Popen(cmd, shell=False)
 
             with vm_slot_update(vm.vm_id) as vm:
                 vm.pid = p.pid
 
             print GREEN+"Vm ID: "+str(vm.vm_id)+NC
-    
+
             p.wait()
             caught_signal[0] = True
         except:
             pass
-    
+
     vm_cleanup(options.tmpdir)
     subprocess.call(["stty", "sane"],
                     stdout=FNULL,
@@ -880,8 +880,8 @@ def cmd_stop():
         if len(args) == 0:
             raise RuntimeError("Please provide a vm id or ip address to stop")
 
-        ids = args[0].split("/") 
-        
+        ids = args[0].split("/")
+
         for id in ids:
             vm = vm_lookup(int(id))
             logging.debug("killing vm "+id+": pid="+str(vm.pid)+"  exists="+str(vm.exists()))
@@ -996,6 +996,11 @@ def cmd_list():
                    default=False, action="store_true",
         help="enable debugging")
 
+    # option to return json-formatted info instead of printed report
+    opt.add_option("-j", "--json", dest="json",
+                   default=False, action="store_true",
+        help="dump vm-start list data in json format")
+
 
     (options, args) = opt.parse_args()
 
@@ -1003,41 +1008,73 @@ def cmd_list():
         logging.getLogger().setLevel("DEBUG")
 
     if len(args) == 0 or args[0] == "vms":
-        
+
         # get running vms:
         d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
         running_vms = d["running_vms"]
         closeLockedDb(d)
-    
+
         running_vms = sorted(running_vms, key=operator.attrgetter("owner", "vm_id"))
-    
-        print "Domain\tIP\t\tConX3 id\tOwner\tPID"
-        print "------\t------------\t--------\t-----\t-----"
-    
+
+        if not options.json:
+            print "Domain\tIP\t\tConX3 id\tOwner\tPID"
+            print "------\t------------\t--------\t-----\t-----"
+
+        json_fmt = '"%s":{"ip":"%s","conx3":"%s","owner":"%s","pid":%s},'
+        json_dict = ""
+
         for vm in running_vms:
             vpid=str(vm.pid) if vm.exists() == True else "DEAD"
-            print (str(vm.name) + "\t" + str(vm.ip) + "\t" +
-                   str(vm.conx3_id) + "\t\t" +
-                   str(vm.owner) + "\t" + vpid)
+
+            json_dict += json_fmt % (str(vm.name),
+                str(vm.ip), str(vm.conx3_id), str(vm.owner), str(vpid))
+
+            if not options.json:
+                print (str(vm.name) + "\t" + str(vm.ip) + "\t" +
+                       str(vm.conx3_id) + "\t\t" +
+                       str(vm.owner) + "\t" + vpid)
 
     elif args[0] == "bridges":
-        print "bridge name\tbridge id"
+        if not options.json:
+            print "bridge name\tbridge id"
+
+        json_dict = ""
+
         for br_id in range(MAX_BRIDGES):
             try:
                 brout=subprocess.check_output(['/sbin/brctl', 'show', "vmbr%d" % br_id], stderr=FNULL)
                 for l in brout.split("\n"):
                     m = re.match('^(vmbr\d+)\s+([0-9a-f]+\.[0-9a-f]+)', l)
                     if m:
-                        print "%s\t\t%s" % (m.group(1), m.group(2))
+                        json_dict += '"%s":"%s",' % (m.group(1), m.group(2))
+                        if not options.json:
+                            print "%s\t\t%s" % (m.group(1), m.group(2))
             except subprocess.CalledProcessError:
                 pass
 
+
     elif args[0] == "conx3":
+
         cards = list_conx3()
-        print "Cards"
-        print "-------"
+
+        if not options.json:
+            print "Cards"
+            print "-------"
+
+        json_dict = ""
+
         for card in cards:
-            print card
+
+            json_dict += '"%s",' % card
+
+            if not options.json:
+                print card
+
+        json_dict = '"cards":[' + json_dict[:-1] + '],'
+
+    if options.json:
+        print "{" + json_dict[:-1] + "}"
+
 
 cmd_ls = cmd_list
 
@@ -1105,7 +1142,7 @@ def cmd_purge():
 
     vmdb["running_vms"] = new_vms
     closeLockedDb(vmdb)
-    
+
 
 
 def gendbs(dbname, description, lockfile, dbfile, callback):
@@ -1202,7 +1239,7 @@ def list_conx3():
     """Return the device IDs of all Mellanox ConnectX-3 Virtual Functions
        on the system which are detached from the Mellanox driver and
        are usable for VMs.
-    
+
     Note:
 
     This requires system preparation to create the virtual, detached cards.
