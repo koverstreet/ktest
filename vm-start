@@ -1036,7 +1036,7 @@ def cmd_list():
             print "Domain\tIP\t\tConX3 id\tOwner\tPID"
             print "------\t------------\t--------\t-----\t-----"
 
-        json_fmt = '"%s":{"ip":"%s","conx3":"%s","owner":"%s","pid":%s},'
+        json_fmt = '"%s":{"ip":"%s","conx3":"%s","owner":"%s","pid":"%s"},'
         json_dict = ""
 
         for vm in running_vms:
