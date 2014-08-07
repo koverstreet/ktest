@@ -118,9 +118,14 @@ class Domain:
         """Does the VM this represents actually exist?"""
         try:
             if self.pid is not None:
-                expath = os.path.basename(os.readlink("/proc/%d/exe" % self.pid))
-                if expath[:11] == "qemu-system":
-                    return True
+                f = os.open("/proc/%d/cmdline" % self.pid,  os.O_RDONLY)
+                try:
+                    chkstr="qemu-system"
+                    buf = os.read(f, len(chkstr))
+                    if buf == chkstr:
+                        return True
+                finally:
+                    os.close(f)
         except (OSError, IOError, ValueError) as e:
             pass
 
