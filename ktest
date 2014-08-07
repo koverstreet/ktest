@@ -44,6 +44,7 @@ IMG="/var/lib/ktest/root"
                         #       auto-override: $HOME/.ktest/root
 INTERACTIVE=0           # if set to 1, timeout is ignored completely
                         #       sets with: -I
+EXIT_ON_SUCCESS=0	# if true, exit on success, not failure or timeout
 CONTAINER_SRC_DIR=""	# dir which contains the datera containers
 
 # config files:
@@ -89,7 +90,7 @@ fi
 CMD="cmd_$1"
 shift
 
-while getopts "hp:i:k:Iw:x" arg; do
+while getopts "hp:i:k:ISw:x" arg; do
     case $arg in
 	h)
 	    usage
@@ -106,6 +107,9 @@ while getopts "hp:i:k:Iw:x" arg; do
 	    ;;
 	I)
 	    INTERACTIVE=1
+	    ;;
+	S)
+	    EXIT_ON_SUCCESS=1
 	    ;;
 	w)
 	    WORK_DIR=$OPTARG
@@ -303,16 +307,19 @@ cmd_run()
 
     err=0
 
-    if [ "$INTERACTIVE" = 1 ]; then
+    if [ "$EXIT_ON_SUCCESS" = 1 ]; then
+	sed -u -e '/TEST SUCCESS/ { p; Q0 }'			\
+	       < "$WORK_DIR/output" || err=1
+    elif [ "$INTERACTIVE" = 1 ]; then
 	cat "$WORK_DIR/output"
     else
-	timeout "$_TIMEOUT"				\
-	    sed -u -e '/TEST SUCCESS/ { p; Q0 }'	\
-		   -e '/TEST FAILED/  { p; Q1 }'	\
+	timeout "$_TIMEOUT"					\
+	    sed -u -e '/TEST SUCCESS/ { p; Q0 }'		\
+		   -e '/TEST FAILED/  { p; Q1 }'		\
 		   < "$WORK_DIR/output" || err=1
-
-	$VMSTART stop "$(cat "$WORK_DIR/id")"
     fi
+
+    $VMSTART stop "$(cat "$WORK_DIR/id")"
 
     run_lcov
 
