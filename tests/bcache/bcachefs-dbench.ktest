@@ -5,7 +5,8 @@ require-lib ../test-libs.sh
 config-scratch-devs 2G
 config-mem 512M
 
-config-timeout 600
+nr_iterations=$((($ktest_priority + 1) * 5))
+config-timeout $(($nr_iterations * 60))
 
 main()
 {
@@ -18,7 +19,11 @@ main()
 
     setup_tracing 64 'bcache:*'
 
-    setup_bcache
+    if [ $NR_REBOOTS = 0 ]; then
+	setup_bcache
+    else
+	existing_bcache
+    fi
 
     test_sysfs
 
@@ -28,5 +33,15 @@ main()
     test_drop_caches &
 
     setup_fs
+
+    [ "$NR_REBOOTS" != "$nr_iterations" ] && (sleep 10; do_reboot) &
+
     test_dbench
+
+    if [ "$NR_REBOOTS" != "$nr_iterations" ]; then
+	# Make sure we reboot and don't just exit
+	while true; do
+	    sleep 1000
+	done
+    fi
 }
