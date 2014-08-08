@@ -265,10 +265,8 @@ run_lcov()
     echo "LCOV report: file://$html/index.html"
 }
 
-cmd_boot()
+run_vmstart()
 {
-    prepare_vm
-
     # shellcheck disable=SC2086
     $VMSTART start					\
 	-i "$IMG" -t "$SCRATCH_DIR"			\
@@ -276,7 +274,15 @@ cmd_boot()
 	-c "$WORK_DIR/run.iso"				\
 	--id "$WORK_DIR/id"				\
 	--fs "$WORK_DIR/$LOG_INTERNAL" logfs		\
-	-m 1G
+	--cpus 6					\
+        "$@"
+}
+
+cmd_boot()
+{
+    prepare_vm
+
+    run_vmstart -m 1G
 }
 
 cmd_run()
@@ -292,15 +298,9 @@ cmd_run()
     mkfifo "$WORK_DIR/output"
 
     # shellcheck disable=SC2086
-    $VMSTART start						\
+    run_vmstart                                                 \
 	--append="root=/dev/sda rw ktest.priority=$PRIORITY"	\
-	-i "$IMG" -t "$SCRATCH_DIR"				\
-	-k "$KERNEL/vmlinuz"					\
-	-c "$WORK_DIR/run.iso"					\
-	--id "$WORK_DIR/id"					\
 	-m "$_MEM"						\
-	--fs "$WORK_DIR/$LOG_INTERNAL" logfs			\
-	--cpus 6						\
 	$_SCRATCH						\
 	$_INFINIBAND						\
 	$_VMCLUSTER </dev/null 2>&1 > "$WORK_DIR/output" &
