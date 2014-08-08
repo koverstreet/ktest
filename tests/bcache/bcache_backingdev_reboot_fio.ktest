@@ -36,5 +36,10 @@ main()
     test_sync &
     test_drop_caches &
 
-    test_fio
+    test_fio || true
+
+    # Make sure we reboot and don't just exit
+    while true; do
+	sleep 1000
+    done
 }

@@ -36,7 +36,7 @@ PACKAGES+=" elfutils-libelf elfutils-libelf-devel elfutils-libs elfutils-devel"
 PACKAGES+=" numactl-devel numactl-libs perl perl-libs perl-devel"
 PACKAGES+=" libunwind libunwind-devel"
 PACKAGES+=" libuuid libuuid-devel uuid-perl"
-PACKAGES+=" net-tools htop python-magic"
+PACKAGES+=" net-tools htop python-magic perf python-perf"
 
 create_mount_image "$@"
 

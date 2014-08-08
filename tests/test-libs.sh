@@ -157,7 +157,6 @@ stop_fs()
 
 stop_bcache()
 {
-    stop_fs
     echo 1 > /sys/fs/bcache/reboot
 }
 
@@ -406,6 +405,49 @@ test_fsx()
     )
 }
 
+expect_sysfs()
+{
+    prefix=$1
+    name=$2
+    value=$3
+
+    for file in $(echo /sys/fs/bcache/*/${prefix}*/${name}); do
+        if [ -e $file ]; then
+            current="$(cat $file)"
+            if [ "$current" != "$value" ]; then
+                echo "Mismatch: $file $value != $current"
+                exit 1
+            else
+                echo "OK: $file $value"
+            fi
+        fi
+    done
+}
+
+test_discard()
+{
+    if [ "${BDEV:-}" == "" -a "${CACHE:-}" == "" ]; then
+        return
+    fi
+
+    killall -STOP systemd-udevd
+
+    for dev in $DEVICES; do
+        echo "Discarding ${dev}..."
+        blkdiscard $dev
+    done
+
+    sleep 1
+
+    expect_sysfs cache dirty_buckets 0
+    expect_sysfs cache dirty_data 0
+    expect_sysfs cache cached_buckets 0
+    expect_sysfs cache cached_data 0
+    expect_sysfs bdev dirty_data 0
+
+    killall -CONT systemd-udevd
+}
+
 # Bcache antagonists
 
 test_sysfs()
@@ -471,9 +513,11 @@ test_stress()
     test_fio
 
     setup_fs
-
     test_dbench
     test_bonnie
+    stop_fs
+
+    test_discard
 }
 
 test_powerfail()
