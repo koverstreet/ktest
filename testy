@@ -36,6 +36,14 @@ read_tests()
 
             # shellcheck disable=SC2086
 	    set $line
+
+            if [ "$#" != 3 ]; then
+                echo "Malformed line in ${testlist}:" >&2
+                echo "Expect <priority> <pattern> <test>" >&2
+                echo "Got $line" >&2
+                exit 1
+            fi
+
 	    priority=$1
 	    shift
 	    pattern=$dir/$1
