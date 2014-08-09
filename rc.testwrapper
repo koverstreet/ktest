@@ -130,8 +130,6 @@ set +e
 (set -e; . rc.test; main)
 ret=$?
 
-set -e
-
 # XXX: check dmesg for warnings, oopses, slab corruption, etc. before signaling
 # success
 
