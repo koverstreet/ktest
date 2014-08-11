@@ -76,7 +76,7 @@ fi
 CMD="$1"
 shift
 
-while getopts "hp:k:Kc:i:b:j:Iw:x" arg; do
+while getopts "hp:k:Kc:i:b:j:ISw:x" arg; do
     case $arg in
 	h)
 	    usage
@@ -115,6 +115,9 @@ while getopts "hp:k:Kc:i:b:j:Iw:x" arg; do
 	    ;;
 	I)
 	    KTESTARGS+=" -I"
+	    ;;
+	S)
+	    KTESTARGS+=" -S"
 	    ;;
 	w)
 	    WORK_DIR=$OPTARG
