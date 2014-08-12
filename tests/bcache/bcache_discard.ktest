@@ -1,0 +1,52 @@
+#!/bin/bash
+
+require-lib ../test-libs.sh
+
+require-lib ../../../vm-tests/container_lib.sh
+require-container ioctl_test
+
+config-scratch-devs 1G
+config-mem 512M
+
+config-timeout 600
+
+main()
+{
+    copy_containers
+
+    make-bcache --bucket 64k --block 2k --cache /dev/vda
+    echo /dev/vda > /sys/fs/bcache/register
+
+    cd /root
+
+    dd if=/dev/urandom of=foo bs=4096 count=1
+    touch bar
+
+    bch_ioctl()
+    {
+	container_run ioctl_test /dev/bcache_extent0 $@
+    }
+
+    echo "initial state setup ..."
+    bch_ioctl write	        0 0	8 < foo
+    bch_ioctl write	        0 16	8 < foo
+
+    echo "initial state check ..."
+    bch_ioctl list_keys       0 0 0 1 0 &> bar
+    diff -q bar - <<-EOF
+	0:8 len 8 ptrs 2
+	0:24 len 8 ptrs 2
+	list_keys returned 0, 8 u64s of keys found
+EOF
+
+    echo "discard ...."
+    bch_ioctl discard	        0 0     32
+
+    echo "after discard check ..."
+    bch_ioctl list_keys       0 0 0 1 0 &> bar
+    diff -q bar - <<-EOF
+	list_keys returned 0, 0 u64s of keys found
+EOF
+
+    #! diff -q foo bar
+}
