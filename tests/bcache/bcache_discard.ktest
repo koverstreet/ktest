@@ -5,48 +5,72 @@ require-lib ../test-libs.sh
 require-lib ../../../vm-tests/container_lib.sh
 require-container ioctl_test
 
-config-scratch-devs 1G
+config-scratch-devs 2G
 config-mem 512M
 
 config-timeout 600
+
+mb_to_sec()
+{
+    local mb=$1
+    local sec=$((2*1024*$mb))
+    echo "$sec"
+}
 
 main()
 {
     copy_containers
 
-    make-bcache --bucket 64k --block 2k --cache /dev/vda
-    echo /dev/vda > /sys/fs/bcache/register
+    FLAGS="--bucket 512k --block 2k --discard --cache_replacement_policy=lru"
+    CACHE="/dev/vda"
+    BDEV=
+    VOLUME=1400M
+    TIER=
 
-    cd /root
-
-    dd if=/dev/urandom of=foo bs=4096 count=1
-    touch bar
+    setup_bcache
 
     bch_ioctl()
     {
 	container_run ioctl_test /dev/bcache_extent0 $@
     }
 
+    echo "-------- UNIT TEST -------- "
+
+    # this portion specifically tests to make sure discard doesn't
+    # touch any surrounding keys
+
+    cd /root
+
+    dd if=/dev/urandom of=foo bs=4096 count=1
+    touch bar
+
     echo "initial state setup ..."
-    bch_ioctl write	        0 0	8 < foo
-    bch_ioctl write	        0 16	8 < foo
+    bch_ioctl write	      1 0     8 < foo
+    bch_ioctl write	      1 16    8 < foo
+    bch_ioctl write	      1 32    8 < foo
 
     echo "initial state check ..."
-    bch_ioctl list_keys       0 0 0 1 0 &> bar
-    diff -q bar - <<-EOF
-	0:8 len 8 ptrs 2
-	0:24 len 8 ptrs 2
-	list_keys returned 0, 8 u64s of keys found
-EOF
+    bch_ioctl count_keys    0 1 0 2 0   |& grep "3 keys found";
 
     echo "discard ...."
-    bch_ioctl discard	        0 0     32
+    bch_ioctl discard	      1 8     24
 
     echo "after discard check ..."
-    bch_ioctl list_keys       0 0 0 1 0 &> bar
-    diff -q bar - <<-EOF
-	list_keys returned 0, 0 u64s of keys found
-EOF
+    bch_ioctl list_keys	    0 1 0 2 0	|& grep "2 keys found"
 
-    #! diff -q foo bar
+    bch_ioctl read	      1 0     8 | diff -q foo -
+    bch_ioctl read	      1 32    8 | diff -q foo -
+   
+    echo "------- FIO TEST -------- "
+
+    SIZE=small
+    test_fio
+
+    bch_ioctl list_keys       1 0 0 100 100
+    bch_ioctl count_keys      0 0 0 1 0 |& grep "ENOSPC"
+
+    echo "discard ...."
+    bch_ioctl discard	        0 0	"`mb_to_sec 1400`"
+    bch_ioctl count_keys      0 0 0 1 0 |& grep "0 keys found"
+
 }
