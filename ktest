@@ -27,7 +27,7 @@ checkdep qemu-system-x86_64 qemu-system-i386
 
 PRIORITY="0"		# hint for how long test should run
 KERNEL=""		# dir that has the kernel to run
-                        #       set with: -b <path>
+                        #       set with: -k <path>
 WORK_DIR=""             # dir where vm meta data (id, logs, etc) gets stored
                         #       set with: -w <path>
 LOG_INTERNAL="log.internal"
@@ -74,7 +74,7 @@ usage()
     echo
     echo "  options:"
     echo "      -x       bash debug statements"
-    echo "      -b <dir> build directory for kernel (default: kernel_source/.ktest)"
+    echo "      -k <dir> build directory for kernel (default: kernel_source/.ktest)"
     echo "      -w <dir> work directory (default: kernel build directory)"
     echo "      -i <dir> VM root filesystem image (run cmd only)"
     echo "      -I       disable timeout and VM stop on pass/fail (run cmd only)"
@@ -122,7 +122,7 @@ done
 shift $(( OPTIND - 1 ))
 
 if [ -z "$KERNEL" ]; then
-    echo "Required parameter -b missing: kernel to boot"
+    echo "Required parameter -k missing: kernel to boot"
     exit 1
 fi
 
