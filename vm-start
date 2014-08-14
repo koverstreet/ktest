@@ -255,26 +255,139 @@ def vm_cleanup(vmdir):
         pass
 
 
-class ClusteredVM(object):
+class VM(object):
+    """Defines a virtual machine object.
+    """
+
+    def __init__(self, name, vm_id, conx3_id, opts, vm_tmpdir, vm_console):
+        """Initialize the VM object with its essential data.
+        """
+        self.idnum    = vm_id
+        self.conx3_id = conx3_id
+        self.ipaddr   = None
+        self.name     = name
+        self.tmpdir   = vm_tmpdir
+        self.console  = vm_console
+        self.opts     = opts
+        self.tapdevs = []
+
+    def build_cmdline(self):
+        opts = self.opts
+
+        # setup run CD:
+        if not opts.cdrom:
+            self.iso=None
+        elif os.path.isdir(opts.cdrom):
+            self.iso = os.path.join(self.tmpdir,"run.iso")
+            if subprocess.call(["genisoimage", "-quiet", "-R",
+                                "-input-charset", "utf-8", "-o",
+                                self.iso, opts.cdrom]):
+                raise RuntimeError("Could not create cdrom from dir: "+opts.cdrom)
+        else:
+            self.iso = opts.cdrom
+
+        # generates scratch drives:
+        self.drives = []
+        if opts.scratch:
+            sizes = opts.scratch.split(",")
+            i = 1
+            for size in sizes:
+                if size.strip():
+                    name = os.path.join(self.tmpdir,"disk-"+str(i))
+                    i += 1
+                    if subprocess.call(["fallocate", "-l", size, name]):
+                        logging.warning("Error creating a "+size+" scratch drive with fallocate. Trying dd")
+                        if subprocess.call(["dd", "if=/dev/zero", "of="+name, "count=1", "bs="+size]):
+                            raise RuntimeError("Error creating a "+size+" scratch drive with dd")
+                    self.drives.append(name)
+
+        # generate log and core dump device
+        if opts.core:
+            (name,size) = opts.core.split(",")
+            if size==None:
+                size="10G"
+            if subprocess.call(["fallocate", "-l", size, name]):
+                logging.warning("fallocate error, trying dd")
+                if subprocess.call(["dd", "if=/dev/zero", "of="+name,
+                                    "count=1", "bs="+size]):
+                    raise RuntimeError("error creating core/log drive '"+name+"'")
+            if subprocess.call(["mkfs.ext4", "-U","11111111-2222-3333-4444-555555555555","-F",name]):
+                raise RuntimeError("mkfs.ext4 failed on '"+name+"'")
+
+        # build qemu command and start
+        cmd = ["qemu-system-x86_64"]
+        cmd.extend(["-machine", "accel=kvm"])
+        cmd.extend(["-pidfile", os.path.join(self.tmpdir,"pid",)])
+        cmd.extend(["-m", opts.mem])
+        cmd.extend(["-smp", "%d,sockets=%d" % (int(opts.cpus), int(opts.cpus))])
+        if opts.kernel:
+            cmd.extend(["-kernel", opts.kernel])
+            kernelParams = "console=ttyS0,115200 kgdboc=ttyS2,115200"
+            if self.ipaddr:
+                kernelParams += " ip="+self.ipaddr
+            if opts.append:
+                kernelParams += " "+opts.append
+            cmd.extend(["-append", kernelParams])
+        if opts.initrd:
+            cmd.extend(["-initrd", opts.initrd])
+        cmd.extend(["-nographic"])
+        cmd.extend(["-serial", self.console])
+        cmd.extend(["-serial", "mon:unix:" + os.path.join(self.tmpdir,"con")+",server,nowait"])
+        cmd.extend(["-serial", "unix:" + os.path.join(self.tmpdir,"gdb")+",server,nowait"])
+        cmd.extend(["-monitor", "unix:" + os.path.join(self.tmpdir,"mon")+",server,nowait"])
+        cmd.extend(["-gdb", "unix:" + os.path.join(self.tmpdir,"gdb")+",server,nowait"])
+
+        if opts.persistant:
+            cmd.extend(["-drive", "format=raw,file="+opts.image])
+        else:
+            cmd.extend(["-drive", "format=raw,snapshot=on,file="+opts.image])
+
+        if opts.filesystems:
+            for fspath, fslabel in opts.filesystems:
+                cmd.extend(["-virtfs", "local,path="+fspath+",mount_tag="+fslabel+",security_model=none"])
+
+        if opts.core:
+           cmd.extend(["-drive", "format=raw,file="+options.core.split(",")[0]])
+
+        for drive in self.drives:  # add scratch drives
+            cmd.extend(["-drive", "if=virtio,format=raw,cache=writeback,file="+drive])
+        if self.iso:              # add cdrom
+            cmd.extend(["-cdrom", self.iso])
+
+        if opts.conx3:
+            print "Assigning vf: ", self.conx3_id
+            cmd.extend(["-device", "pci-assign,host="+str(self.conx3_id)])
+
+        if self.tapdevs:
+            for td in self.tapdevs:
+                cmd.extend(["-netdev","tap,id="+td["eth"]+",ifname="+td["name"]+",script=no,downscript=no"])
+                cmd.extend(["-device","virtio-net-pci,netdev="+td["eth"]+",mac="+td["mac"]])
+        else:
+            cmd.extend(["-net", "nic,model=virtio"])
+            cmd.extend(["-net", "user,host=10.0.2.2,restrict=off,hostfwd=tcp:127.0.0.1:" + str(self.idnum + 9000) + "-:22"])
+
+        cmd.extend(["-device", "virtio-rng-pci"])
+
+        return cmd
+
+
+class ClusteredVM(VM):
     """Defines a virtual machine object.
     """
 
     def __init__(self, vm_id, bridge, opts, vms_id, vm_tmpdir, vm_console):
         """Initialize the VM object with its essential data.
         """
-        self.idnum    = vm_id
+        name = "vm%d-%s" % (vm_id, bridge.name)
+        super(ClusteredVM, self).__init__(name, vm_id, None,
+                                          opts, vm_tmpdir, vm_console)
         self.vmsid    = vms_id
         self.bridge   = bridge
         self.ipaddr   = bridge.ipgen(vm_id)
-        self.name     = "vm%d-%s" % (self.idnum, bridge.name)
         self.tapname  = self.name
-        self.tmpdir   = vm_tmpdir
-        self.console  = vm_console
-        self.opts     = opts
 
-        os.makedirs(self.tmpdir, 0700)
+        os.makedirs(vm_tmpdir, 0700)
 
-        self.tapdevs = []
         for iface_idx in range(int(self.opts.interfaces)):
             iface_name=self.tapname
             if iface_idx > 0:
@@ -296,75 +409,8 @@ class ClusteredVM(object):
             subprocess.check_call(['sudo', '-n', '--', 'ip', 'link', 'set', 'dev', td["name"], 'up'])
             subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addif', self.bridge.name, td["name"]])
 
-
     def run(self):
-        opts = self.opts
-
-        # setup run CD:
-        if not opts.cdrom:
-            self.iso=None
-        elif os.path.isdir(opts.cdrom):
-            self.iso = os.path.join(self.tmpdir,"run.iso")
-            if subprocess.call(["genisoimage", "-quiet", "-R",
-                                "-input-charset", "utf-8", "-o",
-                                self.iso, opts.cdrom]):
-                raise RuntimeError("Could not create cdrom from dir: "+opts.cdrom)
-        else:
-            self.iso = opts.cdrom
-
-        # generates scratch drives:
-        self.drives = []
-        if opts.scratch:
-            sizes = opts.scratch.split(",")
-            i = 1;
-            for size in sizes:
-                if size.strip():
-                    name = os.path.join(self.tmpdir,"disk-"+str(i))
-                    i += 1
-                    if subprocess.call(["fallocate", "-l", size, name]):
-                        logging.warning("Error creating a "+size+" scratch drive with fallocate. Trying dd")
-                        if subprocess.call(["dd", "if=/dev/zero", "of="+name, "count=1", "bs="+size]):
-                            raise RuntimeError("Error creating a "+size+" scratch drive with dd")
-                    self.drives.append(name)
-
-        # build qemu command and start
-        cmd = ["qemu-system-x86_64"]
-        cmd.extend(["-machine", "accel=kvm"])
-        cmd.extend(["-pidfile", os.path.join(self.tmpdir,"pid",)])
-        cmd.extend(["-m", opts.mem])
-        cmd.extend(["-smp", "%d,sockets=%d" % (int(opts.cpus), int(opts.cpus))])
-        if opts.kernel:
-            cmd.extend(["-kernel", opts.kernel])
-            kernelParams = "console=ttyS0,115200 kgdboc=ttyS2,115200"
-            kernelParams += " ip="+self.ipaddr
-            if opts.append:
-                kernelParams += " "+opts.append
-            cmd.extend(["-append", kernelParams])
-        if opts.initrd:
-            cmd.extend(["-initrd", opts.initrd])
-        cmd.extend(["-nographic"])
-        cmd.extend(["-serial", self.console])
-        cmd.extend(["-serial", "mon:unix:" + os.path.join(self.tmpdir,"con")+",server,nowait"])
-        cmd.extend(["-serial", "unix:" + os.path.join(self.tmpdir,"gdb")+",server,nowait"])
-        cmd.extend(["-monitor", "unix:" + os.path.join(self.tmpdir,"mon")+",server,nowait"])
-        if opts.persistant:
-            cmd.extend(["-drive", "format=raw,file="+opts.image])
-        else:
-            cmd.extend(["-drive", "format=raw,snapshot=on,file="+opts.image])
-        if opts.filesystems:
-            for fspath, fslabel in opts.filesystems:
-                cmd.extend(["-virtfs", "local,path="+fspath+",mount_tag="+fslabel+",security_model=none"])
-        for drive in self.drives:  # add scratch drives
-            cmd.extend(["-drive", "if=virtio,format=raw,cache=writeback,file="+drive])
-        if self.iso:              # add cdrom
-            cmd.extend(["-cdrom", self.iso])
-
-        for td in self.tapdevs:
-            cmd.extend(["-netdev","tap,id="+td["eth"]+",ifname="+td["name"]+",script=no,downscript=no"])
-            cmd.extend(["-device","virtio-net-pci,netdev="+td["eth"]+",mac="+td["mac"]])
-
-        cmd.extend(["-device", "virtio-rng-pci"])
-
+        cmd = self.build_cmdline()
         self.proc = subprocess.Popen(cmd, shell=False, close_fds=True)
 
         with vm_slot_update(self.vmsid.vm_id) as vm:
@@ -738,99 +784,9 @@ def cmd_start():
             if options.indexfile:
                 writefile(options.indexfile, vm.vm_id)
 
-            # setup run CD:
-            if not options.cdrom:
-                iso=None
-            elif os.path.isdir(options.cdrom):
-                iso = options.tmpdir + "/run.iso"
-                if subprocess.call(["genisoimage", "-quiet", "-R",
-                    "-input-charset",
-                    "utf-8", "-o", iso, options.cdrom]):
-                    raise RuntimeError("Could not create cdrom from dir: "+options.cdrom)
-            else:
-                iso=options.cdrom
-
-             # generates scratch drives:
-            drives = []
-            if options.scratch:
-                sizes = options.scratch.split(",")
-
-                i = 1;
-                for size in sizes:
-                    if size.strip():
-                        name = options.tmpdir + "/disk-" + str(i)
-                        i += 1
-
-                        if subprocess.call(["fallocate", "-l", size, name]):
-                            logging.warning("fallocate error, trying dd")
-                            if subprocess.call(["dd", "if=/dev/zero", "of="+name,
-                                "count=1", "bs="+size]):
-                               raise RuntimeError("error creating scratch drive '"+name+"'")
-                        drives.append(name)
-
-            # generate log and core dump device
-            if options.core:
-                (name,size) = options.core.split(",")
-                if size==None:
-                    size="10G"
-                if subprocess.call(["fallocate", "-l", size, name]):
-                    logging.warning("fallocate error, trying dd")
-                    if subprocess.call(["dd", "if=/dev/zero", "of="+name,
-                                        "count=1", "bs="+size]):
-                        raise RuntimeError("error creating core/log drive '"+name+"'")
-                if subprocess.call(["mkfs.ext4", "-U","11111111-2222-3333-4444-555555555555","-F",name]):
-                    raise RuntimeError("mkfs.ext4 failed on '"+name+"'")
-
-
-            # build qemu command and start
-            cmd = ["qemu-system-x86_64"]
-            cmd.extend(["-machine", "accel=kvm"])
-            cmd.extend(["-pidfile", options.tmpdir + "/pid"])
-            cmd.extend(["-m", options.mem])
-            cmd.extend(["-smp", "%d,sockets=%d" % (int(options.cpus), int(options.cpus))])
-
-            if options.kernel:
-                cmd.extend(["-kernel", options.kernel])
-                kernelParams = "console=ttyS0,115200 kgdboc=ttyS2,115200"
-                if options.append:
-                    kernelParams += " "+options.append
-                cmd.extend(["-append", kernelParams])
-
-            if options.initrd:
-                cmd.extend(["-initrd", options.initrd])
-
-            cmd.extend(["-nographic"])
-            cmd.extend(["-serial",  options.console])
-            cmd.extend(["-serial",  "mon:unix:" + options.tmpdir + "/con,server,nowait"])
-            cmd.extend(["-serial",  "unix:" + options.tmpdir + "/kgdb,server,nowait"])
-            cmd.extend(["-monitor", "unix:" + options.tmpdir + "/mon,server,nowait"])
-            cmd.extend(["-gdb", "unix:" + options.tmpdir + "/gdb,server,nowait"])
-
-            # Drives:
-            if options.persistant:
-                cmd.extend(["-drive", "format=raw,file="+options.image])
-            else:
-                cmd.extend(["-drive", "format=raw,snapshot=on,file="+options.image])
-            if options.filesystems:
-                for fspath, fslabel in options.filesystems:
-                    cmd.extend(["-virtfs", "local,path="+fspath+",mount_tag="+fslabel+",security_model=none"])
-            if options.core:
-               cmd.extend(["-drive", "format=raw,file="+options.core.split(",")[0]])
-
-            for drive in drives:  # add scratch drives
-                cmd.extend(["-drive", "if=virtio,format=raw,cache=writeback,file="+drive])
-
-            if iso:              # add cdrom
-                cmd.extend(["-cdrom",iso])
-
-            cmd.extend(["-net", "nic,model=virtio"])
-            cmd.extend(["-net", "user,host=10.0.2.2,restrict=off,hostfwd=tcp:127.0.0.1:" + str(vm.vm_id + 9000) + "-:22"])
-
-            if options.conx3:
-                print "Assigning vf: ", vm.conx3_id
-                cmd.extend(["-device", "pci-assign,host="+str(vm.conx3_id)])
-
-            cmd.extend(["-device", "virtio-rng-pci"])
+            vm_proc = VM('vm%d' % vm.vm_id, vm.vm_id, vm.conx3_id,
+                         options, options.tmpdir, options.console)
+            cmd = vm_proc.build_cmdline()
 
             logging.warning("Executing: "+str(cmd))
 
