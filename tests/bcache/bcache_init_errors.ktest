@@ -48,9 +48,14 @@ main()
 	    echo /dev/vda > /sys/fs/bcache/register || true
 	    echo /dev/vdb > /sys/fs/bcache/register || true
 
+	    sleep 2
 	    echo "func $fault -f" > $control
+	    sleep 2
 
-	    sleep 5
+            if test -e /sys/fs/bcache/*-*-*-*-*; then
+                echo "Registration should have failed"
+                false
+            fi
 	done
     fi
 }
