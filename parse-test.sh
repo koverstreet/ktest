@@ -1,6 +1,7 @@
 
 parse_test_deps()
 {
+    _CPUS="6"
     _MEM=""
     _TIMEOUT=""
     _SCRATCH=""
@@ -65,6 +66,11 @@ parse_test_deps()
     config-scratch-devs()
     {
 	_SCRATCH="-s $1"
+    }
+
+    config-cpus()
+    {
+	_CPUS=$1
     }
 
     config-mem()

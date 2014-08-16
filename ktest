@@ -274,7 +274,6 @@ run_vmstart()
 	-c "$WORK_DIR/run.iso"				\
 	--id "$WORK_DIR/id"				\
 	--fs "$WORK_DIR/$LOG_INTERNAL" logfs		\
-	--cpus 6					\
         "$@"
 }
 
@@ -282,7 +281,7 @@ cmd_boot()
 {
     prepare_vm
 
-    run_vmstart -m 1G
+    run_vmstart -m 1G --cpus 6
 }
 
 cmd_run()
@@ -301,6 +300,7 @@ cmd_run()
     run_vmstart                                                 \
 	--append="root=/dev/sda rw ktest.priority=$PRIORITY"	\
 	-m "$_MEM"						\
+	--cpus "$_CPUS"						\
 	$_SCRATCH						\
 	$_INFINIBAND						\
 	$_VMCLUSTER </dev/null 2>&1 > "$WORK_DIR/output" &

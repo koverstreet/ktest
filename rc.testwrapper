@@ -105,6 +105,11 @@ config-scratch-devs()
     return 0
 }
 
+config-cpus()
+{
+    return 0
+}
+
 config-mem()
 {
     return 0
