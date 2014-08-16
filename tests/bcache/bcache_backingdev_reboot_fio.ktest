@@ -10,7 +10,7 @@ config-timeout $(($nr_iterations * 60))
 
 main()
 {
-    SIZE=large
+    SIZE=small
     FS=ext4
     FLAGS="--bucket 32k --block 4k --discard --writeback --cache_replacement_policy=lru"
     CACHE="/dev/vda"
@@ -25,9 +25,7 @@ main()
 	existing_bcache
     fi
 
-    [ $NR_REBOOTS = $nr_iterations ] && exit 0
-
-    (sleep 10; do_reboot) &
+    [ "$NR_REBOOTS" != "$nr_iterations" ] && (sleep 10; do_reboot) &
 
     test_sysfs
 
@@ -36,10 +34,12 @@ main()
     test_sync &
     test_drop_caches &
 
-    test_fio || true
-
-    # Make sure we reboot and don't just exit
-    while true; do
+    if [ "$NR_REBOOTS" != "$nr_iterations" ]; then
+	test_fio || true
 	sleep 1000
-    done
+	exit 1
+    else
+	test_fio
+	stop_bcache
+    fi
 }
