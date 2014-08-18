@@ -281,11 +281,13 @@ cmd_boot()
 {
     prepare_vm
 
-    run_vmstart -m 1G --cpus 6
+    run_vmstart -m 1G --kgdb --cpus 6
 }
 
 cmd_run()
 {
+    local KGDB=""
+
     if [[ $# -lt 1 ]]; then
 	echo "ktest: missing test"
 	exit 1
@@ -296,9 +298,12 @@ cmd_run()
     rm -f "$WORK_DIR/output"
     mkfifo "$WORK_DIR/output"
 
+    [ "$EXIT_ON_SUCCESS" = 1 -o "$INTERACTIVE" = 1 ] && KGDB="--kgdb"
+
     # shellcheck disable=SC2086
     run_vmstart                                                 \
 	--append="root=/dev/sda rw ktest.priority=$PRIORITY"	\
+	$KGDB							\
 	-m "$_MEM"						\
 	--cpus "$_CPUS"						\
 	$_SCRATCH						\
