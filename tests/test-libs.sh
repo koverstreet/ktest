@@ -8,8 +8,6 @@ require-bin bcachectl
 require-kernel-config MD,BCACHE,BCACHE_DEBUG,CLOSURE_DEBUG
 require-kernel-config DYNAMIC_FAULT
 
-export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]}()}+ '
-
 # Wait for an IP or IPv6 address to show
 # up on a specific device.
 # args: addr bits=24 type=4 dev=eth0 timeout=60 on=true
