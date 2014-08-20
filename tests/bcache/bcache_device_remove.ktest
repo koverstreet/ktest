@@ -1,26 +1,22 @@
 #!/bin/bash
 
-require-lib ../test-libs.sh
+require-lib bcache-test-libs.sh
 
-config-scratch-devs 512M,512M,512M,512M
+config-cache 512M,512M
+config-tier 512M,512M
+config-bucket-size 64k
+config-block-size 4k
+config-volume 500M
 config-mem 512M
+config-data-replicas 2
 
 config-timeout 600
 
 main()
 {
-    SIZE=small
-    FS=ext4
-    FLAGS="--bucket 64k --block 4k --discard --writeback --cache_replacement_policy=lru"
-    CACHE="/dev/vda /dev/vdb"
-    BDEV=
-    TIER="/dev/vdc /dev/vdd"
-    VOLUME=500M
-
     setup_tracing 64 'bcache:*'
 
     setup_bcache
-    echo 2 > /sys/fs/bcache/*/data_replicas
 
     (
 	sleep 10

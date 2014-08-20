@@ -1,22 +1,17 @@
 #!/bin/bash
 
-require-lib ../test-libs.sh
+require-lib bcache-test-libs.sh
 
-config-scratch-devs 2G
+config-cache 2G
+config-bucket-size 8k
+config-block-size 2k
+config-volume 1400M
 config-mem 512M
 
 config-timeout 1200
 
 main()
 {
-    SIZE=small
-    FS=ext4
-    FLAGS="--bucket 8k --block 4k --discard --cache_replacement_policy=lru"
-    CACHE="/dev/vda"
-    BDEV=
-    TIER=
-    VOLUME=1400M
-
     setup_tracing 64 'bcache:*'
 
     setup_bcache
