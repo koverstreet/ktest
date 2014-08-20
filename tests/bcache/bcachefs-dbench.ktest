@@ -1,8 +1,10 @@
 #!/bin/bash
 
-require-lib ../test-libs.sh
+require-lib bcache-test-libs.sh
 
-config-scratch-devs 2G
+config-cache 2G
+config-bucket-size 64k
+config-block-size 2k
 config-mem 512M
 
 nr_iterations=$((($ktest_priority + 1) * 5))
@@ -10,12 +12,7 @@ config-timeout $(($nr_iterations * 60))
 
 main()
 {
-    SIZE=small
     FS=bcachefs
-    FLAGS="--bucket 64k --block 2k --discard --writeback --cache_replacement_policy=lru"
-    CACHE="/dev/vda"
-    BDEV=
-    TIER=
 
     setup_tracing 64 'bcache:*'
 

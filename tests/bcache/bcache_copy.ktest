@@ -1,11 +1,13 @@
 #!/bin/bash
 
-require-lib ../test-libs.sh
+require-lib bcache-test-libs.sh
 
 require-lib ../../../vm-tests/container_lib.sh
 require-container ioctl_test
 
-config-scratch-devs 1G
+config-cache 1G
+config-bucket-size 64k
+config-block-size 2k
 config-mem 512M
 
 config-timeout 600
@@ -14,8 +16,7 @@ main()
 {
     copy_containers
 
-    make-bcache --bucket 64k --block 2k --cache /dev/vda
-    echo /dev/vda > /sys/fs/bcache/register
+    setup_bcache
 
     cd /root
 

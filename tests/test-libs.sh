@@ -3,9 +3,7 @@
 # ktest framework.
 #
 
-require-bin make-bcache
-require-bin bcachectl
-require-kernel-config MD,BCACHE,BCACHE_DEBUG,CLOSURE_DEBUG
+require-kernel-config MD
 require-kernel-config DYNAMIC_FAULT
 
 # Wait for an IP or IPv6 address to show
@@ -63,8 +61,6 @@ wait_no_ip()
     wait_on_ip "$1" "$2" "$3" "$4" "$5" "false"
 }
 
-# Bcache setup
-
 #
 # Set up a block device without bcache.
 #
@@ -72,90 +68,21 @@ setup_blkdev() {
     DEVICES=/dev/vda
 }
 
-add_device() {
-    DEVICES="$DEVICES /dev/bcache$DEVICE_COUNT"
-    DEVICE_COUNT=$(($DEVICE_COUNT + 1))
-}
-
-#
-# Registers all bcache devices.
-#
-# Should be called after setting FLAGS, CACHE, BDEV and TIER variables
-# FLAGS -- flags for make-bcache, such as --block, --discard, --writeback
-# CACHE -- one or more cache devices in tier 0
-# BDEV -- zero or more backing devices
-# TIER -- zero or more cache devices in tier 1
-# VOLUME -- zero or one sizes for flash only volume
-#
-# BDEV and VOLUME are mutually exclusive.
-#
-# Upon successful completion, the DEVICES variable is set to a list of
-# bcache block devices.
-#
-existing_bcache() {
-    bcachectl register $CACHE $TIER $BDEV
-
-    DEVICES=
-    DEVICE_COUNT=0
-
-    # If we have one or more backing devices, then we get
-    # one bcacheN per backing device.
-    for device in $BDEV; do
-	add_device
-    done
-
-    udevadm settle
-
-    for device in $DEVICES; do
-	wait_on_dev $device
-    done
-
-    cache_set_settings
-
-    # Set up flash-only volumes.
-    for volume in ${VOLUME:=}; do
-	add_device
-    done
-
-    cached_dev_settings
-}
-
-#
-# Registers all bcache devices after running make-bcache.
-#
-setup_bcache() {
-    make_bcache_flags="$FLAGS --wipe-bcache --cache $CACHE"
-
-    if [ "$TIER" != "" ]; then
-	make_bcache_flags="$make_bcache_flags --tier 1 $TIER"
-    fi
-
-    if [ "$BDEV" != "" ]; then
-	make_bcache_flags="$make_bcache_flags --bdev $BDEV"
-    fi
-
-    make-bcache $make_bcache_flags
-
-    existing_bcache
-
-    for size in ${VOLUME:=}; do
-	for file in /sys/fs/bcache/*/flash_vol_create; do
-	    echo $size > $file
-	done
-    done
-}
-
-stop_fs()
+# Usage:
+# setup_tracing buffer_size_kb tracepoint_glob
+setup_tracing()
 {
-    for dev in $DEVICES; do
-	umount /mnt/$dev || true
-    done
-
+    echo > /sys/kernel/debug/tracing/trace
+    echo $1 > /sys/kernel/debug/tracing/buffer_size_kb
+    echo $2 > /sys/kernel/debug/tracing/set_event
+    echo 1 > /proc/sys/kernel/ftrace_dump_on_oops
+    echo 1 > /sys/kernel/debug/tracing/options/overwrite
+    echo 1 > /sys/kernel/debug/tracing/tracing_on
 }
 
-stop_bcache()
+dump_trace()
 {
-    echo 1 > /sys/fs/bcache/reboot
+    cat /sys/kernel/debug/tracing/trace
 }
 
 #
@@ -208,6 +135,8 @@ existing_fs() {
 #
 # Set up file systems on all bcache block devices and mount them.
 #
+FS=ext4
+
 setup_fs() {
     case $FS in
 	ext4)
@@ -230,58 +159,12 @@ setup_fs() {
     existing_fs
 }
 
-cache_set_settings()
+stop_fs()
 {
-    for dir in $(ls -d /sys/fs/bcache/*-*-*); do
-	true
-	#echo 0 > $dir/synchronous
-	echo panic > $dir/errors
-
-	#echo 0 > $dir/journal_delay_ms
-	#echo 1 > $dir/internal/key_merging_disabled
-	#echo 1 > $dir/internal/btree_coalescing_disabled
-	#echo 1 > $dir/internal/verify
-
-	# This only exists if CONFIG_BCACHE_DEBUG is on
-	if [ -f $dir/internal/expensive_debug_checks ]; then
-	    echo 1 > $dir/internal/expensive_debug_checks
-	fi
-
-	echo 0 > $dir/congested_read_threshold_us
-	echo 0 > $dir/congested_write_threshold_us
-
-	echo 1 > $dir/internal/copy_gc_enabled
+    for dev in $DEVICES; do
+	umount /mnt/$dev || true
     done
-}
 
-cached_dev_settings()
-{
-    for dir in $(ls -d /sys/block/bcache*/bcache); do
-	true
-	#echo 128k    > $dir/readahead
-	#echo 1	> $dir/writeback_delay
-	#echo 0	> $dir/writeback_running
-	#echo 0	> $dir/sequential_cutoff
-	#echo 1	> $dir/verify
-	#echo 1	> $dir/bypass_torture_test
-    done
-}
-
-# Usage:
-# setup_tracing buffer_size_kb tracepoint_glob
-setup_tracing()
-{
-    echo > /sys/kernel/debug/tracing/trace
-    echo $1 > /sys/kernel/debug/tracing/buffer_size_kb
-    echo $2 > /sys/kernel/debug/tracing/set_event
-    echo 1 > /proc/sys/kernel/ftrace_dump_on_oops
-    echo 1 > /sys/kernel/debug/tracing/options/overwrite
-    echo 1 > /sys/kernel/debug/tracing/tracing_on
-}
-
-dump_trace()
-{
-    cat /sys/kernel/debug/tracing/trace
 }
 
 # Bcache workloads
@@ -290,6 +173,7 @@ dump_trace()
 # test_dbench:
 # DEVICES - list of devices
 # SIZE - one of small, medium or large
+SIZE=small
 
 test_wait()
 {

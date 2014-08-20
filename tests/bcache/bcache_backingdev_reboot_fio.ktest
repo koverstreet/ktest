@@ -1,8 +1,12 @@
 #!/bin/bash
 
-require-lib ../test-libs.sh
+require-lib bcache-test-libs.sh
 
-config-scratch-devs 2G,4G
+config-cache 2G
+config-backing 4G
+config-bucket-size 32k
+config-block-size 4k
+config-writeback
 config-mem 512M
 config-cpus 1
 
@@ -11,13 +15,6 @@ config-timeout $(($nr_iterations * 60))
 
 main()
 {
-    SIZE=small
-    FS=ext4
-    FLAGS="--bucket 32k --block 4k --discard --writeback --cache_replacement_policy=lru"
-    CACHE="/dev/vda"
-    BDEV="/dev/vdb"
-    TIER=
-
     setup_tracing 64 'bcache:*'
 
     if [ $NR_REBOOTS = 0 ]; then

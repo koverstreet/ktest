@@ -1,28 +1,23 @@
 #!/bin/bash
 
-require-lib ../test-libs.sh
+require-lib bcache-test-libs.sh
 
-config-scratch-devs 256M,256M,256M,256M,2G
+config-cache 256M,256M,256M,256M
+config-backing 2G
+config-bucket-size 64k
+config-block-size 4k
+config-writeback
 config-mem 512M
+config-data-replicas 4
+config-meta-replicas 4
 
 config-timeout 600
 
 main()
 {
-    SIZE=small
-    FS=ext4
-    FLAGS="--bucket 64k --block 4k --discard --writeback --cache_replacement_policy=lru"
-    CACHE="/dev/vda /dev/vdb /dev/vdc /dev/vdd"
-    BDEV="/dev/vde"
-    TIER=
-
     setup_tracing 64 'bcache:*'
 
     setup_bcache
-
-    echo 4 > /sys/fs/bcache/*/meta_replicas
-    echo 4 > /sys/fs/bcache/*/data_replicas
-
     test_stress
     stop_bcache
 }

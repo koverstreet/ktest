@@ -1,6 +1,6 @@
 #!/bin/bash
 
-require-lib ../test-libs.sh
+require-lib bcache-test-libs.sh
 
 config-scratch-devs 512M,2G,2G
 config-mem 512M
