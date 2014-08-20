@@ -79,7 +79,11 @@ parse_test_deps()
 
     config-scratch-devs()
     {
-	_SCRATCH="-s $1"
+	if [ "$_SCRATCH" == "" ]; then
+	    _SCRATCH="-s $1"
+	else
+	    _SCRATCH+=",$1"
+	fi
     }
 
     config-cpus()
