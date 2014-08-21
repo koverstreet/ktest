@@ -1,6 +1,7 @@
 #!/bin/bash
 
 require-lib ../test-libs.sh
+require-make ../../ltp-fsx/Makefile ltp-fsx
 
 config-scratch-devs 2G
 config-mem 512M

@@ -18,21 +18,17 @@ parse_test_deps()
 
     _add-file()
     {
-	local req=$1
-	local f=$2
-
-	if [ ! -e "$f" ]; then
+	if [ ! -e "$1" ]; then
 	    echo "Dependency $req not found"
 	    exit 1
 	fi
 
-	FILES+=" $(readlink -f "$f")"
+	FILES+=" $(readlink -f "$1")"
     }
 
     require-lib()
     {
 	local req="$1"
-	local f="$TESTDIR/$req"
 
 	if [ "${req:0:1}" = "/" ]; then
 	    local f="$req"
@@ -40,7 +36,7 @@ parse_test_deps()
 	    local f="$TESTDIR/$req"
 	fi
 
-	_add-file "$req" "$f"
+	_add-file "$f"
 
 	. "$f" deps
     }
@@ -50,7 +46,25 @@ parse_test_deps()
 	local req=$1
 	local f="$(which "$req")"
 
-	_add-file "$req" "$f"
+	_add-file "$f"
+    }
+
+    require-make()
+    {
+	local makefile=$1
+	local req=$2
+
+	if [ "${makefile:0:1}" = "/" ]; then
+	    local f="$makefile"
+	else
+	    local f="$TESTDIR/$makefile"
+	fi
+
+	local dir="$(dirname "$f")"
+
+	(cd "$dir"; make -f "$f" "$req")
+
+	_add-file "$dir/$req"
     }
 
     require-container()
