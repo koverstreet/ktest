@@ -680,7 +680,7 @@ def cmd_start():
         default="root=/dev/sda rw",
         help="append kernel command line boot arguments")
 
-    opt.add_option("--kgdb", dest="kgdb",
+    opt.add_option("--kgdb", dest="kgdb", action="store_true",
         help="enable kgdb")
 
     opt.add_option("-c", "--cdrom-source", dest="cdrom",
