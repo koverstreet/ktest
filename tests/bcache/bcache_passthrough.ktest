@@ -1,0 +1,19 @@
+#!/bin/bash
+
+require-lib bcache-test-libs.sh
+
+config-backing 2G
+config-bucket-size 64k
+config-block-size 4k
+config-mem 512M
+
+config-timeout 600
+
+main()
+{
+    setup_tracing 64 'bcache:*'
+
+    setup_bcache
+    test_stress
+    stop_bcache
+}
