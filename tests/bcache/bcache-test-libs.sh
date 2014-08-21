@@ -123,7 +123,14 @@ existing_bcache() {
     DEVICES=
     DEVICE_COUNT=0
 
-    bcachectl register $CACHE $TIER $BDEV
+    # Older kernel versions don't have /dev/bcache
+    if [ -e /dev/bcacheXXX ]; then
+	bcachectl register $CACHE $TIER $BDEV
+    else
+	for dev in $CACHE $TIER $BDEV; do
+	    echo $dev > /sys/fs/bcache/register
+	done
+    fi
 
     # If we have one or more backing devices, then we get
     # one bcacheN per backing device.
