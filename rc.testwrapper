@@ -90,6 +90,11 @@ require-bin()
     return 0
 }
 
+require-make()
+{
+    return 0
+}
+
 require-container()
 {
     return 0
