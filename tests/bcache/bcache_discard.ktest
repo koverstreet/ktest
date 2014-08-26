@@ -34,12 +34,17 @@ main()
 	container_run ioctl_test /dev/bcache_extent0 $@
     }
 
+    cd /root
+
+    echo "-------- READ TEST -------- "
+
+    dd if=/dev/zero of=bar bs=512 count=24
+    bch_ioctl read	      1 8     24 | diff -q bar -
+
     echo "-------- UNIT TEST -------- "
 
     # this portion specifically tests to make sure discard doesn't
     # touch any surrounding keys
-
-    cd /root
 
     dd if=/dev/urandom of=foo bs=4096 count=1
     touch bar
@@ -59,6 +64,7 @@ main()
     bch_ioctl list_keys	    0 1 0 2 0	|& grep "2 keys found"
 
     bch_ioctl read	      1 0     8 | diff -q foo -
+    bch_ioctl read	      1 8     24 | diff -q bar -
     bch_ioctl read	      1 32    8 | diff -q foo -
    
     echo "------- FIO TEST -------- "
@@ -72,5 +78,4 @@ main()
     echo "discard ...."
     bch_ioctl discard	        0 0	"`mb_to_sec 1400`"
     bch_ioctl count_keys      0 0 0 1 0 |& grep "0 keys found"
-
 }
