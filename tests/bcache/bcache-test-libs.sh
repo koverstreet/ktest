@@ -100,12 +100,17 @@ add_bcache_devs()
 make_bcache_flags()
 {
     flags="--bucket $BUCKET_SIZE --block $BLOCK_SIZE --cache_replacement_policy=$REPLACEMENT"
-    if [ "$DISCARD" != "0" ]; then
-	flags+=" --discard"
-    fi
-    if [ "$WRITEBACK" != "0" ]; then
-	flags+=" --writeback"
-    fi
+    case "$DISCARD" in
+	0) ;;
+	1) flags+=" --discard" ;;
+	*) echo "Bad discard: $DISCARD"; exit ;;
+    esac
+    case "$WRITEBACK" in
+	0) ;;
+	1) flags+=" --writeback" ;;
+	*) echo "Bad writeback: $WRITEBACK"; exit ;;
+    esac
+    echo $flags
 }
 
 add_device() {
@@ -159,7 +164,7 @@ existing_bcache() {
 #
 setup_bcache() {
     make_bcache_flags="$(make_bcache_flags)"
-    make_bcache_flags+="--wipe-bcache --cache $CACHE"
+    make_bcache_flags+=" --wipe-bcache --cache $CACHE"
 
     if [ "$TIER" != "" ]; then
 	make_bcache_flags+=" --tier 1 $TIER"
