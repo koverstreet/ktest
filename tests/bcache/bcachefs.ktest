@@ -26,7 +26,9 @@ main()
     test_drop_caches &
 
     setup_fs
-    test_fsx
+    test_bonnie
+    test_dbench
+    #test_fsx
     stop_fs
 
     stop_bcache
