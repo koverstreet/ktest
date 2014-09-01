@@ -5,6 +5,7 @@ require-bin make-bcache
 require-bin bcachectl
 require-kernel-config BCACHE,BCACHE_DEBUG,CLOSURE_DEBUG
 
+SYSFS=""
 BDEV=""
 CACHE=""
 TIER=""
@@ -74,6 +75,14 @@ config-data-replicas()
 config-meta-replicas()
 {
     META_REPLICAS="$1"
+}
+
+config-bcache-sysfs()
+{
+    if [ "$SYSFS" != "" ]; then
+	SYSFS+="; "
+    fi
+    SYSFS+="for file in /sys/fs/bcache/*/$1; do echo $2 > \$file; done"
 }
 
 get_next_virtio()
@@ -157,6 +166,8 @@ existing_bcache() {
     done
 
     cached_dev_settings
+
+    eval "$SYSFS"
 }
 
 #
