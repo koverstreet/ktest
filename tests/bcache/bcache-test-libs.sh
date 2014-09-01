@@ -176,6 +176,8 @@ existing_bcache() {
 setup_bcache() {
     make_bcache_flags="$(make_bcache_flags)"
     make_bcache_flags+=" --wipe-bcache --cache $CACHE"
+    make_bcache_flags+=" --data-replicas $DATA_REPLICAS"
+    make_bcache_flags+=" --meta-replicas $META_REPLICAS"
 
     if [ "$TIER" != "" ]; then
 	make_bcache_flags+=" --tier 1 $TIER"
@@ -220,9 +222,6 @@ cache_set_settings()
 
 	echo 0 > $dir/congested_read_threshold_us
 	echo 0 > $dir/congested_write_threshold_us
-
-	echo $DATA_REPLICAS > $dir/data_replicas
-	echo $META_REPLICAS > $dir/meta_replicas
 
 	echo 1 > $dir/internal/copy_gc_enabled
     done
