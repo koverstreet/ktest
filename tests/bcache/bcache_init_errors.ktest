@@ -4,7 +4,6 @@ require-lib bcache-test-libs.sh
 
 require-kernel-config DYNAMIC_FAULT
 
-config-scratch-devs 2G,4G
 config-cache 2G
 config-tier 4G
 config-bucket-size 32k
