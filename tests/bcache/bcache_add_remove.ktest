@@ -1,0 +1,34 @@
+#!/bin/bash
+
+require-lib bcache-test-libs.sh
+
+config-cache 512M
+config-tier 2G
+config-scratch-devs 1G
+
+config-bucket-size 512k
+config-block-size 2k
+config-mem 1G
+
+config-timeout 600
+
+main()
+{
+    setup_tracing 64 'bcache:*'
+
+    setup_bcache
+    echo "setup done"
+
+    sleep 1
+    make-bcache -C --bucket 512k --block 2k /dev/vdc
+
+    echo "adding device"
+    echo /dev/vdc > /sys/fs/bcache/*/add_device
+
+    # can't start test_stress before adding the device, because test_stress
+    # triggers dynamic faults in the background which breaks a kmalloc adding
+    # the device
+    test_stress &
+
+    stop_bcache
+}
