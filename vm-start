@@ -1073,8 +1073,8 @@ cmd_ls = cmd_list
 def cmd_purge():
     """Purge entries from a partially broken database"""
 
-    opt=OptionParser("usage: %prog purge [object, object, ...]",
-             description="""Purge entries from a partially broken database""")
+    opt=OptionParser("usage: %prog purge [vm1, vm2, vmbr101, ...]",
+             description="""Purge entries from the database or bridges from the system""")
 
     opt.add_option("-d", "--debug", dest="debug",
                    default=False, action="store_true",
@@ -1279,6 +1279,7 @@ def cmd_help():
     check       check whether there are free resources
     list        list all running vms
     genips      generate a fresh vm database
+    purge       purge vm database entries and bridges
     help        print help for commands
     """
 
