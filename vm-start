@@ -418,6 +418,7 @@ class ClusteredVM(VM):
             atexit.register(subprocess.call, ['sudo','-n', '--', 'ip', 'tuntap', 'del', 'dev', td["name"], 'mode', 'tap'])
 
             subprocess.check_call(['sudo', '-n', '--', 'ip', 'link', 'set', 'dev', td["name"], 'up'])
+            subprocess.call(['sudo', '-n', '--', 'sysctl', '-q', '-w', "net.ipv6.conf.%s.disable_ipv6=0" % td["name"]])
             subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addif', self.bridge.name, td["name"]])
 
     def run(self):
@@ -521,6 +522,7 @@ class Cluster(object):
 
         subprocess.call(['sudo', '-n', '--', 'ip', 'tuntap','del', 'dev', brname + "-host", 'mode', 'tap'], stdout=FNULL, stderr=FNULL)
         subprocess.check_call(['sudo', '-n', '--', 'ip', 'tuntap','add', 'dev', brname + "-host", 'mode', 'tap'])
+        subprocess.call(['sudo', '-n', '--', 'sysctl', '-q', '-w', "net.ipv6.conf.%s.disable_ipv6=0" % brname + "-host"])
         atexit.register(subprocess.call, ['sudo', '-n', '--', 'ip', 'tuntap','del', 'dev', brname + "-host", 'mode', 'tap'])
 
         subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addif', brname, brname + "-host"])
@@ -544,6 +546,7 @@ class Cluster(object):
         # used for anything else.
         subprocess.call(['sudo', '-n', '--', 'sysctl', '-q', '-w', 'net.ipv4.ip_forward=1'])
 
+        subprocess.call(['sudo', '-n', '--', 'sysctl', '-q', '-w', "net.ipv6.conf.%s.disable_ipv6=0" % brname])
         subprocess.check_call(['sudo', '-n', '--', 'ip', 'addr', 'add', "%s/%d" %(self.ipgen(1), self.cidr), "dev", brname])
         subprocess.check_call(['sudo', '-n', '--', 'ip', 'addr', 'add', "%s/%d" %(self.ipv6gen(1), self.v6cidr), "dev", brname])
 
