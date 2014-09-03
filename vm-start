@@ -357,7 +357,7 @@ class VM(object):
            cmd.extend(["-drive", "format=raw,file="+options.core.split(",")[0]])
 
         for drive in self.drives:  # add scratch drives
-            cmd.extend(["-drive", "if=virtio,format=raw,cache=writeback,file="+drive])
+            cmd.extend(["-drive", "if=virtio,format=raw,cache=unsafe,file="+drive])
         if self.iso:              # add cdrom
             cmd.extend(["-cdrom", self.iso])
 
