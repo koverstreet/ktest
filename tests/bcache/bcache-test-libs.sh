@@ -239,3 +239,37 @@ cached_dev_settings()
 	#echo 1	> $dir/bypass_torture_test
     done
 }
+
+
+block_device_verify_dd()
+{
+    setup_tracing 64 'dfs_client:*'
+    dd if=$1 of=/root/cmp bs=4096 count=1 iflag=direct
+    cmp /root/cmp /root/orig
+
+    if [ $? -eq 1 ]; then
+        echo "Files differ! write test failure!"
+    else
+	echo "Files match!"
+    fi
+    echo "dd verification completed!"
+}
+
+block_device_dd()
+{
+    dd if=/dev/urandom of=/root/orig bs=4096 count=1
+    dd if=/root/orig of=$1 bs=4096 count=1 oflag=direct
+    dd if=$1 of=/root/cmp bs=4096 count=1 iflag=direct
+    cmp /root/cmp /root/orig
+    if [ $? -eq 1 ]; then
+        echo "Files differ! write test failure!"
+	exit 1
+    else
+	echo "Files match!"
+    fi
+
+    dd if=/dev/urandom of=/root/orig bs=4096 count=1
+    dd if=/root/orig of=$1 bs=4096 count=1 oflag=direct
+}
+
+
