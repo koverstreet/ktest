@@ -1,5 +1,5 @@
 
-require-lib /src/ktest/tests/test-libs.sh
+require-lib ../test-libs.sh
 
 require-bin make-bcache
 require-bin bcachectl
