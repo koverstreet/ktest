@@ -9,7 +9,7 @@ config-block-size 4k
 config-writeback
 config-mem 512M
 
-config-timeout 1200
+config-timeout $(stress_timeout)
 
 main()
 {

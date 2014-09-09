@@ -10,7 +10,7 @@ config-meta-replicas 2
 config-data-replicas 2
 config-mem 512M
 
-config-timeout 1200
+config-timeout $(stress_timeout)
 
 main()
 {

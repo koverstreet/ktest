@@ -11,7 +11,7 @@ config-mem 512M
 config-cpus 1
 
 nr_iterations=$((($ktest_priority + 1) * 5))
-config-timeout $(($nr_iterations * 60))
+config-timeout $(($nr_iterations * 45 + $(stress_timeout)))
 
 main()
 {
