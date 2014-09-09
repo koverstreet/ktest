@@ -164,10 +164,9 @@ stop_fs()
     for dev in $DEVICES; do
 	umount /mnt/$dev || true
     done
-
 }
 
-# Bcache workloads
+# Block device workloads
 #
 # The DEVICES variable must be set to a list of devices before any of the
 # below workloads are involed.
@@ -371,7 +370,7 @@ test_drop_caches()
     done
 }
 
-test_stress()
+test_antagonist()
 {
     test_sysfs
 
@@ -379,14 +378,17 @@ test_stress()
     test_fault &
     test_sync &
     test_drop_caches &
+}
 
+test_stress()
+{
     test_fio
+    test_discard
 
     setup_fs
     test_dbench
     test_bonnie
     stop_fs
-
     test_discard
 }
 

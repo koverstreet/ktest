@@ -18,12 +18,7 @@ main()
 
     setup_bcache
 
-    test_sysfs
-
-    test_shrink &
-    test_fault &
-    test_sync &
-    test_drop_caches &
+    test_antagonist
 
     setup_fs
     test_bonnie

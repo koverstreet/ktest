@@ -27,12 +27,7 @@ main()
 
     [ $NR_REBOOTS = $nr_iterations ] && exit 0
 
-    test_sysfs
-
-    test_shrink &
-    test_fault &
-    test_sync &
-    test_drop_caches &
+    test_antagonist
 
     test_dbench &
     test_bonnie &
