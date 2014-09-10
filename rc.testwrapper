@@ -14,7 +14,7 @@ mkdir -p $LOGDIR
 mount -t 9p -o trans=virtio logfs /var/log/datera
 
 echo 1 > /proc/sys/fs/suid_dumpable
-echo "| /usr/bin/cat - > $LOGDIR/core.%e.PID%p.SIG%s.TIME%t" > /proc/sys/kernel/core_pattern
+echo "| /usr/bin/dd of=$LOGDIR/core.%e.PID%p.SIG%s.TIME%t" > /proc/sys/kernel/core_pattern
 ulimit -c unlimited
 
 for i in `cat /proc/cmdline`; do
