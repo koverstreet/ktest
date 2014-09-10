@@ -29,15 +29,14 @@ NR_REBOOTS=$([ -e /NR_REBOOTS ] && cat /NR_REBOOTS || echo 0)
 
 EXPECTED_REBOOT=$([ -e /EXPECTED_REBOOT ] && cat /EXPECTED_REBOOT || echo 0)
 
-echo $((NR_REBOOTS + 1)) > /NR_REBOOTS
-
-if [ $NR_REBOOTS != $EXPECTED_REBOOT ]; then
-    echo "UNEXPECTED REBOOT"
+if [ "$NR_REBOOTS" != "$EXPECTED_REBOOT" ]; then
+    echo "UNEXPECTED REBOOT: got $NR_REBOOTS expected $EXPECTED_REBOOT"
     echo "TEST FAILED"
     exit 1
 fi
 
 echo "TEST REBOOT $NR_REBOOTS"
+echo $((NR_REBOOTS + 1)) | dd of=/NR_REBOOTS oflag=direct
 
 copy_to_host()
 {
