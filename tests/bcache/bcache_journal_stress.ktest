@@ -9,6 +9,7 @@ config-bucket-size 64k
 config-block-size 4k
 config-volume 2000M
 config-mem 512M
+config-bcache-sysfs journal_delay_ms 0
 
 config-timeout $(stress_timeout)
 
@@ -17,7 +18,6 @@ main()
     setup_tracing 64 'bcache:*'
 
     setup_bcache
-    echo 0 > /sys/fs/bcache/*/journal_delay_ms
     test_stress
     stop_bcache
 }
