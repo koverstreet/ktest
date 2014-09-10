@@ -5,11 +5,10 @@ require-lib ./test-libs.sh
 config-scratch-devs 2G
 config-mem 512M
 
-config-timeout 600
+config-timeout $(stress_timeout)
 
 main()
 {
-    SIZE=small
     FS=ext4
 
     #echo "file inode.c +p"		> /sys/kernel/debug/dynamic_debug/control

@@ -8,7 +8,7 @@ config-bucket-size 64k
 config-block-size 2k
 config-mem 512M
 
-config-timeout 600
+config-timeout $(stress_timeout)
 
 main()
 {
