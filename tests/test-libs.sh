@@ -169,11 +169,8 @@ stop_fs()
 
 # Bcache workloads
 #
-# The following variables must be set to use test_fio, test_bonnie or
-# test_dbench:
-# DEVICES - list of devices
-# SIZE - one of small, medium or large
-SIZE=small
+# The DEVICES variable must be set to a list of devices before any of the
+# below workloads are involed.
 
 test_wait()
 {
@@ -184,54 +181,46 @@ test_wait()
 
 test_bonnie()
 {
-    (
-	case $SIZE in
-	    small) loops=1 ;;
-	    medium) loops=10 ;;
-	    large) loops=100 ;;
-	    *) exit 1 ;;
-	esac
+    echo "=== start bonnie at $(date)"
+    loops=$((($ktest_priority + 1) * 5))
 
+    (
 	for dev in $DEVICES; do
 	    bonnie++ -x $loops -r 128 -u root -d /mnt/$dev &
 	done
 
 	test_wait
     )
+
+    echo "=== done bonnie at $(date)"
 }
 
 test_dbench()
 {
-    (
-	case $SIZE in
-	    small) duration=30 ;;
-	    medium) duration=300 ;;
-	    large) duration=100000 ;;
-	    *) exit 1 ;;
-	esac
+    echo "=== start dbench at $(date)"
+    duration=$((($ktest_priority + 1) * 30))
 
+    (
 	for dev in $DEVICES; do
 	    dbench -S -t $duration 2 -D /mnt/$dev &
 	done
 
 	test_wait
     )
+
+    echo "=== done dbench at $(date)"
 }
 
 test_fio()
 {
+    echo "=== start fio at $(date)"
+    loops=$(($ktest_priority + 1))
+
     (
 	# Our default working directory (/cdrom) is not writable,
 	# fio wants to write files when verify_dump is set, so
 	# change to a different directory.
 	cd $LOGDIR
-
-	case $SIZE in
-	    small) loops=1 ;;
-	    medium) loops=10 ;;
-	    large) loops=100 ;;
-	    *) exit 1 ;;
-	esac
 
 	for dev in $DEVICES; do
 	    fio --eta=always - <<-ZZ &
@@ -250,7 +239,7 @@ test_fio()
 		filename=$dev
 
 		[seqwrite]
-		loops=1
+		loops=$loops
 		blocksize_range=4k-128k
 		rw=write
 		verify=crc32c-intel
@@ -266,25 +255,24 @@ test_fio()
 
 	test_wait
     )
+
+    echo "=== done fio at $(date)"
 }
 
 test_fsx()
 {
-    (
-	case $SIZE in
-	    small) numops=300000 ;;
-	    medium) numops=3000000 ;;
-	    large) numops=30000000 ;;
-	    *) exit 1 ;;
-	esac
+    echo "=== start fsx at $(date)"
+    numops=$((($ktest_priority + 1) * 300000))
 
-	echo $DEVICES
+    (
 	for dev in $DEVICES; do
 	    ltp-fsx -N $numops /mnt/$dev/foo
 	done
 
 	test_wait
     )
+
+    echo "=== done fsx at $(date)"
 }
 
 expect_sysfs()
@@ -400,6 +388,11 @@ test_stress()
     stop_fs
 
     test_discard
+}
+
+stress_timeout()
+{
+    echo $((($ktest_priority + 3) * 300))
 }
 
 test_powerfail()

@@ -8,7 +8,7 @@ require-container ioctl_test
 config-scratch-devs 2G
 config-mem 512M
 
-config-timeout 600
+config-timeout $(stress_timeout)
 
 mb_to_sec()
 {
@@ -69,7 +69,6 @@ main()
    
     echo "------- FIO TEST -------- "
 
-    SIZE=small
     test_fio
 
     bch_ioctl list_keys       1 0 0 100 100

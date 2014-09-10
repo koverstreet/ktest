@@ -11,8 +11,7 @@ parse_test_deps()
     _VMCLUSTER=""
 
     local TEST=$1
-    local TESTDIR=$(dirname "$TEST")
-    local HAVE_CONTAINER=""
+    local TESTDIR="$(dirname "$TEST")"
 
     ktest_priority=$PRIORITY
 
@@ -38,7 +37,10 @@ parse_test_deps()
 
 	_add-file "$f"
 
-	. "$f" deps
+	local old="$TESTDIR"
+	TESTDIR="$(dirname "$f")"
+	. "$f"
+	TESTDIR="$old"
     }
 
     require-bin()
@@ -121,7 +123,7 @@ parse_test_deps()
 
     PATH+=":/sbin:/usr/sbin:/usr/local/sbin"
 
-    . "$TEST" deps
+    . "$TEST"
 
     if [ -z "$_MEM" ]; then
 	echo "test must specify config-mem"
