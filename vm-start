@@ -884,10 +884,10 @@ def cmd_ssh():
     os.system("chmod 600 " + keyfile)
 
     if vm.ip and (vm.ip[:7]!='172.20.'):
-        cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o",
+        cmd = ["ssh", "-t", "-o", "StrictHostKeyChecking=no", "-o",
             "UserKnownHostsFile=/dev/null", "-i", keyfile, "root@"+vm.ip]
     else:
-        cmd = ["ssh", "-o", "NoHostAuthenticationForLocalhost=yes",
+        cmd = ["ssh", "-t", "-o", "NoHostAuthenticationForLocalhost=yes",
             "-i", keyfile, "-p", str(9000 + id), "root@127.0.0.1"]
 
     cmd.extend(sys.argv[2:])
