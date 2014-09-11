@@ -210,6 +210,13 @@ setup_bcache() {
     done
 }
 
+stop_volumes()
+{
+    for dev in /sys/block/bcache*/bcache/unregister; do
+	echo > $dev
+    done
+}
+
 stop_bcache()
 {
     echo 1 > /sys/fs/bcache/reboot
