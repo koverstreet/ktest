@@ -251,3 +251,27 @@ cached_dev_settings()
 	#echo 1	> $dir/bypass_torture_test
     done
 }
+
+setup_bcachefs()
+{
+    uuid=$(ls -d /sys/fs/bcache/*-*-* | sed -e 's/.*\///')
+    mkdir -p /mnt/bcachefs
+    mount -t bcachefs $uuid /mnt/bcachefs
+
+    # for fs workloads to know mount point
+    DEVICES=bcachefs
+}
+
+stop_bcachefs()
+{
+    umount /mnt/bcachefs
+}
+
+test_bcachefs_stress()
+{
+    setup_bcachefs
+    test_dbench
+    test_bonnie
+    #test_fsx
+    stop_bcachefs
+}
