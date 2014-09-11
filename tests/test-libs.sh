@@ -265,7 +265,7 @@ test_fsx()
 
     (
 	for dev in $DEVICES; do
-	    ltp-fsx -N $numops /mnt/$dev/foo
+	    ltp-fsx -N $numops /mnt/$dev/foo &
 	done
 
 	test_wait
@@ -388,6 +388,7 @@ test_stress()
     setup_fs
     test_dbench
     test_bonnie
+    test_fsx
     stop_fs
     test_discard
 }

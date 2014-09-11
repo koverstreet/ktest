@@ -3,6 +3,9 @@ require-lib ../test-libs.sh
 
 require-bin make-bcache
 require-bin bcachectl
+
+require-make ../../ltp-fsx/Makefile ltp-fsx
+
 require-kernel-config BCACHE,BCACHE_DEBUG,CLOSURE_DEBUG
 
 SYSFS=""
