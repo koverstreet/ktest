@@ -86,77 +86,45 @@ dump_trace()
 }
 
 #
-# Mount file systems on all bcache block devices.
-# The FS variable should be set to one of the following:
-# - none -- no file system setup, test doesn't need one
-# - ext4 -- ext4 file system on bcache device
-# - xfs -- xfs file system on bcache device
-# - bcachefs -- bcachefs on cache set
+# Mount file systems on all block devices.
 #
 existing_fs() {
-    case $FS in
+    case $1 in
 	ext4)
-	    for dev in $DEVICES; do
-		mkdir -p /mnt/$dev
-		mount $dev /mnt/$dev -t ext4 -o errors=panic
-	    done
+	    opts="errors=panic"
 	    ;;
 	xfs)
-	    for dev in $DEVICES; do
-		mkdir -p /mnt/$dev
-		mount $dev /mnt/$dev -t xfs -o wsync
-	    done
-	    ;;
-	bcachefs)
-	    # Hack -- when using bcachefs we don't have a backing
-	    # device or a flash only volume, but we have to invent
-	    # a name for the device for use as the mount point.
-	    if [ "$DEVICES" != "" ]; then
-		echo "Don't use a backing device or flash-only"
-		echo "volume with bcachefs"
-		exit 1
-	    fi
-
-	    dev=/dev/bcache0
-	    DEVICES=$dev
-	    uuid=$(ls -d /sys/fs/bcache/*-*-* | sed -e 's/.*\///')
-	    echo "Mounting bcachefs on $uuid"
-	    mkdir -p /mnt/$dev
-	    mount -t bcachefs $uuid /mnt/$dev -o errors=panic
+	    opts="wsync"
 	    ;;
 	*)
-	    echo "Unsupported file system type: $FS"
-	    exit 1
+	    opts=""
 	    ;;
     esac
 
+    for dev in $DEVICES; do
+	mkdir -p /mnt/$dev
+	mount $dev /mnt/$dev -t $1 -o $opts
+    done
 }
 
 #
-# Set up file systems on all bcache block devices and mount them.
+# Set up file systems on all block devices and mount them.
 #
-FS=ext4
+setup_fs()
+{
+    for dev in $DEVICES; do
+	case $1 in
+	    xfs)
+		opts="-f"
+		;;
+	    *)
+		opts=""
+		;;
+	esac
 
-setup_fs() {
-    case $FS in
-	ext4)
-	    for dev in $DEVICES; do
-		mkfs.ext4 $dev
-	    done
-	    ;;
-	xfs)
-	    for dev in $DEVICES; do
-		mkfs.xfs $dev
-	    done
-	    ;;
-	bcachefs)
-	    ;;
-	*)
-	    echo "Unsupported file system type: $FS"
-	    exit 1
-	    ;;
-    esac
-    existing_fs
+	mkfs.$1 $opts $dev
+    done
+    existing_fs $1
 }
 
 stop_fs()
@@ -385,12 +353,20 @@ test_stress()
     test_fio
     test_discard
 
-    setup_fs
+    setup_fs ext4
     test_dbench
     test_bonnie
     test_fsx
     stop_fs
     test_discard
+
+    if [ $ktest_priority -gt 0 ]; then
+	setup_fs xfs
+	test_dbench
+	test_bonnie
+	stop_fs
+	test_discard
+    fi
 }
 
 stress_timeout()
