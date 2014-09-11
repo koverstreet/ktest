@@ -395,83 +395,19 @@ stress_timeout()
     echo $((($ktest_priority + 3) * 300))
 }
 
-test_powerfail()
+block_device_verify_dd()
 {
-    sleep 120
-    echo b > /proc/sysrq-trigger
+    dd if=$1 of=/root/cmp bs=4096 count=1 iflag=direct
+    cmp /root/cmp /root/orig
 }
 
-# Random stuff (that's not used anywhere AFAIK)
-
-wait_on_dev()
+block_device_dd()
 {
-    for device in $@; do
-	while [ ! -b "$device" ]; do
-	    sleep 0.5
-	done
-    done
-}
+    dd if=/dev/urandom of=/root/orig bs=4096 count=1
+    dd if=/root/orig of=$1 bs=4096 count=1 oflag=direct
+    dd if=$1 of=/root/cmp bs=4096 count=1 iflag=direct
+    cmp /root/cmp /root/orig
 
-setup_netconsole()
-{
-    IP=`ifconfig eth0|grep inet|sed -e '/inet/ s/.*inet addr:\([.0-9]*\).*$/\1/'`
-    REMOTE=`cat /proc/cmdline |sed -e 's/^.*nfsroot=\([0-9.]*\).*$/\1/'`
-    PORT=`echo $IP|sed -e 's/.*\(.\)$/666\1/'`
-
-    mkdir	  /sys/kernel/config/netconsole/1
-    echo $IP    > /sys/kernel/config/netconsole/1/local_ip
-    echo $REMOTE    > /sys/kernel/config/netconsole/1/remote_ip
-    echo $PORT    > /sys/kernel/config/netconsole/1/remote_port
-    echo 1	> /sys/kernel/config/netconsole/1/enabled
-}
-
-setup_dynamic_debug()
-{
-    #echo "func btree_read +p"	> /sys/kernel/debug/dynamic_debug/control
-    echo "func btree_read_work +p"	> /sys/kernel/debug/dynamic_debug/control
-
-    echo "func btree_insert_recurse +p"    > /sys/kernel/debug/dynamic_debug/control
-    #echo "func btree_gc_recurse +p "    > /sys/kernel/debug/dynamic_debug/control
-
-    #echo "func bch_btree_gc_finish +p "    > /sys/kernel/debug/dynamic_debug/control
-
-    echo "func sync_btree_check +p "    > /sys/kernel/debug/dynamic_debug/control
-    #echo "func btree_insert_keys +p"    > /sys/kernel/debug/dynamic_debug/control
-    #echo "func __write_super +p"	> /sys/kernel/debug/dynamic_debug/control
-    echo "func register_cache_set +p"    > /sys/kernel/debug/dynamic_debug/control
-    echo "func run_cache_set +p"	> /sys/kernel/debug/dynamic_debug/control
-    echo "func write_bdev_super +p"	> /sys/kernel/debug/dynamic_debug/control
-    echo "func detach_bdev +p"	> /sys/kernel/debug/dynamic_debug/control
-
-    echo "func journal_read_bucket +p"    > /sys/kernel/debug/dynamic_debug/control
-    echo "func bch_journal_read +p"	> /sys/kernel/debug/dynamic_debug/control
-    echo "func bch_journal_mark +p"	> /sys/kernel/debug/dynamic_debug/control
-    #echo "func bch_journal_replay +p"    > /sys/kernel/debug/dynamic_debug/control
-
-    #echo "func btree_cache_insert +p"    > /sys/kernel/debug/dynamic_debug/control
-    #echo "func bch_btree_insert_check_key +p" > /sys/kernel/debug/dynamic_debug/control
-    #echo "func cached_dev_cache_miss +p"    > /sys/kernel/debug/dynamic_debug/control
-    #echo "func request_read_done_bh +p"    > /sys/kernel/debug/dynamic_debug/control
-    #echo "func bch_insert_data_loop +p"    > /sys/kernel/debug/dynamic_debug/control
-
-    #echo "func bch_refill_keybuf +p"    > /sys/kernel/debug/dynamic_debug/control
-    #echo "func bcache_keybuf_next_rescan +p"    > /sys/kernel/debug/dynamic_debug/control
-    #echo "file movinggc.c +p"	> /sys/kernel/debug/dynamic_debug/control
-    #echo "file super.c +p"	    > /sys/kernel/debug/dynamic_debug/control
-    #echo "func invalidate_buckets +p"    > /sys/kernel/debug/dynamic_debug/control
-
-    #echo "file request.c +p"	> /sys/kernel/debug/dynamic_debug/control
-}
-
-setup_md_faulty()
-{
-    CACHE=md0
-    #mdadm -C /dev/md0 -l6 -n4 /dev/vd[bcde]
-    #mdadm -A /dev/md0 /dev/vd[bcde]
-
-    #mdadm -B /dev/md0 -l0 -n2 /dev/vdb /dev/vdc
-
-    mdadm -B /dev/md0 -lfaulty -n1 /dev/vda
-
-    mdadm -G /dev/md0 -prp10000
+    dd if=/dev/urandom of=/root/orig bs=4096 count=1
+    dd if=/root/orig of=$1 bs=4096 count=1 oflag=direct
 }
