@@ -93,10 +93,10 @@ dump_trace()
 existing_fs() {
     case $1 in
 	ext4)
-	    opts="errors=panic"
+	    opts="-o errors=panic"
 	    ;;
 	xfs)
-	    opts="wsync"
+	    opts=""
 	    ;;
 	*)
 	    opts=""
@@ -105,7 +105,7 @@ existing_fs() {
 
     for dev in $DEVICES; do
 	mkdir -p /mnt/$dev
-	mount $dev /mnt/$dev -t $1 -o $opts
+	mount $dev /mnt/$dev -t $1 $opts
     done
 }
 
