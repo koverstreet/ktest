@@ -19,20 +19,15 @@ main()
 
     if [ $NR_REBOOTS = 0 ]; then
 	setup_bcache
-	setup_fs
+	setup_fs ext4
     else
 	existing_bcache
-	existing_fs
+	existing_fs ext4
     fi
 
     [ $NR_REBOOTS = $nr_iterations ] && exit 0
 
-    test_sysfs
-
-    test_shrink &
-    test_fault &
-    test_sync &
-    test_drop_caches &
+    test_antagonist
 
     test_dbench &
     test_bonnie &

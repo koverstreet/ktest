@@ -2,7 +2,11 @@
 require-lib ../test-libs.sh
 
 require-bin make-bcache
+require-bin bcache-super-show
 require-bin bcachectl
+
+require-make ../../ltp-fsx/Makefile ltp-fsx
+
 require-kernel-config BCACHE,BCACHE_DEBUG,CLOSURE_DEBUG
 
 SYSFS=""
@@ -127,6 +131,15 @@ add_device() {
     DEVICE_COUNT=$(($DEVICE_COUNT + 1))
 }
 
+wait_on_dev()
+{
+    for device in $@; do
+	while [ ! -b "$device" ]; do
+	    sleep 0.5
+	done
+    done
+}
+
 #
 # Registers all bcache devices.
 #
@@ -136,6 +149,12 @@ add_device() {
 existing_bcache() {
     DEVICES=
     DEVICE_COUNT=0
+
+    # Make sure bcache-super-show works -- the control plane wipes data
+    # if this fails so its important that it doesn't break
+    for dev in $CACHE $BDEV $TIER; do
+	bcache-super-show $dev
+    done
 
     # Older kernel versions don't have /dev/bcache
     if [ -e /dev/bcacheXXX ]; then
@@ -187,7 +206,8 @@ setup_bcache() {
 	make_bcache_flags+=" --bdev $BDEV"
     fi
 
-    make-bcache $make_bcache_flags
+    # Let's change the checksum type just for fun
+    make-bcache --csum-type crc32c $make_bcache_flags
 
     existing_bcache
 
@@ -195,6 +215,13 @@ setup_bcache() {
 	for file in /sys/fs/bcache/*/flash_vol_create; do
 	    echo $size > $file
 	done
+    done
+}
+
+stop_volumes()
+{
+    for dev in /sys/block/bcache*/bcache/unregister; do
+	echo > $dev
     done
 }
 
@@ -240,36 +267,26 @@ cached_dev_settings()
     done
 }
 
-
-block_device_verify_dd()
+setup_bcachefs()
 {
-    setup_tracing 64 'dfs_client:*'
-    dd if=$1 of=/root/cmp bs=4096 count=1 iflag=direct
-    cmp /root/cmp /root/orig
+    uuid=$(ls -d /sys/fs/bcache/*-*-* | sed -e 's/.*\///')
+    mkdir -p /mnt/bcachefs
+    mount -t bcachefs $uuid /mnt/bcachefs
 
-    if [ $? -eq 1 ]; then
-        echo "Files differ! write test failure!"
-    else
-	echo "Files match!"
-    fi
-    echo "dd verification completed!"
+    # for fs workloads to know mount point
+    DEVICES=bcachefs
 }
 
-block_device_dd()
+stop_bcachefs()
 {
-    dd if=/dev/urandom of=/root/orig bs=4096 count=1
-    dd if=/root/orig of=$1 bs=4096 count=1 oflag=direct
-    dd if=$1 of=/root/cmp bs=4096 count=1 iflag=direct
-    cmp /root/cmp /root/orig
-    if [ $? -eq 1 ]; then
-        echo "Files differ! write test failure!"
-	exit 1
-    else
-	echo "Files match!"
-    fi
-
-    dd if=/dev/urandom of=/root/orig bs=4096 count=1
-    dd if=/root/orig of=$1 bs=4096 count=1 oflag=direct
+    umount /mnt/bcachefs
 }
 
-
+test_bcachefs_stress()
+{
+    setup_bcachefs
+    test_dbench
+    test_bonnie
+    #test_fsx
+    stop_bcachefs
+}
