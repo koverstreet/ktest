@@ -15,6 +15,9 @@ main()
     setup_tracing 64 'bcache:*'
 
     setup_bcache
+    test_antagonist
     test_stress
+    stop_volumes
+    test_bcachefs_stress
     stop_bcache
 }
