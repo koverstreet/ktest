@@ -25,12 +25,7 @@ main()
 
     [ "$NR_REBOOTS" != "$nr_iterations" ] && (sleep 10; do_reboot) &
 
-    test_sysfs
-
-    test_shrink &
-    test_fault &
-    test_sync &
-    test_drop_caches &
+    test_antagonist
 
     if [ "$NR_REBOOTS" != "$nr_iterations" ]; then
 	test_fio || true

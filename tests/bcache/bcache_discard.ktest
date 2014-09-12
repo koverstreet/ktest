@@ -1,11 +1,15 @@
 #!/bin/bash
 
-require-lib ../test-libs.sh
+require-lib bcache-test-libs.sh
 
 require-lib ../../../vm-tests/container_lib.sh
 require-container ioctl_test
 
-config-scratch-devs 2G
+config-cache 2G
+config-bucket-size 512k
+config-block-size 2k
+config-volume 1400M
+
 config-mem 512M
 
 config-timeout $(stress_timeout)
@@ -20,12 +24,6 @@ mb_to_sec()
 main()
 {
     copy_containers
-
-    FLAGS="--bucket 512k --block 2k --discard --cache_replacement_policy=lru"
-    CACHE="/dev/vda"
-    BDEV=
-    VOLUME=1400M
-    TIER=
 
     setup_bcache
 

@@ -10,6 +10,8 @@ config-bucket-size 512k
 config-block-size 2k
 config-mem 1G
 
+config-volume 1400M
+
 config-timeout $(stress_timeout)
 
 main()
@@ -28,6 +30,7 @@ main()
     # can't start test_stress before adding the device, because test_stress
     # triggers dynamic faults in the background which breaks a kmalloc adding
     # the device
+    test_antagonist
     test_stress
 
     stop_bcache
