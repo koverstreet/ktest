@@ -2,6 +2,7 @@
 require-lib ../test-libs.sh
 
 require-bin make-bcache
+require-bin bcache-super-show
 require-bin bcachectl
 
 require-make ../../ltp-fsx/Makefile ltp-fsx
@@ -149,6 +150,12 @@ existing_bcache() {
     DEVICES=
     DEVICE_COUNT=0
 
+    # Make sure bcache-super-show works -- the control plane wipes data
+    # if this fails so its important that it doesn't break
+    for dev in $CACHE $BDEV $TIER; do
+	bcache-super-show $dev
+    done
+
     # Older kernel versions don't have /dev/bcache
     if [ -e /dev/bcacheXXX ]; then
 	bcachectl register $CACHE $TIER $BDEV
@@ -199,7 +206,8 @@ setup_bcache() {
 	make_bcache_flags+=" --bdev $BDEV"
     fi
 
-    make-bcache $make_bcache_flags
+    # Let's change the checksum type just for fun
+    make-bcache --csum-type crc32c $make_bcache_flags
 
     existing_bcache
 
