@@ -1,10 +1,12 @@
 #
-# Library with some functions for writing bcache tests using the
+# Library with some functions for writing block layer tests using the
 # ktest framework.
 #
 
 require-kernel-config MD
 require-kernel-config DYNAMIC_FAULT
+
+require-make ../ltp-fsx/Makefile ltp-fsx
 
 # Wait for an IP or IPv6 address to show
 # up on a specific device.
