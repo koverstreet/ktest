@@ -37,7 +37,7 @@ LOG_INTERNAL="log.internal"
 SCRATCH_DIR="/tmp"      # dir where scratch drives are created
                         #       defaults: /tmp
                         #       auto-override: $HOME/.ktest/tmp
-IMG="/var/lib/ktest/root.0.5.1"
+IMG="/var/lib/ktest/root"
                         # root image that will be booted
                         #       set with: -i <path>
                         #       defaults: /var/lib/ktest/root
