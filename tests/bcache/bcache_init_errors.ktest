@@ -18,6 +18,9 @@ main()
 
     if [ $NR_REBOOTS = 0 ]; then
 	setup_bcache
+
+	echo readonly > /sys/fs/bcache/*/errors
+
 	setup_fs ext4
 
 	test_antagonist
