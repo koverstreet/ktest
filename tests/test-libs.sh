@@ -71,12 +71,12 @@ setup_blkdev() {
 }
 
 # Usage:
-# setup_tracing buffer_size_kb tracepoint_glob
+# setup_tracing tracepoint_glob
 setup_tracing()
 {
     echo > /sys/kernel/debug/tracing/trace
-    echo $1 > /sys/kernel/debug/tracing/buffer_size_kb
-    echo $2 > /sys/kernel/debug/tracing/set_event
+    echo 4 > /sys/kernel/debug/tracing/buffer_size_kb
+    echo $1 > /sys/kernel/debug/tracing/set_event
     echo 1 > /proc/sys/kernel/ftrace_dump_on_oops
     echo 1 > /sys/kernel/debug/tracing/options/overwrite
     echo 1 > /sys/kernel/debug/tracing/tracing_on

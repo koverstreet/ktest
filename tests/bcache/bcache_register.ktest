@@ -14,7 +14,7 @@ config-timeout 60
 
 main()
 {
-    setup_tracing 64 'bcache:*'
+    setup_tracing 'bcache:*'
 
     setup_bcache
 
