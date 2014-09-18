@@ -64,7 +64,7 @@ parse_test_deps()
 
 	local dir="$(dirname "$f")"
 
-	(cd "$dir"; make -f "$f" "$req")
+	(cd "$dir"; make -f "$(basename "$f")" "$req")
 
 	_add-file "$dir/$req"
     }
