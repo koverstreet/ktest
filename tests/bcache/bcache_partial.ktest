@@ -9,7 +9,7 @@ config-timeout 60
 
 main()
 {
-    setup_tracing 64 'bcache:*'
+    setup_tracing 'bcache:*'
 
     make-bcache -C /dev/vda /dev/vdb /dev/vdc
     make-bcache --wipe-bcache -C /dev/vdc
