@@ -610,6 +610,10 @@ class Cluster(object):
             for idx in range(2, 127):
                 f.write("%s,%s,node%d\n" % (self.macgen(idx), self.ipgen(idx), idx-1))
 
+        killcmd=['sudo', 'pkill', '-KILL', '-f', 'dnsmasq.*'+os.path.basename(self.dnsmasq_conf)]
+        subprocess.call(killcmd)
+        atexit.register(subprocess.call, killcmd)
+
         cmd = ['sudo', '-n', '--', 'dnsmasq',
                "--log-facility=-", '--log-queries',
                "--conf-file=%s" % self.dnsmasq_conf,
@@ -618,27 +622,6 @@ class Cluster(object):
                               stdin=FNULL,
                               stdout=open(self.dnsmasq_output, 'w'),
                               stderr=subprocess.STDOUT)
-
-        # Wait up to 1 minute for dnsmasq to stabilize
-        etime = time.time() + 60.0
-        while (time.time() <= etime):
-            time.sleep(1.0)
-            try:
-                with open(self.dnsmasq_pid, 'r') as f:
-                    pid=int(f.read().strip())
-                    if pid > 0:
-                        atexit.register(self.disable_dnsmasq, pid)
-                        break
-            except (OSError, IOError):
-                pass
-        else:
-            raise RuntimeError("Dnsmasq failed to start in time")
-
-    def disable_dnsmasq(self, pid):
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except:
-            logging.warning("Failed to terminate dnsmasq")
 
 
     # Tear down VMs and networking on a signal or abort
