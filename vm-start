@@ -182,10 +182,10 @@ def vm_slot_get(tmpdir, ip, conx3):
     free_vmids=range(MAX_VMS)
     for vm in running_vms:
         try:
+            free_vmids.remove(vm.vm_id)
             if vm.expired():
-                running_vms.remove(vm)
-            else:
-                free_vmids.remove(vm.vm_id)
+                free_vmids.append(vm.vm_id)
+
         except ValueError:
             pass
 
@@ -208,6 +208,9 @@ def vm_slot_get(tmpdir, ip, conx3):
 
 
     # get vm entr, mark for setup
+    new_vmid = free_vmids[0]
+    running_vms = filter(lambda v: v.vm_id != new_vmid, running_vms)
+
     vm = Domain(free_vmids[0])
     vm.state    = "setup"
     vm.owner    = user
