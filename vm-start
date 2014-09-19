@@ -106,11 +106,14 @@ class Domain:
         self.name = "vm"+str(vm_id)   # name of the vm, can be custom
         self.tmpdir  = None        # the location of dir to store scratch drives
         self.conx3_id = None       # dev id of the virtual pci x3 Connect X3 card
+        self.ctime = time.time()   # Record last modification time
 
     def __getattr__(self, name):
-        """Fixup old versions of this clas saved in the DB"""
+        """Fixup old versions of this class saved in the DB"""
         if name in ("ip", "mac", "owner", "pid", "tmpdir", "conx3_id"):
             return None
+        elif name in ("ctime"):
+            return 0.0
         else:
             raise AttributeError("%s instance has no attribute '%s'" % (self.__class__.__name__, name))
 
@@ -130,6 +133,15 @@ class Domain:
             pass
 
         return False
+
+
+    def expired(self):
+        """If a node is dead and it was created at least 2min ago then it can
+        be reclaimed with minimal risk of the create->pid race
+        condition.
+        """
+        return not self.exists() and ((self.ctime + 120.0) < time.time())
+
 
 @contextmanager
 def vm_slot_update(id):
@@ -170,7 +182,10 @@ def vm_slot_get(tmpdir, ip, conx3):
     free_vmids=range(MAX_VMS)
     for vm in running_vms:
         try:
-            free_vmids.remove(vm.vm_id)
+            if vm.expired():
+                running_vms.remove(vm)
+            else:
+                free_vmids.remove(vm.vm_id)
         except ValueError:
             pass
 
@@ -201,7 +216,7 @@ def vm_slot_get(tmpdir, ip, conx3):
     vm.ip       = ip
 
     running_vms.append(vm)
-    d["running_vms"] = running_vms
+    d["running_vms"] = sorted(running_vms, key=lambda v: v.vm_id)
 
     closeLockedDb(d)
     return vm
