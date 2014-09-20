@@ -22,10 +22,10 @@ main()
     echo "setup done"
 
     sleep 1
-    make-bcache -C --bucket 512k --block 2k /dev/vdc
+    make-bcache -C --bucket 512k --block 2k /dev/sdd
 
     echo "adding device"
-    echo /dev/vdc > /sys/fs/bcache/*/add_device
+    echo /dev/sdd > /sys/fs/bcache/*/add_device
 
     # can't start test_stress before adding the device, because test_stress
     # triggers dynamic faults in the background which breaks a kmalloc adding

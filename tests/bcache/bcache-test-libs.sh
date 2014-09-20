@@ -91,11 +91,12 @@ config-bcache-sysfs()
     SYSFS+="for file in /sys/fs/bcache/*/$1; do echo $2 > \$file; done"
 }
 
+# Scratch devices are sdb onwards
 get_next_virtio()
 {
     # Ugh...
-    letter="$(printf "\x$(printf "%x" $((97 + $VIRTIO_BLKDEVS)))")"
-    echo "/dev/vd$letter"
+    letter="$(printf "\x$(printf "%x" $((98 + $VIRTIO_BLKDEVS)))")"
+    echo "/dev/sd$letter"
 }
 
 add_bcache_devs()

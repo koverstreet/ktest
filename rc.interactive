@@ -14,6 +14,12 @@ echo 1 > /proc/sys/fs/suid_dumpable
 echo "| /usr/bin/dd of=$LOGDIR/core.%e.PID%p.SIG%s.TIME%t" > /proc/sys/kernel/core_pattern
 ulimit -c unlimited
 
+# Virtual block device tweaks
+for q in /sys/block/sd*/queue; do
+    echo 0 > $q/rotational
+    echo noop > $q/scheduler
+done
+
 # Check if we are running the crashdump kernel
 if [ -s /proc/vmcore ]; then
     echo "Collecting crash dump..."

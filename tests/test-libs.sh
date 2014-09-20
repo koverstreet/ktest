@@ -67,7 +67,7 @@ wait_no_ip()
 # Set up a block device without bcache.
 #
 setup_blkdev() {
-    DEVICES=/dev/vda
+    DEVICES="/dev/sdb"
 }
 
 # Usage:
@@ -118,6 +118,9 @@ setup_fs()
 	case $1 in
 	    xfs)
 		opts="-f"
+		;;
+	    ext4)
+		opts="-F"
 		;;
 	    *)
 		opts=""
