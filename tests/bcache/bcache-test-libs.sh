@@ -159,7 +159,7 @@ existing_bcache() {
     done
 
     # Older kernel versions don't have /dev/bcache
-    if [ -e /dev/bcacheXXX ]; then
+    if [ -e /dev/bcache ]; then
 	bcachectl register $CACHE $TIER $BDEV
     else
 	for dev in $CACHE $TIER $BDEV; do
