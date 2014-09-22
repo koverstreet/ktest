@@ -7,7 +7,7 @@ config-tier 256M,256M,256M,256M,256M,256M,256M,256M,256M,256M
 
 config-bucket-size 64k
 config-block-size 4k
-config-volume 2000M
+config-volume 1900M
 config-mem 512M
 config-bcache-sysfs journal_delay_ms 0
 
