@@ -186,7 +186,7 @@ test_dbench()
 test_fio()
 {
     echo "=== start fio at $(date)"
-    loops=$(($ktest_priority + 1))
+    loops=$(($ktest_priority / 2 + 1))
 
     (
 	# Our default working directory (/cdrom) is not writable,
@@ -222,6 +222,20 @@ test_fio()
 		loops=$loops
 		rw=randwrite
 		verify=meta
+
+		[randwrite_small]
+		stonewall
+		blocksize=4k
+		loops=$loops
+		rw=randwrite
+		verify=crc32c-intel
+
+		[randread]
+		stonewall
+		blocksize=4k
+		loops=$loops
+		rw=randread
+		verify=crc32c-intel
 		ZZ
 	done
 
