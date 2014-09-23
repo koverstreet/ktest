@@ -55,7 +55,10 @@ config-volume()
 
 config-bucket-size()
 {
-    BUCKET_SIZE="$1"
+    BUCKET_SIZE=""
+    for size in "$@"; do
+        BUCKET_SIZE="$BUCKET_SIZE--bucket $size "
+    done
 }
 
 config-block-size()
@@ -114,7 +117,7 @@ add_bcache_devs()
 
 make_bcache_flags()
 {
-    flags="--bucket $BUCKET_SIZE --block $BLOCK_SIZE --cache_replacement_policy=$REPLACEMENT"
+    flags="$BUCKET_SIZE --block $BLOCK_SIZE --cache_replacement_policy=$REPLACEMENT"
     case "$DISCARD" in
 	0) ;;
 	1) flags+=" --discard" ;;
