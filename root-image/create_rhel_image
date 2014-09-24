@@ -37,6 +37,7 @@ PACKAGES+=" numactl-devel numactl-libs perl perl-libs perl-devel"
 PACKAGES+=" libunwind libunwind-devel"
 PACKAGES+=" libuuid libuuid-devel uuid-perl"
 PACKAGES+=" net-tools htop python-magic perf python-perf"
+PACKAGES+=" kexec-tools"
 
 create_mount_image "$@"
 
@@ -115,6 +116,8 @@ ShowStatus=no
 DefaultStandardOutput=journal+console
 DefaultStandardError=journal+console
 ZZ
+
+rm -f "$MNT/etc/systemd/system/multi-user.target.wants/kdump.service"
 
 cp $VM_IMAGE_DIR/rc.local "$MNT/etc/rc.d/rc.local"
 chmod 755 "$MNT/etc/rc.d/rc.local"
