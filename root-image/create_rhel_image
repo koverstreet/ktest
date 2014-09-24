@@ -16,7 +16,7 @@ checkdep yum rpm
 # of yum+rpm on RHEL 7 or a later Fedora, not on debian.
 source /etc/os-release
 test "$ID" = "dateros"
-test "$VERSION_ID" = "7"
+test "$VERSION_ID" = "0.5.1"
 
 
 COREPKGS="basesystem bash biosdevname btrfs-progs coreutils"
