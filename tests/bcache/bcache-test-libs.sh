@@ -256,6 +256,12 @@ cache_set_settings()
 	echo 0 > $dir/congested_write_threshold_us
 
 	echo 1 > $dir/internal/copy_gc_enabled
+
+	# Disable damping effect since test cache devices are so small
+	echo 1 > $dir/internal/tiering_rate_p_term_inverse
+	for dev in $(ls -d $dir/cache[0-9]*); do
+	    echo 1 > $dev/copy_gc_rate_p_term_inverse
+	done
     done
 }
 
