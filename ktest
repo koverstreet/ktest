@@ -78,6 +78,8 @@ usage()
     echo "      -w <dir> work directory (default: kernel build directory)"
     echo "      -i <dir> VM root filesystem image (run cmd only)"
     echo "      -I       disable timeout and VM stop on pass/fail (run cmd only)"
+    echo "      -S       disable timeout and VM stop on fail (run cmd only)"
+    echo "      -p <num> set test duration (higher is longer, default is 0)"
 }
 
 #prints usage if no args
