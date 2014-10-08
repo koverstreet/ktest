@@ -3,7 +3,6 @@
 require-lib ./test-libs.sh
 
 config-scratch-devs 512M
-config-mem 512M
 
 config-timeout $(stress_timeout)
 

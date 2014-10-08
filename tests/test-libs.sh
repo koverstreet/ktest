@@ -3,6 +3,8 @@
 # ktest framework.
 #
 
+config-mem 1G
+
 require-kernel-config MD
 require-kernel-config DYNAMIC_FAULT
 

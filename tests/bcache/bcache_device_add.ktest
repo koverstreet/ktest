@@ -8,7 +8,6 @@ config-scratch-devs 1G,1G
 
 config-bucket-size 512k
 config-block-size 2k
-config-mem 1G
 
 config-volume 1400M
 
