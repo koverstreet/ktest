@@ -154,7 +154,7 @@ test_wait()
 test_bonnie()
 {
     echo "=== start bonnie at $(date)"
-    loops=$((($ktest_priority + 1) * 5))
+    loops=$((($ktest_priority + 1) * 4))
 
     (
 	for dev in $DEVICES; do
@@ -390,7 +390,7 @@ test_stress()
 
 stress_timeout()
 {
-    echo $((($ktest_priority + 3) * 300))
+    echo $((($ktest_priority + 3) * 400))
 }
 
 block_device_verify_dd()

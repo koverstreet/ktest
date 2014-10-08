@@ -24,6 +24,6 @@ main()
 
     setup_bcache
     test_antagonist
-    test_stress
+    test_fio
     stop_bcache
 }
