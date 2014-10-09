@@ -1,0 +1,14 @@
+#!/bin/bash
+
+# Note: create-vm-image doesn't create a vm with a 32 bit userland, so we're not
+# going to be able to run much with this kernel - this is really just for
+# checking if it builds
+
+require-lib bcache-test-libs.sh
+
+require-kernel-config 64BIT=n
+
+main()
+{
+    true
+}
