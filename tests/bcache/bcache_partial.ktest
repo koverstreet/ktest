@@ -11,10 +11,10 @@ main()
 {
     setup_tracing 'bcache:*'
 
-    make-bcache -C /dev/vda /dev/vdb /dev/vdc
-    make-bcache --wipe-bcache -C /dev/vdc
+    make-bcache -C /dev/sdb /dev/sdc /dev/sdd
+    make-bcache --wipe-bcache -C /dev/sdd
 
-    echo /dev/vda > /sys/fs/bcache/register
+    echo /dev/sdb > /sys/fs/bcache/register
 
     # Make sure we can write to sysfs without panicing
     echo 100M > /sys/fs/bcache/*/flash_vol_create || true
@@ -22,10 +22,10 @@ main()
     # Make sure we can read from sysfs without panicing
     test_sysfs
 
-    echo /dev/vdb > /sys/fs/bcache/register
+    echo /dev/sdc > /sys/fs/bcache/register
     echo > /sys/fs/bcache/*/unregister
 
-    echo /dev/vdc > /sys/fs/bcache/register
+    echo /dev/sdd > /sys/fs/bcache/register
     echo > /sys/fs/bcache/*/unregister
 
     echo > /sys/fs/bcache/reboot

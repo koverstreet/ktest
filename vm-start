@@ -362,10 +362,24 @@ class VM(object):
         cmd.extend(["-monitor", "unix:" + os.path.join(self.tmpdir,"mon")+",server,nowait"])
         cmd.extend(["-gdb", "unix:" + os.path.join(self.tmpdir,"gdb")+",server,nowait"])
 
-        if opts.persistant:
-            cmd.extend(["-drive", "format=raw,file="+opts.image])
-        else:
-            cmd.extend(["-drive", "format=raw,snapshot=on,file="+opts.image])
+	# VirtIO-SCSI for root file system and scratch devices
+	cmd.extend(["-device", "virtio-scsi-pci,id=scsi-hba"])
+
+	# Root file system comes first (sda)
+	root_flags = "if=none,format=raw,file=" + opts.image + ",id=root"
+        if not opts.persistent:
+	    root_flags += ",snapshot=on"
+	cmd.extend(["-drive", root_flags])
+	cmd.extend(["-device", "scsi-hd,bus=scsi-hba.0,drive=root"])
+
+	# Scratch volumes (sdb onward)
+        for n, drive in enumerate(self.drives):  # add scratch drives
+            cmd.extend(["-drive", "if=none,format=raw,cache=unsafe,id=scsi" + str(n) + ",file="+drive])
+	    cmd.extend(["-device", "scsi-hd,bus=scsi-hba.0,drive=scsi" + str(n)])
+
+        if self.iso:              # add cdrom
+	    cmd.extend(["-drive", "if=none,format=raw,cache=unsafe,id=scsi-cd,file=" + self.iso])
+	    cmd.extend(["-device", "scsi-cd,bus=scsi-hba.0,drive=scsi-cd"])
 
         if opts.filesystems:
             for fspath, fslabel in opts.filesystems:
@@ -373,11 +387,6 @@ class VM(object):
 
         if opts.core:
            cmd.extend(["-drive", "format=raw,file="+options.core.split(",")[0]])
-
-        for drive in self.drives:  # add scratch drives
-            cmd.extend(["-drive", "if=virtio,format=raw,cache=unsafe,file="+drive])
-        if self.iso:              # add cdrom
-            cmd.extend(["-cdrom", self.iso])
 
         if opts.conx3:
             print "Assigning vf: ", self.conx3_id
@@ -715,7 +724,7 @@ def cmd_start():
         default="1",
         help="number of CPUs allocated per VM")
 
-    opt.add_option("-p", "--persistant", dest="persistant",
+    opt.add_option("-p", "--persistent", dest="persistent",
         action="store_true",
         help="use writeback")
 
@@ -818,8 +827,8 @@ def cmd_start():
 
             p.wait()
             caught_signal[0] = True
-        except:
-            pass
+        except Exception, e:
+	    print e
 
     vm_cleanup(options.tmpdir)
     subprocess.call(["stty", "sane"],

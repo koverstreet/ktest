@@ -67,7 +67,7 @@ wait_no_ip()
 # Set up a block device without bcache.
 #
 setup_blkdev() {
-    DEVICES=/dev/vda
+    DEVICES="/dev/sdb"
 }
 
 # Usage:
@@ -119,6 +119,9 @@ setup_fs()
 	    xfs)
 		opts="-f"
 		;;
+	    ext4)
+		opts="-F"
+		;;
 	    *)
 		opts=""
 		;;
@@ -151,7 +154,7 @@ test_wait()
 test_bonnie()
 {
     echo "=== start bonnie at $(date)"
-    loops=$((($ktest_priority + 1) * 5))
+    loops=$((($ktest_priority + 1) * 4))
 
     (
 	for dev in $DEVICES; do
@@ -183,7 +186,7 @@ test_dbench()
 test_fio()
 {
     echo "=== start fio at $(date)"
-    loops=$(($ktest_priority + 1))
+    loops=$(($ktest_priority / 2 + 1))
 
     (
 	# Our default working directory (/cdrom) is not writable,
@@ -219,6 +222,20 @@ test_fio()
 		loops=$loops
 		rw=randwrite
 		verify=meta
+
+		[randwrite_small]
+		stonewall
+		blocksize=4k
+		loops=$loops
+		rw=randwrite
+		verify=crc32c-intel
+
+		[randread]
+		stonewall
+		blocksize=4k
+		loops=$loops
+		rw=randread
+		verify=crc32c-intel
 		ZZ
 	done
 
@@ -373,7 +390,7 @@ test_stress()
 
 stress_timeout()
 {
-    echo $((($ktest_priority + 3) * 300))
+    echo $((($ktest_priority + 3) * 400))
 }
 
 block_device_verify_dd()

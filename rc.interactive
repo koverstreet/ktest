@@ -3,10 +3,29 @@
 dmesg -n 7
 echo 1 > /proc/sys/kernel/sysrq
 
+# Log file system visible to host
 echo "mount logfs"
 LOGDIR=/var/log/datera
 mkdir -p $LOGDIR
 mount -t 9p -o trans=virtio logfs /var/log/datera
+
+# Core dump settings
 echo 1 > /proc/sys/fs/suid_dumpable
 echo "| /usr/bin/dd of=$LOGDIR/core.%e.PID%p.SIG%s.TIME%t" > /proc/sys/kernel/core_pattern
 ulimit -c unlimited
+
+# Virtual block device tweaks
+for q in /sys/block/sd*/queue; do
+    echo 0 > $q/rotational
+    echo noop > $q/scheduler
+done
+
+# Check if we are running the crashdump kernel
+if [ -s /proc/vmcore ]; then
+    echo "Collecting crash dump..."
+    cp --sparse=always /proc/vmcore /var/log/datera/vmcore
+    sync
+    poweroff
+else
+    kexec -p /cdrom/vmlinuz --append="root=/dev/sda rw console=ttyS0,115200 maxcpus=1"
+fi

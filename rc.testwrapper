@@ -8,14 +8,7 @@ set -o errtrace
 
 export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]}()}+ '
 
-echo "mount logfs"
-LOGDIR=/var/log/datera
-mkdir -p $LOGDIR
-mount -t 9p -o trans=virtio logfs /var/log/datera
-
-echo 1 > /proc/sys/fs/suid_dumpable
-echo "| /usr/bin/dd of=$LOGDIR/core.%e.PID%p.SIG%s.TIME%t" > /proc/sys/kernel/core_pattern
-ulimit -c unlimited
+. /cdrom/rc.interactive
 
 for i in `cat /proc/cmdline`; do
     case $i in
