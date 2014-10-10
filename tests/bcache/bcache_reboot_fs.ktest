@@ -15,7 +15,7 @@ config-timeout $(($nr_iterations * 45 + $(stress_timeout)))
 
 main()
 {
-    setup_tracing 64 'bcache:*'
+    setup_tracing 'bcache:*'
 
     if [ $NR_REBOOTS = 0 ]; then
 	setup_bcache

@@ -1,10 +1,12 @@
 #
-# Library with some functions for writing bcache tests using the
+# Library with some functions for writing block layer tests using the
 # ktest framework.
 #
 
 require-kernel-config MD
 require-kernel-config DYNAMIC_FAULT
+
+require-make ../ltp-fsx/Makefile ltp-fsx
 
 # Wait for an IP or IPv6 address to show
 # up on a specific device.
@@ -69,12 +71,12 @@ setup_blkdev() {
 }
 
 # Usage:
-# setup_tracing buffer_size_kb tracepoint_glob
+# setup_tracing tracepoint_glob
 setup_tracing()
 {
     echo > /sys/kernel/debug/tracing/trace
-    echo $1 > /sys/kernel/debug/tracing/buffer_size_kb
-    echo $2 > /sys/kernel/debug/tracing/set_event
+    echo 4 > /sys/kernel/debug/tracing/buffer_size_kb
+    echo $1 > /sys/kernel/debug/tracing/set_event
     echo 1 > /proc/sys/kernel/ftrace_dump_on_oops
     echo 1 > /sys/kernel/debug/tracing/options/overwrite
     echo 1 > /sys/kernel/debug/tracing/tracing_on
@@ -91,10 +93,10 @@ dump_trace()
 existing_fs() {
     case $1 in
 	ext4)
-	    opts="errors=panic"
+	    opts="-o errors=panic"
 	    ;;
 	xfs)
-	    opts="wsync"
+	    opts=""
 	    ;;
 	*)
 	    opts=""
@@ -103,7 +105,7 @@ existing_fs() {
 
     for dev in $DEVICES; do
 	mkdir -p /mnt/$dev
-	mount $dev /mnt/$dev -t $1 -o $opts
+	mount $dev /mnt/$dev -t $1 $opts
     done
 }
 

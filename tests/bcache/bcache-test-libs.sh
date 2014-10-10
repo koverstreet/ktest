@@ -1,11 +1,13 @@
+#
+# Library with some functions for writing bcache tests using the
+# ktest framework.
+#
 
 require-lib ../test-libs.sh
 
 require-bin make-bcache
 require-bin bcache-super-show
 require-bin bcachectl
-
-require-make ../../ltp-fsx/Makefile ltp-fsx
 
 require-kernel-config BCACHE,BCACHE_DEBUG,CLOSURE_DEBUG
 
@@ -234,6 +236,8 @@ cache_set_settings()
 {
     for dir in $(ls -d /sys/fs/bcache/*-*-*); do
 	true
+	echo 1 > $dir/btree_scan_ratelimit
+
 	#echo 0 > $dir/synchronous
 	echo panic > $dir/errors
 
