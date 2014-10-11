@@ -1,0 +1,30 @@
+#!/bin/bash
+
+require-lib bcache-test-libs.sh
+
+config-cache 512M
+config-tier 2G,2G
+
+config-bucket-size 512k
+config-block-size 2k
+config-mem 1G
+
+config-volume 1400M
+
+config-timeout $(stress_timeout)
+
+main()
+{
+    setup_tracing 'bcache:*'
+
+    if [ $NR_REBOOTS = 0 ]; then
+	setup_bcache
+	test_fio
+	echo readonly > /sys/fs/bcache/*/cache2/state
+	do_reboot
+    else
+	existing_bcache
+	test_discard
+	stop_bcache
+    fi
+}
