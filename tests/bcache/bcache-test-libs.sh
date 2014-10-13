@@ -237,7 +237,7 @@ cache_set_settings()
 {
     for dir in $(ls -d /sys/fs/bcache/*-*-*); do
 	true
-	echo 1 > $dir/btree_scan_ratelimit
+	echo 0 > $dir/btree_scan_ratelimit
 
 	#echo 0 > $dir/synchronous
 	echo panic > $dir/errors
