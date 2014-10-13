@@ -29,5 +29,5 @@ if [ -s /proc/vmcore ]; then
 else
     # If debugging crash dumps, add "console=ttyS0,115200" to the append line
     # below:
-    kexec -p /cdrom/vmlinuz --append="root=/dev/sda rw maxcpus=1"
+    kexec -p /cdrom/vmlinuz --append="root=/dev/sda rw maxcpus=1" || true
 fi
