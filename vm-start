@@ -854,6 +854,10 @@ def cmd_stop():
     opt.add_option("-i", "--ip", dest="ipaddr",
       help="The ip address of the vm")
 
+    opt.add_option("-f", "--force", dest="force",
+                   default=False, action="store_true",
+                   help="Do not error out of the node is missing")
+
     (opts, args) = opt.parse_args()
 
     if opts.debug:
@@ -872,11 +876,14 @@ def cmd_stop():
         ids = args[0].split("/")
 
         for id in ids:
-            vm = vm_lookup(int(id))
-            logging.debug("killing vm "+id+": pid="+str(vm.pid)+"  exists="+str(vm.exists()))
-            if (vm.pid is not None) and vm.exists():
-                os.kill(vm.pid, signal.SIGKILL)
-
+            try:
+                vm = vm_lookup(int(id))
+                logging.debug("killing vm "+id+": pid="+str(vm.pid)+"  exists="+str(vm.exists()))
+                if (vm.pid is not None) and vm.exists():
+                    os.kill(vm.pid, signal.SIGKILL)
+            except RuntimeError:
+                if not opts.force:
+                    raise
 
 def cmd_ssh():
     """ssh into a virtual machine"""
