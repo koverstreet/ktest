@@ -78,6 +78,8 @@ usage()
     echo "      -w <dir> work directory (default: kernel build directory)"
     echo "      -i <dir> VM root filesystem image (run cmd only)"
     echo "      -I       disable timeout and VM stop on pass/fail (run cmd only)"
+    echo "      -S       disable timeout and VM stop on fail (run cmd only)"
+    echo "      -p <num> set test duration (higher is longer, default is 0)"
 }
 
 #prints usage if no args
@@ -143,16 +145,21 @@ check_mlxcard()
 
 build_file_list()
 {
+    install -m0644 "$KERNEL/vmlinuz" "$WORK_DIR/vmlinuz"
+    FILES="$WORK_DIR/vmlinuz"
+
     if [ $# -eq 0 ]; then
 	install -m0755 "$KTESTDIR/rc.interactive" "$WORK_DIR/rc"
-	FILES="$WORK_DIR/rc"
-	_MEM="1G"
+	FILES+=" $WORK_DIR/rc"
     else
 	TEST=$1
 	TEST=$(readlink -e "$TEST")
 
+	install -m0755 "$KTESTDIR/rc.interactive" "$WORK_DIR/rc.interactive"
+	FILES+=" $WORK_DIR/rc.interactive"
+
 	install -m0755 "$KTESTDIR/rc.testwrapper" "$WORK_DIR/rc"
-	FILES="$WORK_DIR/rc"
+	FILES+=" $WORK_DIR/rc"
 
 	install -m0644 "$TEST" "$WORK_DIR/rc.test"
 	FILES+=" $WORK_DIR/rc.test"
@@ -267,6 +274,10 @@ run_lcov()
 
 run_vmstart()
 {
+    local KGDB=""
+
+    [ "$EXIT_ON_SUCCESS" = 1 -o "$INTERACTIVE" = 1 ] && KGDB="--kgdb"
+
     # shellcheck disable=SC2086
     $VMSTART start					\
 	-i "$IMG" -t "$SCRATCH_DIR"			\
@@ -274,6 +285,8 @@ run_vmstart()
 	-c "$WORK_DIR/run.iso"				\
 	--id "$WORK_DIR/id"				\
 	--fs "$WORK_DIR/$LOG_INTERNAL" logfs		\
+	--append="root=/dev/sda rw crashkernel=128M"	\
+	"$KGDB"						\
         "$@"
 }
 
@@ -281,13 +294,11 @@ cmd_boot()
 {
     prepare_vm
 
-    run_vmstart -m 1G --kgdb --cpus 6
+    run_vmstart -m 1G --cpus 6
 }
 
 cmd_run()
 {
-    local KGDB=""
-
     if [[ $# -lt 1 ]]; then
 	echo "ktest: missing test"
 	exit 1
@@ -298,12 +309,9 @@ cmd_run()
     rm -f "$WORK_DIR/output"
     mkfifo "$WORK_DIR/output"
 
-    [ "$EXIT_ON_SUCCESS" = 1 -o "$INTERACTIVE" = 1 ] && KGDB="--kgdb"
-
     # shellcheck disable=SC2086
     run_vmstart                                                 \
-	--append="root=/dev/sda rw ktest.priority=$PRIORITY"	\
-	$KGDB							\
+	--append="root=/dev/sda rw ktest.priority=$PRIORITY crashkernel=128M"	\
 	-m "$_MEM"						\
 	--cpus "$_CPUS"						\
 	$_SCRATCH						\

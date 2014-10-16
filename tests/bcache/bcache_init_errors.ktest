@@ -40,8 +40,8 @@ main()
 	    echo "TESTING FAULT $id"
 	    echo "func $fault +f" > $control
 
-	    echo /dev/vda > /sys/fs/bcache/register || true
-	    echo /dev/vdb > /sys/fs/bcache/register || true
+	    echo /dev/sdb > /sys/fs/bcache/register || true
+	    echo /dev/sdc > /sys/fs/bcache/register || true
 
 	    sleep 2
 	    echo "func $fault -f" > $control
