@@ -240,7 +240,7 @@ cache_set_settings()
 {
     for dir in $(ls -d /sys/fs/bcache/*-*-*); do
 	true
-	echo 1 > $dir/btree_scan_ratelimit
+	echo 0 > $dir/btree_scan_ratelimit
 
 	#echo 0 > $dir/synchronous
 	echo panic > $dir/errors
@@ -271,14 +271,8 @@ cache_set_settings()
 
 cached_dev_settings()
 {
-    for dir in $(ls -d /sys/block/bcache*/bcache); do
-	true
-	#echo 128k    > $dir/readahead
-	#echo 1	> $dir/writeback_delay
-	#echo 0	> $dir/writeback_running
-	#echo 0	> $dir/sequential_cutoff
-	#echo 1	> $dir/verify
-	#echo 1	> $dir/bypass_torture_test
+    for dir in $(ls -d /sys/fs/bcache/*-*-*/bdev*); do
+	echo 1 > $dir/writeback_rate_p_term_inverse
     done
 }
 

@@ -8,7 +8,6 @@ config-block-size 2k
 config-volume 1400M
 config-meta-replicas 2
 config-data-replicas 2
-config-mem 512M
 
 config-timeout $(stress_timeout)
 

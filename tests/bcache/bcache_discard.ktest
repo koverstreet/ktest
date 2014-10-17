@@ -10,8 +10,6 @@ config-bucket-size 512k
 config-block-size 2k
 config-volume 1400M
 
-config-mem 512M
-
 config-timeout $(stress_timeout)
 
 mb_to_sec()

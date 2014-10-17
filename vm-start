@@ -178,14 +178,19 @@ def vm_slot_get(tmpdir, ip, conx3):
     d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
     running_vms=d["running_vms"]
 
+    try:
+        last_vmid=int(d["last_vmid"])
+    except:
+        last_vmid=-1
+
+    logging.debug("Last VM: %s" % str(last_vmid))
+
     # check to make sure we have a free vm entry
     free_vmids=range(MAX_VMS)
     for vm in running_vms:
         try:
-            free_vmids.remove(vm.vm_id)
-            if vm.expired():
-                free_vmids.append(vm.vm_id)
-
+            if not vm.expired():
+                free_vmids.remove(vm.vm_id)
         except ValueError:
             pass
 
@@ -208,10 +213,16 @@ def vm_slot_get(tmpdir, ip, conx3):
 
 
     # get vm entr, mark for setup
-    new_vmid = free_vmids[0]
+    new_vmid=0
+    for try_vmid in free_vmids:
+        if try_vmid > last_vmid:
+            new_vmid=try_vmid
+            break
+
+    logging.debug("New VMID: %d" % new_vmid)
     running_vms = filter(lambda v: v.vm_id != new_vmid, running_vms)
 
-    vm = Domain(free_vmids[0])
+    vm = Domain(new_vmid)
     vm.state    = "setup"
     vm.owner    = user
     vm.tmpdir   = tmpdir
@@ -220,6 +231,7 @@ def vm_slot_get(tmpdir, ip, conx3):
 
     running_vms.append(vm)
     d["running_vms"] = sorted(running_vms, key=lambda v: v.vm_id)
+    d["last_vmid"]=int(vm.vm_id)
 
     closeLockedDb(d)
     return vm
@@ -854,6 +866,10 @@ def cmd_stop():
     opt.add_option("-i", "--ip", dest="ipaddr",
       help="The ip address of the vm")
 
+    opt.add_option("-f", "--force", dest="force",
+                   default=False, action="store_true",
+                   help="Do not error out of the node is missing")
+
     (opts, args) = opt.parse_args()
 
     if opts.debug:
@@ -872,11 +888,14 @@ def cmd_stop():
         ids = args[0].split("/")
 
         for id in ids:
-            vm = vm_lookup(int(id))
-            logging.debug("killing vm "+id+": pid="+str(vm.pid)+"  exists="+str(vm.exists()))
-            if (vm.pid is not None) and vm.exists():
-                os.kill(vm.pid, signal.SIGKILL)
-
+            try:
+                vm = vm_lookup(int(id))
+                logging.debug("killing vm "+id+": pid="+str(vm.pid)+"  exists="+str(vm.exists()))
+                if (vm.pid is not None) and vm.exists():
+                    os.kill(vm.pid, signal.SIGKILL)
+            except RuntimeError:
+                if not opts.force:
+                    raise
 
 def cmd_ssh():
     """ssh into a virtual machine"""

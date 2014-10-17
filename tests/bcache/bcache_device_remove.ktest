@@ -7,7 +7,6 @@ config-tier 512M,512M,512M
 config-bucket-size 64k
 config-block-size 4k
 config-volume 350M
-config-mem 512M
 config-data-replicas 2
 
 config-timeout $(stress_timeout)

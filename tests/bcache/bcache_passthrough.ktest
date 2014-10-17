@@ -5,7 +5,6 @@ require-lib bcache-test-libs.sh
 config-backing 2G
 config-bucket-size 64k
 config-block-size 4k
-config-mem 512M
 
 config-timeout $(stress_timeout)
 

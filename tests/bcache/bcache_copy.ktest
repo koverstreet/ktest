@@ -8,7 +8,6 @@ require-container ioctl_test
 config-cache 1G
 config-bucket-size 64k
 config-block-size 2k
-config-mem 512M
 
 config-timeout 600
 

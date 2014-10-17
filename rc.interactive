@@ -27,5 +27,7 @@ if [ -s /proc/vmcore ]; then
     sync
     poweroff
 else
-    kexec -p /cdrom/vmlinuz --append="root=/dev/sda rw console=ttyS0,115200 maxcpus=1"
+    # If debugging crash dumps, add "console=ttyS0,115200" to the append line
+    # below:
+    kexec -p /cdrom/vmlinuz --append="root=/dev/sda rw maxcpus=1" || true
 fi

@@ -5,7 +5,6 @@ require-lib bcache-test-libs.sh
 config-cache 2G
 config-bucket-size 512k
 config-block-size 2k
-config-mem 1G
 
 config-timeout 600
 

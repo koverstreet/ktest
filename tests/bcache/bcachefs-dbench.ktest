@@ -5,7 +5,6 @@ require-lib bcache-test-libs.sh
 config-cache 2G
 config-bucket-size 64k
 config-block-size 2k
-config-mem 512M
 
 nr_iterations=$((($ktest_priority + 1) * 5))
 config-timeout $(($nr_iterations * 60))

@@ -6,7 +6,6 @@ config-cache 512M
 config-backing 512M,512M
 config-bucket-size 64k
 config-block-size 4k
-config-mem 512M
 
 config-timeout $(stress_timeout)
 
