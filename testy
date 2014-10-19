@@ -119,7 +119,7 @@ usage()
     echo "  -n	    don't run tests, just print them out"
 }
 
-while getopts "hnfp:k:Ki:b:j:w:x" arg; do
+while getopts "hnfp:k:Ki:b:j:w:o:x" arg; do
     case $arg in
 	h)
 	    usage
@@ -153,6 +153,9 @@ while getopts "hnfp:k:Ki:b:j:w:x" arg; do
 	w)
 	    WORKDIR=$OPTARG
 	    KTESTARGS+=" -w $OPTARG"
+	    ;;
+	o)
+	    KTESTARGS+=" -o $OPTARG"
 	    ;;
 	x)
 	    set -x
