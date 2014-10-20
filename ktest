@@ -237,42 +237,6 @@ prepare_vm()
     fi
 }
 
-run_lcov()
-{
-    which lcov >/dev/null 2>&1 || return 0
-
-    [ -d "$LOG_INTERNAL/gcov.0" ] || return 0
-
-    local gcov_out=$WORK_DIR/gcov
-
-    rm -rf "$gcov_out"
-    mkdir "$gcov_out"
-
-    local info=$gcov_out/gcov.info
-    local html=$gcov_out/gcov.html
-    local tracefiles=""
-
-    for i in $LOG_INTERNAL/gcov.*; do
-        local out=$gcov_out/$(basename "$i").info
-	tracefiles+=" --add-tracefile $out"
-
-	lcov --capture --quiet				\
-	    --directory "$i" --output-file "$out"
-    done
-
-    [ -n "$tracefiles" ] || return 0
-
-    echo "You may need to install perl-digest-MD5 for lcov"
-    echo "    sudo yum install perl-Digest-MD5"
-
-    # shellcheck disable=SC2086
-    lcov --quiet --output-file "$info" $tracefiles || true
-    genhtml --output-directory "$html" "$info" > /dev/null || true
-
-    echo
-    echo "LCOV report: file://$html/index.html"
-}
-
 run_vmstart()
 {
     local KGDB=""
@@ -335,8 +299,6 @@ cmd_run()
     fi
 
     $VMSTART stop "$(cat "$WORK_DIR/id")"
-
-    run_lcov
 
     exit $err
 }
