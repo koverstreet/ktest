@@ -250,11 +250,6 @@ cache_set_settings()
 	#echo 1 > $dir/internal/btree_coalescing_disabled
 	#echo 1 > $dir/internal/verify
 
-	# This only exists if CONFIG_BCACHE_DEBUG is on
-	if [ -f $dir/internal/expensive_debug_checks ]; then
-	    echo 1 > $dir/internal/expensive_debug_checks
-	fi
-
 	echo 0 > $dir/congested_read_threshold_us
 	echo 0 > $dir/congested_write_threshold_us
 

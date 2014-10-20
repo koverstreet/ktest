@@ -30,10 +30,7 @@ KERNEL=""		# dir that has the kernel to run
                         #       set with: -k <path>
 WORK_DIR=""             # dir where vm meta data (id, logs, etc) gets stored
                         #       set with: -w <path>
-LOG_INTERNAL="log.internal"
-                        # dir name which is mapped with virtfs to inside vm
-                        # at /var/log/datera
-                        #       path: $WORK_DIR/$LOG_INTERNAL
+LOG_INTERNAL=""		# dir name which is mounted at /var/log/datera in VM
 SCRATCH_DIR="/tmp"      # dir where scratch drives are created
                         #       defaults: /tmp
                         #       auto-override: $HOME/.ktest/tmp
@@ -75,7 +72,8 @@ usage()
     echo "  options:"
     echo "      -x       bash debug statements"
     echo "      -k <dir> build directory for kernel (default: kernel_source/.ktest)"
-    echo "      -w <dir> work directory (default: kernel build directory)"
+    echo "      -w <dir> work directory (default: kernel_source/ktest.<pid>)"
+    echo "      -o <dir> output directory (default: kernel_source/ktest.<pid>/output)"
     echo "      -i <dir> VM root filesystem image (run cmd only)"
     echo "      -I       disable timeout and VM stop on pass/fail (run cmd only)"
     echo "      -S       disable timeout and VM stop on fail (run cmd only)"
@@ -92,7 +90,7 @@ fi
 CMD="cmd_$1"
 shift
 
-while getopts "hp:i:k:ISw:x" arg; do
+while getopts "hp:i:k:ISw:o:x" arg; do
     case $arg in
 	h)
 	    usage
@@ -114,7 +112,10 @@ while getopts "hp:i:k:ISw:x" arg; do
 	    EXIT_ON_SUCCESS=1
 	    ;;
 	w)
-	    WORK_DIR=$OPTARG
+	    WORK_DIR="$OPTARG"
+	    ;;
+	o)
+	    LOG_INTERNAL="$OPTARG"
 	    ;;
 	x)
 	    set -x
@@ -129,6 +130,7 @@ if [ -z "$KERNEL" ]; then
 fi
 
 [ -z "$WORK_DIR" ] && WORK_DIR="./ktest.$$"
+[ -z "$LOG_INTERNAL" ] && LOG_INTERNAL="$WORK_DIR/output"
 
 mkdir -p "$WORK_DIR"
 WORK_DIR=$(readlink -e "$WORK_DIR")
@@ -220,8 +222,7 @@ prepare_vm()
     genisoimage_sudo=""
 
     # setup directory where logfs will be mounted from
-    rm -rf "$WORK_DIR/$LOG_INTERNAL"
-    mkdir -p "$WORK_DIR/$LOG_INTERNAL"
+    mkdir -p "$LOG_INTERNAL"
 
     build_file_list "$@"
 
@@ -236,42 +237,6 @@ prepare_vm()
     fi
 }
 
-run_lcov()
-{
-    which lcov >/dev/null 2>&1 || return 0
-
-    [ -d "$WORK_DIR/$LOG_INTERNAL/gcov.0" ] || return 0
-
-    local gcov_out=$WORK_DIR/gcov
-
-    rm -rf "$gcov_out"
-    mkdir "$gcov_out"
-
-    local info=$gcov_out/gcov.info
-    local html=$gcov_out/gcov.html
-    local tracefiles=""
-
-    for i in $WORK_DIR/$LOG_INTERNAL/gcov.*; do
-        local out=$gcov_out/$(basename "$i").info
-	tracefiles+=" --add-tracefile $out"
-
-	lcov --capture --quiet				\
-	    --directory "$i" --output-file "$out"
-    done
-
-    [ -n "$tracefiles" ] || return 0
-
-    echo "You may need to install perl-digest-MD5 for lcov"
-    echo "    sudo yum install perl-Digest-MD5"
-
-    # shellcheck disable=SC2086
-    lcov --quiet --output-file "$info" $tracefiles || true
-    genhtml --output-directory "$html" "$info" > /dev/null || true
-
-    echo
-    echo "LCOV report: file://$html/index.html"
-}
-
 run_vmstart()
 {
     local KGDB=""
@@ -284,7 +249,7 @@ run_vmstart()
 	-k "$KERNEL/vmlinuz"				\
 	-c "$WORK_DIR/run.iso"				\
 	--id "$WORK_DIR/id"				\
-	--fs "$WORK_DIR/$LOG_INTERNAL" logfs		\
+	--fs "$LOG_INTERNAL" logfs		\
 	--append="root=/dev/sda rw crashkernel=128M"	\
 	"$KGDB"						\
         "$@"
@@ -304,10 +269,11 @@ cmd_run()
 	exit 1
     fi
 
+    LOG_INTERNAL="$LOG_INTERNAL/$(basename "$1")"
     prepare_vm "$1"
 
-    rm -f "$WORK_DIR/output"
-    mkfifo "$WORK_DIR/output"
+    rm -f "$WORK_DIR/fifo"
+    mkfifo "$WORK_DIR/fifo"
 
     # shellcheck disable=SC2086
     run_vmstart                                                 \
@@ -316,25 +282,23 @@ cmd_run()
 	--cpus "$_CPUS"						\
 	$_SCRATCH						\
 	$_INFINIBAND						\
-	$_VMCLUSTER </dev/null 2>&1 > "$WORK_DIR/output" &
+	$_VMCLUSTER </dev/null 2>&1 > "$WORK_DIR/fifo" &
 
     err=0
 
     if [ "$EXIT_ON_SUCCESS" = 1 ]; then
 	sed -u -e '/TEST SUCCESS/ { p; Q0 }'			\
-	       < "$WORK_DIR/output" || err=1
+	       < "$WORK_DIR/fifo" || err=1
     elif [ "$INTERACTIVE" = 1 ]; then
-	cat "$WORK_DIR/output"
+	cat "$WORK_DIR/fifo"
     else
 	timeout "$_TIMEOUT"					\
 	    sed -u -e '/TEST SUCCESS/ { p; Q0 }'		\
 		   -e '/TEST FAILED/  { p; Q1 }'		\
-		   < "$WORK_DIR/output" || err=1
+		   < "$WORK_DIR/fifo" || err=1
     fi
 
     $VMSTART stop "$(cat "$WORK_DIR/id")"
-
-    run_lcov
 
     exit $err
 }
