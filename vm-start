@@ -534,7 +534,7 @@ class Cluster(object):
             if vm == 0:
                 vm_console = opts.console
             else:
-                vm_console = 'file:%s' % os.path.join(vm_tmpdir, "console")
+                vm_console = 'file,path=%s' % os.path.join(vm_tmpdir, "console")
 
             self.vms.append(ClusteredVM(vm+2, self, opts, slot, vm_tmpdir, vm_console))
 
