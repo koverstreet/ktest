@@ -47,5 +47,14 @@ main()
 	exit 1
     fi
 
+    # Make sure new devices are in tier 1
+    for device in cache2 cache3; do
+	tier="$(cat /sys/fs/bcache/*/${device}/tier)"
+	if [ "$tier" != 1 ]; then
+	    echo "${device} not in tier 1"
+	    exit 1
+	fi
+    done
+
     stop_bcache
 }

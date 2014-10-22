@@ -272,30 +272,34 @@ cmd_run()
     LOG_INTERNAL="$LOG_INTERNAL/$(basename "$1")"
     prepare_vm "$1"
 
-    rm -f "$WORK_DIR/fifo"
-    mkfifo "$WORK_DIR/fifo"
+    rm -f "$WORK_DIR/fifo.*"
+    mkfifo "$WORK_DIR/fifo.in"
+
+    FIFO="$WORK_DIR/fifo.out"
+    mkfifo "$FIFO"
 
     # shellcheck disable=SC2086
     run_vmstart                                                 \
 	--append="root=/dev/sda rw ktest.priority=$PRIORITY crashkernel=128M"	\
 	-m "$_MEM"						\
 	--cpus "$_CPUS"						\
+	--console "pipe,path=$WORK_DIR/fifo"			\
 	$_SCRATCH						\
 	$_INFINIBAND						\
-	$_VMCLUSTER </dev/null 2>&1 > "$WORK_DIR/fifo" &
+	$_VMCLUSTER &
 
     err=0
 
     if [ "$EXIT_ON_SUCCESS" = 1 ]; then
 	sed -u -e '/TEST SUCCESS/ { p; Q0 }'			\
-	       < "$WORK_DIR/fifo" || err=1
+	       < "$FIFO" || err=1
     elif [ "$INTERACTIVE" = 1 ]; then
-	cat "$WORK_DIR/fifo"
+	cat "$FIFO"
     else
 	timeout "$_TIMEOUT"					\
 	    sed -u -e '/TEST SUCCESS/ { p; Q0 }'		\
 		   -e '/TEST FAILED/  { p; Q1 }'		\
-		   < "$WORK_DIR/fifo" || err=1
+		   < "$FIFO" || err=1
     fi
 
     $VMSTART stop "$(cat "$WORK_DIR/id")"

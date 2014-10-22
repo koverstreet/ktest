@@ -354,7 +354,7 @@ class VM(object):
         if opts.kernel:
             cmd.extend(["-kernel", opts.kernel])
 
-            kernelParams = "console=ttyS0,115200"
+            kernelParams = "console=hvc0"
             if opts.kgdb:
                 kernelParams += " kgdboc=ttyS2,115200"
 
@@ -368,11 +368,13 @@ class VM(object):
             cmd.extend(["-initrd", opts.initrd])
 
         cmd.extend(["-nographic"])
-        cmd.extend(["-serial", self.console])
         cmd.extend(["-serial", "mon:unix:" + os.path.join(self.tmpdir,"con")+",server,nowait"])
         cmd.extend(["-serial", "unix:" + os.path.join(self.tmpdir,"kgdb")+",server,nowait"])
         cmd.extend(["-monitor", "unix:" + os.path.join(self.tmpdir,"mon")+",server,nowait"])
         cmd.extend(["-gdb", "unix:" + os.path.join(self.tmpdir,"gdb")+",server,nowait"])
+        cmd.extend(["-device", "virtio-serial"])
+        cmd.extend(["-chardev", self.console + ",id=console"])
+        cmd.extend(["-device", "virtconsole,chardev=console"])
 
 	# VirtIO-SCSI for root file system and scratch devices
 	cmd.extend(["-device", "virtio-scsi-pci,id=scsi-hba"])
@@ -532,7 +534,7 @@ class Cluster(object):
             if vm == 0:
                 vm_console = opts.console
             else:
-                vm_console = 'file:%s' % os.path.join(vm_tmpdir, "console")
+                vm_console = 'file,path=%s' % os.path.join(vm_tmpdir, "console")
 
             self.vms.append(ClusteredVM(vm+2, self, opts, slot, vm_tmpdir, vm_console))
 
@@ -750,7 +752,7 @@ def cmd_start():
 
     opt.add_option("--console", dest="console",
         default="stdio",
-        help="where to attach the vm console (ex: stdio, file:foo)")
+        help="where to attach the vm console (ex: stdio, pipe,path=foo)")
 
     opt.add_option("--conx3", dest="conx3",
         default=False, action="store_true",
