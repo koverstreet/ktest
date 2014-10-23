@@ -1,11 +1,13 @@
+#
+# Library with some functions for writing bcache tests using the
+# ktest framework.
+#
 
 require-lib ../test-libs.sh
 
 require-bin make-bcache
 require-bin bcache-super-show
 require-bin bcachectl
-
-require-make ../../ltp-fsx/Makefile ltp-fsx
 
 require-kernel-config BCACHE,BCACHE_DEBUG,CLOSURE_DEBUG
 
@@ -89,11 +91,12 @@ config-bcache-sysfs()
     SYSFS+="for file in /sys/fs/bcache/*/$1; do echo $2 > \$file; done"
 }
 
+# Scratch devices are sdb onwards
 get_next_virtio()
 {
     # Ugh...
-    letter="$(printf "\x$(printf "%x" $((97 + $VIRTIO_BLKDEVS)))")"
-    echo "/dev/vd$letter"
+    letter="$(printf "\x$(printf "%x" $((98 + $VIRTIO_BLKDEVS)))")"
+    echo "/dev/sd$letter"
 }
 
 add_bcache_devs()
@@ -157,7 +160,7 @@ existing_bcache() {
     done
 
     # Older kernel versions don't have /dev/bcache
-    if [ -e /dev/bcacheXXX ]; then
+    if [ -e /dev/bcache ]; then
 	bcachectl register $CACHE $TIER $BDEV
     else
 	for dev in $CACHE $TIER $BDEV; do
@@ -234,6 +237,8 @@ cache_set_settings()
 {
     for dir in $(ls -d /sys/fs/bcache/*-*-*); do
 	true
+	echo 1 > $dir/btree_scan_ratelimit
+
 	#echo 0 > $dir/synchronous
 	echo panic > $dir/errors
 
@@ -251,6 +256,13 @@ cache_set_settings()
 	echo 0 > $dir/congested_write_threshold_us
 
 	echo 1 > $dir/internal/copy_gc_enabled
+
+	# Disable damping effect since test cache devices are so small
+	echo 1 > $dir/internal/tiering_rate_p_term_inverse
+	echo 1 > $dir/internal/foreground_write_rate_p_term_inverse
+	for dev in $(ls -d $dir/cache[0-9]*); do
+	    echo 1 > $dev/copy_gc_rate_p_term_inverse
+	done
     done
 }
 

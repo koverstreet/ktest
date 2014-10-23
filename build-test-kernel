@@ -156,6 +156,35 @@ do_make()
 	EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments" "$@"
 }
 
+kernel_opt()
+{
+    local cmd=$1
+    local opt=$2
+    local kconfig="$WORK_DIR/.config"
+    local config_tool="$KERNEL_SOURCE/scripts/config"
+
+    if [[ $opt =~ = ]]; then
+	local val=${opt: -1}
+	opt="${opt%=?}"
+    else
+	local val=y
+    fi
+
+    case $cmd in
+	set)
+	    "$config_tool" --file "$kconfig" --set-val "$opt" "$val"
+	    ;;
+	check)
+	    local c=$("$config_tool" --file "$kconfig" -s "$opt")
+
+	    if [[ $c != $val ]]; then
+		echo "Kernel config option $opt is $c; should be $val"
+		exit 1
+	    fi
+	    ;;
+    esac
+}
+
 build_kernel()
 {
     rm -rf "$KERNEL_OUTPUT"
@@ -169,22 +198,14 @@ build_kernel()
 
     [ -f "$kconfig" ] || cp "$KTESTDIR/defconfig" "$kconfig"
 
-    for req in $_KERNEL_CONFIG_REQUIRE; do
-	if [ -n "$req" ]; then
-	    "$config_tool" --file "$kconfig" -e "$req"
-	fi
+    for opt in $_KERNEL_CONFIG_REQUIRE; do
+	[ -n "$opt" ] && kernel_opt set "$opt"
     done
 
     do_make olddefconfig
 
-    for req in $_KERNEL_CONFIG_REQUIRE; do
-	if [ -n "$req" ]; then
-	    c=$("$config_tool" --file "$kconfig" -s "$req")
-	    if [ "$c" != "y" ]; then
-		echo "Kernel config option $req not set"
-		exit 1
-	    fi
-	fi
+    for opt in $_KERNEL_CONFIG_REQUIRE; do
+	[ -n "$opt" ] && kernel_opt check "$opt"
     done
 
     IFS=$OLDIFS

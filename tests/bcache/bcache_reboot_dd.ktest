@@ -12,7 +12,7 @@ config-timeout 10000
 
 main()
 {
-    setup_tracing 64 'bcache:*'
+    setup_tracing 'bcache:*'
 
     if [ $NR_REBOOTS -eq 0 ]; then
 	setup_bcache

@@ -4,7 +4,7 @@ require-lib bcache-test-libs.sh
 
 config-cache 512M
 config-tier 2G
-config-scratch-devs 1G
+config-scratch-devs 1G,1G
 
 config-bucket-size 512k
 config-block-size 2k
@@ -16,22 +16,37 @@ config-timeout $(stress_timeout)
 
 main()
 {
-    setup_tracing 64 'bcache:*'
+    setup_tracing 'bcache:*'
 
     setup_bcache
     echo "setup done"
 
-    sleep 1
-    make-bcache -C --bucket 512k --block 2k /dev/vdc
+    (
+	sleep 5
+	make-bcache --bucket 512k --block 2k --tier 1 -C /dev/sdd
+	echo "adding device 1"
+	echo /dev/sdd > /sys/fs/bcache/*/add_device
 
-    echo "adding device"
-    echo /dev/vdc > /sys/fs/bcache/*/add_device
+	sleep 5
+	make-bcache --bucket 512k --block 2k --tier 1 -C /dev/sde
+	echo "adding device 2"
+	echo /dev/sde > /sys/fs/bcache/*/add_device
 
-    # can't start test_stress before adding the device, because test_stress
-    # triggers dynamic faults in the background which breaks a kmalloc adding
-    # the device
-    test_antagonist
-    test_stress
+	# can't start test_antagonist before adding the device, because it will
+	# triggers dynamic faults in the background which breaks a kmalloc adding
+	# the device
+	test_antagonist
+    ) &
+
+    test_fio
+    test_discard
+
+    # Make sure we actually added those devices
+    devices="$(ls -d /sys/fs/bcache/*/cache[0-9] | wc -l)"
+    if [ "$devices" != 4 ]; then
+	echo "Only found $devices devices"
+	exit 1
+    fi
 
     stop_bcache
 }

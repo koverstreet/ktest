@@ -3,10 +3,10 @@
 require-lib bcache-test-libs.sh
 
 config-cache 512M,512M
-config-tier 512M,512M
+config-tier 512M,512M,512M
 config-bucket-size 64k
 config-block-size 4k
-config-volume 500M
+config-volume 350M
 config-mem 512M
 config-data-replicas 2
 
@@ -14,18 +14,18 @@ config-timeout $(stress_timeout)
 
 main()
 {
-    setup_tracing 64 'bcache:*'
+    setup_tracing 'bcache:*'
 
     setup_bcache
 
     (
 	sleep 10
-	echo "removing device 3"
-	echo 1 > /sys/fs/bcache/*/cache3/unregister
+	echo "removing device 4"
+	echo 1 > /sys/fs/bcache/*/cache4/unregister
 	echo "removed"
     )&
 
     test_antagonist
-    test_stress
+    test_fio
     stop_bcache
 }

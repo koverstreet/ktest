@@ -14,10 +14,13 @@ config-volume 1600M
 
 main()
 {
-    setup_tracing 64 'bcache:*'
+    setup_tracing 'bcache:*'
 
     if [ $NR_REBOOTS = 0 ]; then
 	setup_bcache
+
+	echo readonly > /sys/fs/bcache/*/errors
+
 	setup_fs ext4
 
 	test_antagonist
@@ -37,8 +40,8 @@ main()
 	    echo "TESTING FAULT $id"
 	    echo "func $fault +f" > $control
 
-	    echo /dev/vda > /sys/fs/bcache/register || true
-	    echo /dev/vdb > /sys/fs/bcache/register || true
+	    echo /dev/sdb > /sys/fs/bcache/register || true
+	    echo /dev/sdc > /sys/fs/bcache/register || true
 
 	    sleep 2
 	    echo "func $fault -f" > $control
