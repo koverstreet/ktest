@@ -272,9 +272,10 @@ cmd_run()
     LOG_INTERNAL="$LOG_INTERNAL/$(basename "$1")"
     prepare_vm "$1"
 
-    rm -f "$WORK_DIR/fifo.*"
+    rm -f "$WORK_DIR/fifo.in"
     mkfifo "$WORK_DIR/fifo.in"
 
+    rm -f "$WORK_DIR/fifo.out"
     FIFO="$WORK_DIR/fifo.out"
     mkfifo "$FIFO"
 
