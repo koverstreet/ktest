@@ -25,6 +25,17 @@ from contextlib import contextmanager
 
 from optparse import OptionParser, OptionGroup
 
+# Decorator to wrap methods in logging
+def logwrap(f):
+    def inner(*args, **kwargs):
+        try:
+            logging.debug("BEGIN: %s %s %s" % (f.__name__, repr(args), repr(kwargs)))
+            return f(*args, **kwargs)
+        finally:
+            logging.debug("END: %s %s %s" %(f.__name__, repr(args), repr(kwargs)))
+    return inner
+
+
 # script directory and path
 DIR=os.path.dirname(__file__)       # path to script directory
 
@@ -154,6 +165,7 @@ def vm_slot_update(id):
     finally:
         closeLockedDb(d)
 
+@logwrap
 def vm_slot_put(id):
     d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
     running_vms = d["running_vms"]
@@ -168,6 +180,7 @@ def vm_slot_put(id):
 
     closeLockedDb(d)
 
+@logwrap
 def vm_slot_get(tmpdir, ip, conx3):
     try:
         user = os.environ["SUDO_USER"]
@@ -236,6 +249,7 @@ def vm_slot_get(tmpdir, ip, conx3):
     closeLockedDb(d)
     return vm
 
+@logwrap
 def vm_lookup(id):
     d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
     running_vms = d["running_vms"]
@@ -248,7 +262,7 @@ def vm_lookup(id):
 
     return vm
 
-
+@logwrap
 def vm_cleanup(vmdir):
 
     idfile = os.path.join(vmdir,"id")
@@ -283,7 +297,6 @@ def vm_cleanup(vmdir):
         shutil.rmtree(vmdir)
     except:
         pass
-
 
 class VM(object):
     """Defines a virtual machine object.
@@ -421,6 +434,7 @@ class ClusteredVM(VM):
     """Defines a virtual machine object.
     """
 
+    @logwrap
     def __init__(self, vm_id, bridge, opts, vms_id, vm_tmpdir, vm_console):
         """Initialize the VM object with its essential data.
         """
@@ -460,6 +474,7 @@ class ClusteredVM(VM):
             subprocess.call(['sudo', '-n', '--', 'sysctl', '-q', '-w', "net.ipv6.conf.%s.disable_ipv6=0" % td["name"]])
             subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addif', self.bridge.name, td["name"]])
 
+    @logwrap
     def run(self):
         cmd = self.build_cmdline()
         self.proc = subprocess.Popen(cmd, shell=False, close_fds=True)
@@ -485,6 +500,7 @@ class Cluster(object):
               signal.SIGUSR1,
               signal.SIGUSR2)
 
+    @logwrap
     def __init__(self, num_of_vms, opts):
         """Initialize the cluster object with bridge information.
         """
@@ -539,6 +555,7 @@ class Cluster(object):
 
     # Network address generators indexed off node number for the MAC address,
     # IPv4 and IPv6 addresses.
+    @logwrap
     def bridge_allocate(self):
         self.cidr = 24
         self.v6cidr = 64
@@ -602,7 +619,7 @@ class Cluster(object):
     def ipv6gen(self, node):
         return "fd84:c772:8103:%0.4x::%0.4x" % (0xfa00 + self.idnum, node)
 
-
+    @logwrap
     def enable_dnsmasq(self):
         """Configure and start dnsmasq
 
@@ -656,6 +673,7 @@ class Cluster(object):
             except:
                 pass
 
+    @logwrap
     def run(self):
         """Setup and run the cluster.
         """
@@ -1318,7 +1336,7 @@ def cmd_help():
 """Main program."""
 
 # Configure logging
-logging.basicConfig(stream=sys.stderr,format='%(levelname)s: %(message)s',level=logging.WARNING)
+logging.basicConfig(stream=sys.stderr,format='%(created)f: %(levelname)s: %(message)s',level=logging.WARNING)
 
 try:
     # if there is no command or args, print error message
