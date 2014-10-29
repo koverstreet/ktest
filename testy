@@ -19,9 +19,6 @@ KTESTARGS=""
 WORKDIR=""
 KEEP_GOING=0
 
-# hack
-( cd "$KTESTDIR/kmo-batch" && make kmo-batch )
-
 read_tests()
 {
     # For every pattern/test in the test list, if $file matches the pattern
@@ -104,13 +101,13 @@ run_test()
 
     case "$testfile" in
 	*.ktest)
-	    "$KTESTDIR/testy.run-test" "$KTESTDIR/ktest" run $KTESTARGS "$testfile"
+	    "$KTESTDIR/ktest" run $KTESTARGS "$testfile"
 	    ;;
 	*.actest)
-	    "$KTESTDIR/testy.run-test" "$ACTEST" -w "$WORKDIR" "$testfile"
+	    $ACTEST -w "$WORKDIR" "$testfile"
 	    ;;
 	*)
-	    "$KTESTDIR/testy.run-test" "$testfile"
+	    "$testfile"
 	    ;;
     esac
 }
@@ -168,49 +165,41 @@ while getopts "hnfp:k:Ki:b:j:w:o:x" arg; do
 done
 shift $((OPTIND - 1))
 
-ret=0
-tmpfile=$(mktemp)
+tests_failed=$(mktemp)
+tests_to_run=$(mktemp)
 
 # If get_tests fail we want the whole script to fail, so we can't call
 # it from $(...) -- redirect output to a file then read the file later
 # instead.
-get_tests "$@" > "$tmpfile"
-tests_to_run=$(sort -u "$tmpfile")
-
-rm "$tmpfile"
+get_tests "$@" > "$tests_to_run"
 
 if [ "$DRYRUN" == 0 ]; then
-    logdir=$(mktemp -d)
+    # shellcheck disable=SC2013
+    for testfile in $(sort -u "$tests_to_run"); do
+        testname=$(basename "$testfile")
+	starttime=$(date +%s)
+	failed=0
 
-    for testfile in $tests_to_run; do
-	testname=$(basename "$testfile")
+	run_test "$testfile" > "/tmp/$testname.log" 2>&1 || failed=1
 
-	run_test "$testfile"				\
-	    |& sed "s/^/[$testname] /" > "$logdir/$testname" &
+	duration=$(($(date +%s) - starttime))
 
-	sleep 2
+	if [ $failed = 1 ]; then
+	    # Note that we're on the right hand side of |, so we can't just
+	    # set a variable and test it at the end of the loop...
+	    echo "$testname" >> "$tests_failed"
+	    sed "s/^/[$testname] /" "/tmp/$testname.log"
+	    echo "[$testname] FAILURE: test finished at $(date +%s) -- $(date) after $duration seconds"
+	    [ $KEEP_GOING = 0 ] && break
+	else
+	    echo "[$testname] SUCCESS: test finished at $(date +%s) -- $(date) after $duration seconds"
+	fi
     done
-
-    wait
-
-    # shellcheck disable=SC2044
-    for testlog in $(find "$logdir" -type f); do
-	line=$(tail -n1 "$testlog")
-	case $line in
-	    *SUCCESS:*)
-		echo "$line"
-		;;
-	    *)
-		ret=1
-		cat "$testlog"
-		[ $KEEP_GOING = 0 ] && break
-		;;
-	esac
-    done
-
-    rm -rf "$logdir"
 else
-    echo "$tests_to_run"
+    sort -u "$tests_to_run"
 fi
 
-exit $ret
+rm "$tests_to_run"
+
+# Exit with failure if some tests failed
+test -z "$(cat "$tests_failed")"
