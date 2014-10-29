@@ -13,6 +13,7 @@
 #include <sys/epoll.h>
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/un.h>
@@ -248,6 +249,9 @@ static int cmd_daemon(int argc, char **argv)
     if (detach)
 	make_daemon();
 
+    /* Allow anyone to connect */
+    umask(0);
+
     auto listenfd = socket(AF_UNIX, SOCK_STREAM|SOCK_NONBLOCK, 0);
 
     struct sockaddr_un addr;
@@ -333,6 +337,11 @@ static int cmd_list(int argc, char **argv)
 
 static int cmd_run(int argc, char **argv)
 {
+    if (argc <= 1) {
+	fprintf(stderr, "Please supply a command to run\n");
+	exit(EXIT_FAILURE);
+    }
+
     auto daemonfd = socket(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC, 0);
 
     struct sockaddr_un addr;
@@ -368,12 +377,18 @@ static int cmd_run(int argc, char **argv)
 	perror("fork error");
 	exit(EXIT_FAILURE);
     } else if (pid) {
-	int status = 1;
+	int status, ret = EXIT_FAILURE;
 
-	while (!(wait(&status) == -1 && errno == ECHILD))
-	    ;
+	while (1) {
+	    auto child = wait(&status);
+	    if (child < 0)
+		break;
 
-	return status;
+	    if (child == pid && WIFEXITED(status))
+		ret = WEXITSTATUS(status);
+	}
+
+	exit(ret);
     } else {
 	execvp(argv[1], argv + 1);
 	fprintf(stderr, "Error running command\n");
