@@ -179,6 +179,9 @@ tests_to_run=$(sort -u "$tmpfile")
 
 rm "$tmpfile"
 
+echo "Running tests:"
+echo "$tests_to_run"
+
 if [ "$DRYRUN" == 0 ]; then
     if [ -z "$LOGDIR" ]; then
 	logdir=$(mktemp -d)
@@ -190,6 +193,7 @@ if [ "$DRYRUN" == 0 ]; then
     for testfile in $tests_to_run; do
 	testname=$(basename "$testfile")
 
+	echo "[$testname] Running ${testfile}..."
 	run_test "$testfile"				\
 	    |& sed "s/^/[$testname] /" > "$logdir/${testname}.log" &
 
@@ -220,4 +224,5 @@ else
     echo "$tests_to_run"
 fi
 
+echo "Exiting with status $ret"
 exit $ret
