@@ -15,9 +15,12 @@ ACTEST="/src/appliance-clustest/actest -i /usr/share/DateraAppliance/DaterOS-sda
 
 DRYRUN=0
 PRIORITY=0
-KTESTARGS=""
 WORKDIR=""
-KEEP_GOING=0
+LOGDIR=""
+KTESTARGS=""
+
+# hack
+( cd "$KTESTDIR/kmo-batch" && make kmo-batch )
 
 read_tests()
 {
@@ -101,13 +104,13 @@ run_test()
 
     case "$testfile" in
 	*.ktest)
-	    "$KTESTDIR/ktest" run $KTESTARGS "$testfile"
+	    "$KTESTDIR/testy.run-test" "$KTESTDIR/ktest" run $KTESTARGS "$testfile"
 	    ;;
 	*.actest)
-	    $ACTEST -w "$WORKDIR" "$testfile"
+	    "$KTESTDIR/testy.run-test" "$ACTEST" -w "$WORKDIR" "$testfile"
 	    ;;
 	*)
-	    "$testfile"
+	    "$KTESTDIR/testy.run-test" "$testfile"
 	    ;;
     esac
 }
@@ -129,7 +132,6 @@ while getopts "hnfp:k:Ki:b:j:w:o:x" arg; do
 	    DRYRUN=1
 	    ;;
 	f)
-	    KEEP_GOING=1
 	    ;;
 	p)
 	    PRIORITY=$OPTARG
@@ -155,6 +157,7 @@ while getopts "hnfp:k:Ki:b:j:w:o:x" arg; do
 	    KTESTARGS+=" -w $OPTARG"
 	    ;;
 	o)
+	    LOGDIR=$OPTARG
 	    KTESTARGS+=" -o $OPTARG"
 	    ;;
 	x)
@@ -165,41 +168,55 @@ while getopts "hnfp:k:Ki:b:j:w:o:x" arg; do
 done
 shift $((OPTIND - 1))
 
-tests_failed=$(mktemp)
-tests_to_run=$(mktemp)
+ret=0
+tmpfile=$(mktemp)
 
 # If get_tests fail we want the whole script to fail, so we can't call
 # it from $(...) -- redirect output to a file then read the file later
 # instead.
-get_tests "$@" > "$tests_to_run"
+get_tests "$@" > "$tmpfile"
+tests_to_run=$(sort -u "$tmpfile")
+
+rm "$tmpfile"
 
 if [ "$DRYRUN" == 0 ]; then
-    # shellcheck disable=SC2013
-    for testfile in $(sort -u "$tests_to_run"); do
-        testname=$(basename "$testfile")
-	starttime=$(date +%s)
-	failed=0
+    if [ -z "$LOGDIR" ]; then
+	logdir=$(mktemp -d)
+    else
+	logdir=$LOGDIR
+    fi
 
-	run_test "$testfile" > "/tmp/$testname.log" 2>&1 || failed=1
+    for testfile in $tests_to_run; do
+	testname=$(basename "$testfile")
 
-	duration=$(($(date +%s) - starttime))
+	run_test "$testfile"				\
+	    |& sed "s/^/[$testname] /" > "$logdir/${testname}.log" &
 
-	if [ $failed = 1 ]; then
-	    # Note that we're on the right hand side of |, so we can't just
-	    # set a variable and test it at the end of the loop...
-	    echo "$testname" >> "$tests_failed"
-	    sed "s/^/[$testname] /" "/tmp/$testname.log"
-	    echo "[$testname] FAILURE: test finished at $(date +%s) -- $(date) after $duration seconds"
-	    [ $KEEP_GOING = 0 ] && break
-	else
-	    echo "[$testname] SUCCESS: test finished at $(date +%s) -- $(date) after $duration seconds"
-	fi
+	sleep 2
     done
+
+    for job in $(jobs -p); do
+	wait "$job" || ret=1
+    done
+
+    # shellcheck disable=SC2044
+    for testlog in $(find "$logdir" -type f); do
+	line=$(tail -n1 "$testlog")
+	case $line in
+	    *SUCCESS:*)
+		echo "$line"
+		;;
+	    *)
+		cat "$testlog"
+		;;
+	esac
+    done
+
+    if [ -z "$LOGDIR" ]; then
+	rm -rf "$logdir"
+    fi
 else
-    sort -u "$tests_to_run"
+    echo "$tests_to_run"
 fi
 
-rm "$tests_to_run"
-
-# Exit with failure if some tests failed
-test -z "$(cat "$tests_failed")"
+exit $ret

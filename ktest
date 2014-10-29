@@ -303,7 +303,7 @@ cmd_run()
 		   < "$FIFO" || err=1
     fi
 
-    $VMSTART stop "$(cat "$WORK_DIR/id")"
+    $VMSTART stop "$(cat "$WORK_DIR/id")" > /dev/null 2>&1
 
     exit $err
 }
