@@ -5,3 +5,5 @@
 #0	.		        ../appliance-clustest/basic-cluster.actest
 
 #0	.		        ../appliance-clustest/tests/dcpd.actest
+
+0	.		        tests/blkdev.ktest
