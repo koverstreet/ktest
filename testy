@@ -183,7 +183,8 @@ if [ "$DRYRUN" == 0 ]; then
     if [ -z "$LOGDIR" ]; then
 	logdir=$(mktemp -d)
     else
-	logdir=$LOGDIR
+	logdir=$LOGDIR/testy
+	mkdir -p "$logdir"
     fi
 
     for testfile in $tests_to_run; do
