@@ -289,21 +289,26 @@ cmd_run()
 	$_INFINIBAND						\
 	$_VMCLUSTER &
 
-    err=0
+    set +o errexit
+    err=1
 
-    if [ "$EXIT_ON_SUCCESS" = 1 ]; then
-	sed -u -e '/TEST SUCCESS/ { p; Q0 }'			\
-	       < "$FIFO" || err=1
-    elif [ "$INTERACTIVE" = 1 ]; then
+    if [ "$INTERACTIVE" = 1 ]; then
 	cat "$FIFO"
+    elif [ "$EXIT_ON_SUCCESS" = 1 ]; then
+	sed -u -e '/TEST SUCCESS/ { p; Q7 }'			\
+	       < "$FIFO"
     else
 	timeout "$_TIMEOUT"					\
-	    sed -u -e '/TEST SUCCESS/ { p; Q0 }'		\
-		   -e '/TEST FAILED/  { p; Q1 }'		\
-		   < "$FIFO" || err=1
+	    sed -u -e '/TEST SUCCESS/ { p; Q7 }'		\
+		   -e '/TEST FAILED/  { p; Q0 }'		\
+		   < "$FIFO"
     fi
 
-    $VMSTART stop "$(cat "$WORK_DIR/id")"
+    # don't want sed exiting normally (saw neither TEST SUCCESS nor TEST FAILED)
+    # to be consider success:
+    [ "$?" = 7 ] && err=0
+
+    $VMSTART stop "$(cat "$WORK_DIR/id")" > /dev/null 2>&1
 
     exit $err
 }
