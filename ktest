@@ -306,7 +306,7 @@ cmd_run()
 
     # don't want sed exiting normally (saw neither TEST SUCCESS nor TEST FAILED)
     # to be consider success:
-    [ "$?" == 7 ] && err=0
+    [ "$?" = 7 ] && err=0
 
     $VMSTART stop "$(cat "$WORK_DIR/id")" > /dev/null 2>&1
 
