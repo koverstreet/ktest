@@ -11,14 +11,13 @@ KTESTDIR=$(dirname "$(readlink -f "$0")")
 
 starttime=$(date +%s)
 testfile=$1
-ret=1
 
-$KTESTDIR/kmo-batch/kmo-batch run $@ && ret=0
-
-if [ "$ret" = 0 ]; then
+if $KTESTDIR/kmo-batch/kmo-batch run $@; then
     status="SUCCESS"
+    ret=0
 else
     status="FAILURE"
+    ret=1
 fi
 
 duration=$(($(date +%s) - starttime))
