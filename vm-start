@@ -369,7 +369,7 @@ class VM(object):
 
             kernelParams = "console=hvc0"
             if opts.kgdb:
-                kernelParams += " kgdboc=ttyS2,115200"
+                kernelParams += " kgdboc=ttyS1,115200"
 
             if self.ipaddr:
                 kernelParams += " ip="+self.ipaddr
