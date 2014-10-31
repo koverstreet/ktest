@@ -4,7 +4,7 @@ require-lib bcache-test-libs.sh
 
 config-scratch-devs 512M,2G,2G
 
-config-timeout 60
+config-timeout 240
 
 main()
 {
