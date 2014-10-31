@@ -22,5 +22,6 @@ fi
 
 duration=$(($(date +%s) - starttime))
 
+echo
 echo "$status: test finished at $(date +%s) -- $(date) after $duration seconds"
 exit $ret
