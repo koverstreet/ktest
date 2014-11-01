@@ -406,7 +406,7 @@ test_stress()
 
 stress_timeout()
 {
-    echo $((($ktest_priority + 3) * 400))
+    echo $((($ktest_priority + 3) * 600))
 }
 
 block_device_verify_dd()
