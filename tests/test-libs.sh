@@ -295,7 +295,10 @@ test_discard()
         blkdiscard $dev
     done
 
-    sleep 1
+    # Wait for btree GC to finish so that the counts are actually up to date
+    while [ "$(cat /sys/fs/bcache/*/internal/btree_gc_running)" != "0" ]; do
+	sleep 1
+    done
 
     expect_sysfs cache dirty_buckets 0
     expect_sysfs cache dirty_data 0
