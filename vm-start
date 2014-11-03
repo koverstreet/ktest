@@ -29,10 +29,20 @@ from optparse import OptionParser, OptionGroup
 def logwrap(f):
     def inner(*args, **kwargs):
         try:
-            logging.debug("BEGIN: %s %s %s" % (f.__name__, repr(args), repr(kwargs)))
+            reported_args = repr(args)
+        except:
+            reported_args = "[cannot parse args]"
+
+        try:
+            reported_kwargs = repr(kwargs)
+        except:
+            reported_kwargs = "[cannot parse kwargs]"
+
+        try:
+            logging.debug("BEGIN: %s %s %s" % (f.__name__, reported_args, reported_kwargs))
             return f(*args, **kwargs)
         finally:
-            logging.debug("END: %s %s %s" %(f.__name__, repr(args), repr(kwargs)))
+            logging.debug("END: %s %s %s" %(f.__name__, reported_args, reported_kwargs))
     return inner
 
 
@@ -94,6 +104,7 @@ def appendfile(filename, line):
 Functions of opening shelf to lock while
 reading and writing to shelf file
 """
+@logwrap
 def openLockedDb(file_lock, file_dict):
     lockFD = os.open(file_lock, os.O_RDONLY)
     fcntl.flock(lockFD, fcntl.LOCK_EX)
@@ -101,6 +112,7 @@ def openLockedDb(file_lock, file_dict):
     db.lockFD = lockFD
     return db
 
+@logwrap
 def closeLockedDb(db):
     db.close()
     fcntl.flock(db.lockFD, fcntl.LOCK_UN)
@@ -128,6 +140,7 @@ class Domain:
         else:
             raise AttributeError("%s instance has no attribute '%s'" % (self.__class__.__name__, name))
 
+    @logwrap
     def exists(self):
         """Does the VM this represents actually exist?"""
         try:
