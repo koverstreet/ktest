@@ -140,7 +140,7 @@ add_device() {
 wait_on_dev()
 {
     for device in $@; do
-	while [ ! -b "$device" ]; do
+	while [ ! -b "$device" ] && [ ! -c "$device" ]; do
 	    sleep 0.5
 	done
     done
@@ -179,9 +179,7 @@ existing_bcache() {
 
     udevadm settle
 
-    for device in $DEVICES; do
-	wait_on_dev $device
-    done
+    wait_on_dev /dev/bcache_extent0 $DEVICES
 
     cache_set_settings
 
