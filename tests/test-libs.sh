@@ -323,19 +323,12 @@ test_sysfs()
 
 test_fault()
 {
-    [ -f /sys/kernel/debug/dynamic_fault/control ] || return
+    f=/sys/kernel/debug/dynamic_fault/control
 
-    while true; do
-	echo "file alloc.c +o"	> /sys/kernel/debug/dynamic_fault/control
-	echo "file btree.c +o"	> /sys/kernel/debug/dynamic_fault/control
-	echo "file bset.c +o"	> /sys/kernel/debug/dynamic_fault/control
-	echo "file io.c +o"	> /sys/kernel/debug/dynamic_fault/control
-	echo "file journal.c +o"    > /sys/kernel/debug/dynamic_fault/control
-	echo "file request.c +o"    > /sys/kernel/debug/dynamic_fault/control
-	echo "file util.c +o"	> /sys/kernel/debug/dynamic_fault/control
-	echo "file writeback.c +o"    > /sys/kernel/debug/dynamic_fault/control
-	sleep 0.5
-    done
+    [[ -f $f ]] || return
+
+    echo "class memory	frequency 100"	> $f
+    echo "class race	frequency 100"	> $f
 }
 
 test_shrink()
