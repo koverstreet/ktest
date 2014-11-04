@@ -244,20 +244,22 @@ run_vmstart()
     [ "$EXIT_ON_SUCCESS" = 1 -o "$INTERACTIVE" = 1 ] && KGDB="--kgdb"
 
     # shellcheck disable=SC2086
-    $VMSTART start					\
-	-i "$IMG" -t "$SCRATCH_DIR"			\
-	-k "$KERNEL/vmlinuz"				\
-	-c "$WORK_DIR/run.iso"				\
-	--id "$WORK_DIR/id"				\
-	--fs "$LOG_INTERNAL" logfs		\
-	--append="root=/dev/sda rw crashkernel=128M"	\
-	"$KGDB"						\
+    $VMSTART start							\
+	-i "$IMG" -t "$SCRATCH_DIR"					\
+	-k "$KERNEL/vmlinuz"						\
+	-c "$WORK_DIR/run.iso"						\
+	--id "$WORK_DIR/id"						\
+	--fs "$LOG_INTERNAL" logfs					\
+	--append="root=/dev/sda rw crashkernel=128M ktest.priority=$PRIORITY $_KERNEL_APPEND"\
+	"$KGDB"								\
         "$@"
 }
 
 cmd_boot()
 {
     prepare_vm
+
+    _KERNEL_APPEND=""
 
     run_vmstart -m 1G --cpus 6
 }
@@ -281,7 +283,6 @@ cmd_run()
 
     # shellcheck disable=SC2086
     run_vmstart                                                 \
-	--append="root=/dev/sda rw ktest.priority=$PRIORITY crashkernel=128M"	\
 	-m "$_MEM"						\
 	--cpus "$_CPUS"						\
 	--console "pipe,path=$WORK_DIR/fifo"			\

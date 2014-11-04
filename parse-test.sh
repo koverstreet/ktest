@@ -8,6 +8,7 @@ parse_test_deps()
     _KERNEL_CONFIG_REQUIRE=""
     _CONTAINERS=""
     _INFINIBAND=""
+    _KERNEL_APPEND=""
     _VMCLUSTER=""
 
     local TEST=$1
@@ -120,6 +121,12 @@ parse_test_deps()
     {
 	_TIMEOUT=$1
     }
+
+    require-kernel-append()
+    {
+	_KERNEL_APPEND+=" $1"
+    }
+
 
     PATH+=":/sbin:/usr/sbin:/usr/local/sbin"
 
