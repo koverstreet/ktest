@@ -8,6 +8,8 @@ require-lib ../test-libs.sh
 require-bin make-bcache
 require-bin bcache-super-show
 require-bin bcachectl
+require-bin bcacheadm
+
 
 require-kernel-config BCACHE,BCACHE_DEBUG,CLOSURE_DEBUG
 
@@ -57,7 +59,7 @@ config-bucket-size()
 {
     BUCKET_SIZE=""
     for size in "$@"; do
-        BUCKET_SIZE="$BUCKET_SIZE--bucket $size "
+        BUCKET_SIZE="$BUCKET_SIZE--bucket=$size "
     done
 }
 
@@ -118,7 +120,7 @@ add_bcache_devs()
 
 make_bcache_flags()
 {
-    flags="$BUCKET_SIZE --block $BLOCK_SIZE --cache_replacement_policy=$REPLACEMENT"
+    flags="$BUCKET_SIZE --block=$BLOCK_SIZE --cache_replacement_policy=$REPLACEMENT"
     case "$DISCARD" in
 	0) ;;
 	1) flags+=" --discard" ;;
@@ -198,20 +200,20 @@ existing_bcache() {
 #
 setup_bcache() {
     make_bcache_flags="$(make_bcache_flags)"
-    make_bcache_flags+=" --wipe-bcache --cache $CACHE"
-    make_bcache_flags+=" --data-replicas $DATA_REPLICAS"
-    make_bcache_flags+=" --meta-replicas $META_REPLICAS"
+    make_bcache_flags+=" --wipe-bcache --cache=$CACHE"
+    make_bcache_flags+=" --data-replicas=$DATA_REPLICAS"
+    make_bcache_flags+=" --meta-replicas=$META_REPLICAS"
 
     if [ "$TIER" != "" ]; then
-	make_bcache_flags+=" --tier 1 $TIER"
+	make_bcache_flags+=" --tier=1 --cache=$TIER"
     fi
 
     if [ "$BDEV" != "" ]; then
-	make_bcache_flags+=" --bdev $BDEV"
+	make_bcache_flags+=" --bdev=$BDEV"
     fi
 
     # Let's change the checksum type just for fun
-    make-bcache --csum-type crc32c $make_bcache_flags
+    bcacheadm format --csum-type=crc32c $make_bcache_flags
 
     existing_bcache
 
@@ -291,4 +293,22 @@ test_bcachefs_stress()
     test_bonnie
     #test_fsx
     stop_bcachefs
+}
+
+bcache_status()
+{
+    DEVS=""
+    for dev in "$@"; do
+	DEVS="$DEVS$dev "
+    done
+    bcacheadm status $DEVS
+}
+
+bcache_dev_query()
+{
+    DEVS=""
+    for dev in "$@"; do
+	DEVS="$DEVS$dev "
+    done
+    bcacheadm query-devs $DEVS
 }
