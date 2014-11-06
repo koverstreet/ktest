@@ -17,9 +17,8 @@ checkdep gcc
 checkdep make
 checkdep qemu-system-x86_64 qemu-system-i386
 
-PRIORITY="0"		# hint for how long test should run
 KTESTARGS=""
-DEFAULT_DIR=".ktest"	# default path for building others
+PRIORITY=0		# hint for how long test should run
 KERNEL_SOURCE="."	# dir of kernel source
 			#       set with: -k <path>
 			#       defaults: current directory
@@ -38,9 +37,9 @@ NJOBS=$(($(grep -c '^processor' /proc/cpuinfo) * 2))
 			#       defaults to 2 * number of processor
 
 # config files:
-[ -f "$KTESTDIR/ktestrc" ]	&& . "$KTESTDIR/ktestrc"
-[ -f /etc/ktestrc ]		&& . /etc/ktestrc
-[ -f "$HOME/.ktestrc" ]		&& . "$HOME/.ktestrc"
+[[ -f $KTESTDIR/ktestrc ]]	&& . "$KTESTDIR/ktestrc"
+[[ -f /etc/ktestrc ]]		&& . /etc/ktestrc
+[[ -f $HOME/.ktestrc ]]		&& . "$HOME/.ktestrc"
 
 usage()
 {
@@ -49,7 +48,8 @@ usage()
     echo "  boot        Boot a VM without running anything"
     echo "  run <test>  Run a kernel test"
     echo "  ssh         Login as root"
-    echo "  gdb         Connect to kgdb"
+    echo "  gdb         Connect to qemu's gdb interface"
+    echo "  kgdb        Connect to kgdb"
     echo "  mon         Connect to qemu monitor"
     echo "  oldconfig   Run make oldconfig"
     echo "  config      Run make nconfig"
@@ -57,13 +57,19 @@ usage()
     echo "  options:"
     echo "      -x       bash debug statements"
     echo "      -k <dir> kernel source dir"
-    echo "      -b <dir> build directory for kernel (default: kernel_source/.ktest)"
+    echo "      -b <dir> build directory for kernel (default: kernel_source/.build-test-kernel)"
     echo "      -w <dir> work directory (default: kernel build directory)"
-    echo "      -K       don't build kernel (run cmd only)"
     echo "      -c <dir> enable coverage for this dir (only valid without -K)"
-    echo "      -i <dir> VM root filesystem image (run cmd only)"
-    echo "      -j <num> j option to make (run cmd only)"
-    echo "      -I       disable timeout and VM stop on pass/fail (run cmd only)"
+    echo
+    echo " options for build-test-kernel run:"
+    echo "      -K       don't build kernel"
+    echo "      -j <num> j option to make"
+    echo "      -i <dir> VM root filesystem image"
+    echo "      -p <num> hint for test duration (higher is longer, default is 0)"
+    echo "      -I       don't automatically stop VM"
+    echo "      -S       exit only on test success"
+    echo
+    echo "For kgdb to be enabled, either -I or -S must be specified"
 }
 
 #prints usage if no args
@@ -73,7 +79,7 @@ if [[ $# -lt 1 ]]; then
 fi
 
 #parse command and shift for rest of arg parsing
-CMD="$1"
+CMD="cmd_$1"
 shift
 
 while getopts "hp:k:Kc:i:b:j:ISw:x" arg; do
@@ -131,12 +137,11 @@ done
 shift $(( OPTIND - 1 ))
 
 # set default parameters:
-[ -z "$WORK_DIR" ] && WORK_DIR=$KERNEL_SOURCE/$DEFAULT_DIR
+[[ -z $WORK_DIR ]]	&& WORK_DIR=$KERNEL_SOURCE/.build_test_kernel
+[[ -z $KERNEL_OUTPUT ]] && KERNEL_OUTPUT=$WORK_DIR/kpkg
 
 mkdir -p "$WORK_DIR"
 WORK_DIR=$(readlink -f "$WORK_DIR")
-
-[ -z "$KERNEL_OUTPUT" ] && KERNEL_OUTPUT=$WORK_DIR/kpkg
 
 run_ktest()
 {
@@ -144,7 +149,7 @@ run_ktest()
     shift
 
     # shellcheck disable=SC2086
-    exec "$KTEST" "$arg" $KTESTARGS -k "$KERNEL_OUTPUT" -w "$WORK_DIR" "$@"
+    exec "$KTEST" "$arg" $KTESTARGS -k "$KERNEL_OUTPUT" "$@"
 }
 
 do_make()
@@ -196,16 +201,16 @@ build_kernel()
     local OLDIFS=$IFS
     IFS=','
 
-    [ -f "$kconfig" ] || cp "$KTESTDIR/defconfig" "$kconfig"
+    [[ -f $kconfig ]] || install -m0644 "$KTESTDIR/defconfig" "$kconfig"
 
     for opt in $_KERNEL_CONFIG_REQUIRE; do
-	[ -n "$opt" ] && kernel_opt set "$opt"
+	[[ -n $opt ]] && kernel_opt set "$opt"
     done
 
     do_make olddefconfig
 
     for opt in $_KERNEL_CONFIG_REQUIRE; do
-	[ -n "$opt" ] && kernel_opt check "$opt"
+	[[ -n $opt ]] && kernel_opt check "$opt"
     done
 
     IFS=$OLDIFS
@@ -215,6 +220,7 @@ build_kernel()
     install -m0644 "$WORK_DIR/vmlinux" "$KERNEL_OUTPUT/vmlinux"
     install -m0644 "$WORK_DIR/arch/x86/boot/bzImage" "$KERNEL_OUTPUT/vmlinuz"
     install -m0644 "$WORK_DIR/.config" "$KERNEL_OUTPUT/config"
+    mkdir -p "$KERNEL_OUTPUT/lib"
 
     do_make modules_install
 
@@ -227,28 +233,28 @@ cmd_boot()
 {
     _KERNEL_CONFIG_REQUIRE=""
 
-    [ -n "$BUILD" ] && build_kernel
+    [[ -n $BUILD ]] && build_kernel
     run_ktest boot
 }
 
 cmd_run()
 {
-    local TEST=$1
-
-    if [ -z "$1" ]; then
+    if [[ $# -lt 1 ]]; then
 	echo "build-test-kernel: missing test"
 	usage
 	exit 1
     fi
 
+    local TEST=$1
+
     parse_test_deps "$TEST"
 
-    if [ -n "$COVERAGE" ]; then
+    if [[ -n $COVERAGE ]]; then
 	_KERNEL_CONFIG_REQUIRE+=",GCOV_KERNEL"
 	_KERNEL_CONFIG_REQUIRE+=",GCOV_FORMAT_AUTODETECT"
     fi
 
-    [ -n "$BUILD" ] && build_kernel
+    [[ -n $BUILD ]] && build_kernel
 
     run_ktest run "$TEST"
 }
@@ -263,15 +269,35 @@ cmd_config()
     do_make nconfig
 }
 
+cmd_ssh()
+{
+    run_ktest "$CMD" "$@"
+}
+
+cmd_gdb()
+{
+    run_ktest "$CMD" "$@"
+}
+
+cmd_kgdb()
+{
+    run_ktest "$CMD" "$@"
+}
+
+cmd_mon()
+{
+    run_ktest "$CMD" "$@"
+}
+
 cmd_help()
 {
     usage
 }
 
 # checks if command is valid
-if [ "$(type -t "cmd_$CMD")" == "function" ]; then
-    eval "cmd_$CMD" "$@"
-else
-    run_ktest "$CMD" "$@"
+if [[ $(type -t "$CMD") != function ]]; then
+    usage
+    exit 1
 fi
 
+$CMD "$@"

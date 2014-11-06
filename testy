@@ -15,8 +15,8 @@ ACTEST="/src/appliance-clustest/actest -i /usr/share/DateraAppliance/DaterOS-sda
 
 DRYRUN=0
 PRIORITY=0
-WORKDIR=""
-LOGDIR=""
+WORK_DIR=""
+OUTPUT_DIR=""
 KTESTARGS=""
 
 # hack
@@ -31,16 +31,16 @@ read_tests()
     local dir=$2
     local testlist="$dir/tests.testy"
 
-    [ -e "$testlist" ] || return 0
+    [[ -e $testlist ]] || return 0
 
     sed -e 's/#.*//' "$testlist"				\
 	|while read line; do
-	    [ -z "$line" ] && continue
+	    [[ -z $line ]] && continue
 
             # shellcheck disable=SC2086
 	    set $line
 
-            if [ "$#" != 3 ]; then
+	    if [[ $# != 3 ]]; then
                 echo "Malformed line in ${testlist}:" >&2
                 echo "Expect <priority> <pattern> <test>" >&2
                 echo "Got $line" >&2
@@ -59,9 +59,9 @@ read_tests()
 	    pattern=${pattern%/.}
 
 	    for i in $pattern; do
-		if [ "$file" = "$i" -o				\
-		     "${i##$file/}" != "$i" -o			\
-		     "${file##$i/}" != "$file" ]; then
+		if [[ $file = "$i" ||				\
+		      ${i##$file/} != "$i" ||			\
+		      ${file##$i/} != "$file" ]]; then
 		    if ! readlink -e "$dir/$1" ; then
 			echo "test $dir/$1 not found" >&2
 			exit 1
@@ -78,7 +78,7 @@ get_tests()
     # the file to test or any parent directory
 
     for i in "$@" ; do
-	[ -e "$i" ] || continue
+	[[ -e $i ]] || continue
 
         local file=$(readlink -fn "$i")
 	local dir="$file"
@@ -88,7 +88,7 @@ get_tests()
 		read_tests "$file" "$(dirname "$testlist")"
 	    done
 
-	while [ "$dir" != "/" ]; do
+	while [[ $dir != / ]]; do
 	    dir=$(dirname "$dir")
 	    read_tests "$file" "$dir"
 	done
@@ -98,16 +98,19 @@ get_tests()
 run_test()
 {
     local testfile=$1
+    local testname=$(basename "$testfile")
+    local workdir="$WORK_DIR/$testname"
+    local outputdir="$OUTPUT_DIR/$testname"
 
-    # hack
-    [ -n "$WORKDIR" ] && sudo rm -rf $WORKDIR
+    echo "Running ${testfile}..."
 
     case "$testfile" in
 	*.ktest)
-	    "$KTESTDIR/testy.run-test" "$KTESTDIR/ktest" run $KTESTARGS "$testfile"
+	    "$KTESTDIR/testy.run-test" "$KTESTDIR/ktest" run		\
+		-w "$workdir" -o "$outputdir" $KTESTARGS "$testfile"
 	    ;;
 	*.actest)
-	    "$KTESTDIR/testy.run-test" "$ACTEST" -w "$WORKDIR" "$testfile"
+	    "$KTESTDIR/testy.run-test" "$ACTEST" -w "$workdir" "$testfile"
 	    ;;
 	*)
 	    "$KTESTDIR/testy.run-test" "$testfile"
@@ -153,12 +156,10 @@ while getopts "hnfp:k:Ki:b:j:w:o:x" arg; do
 	    KTESTARGS+=" -j $OPTARG"
 	    ;;
 	w)
-	    WORKDIR=$OPTARG
-	    KTESTARGS+=" -w $OPTARG"
+	    WORK_DIR=$OPTARG
 	    ;;
 	o)
-	    LOGDIR=$OPTARG
-	    KTESTARGS+=" -o $OPTARG"
+	    OUTPUT_DIR=$OPTARG
 	    ;;
 	x)
 	    set -x
@@ -167,6 +168,9 @@ while getopts "hnfp:k:Ki:b:j:w:o:x" arg; do
     esac
 done
 shift $((OPTIND - 1))
+
+[[ -z $WORK_DIR ]]	&& WORK_DIR=./.testy
+[[ -z $OUTPUT_DIR ]]	&& OUTPUT_DIR=./testy-out
 
 ret=0
 tmpfile=$(mktemp)
@@ -182,21 +186,11 @@ rm "$tmpfile"
 echo "Running tests:"
 echo "$tests_to_run"
 
-if [ "$DRYRUN" == 0 ]; then
-    if [ -z "$LOGDIR" ]; then
-	logdir=$(mktemp -d)
-    else
-	logdir=$LOGDIR/testy
-	mkdir -p "$logdir"
-    fi
-
+if [[ $DRYRUN == 0 ]]; then
     for testfile in $tests_to_run; do
 	testname=$(basename "$testfile")
 
-	echo "[$testname] Running ${testfile}..."
-	run_test "$testfile"				\
-	    |& sed "s/^/[$testname] /" > "$logdir/${testname}.log" &
-
+	run_test "$testfile" > "$OUTPUT_DIR/${testname}.log" 2>&1 &
 	sleep 2
     done
 
@@ -204,22 +198,21 @@ if [ "$DRYRUN" == 0 ]; then
 	wait "$job" || ret=1
     done
 
-    # shellcheck disable=SC2044
-    for testlog in $(find "$logdir" -type f); do
+    for testlog in $OUTPUT_DIR/*.log; do
 	line=$(tail -n1 "$testlog")
+
+	b=$(basename "$testlog")
+	testname=${b%.log}
+
 	case $line in
 	    *SUCCESS:*)
-		echo "$line"
+		echo "[$testname] $line"
 		;;
 	    *)
-		cat "$testlog"
+		sed -e "s/^/[$testname] /" "$testlog"
 		;;
 	esac
     done
-
-    if [ -z "$LOGDIR" ]; then
-	rm -rf "$logdir"
-    fi
 else
     echo "$tests_to_run"
 fi

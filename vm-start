@@ -367,7 +367,7 @@ class VM(object):
         if opts.kernel:
             cmd.extend(["-kernel", opts.kernel])
 
-            kernelParams = "console=hvc0"
+            kernelParams = "console=hvc0 root=/dev/sda"
             if opts.kgdb:
                 kernelParams += " kgdboc=ttyS1,115200"
 
@@ -850,17 +850,18 @@ def cmd_start():
 
             logging.warning("Executing: "+str(cmd))
 
+            print GREEN+"Vm ID: "+str(vm.vm_id)+NC
+            sys.stdout.flush()
+
             p = subprocess.Popen(cmd, shell=False)
 
             with vm_slot_update(vm.vm_id) as vm:
                 vm.pid = p.pid
 
-            print GREEN+"Vm ID: "+str(vm.vm_id)+NC
-
             p.wait()
             caught_signal[0] = True
         except Exception, e:
-	    print e
+            pass
 
     vm_cleanup(options.tmpdir)
     subprocess.call(["stty", "sane"],

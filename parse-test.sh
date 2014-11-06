@@ -23,7 +23,7 @@ parse_test_deps()
 	    exit 1
 	fi
 
-	FILES+=" $(readlink -f "$1")"
+	FILES+=("$(readlink -f "$1")")
     }
 
     require-lib()
