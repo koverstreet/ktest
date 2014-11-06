@@ -271,22 +271,22 @@ cmd_config()
 
 cmd_ssh()
 {
-    run_ktest "$CMD" "$@"
+    run_ktest ssh "$@"
 }
 
 cmd_gdb()
 {
-    run_ktest "$CMD" "$@"
+    run_ktest gdb "$@"
 }
 
 cmd_kgdb()
 {
-    run_ktest "$CMD" "$@"
+    run_ktest kgdb "$@"
 }
 
 cmd_mon()
 {
-    run_ktest "$CMD" "$@"
+    run_ktest mon "$@"
 }
 
 cmd_help()
