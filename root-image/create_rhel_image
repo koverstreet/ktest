@@ -37,7 +37,7 @@ PACKAGES+=" numactl-devel numactl-libs perl perl-libs perl-devel"
 PACKAGES+=" libunwind libunwind-devel"
 PACKAGES+=" libuuid libuuid-devel uuid-perl"
 PACKAGES+=" net-tools htop python-magic perf python-perf"
-PACKAGES+=" kexec-tools"
+PACKAGES+=" kexec-tools libnih"
 
 create_mount_image "$@"
 
