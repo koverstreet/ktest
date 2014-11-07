@@ -198,7 +198,7 @@ if [[ $DRYRUN == 0 ]]; then
 	wait "$job" || ret=1
     done
 
-    for testlog in $OUTPUT_DIR/*.log; do
+    for testlog in $(shopt -s nullglob; echo $OUTPUT_DIR/*.log); do
 	line=$(tail -n1 "$testlog")
 
 	b=$(basename "$testlog")
