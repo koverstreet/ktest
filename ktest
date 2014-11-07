@@ -34,7 +34,7 @@ OUTPUT_DIR=""		# dir name which is mounted at /var/log/datera in VM
 SCRATCH_DIR="/tmp"      # dir where scratch drives are created
                         #       defaults: /tmp
                         #       auto-override: $HOME/.ktest/tmp
-IMG="/var/lib/ktest/root"
+IMG="/var/lib/ktest/root.0.6"
                         # root image that will be booted
                         #       set with: -i <path>
                         #       defaults: /var/lib/ktest/root
