@@ -145,16 +145,14 @@ config-timeout()
     return 0
 }
 
-if (. rc.test; main); then
-    ret=0
-else
-    ret=1
-fi
+set +e
+
+(set -e; . rc.test; main)
+ret=$?
 
 # XXX: check dmesg for warnings, oopses, slab corruption, etc. before signaling
 # success
 
-set +e
 copy_to_host
 
 if [ $ret = 0 ]; then
