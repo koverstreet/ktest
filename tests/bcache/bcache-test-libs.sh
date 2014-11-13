@@ -5,9 +5,6 @@
 
 require-lib ../test-libs.sh
 
-require-bin make-bcache
-require-bin bcache-super-show
-require-bin bcachectl
 require-bin bcacheadm
 
 
@@ -161,12 +158,12 @@ existing_bcache() {
     # Make sure bcache-super-show works -- the control plane wipes data
     # if this fails so its important that it doesn't break
     for dev in $CACHE $BDEV $TIER; do
-	bcache-super-show $dev
+	bcacheadm query-devs $dev
     done
 
     # Older kernel versions don't have /dev/bcache
     if [ -e /dev/bcache ]; then
-	bcachectl register $CACHE $TIER $BDEV
+	bcacheadm register $CACHE $TIER $BDEV
     else
 	for dev in $CACHE $TIER $BDEV; do
 	    echo $dev > /sys/fs/bcache/register
@@ -205,11 +202,16 @@ setup_bcache() {
     make_bcache_flags+=" --meta-replicas=$META_REPLICAS"
 
     if [ "$TIER" != "" ]; then
-	make_bcache_flags+=" --tier=1 --cache=$TIER"
+	make_bcache_flags+=" --tier=1 "
+	for cache in $TIER; do
+		make_bcache_flags+=" --cache=$cache"
+	done
     fi
 
     if [ "$BDEV" != "" ]; then
-	make_bcache_flags+=" --bdev=$BDEV"
+	for bdev in $BDEV; do
+		make_bcache_flags+=" --bdev=$bdev"
+	done
     fi
 
     # Let's change the checksum type just for fun
