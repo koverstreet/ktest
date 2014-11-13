@@ -158,6 +158,8 @@ shift $((OPTIND - 1))
 [[ -z $OUTPUT_DIR ]]	&& OUTPUT_DIR=./testy-out
 mkdir -p "$OUTPUT_DIR"
 
+mkdir -p "$OUTPUT_DIR"
+
 ret=0
 tmpfile=$(mktemp)
 
