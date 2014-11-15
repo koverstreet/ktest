@@ -77,8 +77,8 @@ get_tests()
     # Given a list of files to test, find test lists in the same directory as
     # the file to test or any parent directory
 
-    for i in "$@" ; do
-	[[ -e $i ]] || continue
+    while read i ; do  
+	[[ -e "$i" ]] || continue
 
         local file=$(readlink -fn "$i")
 	local dir="$file"
@@ -92,7 +92,7 @@ get_tests()
 	    dir=$(dirname "$dir")
 	    read_tests "$file" "$dir"
 	done
-    done
+    done < "$1"
 }
 
 run_test()
