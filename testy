@@ -8,6 +8,8 @@ set -o errexit
 set -o pipefail
 export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]}()}+ '
 
+shellcheck "$0" 
+
 KTESTDIR=$(dirname "$(readlink -f "$0")")
 
 # hack:
@@ -171,6 +173,7 @@ shift $((OPTIND - 1))
 
 [[ -z $WORK_DIR ]]	&& WORK_DIR=./.testy
 [[ -z $OUTPUT_DIR ]]	&& OUTPUT_DIR=./testy-out
+mkdir -p "$OUTPUT_DIR"
 
 ret=0
 tmpfile=$(mktemp)
