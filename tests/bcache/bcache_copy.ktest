@@ -13,8 +13,6 @@ config-timeout 600
 
 main()
 {
-    copy_containers
-
     setup_bcache
 
     cd /root

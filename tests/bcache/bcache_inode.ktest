@@ -13,8 +13,6 @@ require-container ioctl_test
 
 main()
 {
-    copy_containers
-
     setup_tracing 'bcache:*'
 
     setup_bcache

@@ -166,42 +166,6 @@ build_file_list()
 	    VMSTART="sudo $VMSTART"
 	    check_mlxcard
 	fi
-
-	local containerdir="$WORK_DIR/container"
-
-	if [ -n "$_CONTAINERS" ]; then
-	    FILES+=("$containerdir")
-	    genisoimage_sudo=sudo
-	    sudo rm -rf "$containerdir"
-	    mkdir -p "$containerdir"
-	fi
-
-	for req in $_CONTAINERS; do
-	    local cvf="$CONTAINER_SRC_DIR/${req}.version.txt"
-
-	    if [ ! -e "$cvf" ]; then
-		echo "Container version file not found: $cvf"
-		exit 1
-	    fi
-
-	    local cv=$(cat "$cvf")
-	    local cf="$CONTAINER_SRC_DIR/${req}-${cv}.tar.gz"
-
-	    if [ ! -e "$cf" ]; then
-		echo "Container file not found: $cf"
-		exit 1
-	    fi
-
-	    local cdir="${req}-${cv}"
-	    local containerdir="$WORK_DIR/container"
-
-	    sudo tar xz -C "$containerdir" -f "$cf"
-	    if [ ! -d "$containerdir/$cdir" ]; then
-		echo "Container '$req' does not unpack into expected directory '$cdir'"
-		exit 1
-	    fi
-	    sudo ln -s "$cdir" "${containerdir}/${req}.chroot"
-	done
     fi
 }
 
@@ -216,20 +180,13 @@ prepare_vm()
     mkdir -p "$WORK_DIR"
     mkdir -p "$OUTPUT_DIR"
 
-    # Might be overridden by test script
-    genisoimage_sudo=""
-
     build_file_list "$@"
 
     # shellcheck disable=SC2086
-    $genisoimage_sudo genisoimage -quiet -R		\
+    genisoimage -quiet -R				\
 	-input-charset utf-8				\
 	-o "$WORK_DIR/run.iso"				\
 	"$KERNEL/lib" "${FILES[@]}"
-
-    if [[ -n $genisoimage_sudo ]]; then
-	$genisoimage_sudo chown "$USER" "$WORK_DIR/run.iso"
-    fi
 }
 
 run_vmstart()

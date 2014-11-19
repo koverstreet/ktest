@@ -6,10 +6,10 @@ parse_test_deps()
     _TIMEOUT=""
     _SCRATCH=""
     _KERNEL_CONFIG_REQUIRE=""
-    _CONTAINERS=""
     _INFINIBAND=""
     _KERNEL_APPEND=""
     _VMCLUSTER=""
+    TEST_RUNNING=""
 
     local TEST=$1
     local TESTDIR="$(dirname "$TEST")"
@@ -68,11 +68,6 @@ parse_test_deps()
 	(cd "$dir"; make -f "$(basename "$f")" "$req")
 
 	_add-file "$dir/$req"
-    }
-
-    require-container()
-    {
-	_CONTAINERS+=" $1"
     }
 
     require-kernel-config()
