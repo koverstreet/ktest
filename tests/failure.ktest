@@ -6,5 +6,5 @@ config-timeout 30
 
 main()
 {
-    true
+    false
 }

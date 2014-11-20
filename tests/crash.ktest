@@ -2,9 +2,9 @@
 
 require-lib test-libs.sh
 
-config-timeout 30
+config-timeout 20
 
 main()
 {
-    true
+    echo c > /proc/sysrq-trigger
 }

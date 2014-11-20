@@ -1,41 +1,23 @@
 #!/bin/bash
 
-set -o nounset
-set -o errexit
-set -o pipefail
+TESTDIR=$(dirname "$(readlink -f "$0")")
+KTEST="$TESTDIR/../ktest"
 
-# Warning: this test has currently several timers and requires that
-# - the vm gets up and fully initialized in less than 30 seconds
-# - the kill process ends and is no longer killable 5 seconds after
-#   sendinf the kill signal
-# In a highly loaded system this could be a problem, in which case 
-# either the timers have to be increased, or the timers need to be 
-# replaced with code that checks if everything is ready.
+do_test()
+{
+    local t=$1
+    local expect=$2
 
-KERNEL=/usr/share/DateraContainer/kernel
-KTESTDIR=/src/ktest
-KTEST=$KTESTDIR/ktest
+    $KTEST run "$TESTDIR/$t"
+    local ret=$?
 
-opt="-w workdir.$$ -K -b $KERNEL -k $KERNEL"
+    if [[ $ret != $expect ]]; then
+	echo "$t failed: got $ret, wanted $expect"
+	exit 1
+    fi
+}
 
-( 
-   sleep 20
-   echo 'killall sleep' | $KTEST ssh $opt
-) &
-pid="$!"
-
-$KTEST run $opt $KTESTDIR/tests/ktest.ktest
-ret="$?"
-
-sleep 5 
-# give the the kill process some time to exit
-
-if kill $pid > /dev/null 2>&1; then
-   ret=1
-   # if the test passed the kill process should not exist anymore
-fi
-
-stty sane
-
-exit $ret
-
+do_test success.ktest	0
+do_test failure.ktest	1
+do_test crash.ktest	1
+do_test timeout.ktest	2
