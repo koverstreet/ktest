@@ -72,8 +72,7 @@ usage()
     echo "For kgdb to be enabled, either -I or -S must be specified"
 }
 
-#prints usage if no args
-if [[ $# -lt 1 ]]; then
+if [[ $# = 0 ]]; then
     usage
     exit 1
 fi
@@ -239,7 +238,7 @@ cmd_boot()
 
 cmd_run()
 {
-    if [[ $# -lt 1 ]]; then
+    if [[ $# = 0 ]]; then
 	echo "build-test-kernel: missing test"
 	usage
 	exit 1

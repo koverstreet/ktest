@@ -861,12 +861,12 @@ def cmd_start():
                          options, options.tmpdir, options.console)
             cmd = vm_proc.build_cmdline()
 
-            logging.warning("Executing: "+str(cmd))
-
-            print GREEN+"Vm ID: "+str(vm.vm_id)+NC
+            print GREEN+"Starting VM ID: " + str(vm.vm_id) + NC
             sys.stdout.flush()
 
-            p = subprocess.Popen(cmd, shell=False)
+            p = subprocess.Popen(cmd,
+                                 stderr=subprocess.STDOUT,
+                                 stdin=subprocess.PIPE)
 
             with vm_slot_update(vm.vm_id) as vm:
                 vm.pid = p.pid

@@ -8,7 +8,7 @@ set -o errexit
 set -o pipefail
 export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]}()}+ '
 
-shellcheck "$0" 
+shellcheck "$0"
 
 KTESTDIR=$(dirname "$(readlink -f "$0")")
 
@@ -17,7 +17,6 @@ ACTEST="/src/appliance-clustest/actest -i /usr/share/DateraAppliance/DaterOS-sda
 
 DRYRUN=0
 PRIORITY=0
-WORK_DIR=""
 OUTPUT_DIR=""
 KTESTARGS=""
 
@@ -101,7 +100,6 @@ run_test()
 {
     local testfile=$1
     local testname=$(basename "$testfile")
-    local workdir="$WORK_DIR/$testname"
     local outputdir="$OUTPUT_DIR/$testname"
 
     echo "Running ${testfile}..."
@@ -109,10 +107,10 @@ run_test()
     case "$testfile" in
 	*.ktest)
 	    "$KTESTDIR/testy.run-test" "$KTESTDIR/ktest" run		\
-		-w "$workdir" -o "$outputdir" $KTESTARGS "$testfile"
+		-o "$outputdir" $KTESTARGS "$testfile"
 	    ;;
 	*.actest)
-	    "$KTESTDIR/testy.run-test" "$ACTEST" -w "$workdir" "$testfile"
+	    "$KTESTDIR/testy.run-test" "$ACTEST" "$testfile"
 	    ;;
 	*)
 	    "$KTESTDIR/testy.run-test" "$testfile"
@@ -127,7 +125,7 @@ usage()
     echo "  -n	    don't run tests, just print them out"
 }
 
-while getopts "hnfp:k:Ki:b:j:w:o:x" arg; do
+while getopts "hnp:k:i:o:x" arg; do
     case $arg in
 	h)
 	    usage
@@ -136,8 +134,6 @@ while getopts "hnfp:k:Ki:b:j:w:o:x" arg; do
 	n)
 	    DRYRUN=1
 	    ;;
-	f)
-	    ;;
 	p)
 	    PRIORITY=$OPTARG
 	    KTESTARGS+=" -p $OPTARG"
@@ -145,20 +141,8 @@ while getopts "hnfp:k:Ki:b:j:w:o:x" arg; do
 	k)
 	    KTESTARGS+=" -k $OPTARG"
 	    ;;
-	K)
-	    KTESTARGS+=" -K"
-	    ;;
 	i)
 	    KTESTARGS+=" -i $OPTARG"
-	    ;;
-	b)
-	    KTESTARGS+=" -b $OPTARG"
-	    ;;
-	j)
-	    KTESTARGS+=" -j $OPTARG"
-	    ;;
-	w)
-	    WORK_DIR=$OPTARG
 	    ;;
 	o)
 	    OUTPUT_DIR=$OPTARG
@@ -171,7 +155,6 @@ while getopts "hnfp:k:Ki:b:j:w:o:x" arg; do
 done
 shift $((OPTIND - 1))
 
-[[ -z $WORK_DIR ]]	&& WORK_DIR=./.testy
 [[ -z $OUTPUT_DIR ]]	&& OUTPUT_DIR=./testy-out
 mkdir -p "$OUTPUT_DIR"
 
