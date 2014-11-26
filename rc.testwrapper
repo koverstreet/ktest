@@ -37,10 +37,6 @@ copy_to_host()
 {
     cat /sys/kernel/debug/tracing/trace >> $LOGDIR/trace.txt
 
-    for file in $(find /sys -type f -perm u+r); do
-	echo -n "$file: "; cat $file 2>&1 || true
-    done >> $LOGDIR/sysfs.txt
-
     # Code coverage
     gcov_dir=/sys/kernel/debug/gcov
 
