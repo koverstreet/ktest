@@ -8,7 +8,7 @@ parse_test_deps()
     _KERNEL_CONFIG_REQUIRE=""
     _INFINIBAND=""
     _KERNEL_APPEND=""
-    _VMCLUSTER=""
+    _NR_VMS="1"
     TEST_RUNNING=""
 
     local TEST=$1
@@ -106,10 +106,9 @@ parse_test_deps()
 	require-kernel-config INFINIBAND_IPOIB
     }
 
-    config-vmcount()
+    config-nr-vms()
     {
-	# what's going on here?
-	_VMCLUSTER="--cluster $1"
+	_NR_VMS=$1
     }
 
     config-timeout()

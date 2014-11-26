@@ -10,7 +10,7 @@ shopt -s lastpipe
 export PS4='+${LINENO}+ '
 
 KTESTDIR=$(dirname "$(readlink -f "$0")")
-VMSTART=$KTESTDIR/vm-start
+VMSTART=$KTESTDIR/vm-start-new
 
 . "$KTESTDIR/util.sh"
 . "$KTESTDIR/parse-test.sh"
@@ -178,7 +178,8 @@ run_vm()
 	--append="rw crashkernel=128M ktest.priority=$PRIORITY $_KERNEL_APPEND"\
 	--memory="$_MEM"						\
 	--cpus "$_CPUS"							\
-	$KGDB $_SCRATCH $_INFINIBAND $_VMCLUSTER|
+	--nr_vms="$_NR_VMS"						\
+	$KGDB $_SCRATCH|
     {
 	if [[ $INTERACTIVE = 1 ]]; then
 	    cat
@@ -208,9 +209,8 @@ cmd_boot()
     _KERNEL_APPEND=""
     _MEM=1G
     _CPUS=6
+    _NR_VMS=1
     _SCRATCH=""
-    _INFINIBAND=""
-    _VMCLUSTER=""
 
     FILES=("rc=$KTESTDIR/rc.interactive")
 

@@ -115,7 +115,7 @@ config-infiniband()
     cd /cdrom
 }
 
-config-vmcount()
+config-nr-vms()
 {
     return 0
 }
