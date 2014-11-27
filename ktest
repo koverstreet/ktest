@@ -175,7 +175,7 @@ run_vm()
 	--kernel="$KERNEL/vmlinuz"					\
 	--cdrom="$iso"							\
 	--fs "$OUTPUT_DIR" logfs					\
-	--append="rw quiet crashkernel=128M ktest.priority=$PRIORITY $_KERNEL_APPEND"\
+	--append="rw crashkernel=128M ktest.priority=$PRIORITY $_KERNEL_APPEND"\
 	--memory="$_MEM"						\
 	--cpus "$_CPUS"							\
 	$KGDB $_SCRATCH $_INFINIBAND $_VMCLUSTER|
@@ -185,9 +185,7 @@ run_vm()
 	elif [[ $EXIT_ON_SUCCESS = 1 ]]; then
 	    sed -u -e '/TEST SUCCESS/ { p; Q7 }'
 	else
-	    timeout "$_TIMEOUT"						\
-		sed -u -e '/TEST SUCCESS/ { p; Q7 }'			\
-		       -e '/TEST FAILED/  { p; Q0 }'
+	    timeout "$_TIMEOUT" $KTESTDIR/catch_test_success.awk
 	fi
 
 	ret=$?

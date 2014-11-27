@@ -1,8 +1,7 @@
 #!/bin/bash
 
-require-lib test-libs.sh
-
-config-timeout 30
+config-mem 512M
+config-timeout 60
 
 main()
 {
