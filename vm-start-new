@@ -239,12 +239,14 @@ def cmd_ssh():
     # this is terrible, but so is automake
     subprocess.check_call(["gcc", "-O2", "-o", lwip_connect,
                            os.path.join(DIR, "lwip-connect.c"),
-                          "-llwipv6"])
+                           "-llwipv6"])
 
     ip = "10.0.2." + str(15 + vm_nr)
 
     sock = os.path.join(vmdir, "net-0")
 
+    # ServerAliveInterval is a hack - lwip_connect should notice when the socket
+    # has gone away an exit, but it appears to be a bug in liblwipv6
     os.execvp("ssh",
               ["ssh", "-t", "-i", keyfile,
                "-F", "/dev/null",
@@ -252,6 +254,7 @@ def cmd_ssh():
                "-o", "StrictHostKeyChecking=no",
                "-o", "UserKnownHostsFile=/dev/null",
                "-o", "NoHostAuthenticationForLocalhost=yes",
+               "-o", "ServerAliveInterval=1",
                "-o", "ProxyCommand=%s %s %s 22" % (lwip_connect, sock, ip),
                "root@127.0.0.1"] + sys.argv[2:])
 

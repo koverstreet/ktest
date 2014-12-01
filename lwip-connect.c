@@ -1,11 +1,33 @@
 #include <arpa/inet.h>
-#include <lwipv6.h>
-#include <unistd.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+#include <lwipv6.h>
 
 #define die(msg)	perror(msg), exit(EXIT_FAILURE)
+
+static void setnonblocking(int fd)
+{
+	int opts = fcntl(fd, F_GETFL);
+	if (opts < 0)
+		die("fcntl(F_GETFL) error");
+
+	if (fcntl(fd, F_SETFL, opts|O_NONBLOCK) < 0)
+		die("fcntl(F_SETFL) error");
+}
+
+static void lwip_setnonblocking(int fd)
+{
+	int opts = lwip_fcntl(fd, F_GETFL, 0);
+	if (opts < 0)
+		die("lwip_fcntl(F_GETFL) error");
+
+	if (lwip_fcntl(fd, F_SETFL, opts|O_NONBLOCK) < 0)
+		die("lwip_fcntl(F_SETFL) error");
+}
 
 int main(int argc, char **argv)
 {
@@ -13,8 +35,6 @@ int main(int argc, char **argv)
 		die("insufficient arguments");
 
 	char *path = argv[1];
-
-	fprintf(stderr, "path is %s\n", path);
 
 	struct stack *stack = lwip_stack_new();
 	if (!stack)
@@ -38,8 +58,6 @@ int main(int argc, char **argv)
 	if (fd < 0)
 		die("lwip_msocket() error");
 
-	printf("connected\n");
-
 	struct sockaddr_in addr;
 	memset(&addr, 0, sizeof(addr));
 	addr.sin_family      = AF_INET;
@@ -49,27 +67,32 @@ int main(int argc, char **argv)
 	if (lwip_connect(fd, (struct sockaddr *) &addr, sizeof(addr)) < 0)
 		die("lwip_connect() error");
 
+	setnonblocking(STDIN_FILENO);
+	lwip_setnonblocking(fd);
+
 	while (1) {
 		char buf[4096];
-		fd_set rfds;
+		fd_set fds;
 		int n;
 
-		FD_ZERO(&rfds);
-		FD_SET(STDIN_FILENO, &rfds);
-		FD_SET(fd, &rfds);
+		FD_ZERO(&fds);
+		FD_SET(STDIN_FILENO, &fds);
+		FD_SET(fd, &fds);
 
-		lwip_select(fd + 1, &rfds, NULL, NULL, NULL);
+		lwip_select(fd + 1, &fds, NULL, &fds, NULL);
 
-		if (FD_ISSET(fd, &rfds)) {
-			if ((n = lwip_read(fd, buf, sizeof(buf))) == 0)
-				exit(EXIT_SUCCESS);
+		while ((n = lwip_read(fd, buf, sizeof(buf))) > 0)
 			write(STDOUT_FILENO, buf, n);
-		}
+		if (!n)
+			exit(EXIT_SUCCESS);
+		if (n < 0 && errno != EAGAIN)
+			die("error reading from socket");
 
-		if (FD_ISSET(STDIN_FILENO,&rfds)) {
-			if ((n = read(STDIN_FILENO, buf, sizeof(buf))) == 0)
-				exit(EXIT_SUCCESS);
+		while ((n = read(STDIN_FILENO, buf, sizeof(buf))) > 0)
 			lwip_write(fd, buf, n);
-		}
+		if (!n)
+			exit(EXIT_SUCCESS);
+		if (n < 0 && errno != EAGAIN)
+			die("error reading from stdin");
 	}
 }
