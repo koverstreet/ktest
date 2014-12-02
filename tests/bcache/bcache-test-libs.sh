@@ -197,7 +197,10 @@ existing_bcache() {
 #
 setup_bcache() {
     make_bcache_flags="$(make_bcache_flags)"
-    make_bcache_flags+=" --wipe-bcache --cache=$CACHE"
+    make_bcache_flags+=" --wipe-bcache"
+    for cache in $CACHE; do
+        make_bcache_flags+=" --cache=$cache"
+    done
     make_bcache_flags+=" --data-replicas=$DATA_REPLICAS"
     make_bcache_flags+=" --meta-replicas=$META_REPLICAS"
 
