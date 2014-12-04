@@ -121,13 +121,15 @@ cp $VM_IMAGE_DIR/rc.local "$MNT/etc/rc.d/rc.local"
 chmod 755 "$MNT/etc/rc.d/rc.local"
 
 chroot "$MNT" systemctl mask				\
-    getty.target					\
-    kdump.service					\
     avahi-daemon.service				\
     crond.service					\
+    getty.target					\
+    kdump.service					\
     lvm2-lvmetad.service				\
     lvm2-monitor.service				\
+    polkit.service					\
     rsyslog.service					\
-    polkit.service
+    systemd-journald.service				\
+    systemd-journal-flush.service
 
 finish_umount_image
