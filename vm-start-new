@@ -103,6 +103,13 @@ def vm_run(opts, vmdir, vm_nr):
                                      stderr=subprocess.STDOUT,
                                      stdin=subprocess.PIPE))
 
+def vm_cleanup(vmdir):
+    while os.waitpid(-1, os.WNOHANG) != (0, 0):
+        pass
+
+    while os.path.isdir(vmdir):
+        shutil.rmtree(vmdir, ignore_errors=True)
+
 def cmd_start():
     """Start new virtual machines
     """
@@ -179,7 +186,7 @@ def cmd_start():
         raise RuntimeError("Cannot find initrd file: " + options.initrd)
 
     vmdir = tempfile.mkdtemp(prefix="vm-", dir=options.tmpfs)
-    atexit.register(shutil.rmtree, vmdir, ignore_errors=True)
+    atexit.register(vm_cleanup, vmdir)
 
     if options.vmdirfile:
         with open(options.vmdirfile, 'w') as f:
