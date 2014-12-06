@@ -12,4 +12,4 @@ mount /dev/sr0 /cdrom
 
 export PATH=/cdrom:$PATH
 cd /cdrom
-exec ./rc
+exec ./rc > /dev/console
