@@ -104,6 +104,12 @@ def vm_run(opts, vmdir, vm_nr):
                                      stdin=subprocess.PIPE))
 
 def vm_cleanup(vmdir):
+    try:
+        while True:
+            os.wait()
+    except:
+        pass
+
     while os.path.isdir(vmdir):
         shutil.rmtree(vmdir, ignore_errors=True)
 
@@ -306,6 +312,7 @@ def cmd_help():
 
 # Allow exit handlers to be called
 for sig in (signal.SIGHUP,
+            signal.SIGINT,
             signal.SIGQUIT,
             signal.SIGILL,
             signal.SIGABRT,
