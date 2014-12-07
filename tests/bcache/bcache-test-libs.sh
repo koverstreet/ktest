@@ -227,6 +227,8 @@ setup_bcache() {
 	    echo $size > $file
 	done
     done
+
+    ln -s /sys/fs/bcache/*-* /root/c
 }
 
 stop_volumes()
