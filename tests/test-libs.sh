@@ -3,6 +3,10 @@
 # ktest framework.
 #
 
+require-lib prelude.sh
+
+config-mem 1G
+
 require-kernel-config MD
 require-kernel-config DYNAMIC_FAULT
 
@@ -293,7 +297,10 @@ test_discard()
         blkdiscard $dev
     done
 
-    sleep 1
+    # Wait for btree GC to finish so that the counts are actually up to date
+    while [ "$(cat /sys/fs/bcache/*/internal/btree_gc_running)" != "0" ]; do
+	sleep 1
+    done
 
     expect_sysfs cache dirty_buckets 0
     expect_sysfs cache dirty_data 0
@@ -357,10 +364,24 @@ test_drop_caches()
     done
 }
 
+test_expensive_debug_checks()
+{
+    # This only exists if CONFIG_BCACHE_DEBUG is on
+    if [ -f $dir/internal/expensive_debug_checks ]; then
+	while true; do
+	    echo 1 > $dir/internal/expensive_debug_checks
+	    sleep 5
+	    echo 0 > $dir/internal/expensive_debug_checks
+	    sleep 10
+	done
+    fi
+}
+
 test_antagonist()
 {
     test_sysfs
 
+    test_expensive_debug_checks &
     test_shrink &
     test_fault &
     test_sync &
@@ -390,7 +411,7 @@ test_stress()
 
 stress_timeout()
 {
-    echo $((($ktest_priority + 3) * 400))
+    echo $((($ktest_priority + 3) * 600))
 }
 
 block_device_verify_dd()

@@ -1,0 +1,47 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          kmo-batch
+# Required-Start:
+# Required-Stop:
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: kmo-batch daemon
+# Description:       Daemon for kmo-batch
+### END INIT INFO
+
+PATH=/bin:/usr/bin:/sbin:/usr/sbin
+DAEMON=/usr/bin/kmo-batch
+PIDFILE=/var/run/kmo-batch.pid
+
+test -f $DAEMON || exit 0
+
+. /lib/lsb/init-functions
+
+case "$1" in
+start)
+    log_daemon_msg "Starting batch daemon" "kmo-batch"
+    mkdir -p /var/run/kmo-batch
+    start_daemon -p $PIDFILE $DAEMON daemon --detach
+    log_end_msg $?
+    ;;
+stop)
+    log_daemon_msg "Stopping batch daemon" "kmo-batch"
+    killproc -p $PIDFILE $DAEMON
+    RETVAL=$?
+    [ $RETVAL -eq 0 ] && [ -e "$PIDFILE" ] && rm -f $PIDFILE
+    log_end_msg $RETVAL
+    ;;
+restart)
+    log_daemon_msg "Restarting batch daemon" "kmo-batch" 
+    $0 stop
+    $0 start
+    ;;
+status)
+    status_of_proc -p $PIDFILE $DAEMON $NAME && exit 0 || exit $?
+    ;;
+*)
+    log_action_msg "Usage: /etc/init.d/kmo-batch {start|stop|status|restart}"
+    exit 2
+    ;;
+esac
+exit 0

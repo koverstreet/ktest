@@ -1,7 +1,4 @@
-#0	ktest			tests/ktest
-#0	vm-start		tests/ktest
+#0	.			tests/ktest
 
-#0	.		        ../appliance-clustest/basic.actest
-#0	.		        ../appliance-clustest/basic-cluster.actest
-
+#0	.		        tests/blkdev.ktest
 #0	.		        ../appliance-clustest/tests/dcpd.actest

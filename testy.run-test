@@ -1,0 +1,27 @@
+#!/bin/bash
+#
+# little wrapper to get correct start and end times
+
+set -o nounset
+set -o errexit
+set -o pipefail
+export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]}()}+ '
+
+KTESTDIR=$(dirname "$(readlink -f "$0")")
+
+starttime=$(date +%s)
+testfile=$1
+
+if $KTESTDIR/kmo-batch/kmo-batch run $@; then
+    status="SUCCESS"
+    ret=0
+else
+    status="FAILURE"
+    ret=1
+fi
+
+duration=$(($(date +%s) - starttime))
+
+echo
+echo "$status: test finished at $(date +%s) -- $(date) after $duration seconds"
+exit $ret

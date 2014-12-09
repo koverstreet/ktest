@@ -8,7 +8,6 @@ config-scratch-devs 1G,1G
 
 config-bucket-size 512k
 config-block-size 2k
-config-mem 1G
 
 config-volume 1400M
 
@@ -23,12 +22,12 @@ main()
 
     (
 	sleep 5
-	make-bcache --bucket 512k --block 2k --tier 1 -C /dev/sdd
+	bcacheadm format --bucket=512k --block=2k --tier=1 -C /dev/sdd
 	echo "adding device 1"
 	echo /dev/sdd > /sys/fs/bcache/*/add_device
 
 	sleep 5
-	make-bcache --bucket 512k --block 2k --tier 1 -C /dev/sde
+	bcacheadm format --bucket=512k --block=2k --tier=1 -C /dev/sde
 	echo "adding device 2"
 	echo /dev/sde > /sys/fs/bcache/*/add_device
 
@@ -47,6 +46,15 @@ main()
 	echo "Only found $devices devices"
 	exit 1
     fi
+
+    # Make sure new devices are in tier 1
+    for device in cache2 cache3; do
+	tier="$(cat /sys/fs/bcache/*/${device}/tier)"
+	if [ "$tier" != 1 ]; then
+	    echo "${device} not in tier 1"
+	    exit 1
+	fi
+    done
 
     stop_bcache
 }

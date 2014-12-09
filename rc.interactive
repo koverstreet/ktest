@@ -23,9 +23,11 @@ done
 # Check if we are running the crashdump kernel
 if [ -s /proc/vmcore ]; then
     echo "Collecting crash dump..."
-    cp --sparse=always /proc/vmcore /var/log/datera/vmcore
+    cp --sparse=always /proc/vmcore /var/log/datera/vmcore || true
     sync
     poweroff
 else
-    kexec -p /cdrom/vmlinuz --append="root=/dev/sda rw console=ttyS0,115200 maxcpus=1"
+    # If debugging crash dumps, add "console=hvc0" to the append line
+    # below:
+    kexec -p /cdrom/vmlinuz --append="root=/dev/sda rw maxcpus=1" || true
 fi

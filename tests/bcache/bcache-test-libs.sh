@@ -5,9 +5,8 @@
 
 require-lib ../test-libs.sh
 
-require-bin make-bcache
-require-bin bcache-super-show
-require-bin bcachectl
+require-bin bcacheadm
+
 
 require-kernel-config BCACHE,BCACHE_DEBUG,CLOSURE_DEBUG
 
@@ -55,7 +54,10 @@ config-volume()
 
 config-bucket-size()
 {
-    BUCKET_SIZE="$1"
+    BUCKET_SIZE=""
+    for size in "$@"; do
+        BUCKET_SIZE="$BUCKET_SIZE--bucket=$size "
+    done
 }
 
 config-block-size()
@@ -115,7 +117,7 @@ add_bcache_devs()
 
 make_bcache_flags()
 {
-    flags="--bucket $BUCKET_SIZE --block $BLOCK_SIZE --cache_replacement_policy=$REPLACEMENT"
+    flags="$BUCKET_SIZE --block=$BLOCK_SIZE --cache_replacement_policy=$REPLACEMENT"
     case "$DISCARD" in
 	0) ;;
 	1) flags+=" --discard" ;;
@@ -137,7 +139,7 @@ add_device() {
 wait_on_dev()
 {
     for device in $@; do
-	while [ ! -b "$device" ]; do
+	while [ ! -b "$device" ] && [ ! -c "$device" ]; do
 	    sleep 0.5
 	done
     done
@@ -156,12 +158,12 @@ existing_bcache() {
     # Make sure bcache-super-show works -- the control plane wipes data
     # if this fails so its important that it doesn't break
     for dev in $CACHE $BDEV $TIER; do
-	bcache-super-show $dev
+	bcacheadm query-devs $dev
     done
 
     # Older kernel versions don't have /dev/bcache
     if [ -e /dev/bcache ]; then
-	bcachectl register $CACHE $TIER $BDEV
+	bcacheadm register $CACHE $TIER $BDEV
     else
 	for dev in $CACHE $TIER $BDEV; do
 	    echo $dev > /sys/fs/bcache/register
@@ -176,9 +178,7 @@ existing_bcache() {
 
     udevadm settle
 
-    for device in $DEVICES; do
-	wait_on_dev $device
-    done
+    wait_on_dev /dev/bcache_extent0 $DEVICES
 
     cache_set_settings
 
@@ -197,20 +197,28 @@ existing_bcache() {
 #
 setup_bcache() {
     make_bcache_flags="$(make_bcache_flags)"
-    make_bcache_flags+=" --wipe-bcache --cache $CACHE"
-    make_bcache_flags+=" --data-replicas $DATA_REPLICAS"
-    make_bcache_flags+=" --meta-replicas $META_REPLICAS"
+    make_bcache_flags+=" --wipe-bcache"
+    for cache in $CACHE; do
+        make_bcache_flags+=" --cache=$cache"
+    done
+    make_bcache_flags+=" --data-replicas=$DATA_REPLICAS"
+    make_bcache_flags+=" --meta-replicas=$META_REPLICAS"
 
     if [ "$TIER" != "" ]; then
-	make_bcache_flags+=" --tier 1 $TIER"
+	make_bcache_flags+=" --tier=1 "
+	for cache in $TIER; do
+		make_bcache_flags+=" --cache=$cache"
+	done
     fi
 
     if [ "$BDEV" != "" ]; then
-	make_bcache_flags+=" --bdev $BDEV"
+	for bdev in $BDEV; do
+		make_bcache_flags+=" --bdev=$bdev"
+	done
     fi
 
     # Let's change the checksum type just for fun
-    make-bcache --csum-type crc32c $make_bcache_flags
+    bcacheadm format --csum-type=crc32c $make_bcache_flags
 
     existing_bcache
 
@@ -237,7 +245,7 @@ cache_set_settings()
 {
     for dir in $(ls -d /sys/fs/bcache/*-*-*); do
 	true
-	echo 1 > $dir/btree_scan_ratelimit
+	echo 0 > $dir/btree_scan_ratelimit
 
 	#echo 0 > $dir/synchronous
 	echo panic > $dir/errors
@@ -246,11 +254,6 @@ cache_set_settings()
 	#echo 1 > $dir/internal/key_merging_disabled
 	#echo 1 > $dir/internal/btree_coalescing_disabled
 	#echo 1 > $dir/internal/verify
-
-	# This only exists if CONFIG_BCACHE_DEBUG is on
-	if [ -f $dir/internal/expensive_debug_checks ]; then
-	    echo 1 > $dir/internal/expensive_debug_checks
-	fi
 
 	echo 0 > $dir/congested_read_threshold_us
 	echo 0 > $dir/congested_write_threshold_us
@@ -268,14 +271,8 @@ cache_set_settings()
 
 cached_dev_settings()
 {
-    for dir in $(ls -d /sys/block/bcache*/bcache); do
-	true
-	#echo 128k    > $dir/readahead
-	#echo 1	> $dir/writeback_delay
-	#echo 0	> $dir/writeback_running
-	#echo 0	> $dir/sequential_cutoff
-	#echo 1	> $dir/verify
-	#echo 1	> $dir/bypass_torture_test
+    for dir in $(ls -d /sys/fs/bcache/*-*-*/bdev*); do
+	echo 1 > $dir/writeback_rate_p_term_inverse
     done
 }
 
@@ -301,4 +298,22 @@ test_bcachefs_stress()
     test_bonnie
     #test_fsx
     stop_bcachefs
+}
+
+bcache_status()
+{
+    DEVS=""
+    for dev in "$@"; do
+	DEVS="$DEVS$dev "
+    done
+    bcacheadm status $DEVS
+}
+
+bcache_dev_query()
+{
+    DEVS=""
+    for dev in "$@"; do
+	DEVS="$DEVS$dev "
+    done
+    bcacheadm query-devs $DEVS
 }

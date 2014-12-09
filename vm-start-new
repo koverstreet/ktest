@@ -1,0 +1,339 @@
+#!/usr/bin/python
+# Copyright (c) 2013 Datera, Inc. All rights reserved
+# Datera, Inc. Confidential and Propriatory
+
+import atexit
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+
+from optparse import OptionParser
+
+DIR = os.path.dirname(__file__)       # path to script directory
+
+DEFAULT_MEMORY = "1G"               # how much memory to give the vms
+DEFAULT_TMP = "/tmp"                # default directory for tmps
+
+# colors:
+GREEN = '\033[32m'
+CYAN = '\033[36m'
+NC = '\033[0m'
+
+FNULL = open(os.devnull, 'rw')
+
+def kill_proc(p):
+    try:
+        p.kill()
+    except:
+        pass
+
+def qemu_disk(dev, filename, opts="", device="scsi-hd"):
+    return ["-drive", "if=none,format=raw,id=" + dev +
+            ",file=" + filename + "," + opts,
+            "-device", device + ",bus=scsi-hba.0,drive=" + dev]
+
+def qemu_socket(vmdir, vm_nr, name):
+    return "unix:" + os.path.join(vmdir, "vm-%u-%s" % (vm_nr, name)) + ",server,nowait"
+
+def vm_run(opts, vmdir, vm_nr):
+    cmd = ["stdbuf", "-oL",
+           "qemu-system-x86_64",
+           "-machine", "accel=kvm",
+           "-m",        opts.mem,
+           "-smp",      "%d,sockets=%d" % (opts.cpus, opts.cpus),
+
+           "-nographic",
+           "-device",   "virtio-serial",
+           "-chardev",  opts.console + ",id=console",
+           "-device",   "virtconsole,chardev=console",
+
+           "-serial",   qemu_socket(vmdir, vm_nr, "kgdb"),
+           "-monitor",  qemu_socket(vmdir, vm_nr, "mon"),
+           "-gdb",      qemu_socket(vmdir, vm_nr, "gdb"),
+
+           "-device",   "virtio-rng-pci"]
+
+    if opts.kernel:
+        cmd.extend(["-kernel", opts.kernel])
+
+    if opts.initrd:
+        cmd.extend(["-initrd", opts.initrd])
+
+    kernelParams = "console=hvc0 root=/dev/sda "
+    if opts.kgdb:
+        kernelParams += "kgdboc=ttyS0,115200 "
+
+    if opts.append:
+        kernelParams += opts.append
+
+    cmd.extend(["-append", kernelParams])
+
+    # VirtIO-SCSI for root file system and scratch devices
+    cmd.extend(["-device", "virtio-scsi-pci,id=scsi-hba"])
+
+    # Root file system comes first (sda)
+    cmd.extend(qemu_disk("root", opts.image, "snapshot=on,cache=unsafe"))
+
+    for i, size in enumerate(opts.scratch.split(",")):
+        if size.strip():
+            drive = os.path.join(vmdir, "vm-%u-disk-%u" % (vm_nr, i))
+            subprocess.check_call(["fallocate", "-l", size, drive])
+            cmd.extend(qemu_disk("scsi" + str(i), drive, "cache=unsafe"))
+
+    if opts.cdrom:
+        cmd.extend(qemu_disk("scsi-cd", opts.cdrom, "", "scsi-cd"))
+
+    for fspath, fslabel in opts.filesystems:
+        cmd.extend(["-virtfs", "local,path=" + fspath +
+                    ",mount_tag=" + fslabel +
+                    ",security_model=none"])
+
+    for i in range(opts.interfaces):
+        mac = "de:ad:be:ef:%0.2x:%0.2x" % (vm_nr, int(i))
+        sock = os.path.join(vmdir, "net-" + str(i))
+
+        cmd.extend(["-net", "nic,model=virtio,macaddr=" + mac,
+                    "-net", "vde,sock=" + sock])
+
+    atexit.register(kill_proc,
+                    subprocess.Popen(cmd,
+                                     stderr=subprocess.STDOUT,
+                                     stdin=subprocess.PIPE))
+
+def cmd_start():
+    """Start new virtual machines
+    """
+    opt = OptionParser("Usage: %prog start [options] [number]",
+        description="Start one or more virtual machines")
+
+    opt.add_option("-i", "--image", dest="image",
+        help="root filesystem for the virtual machine(s)")
+
+    opt.add_option("-k", "--kernel", dest="kernel",
+        help="kernel used to boot the virtual machine(s)")
+
+    opt.add_option("-r", "--initrd", dest="initrd",
+        help="initial ramdisk for boot")
+
+    opt.add_option("-a", "--append", dest="append",
+        default="root=/dev/sda rw",
+        help="append kernel command line boot arguments")
+
+    opt.add_option("--kgdb", dest="kgdb", action="store_true",
+        help="enable kgdb")
+
+    opt.add_option("-c", "--cdrom", dest="cdrom",
+        help="cdrom image")
+
+    opt.add_option("-s", "--scratch-dev ", dest="scratch",
+        default="",
+        help="list of scratch device sizes. ex: 256M,2G")
+
+    opt.add_option("-t", "--tmpfs-dir", dest="tmpfs",
+        default=DEFAULT_TMP,
+        help="directory to use for temporary files/scratch devices")
+
+    opt.add_option("-m", "--memory", dest="mem",
+        default=DEFAULT_MEMORY,
+        help="amount of memory to be allocated per VM")
+
+    opt.add_option("--cpus", dest="cpus",
+        default="1", type="int",
+        help="number of CPUs allocated per VM")
+
+    opt.add_option("--fs", dest="filesystems",
+        action="append", nargs=2,
+        help="mount a directory (first argument) as " +
+        "a filesystem label (second argument) in the VM")
+
+    opt.add_option("--id", dest="vmdirfile",
+        help="file to write vm directory to")
+
+    opt.add_option("--console", dest="console",
+        default="stdio",
+        help="where to attach the vm console (ex: stdio, pipe,path=foo)")
+
+    opt.add_option("--nr_vms", dest="nr_vms",
+        default="1", type="int",
+        help="number of virtual machines to start")
+
+    opt.add_option("--interfaces", dest="interfaces",
+        default="1", type="int",
+        help="Specify the number of interfaces on the cluster nodes")
+
+    (options, args) = opt.parse_args()
+
+    if not options.image:
+        raise RuntimeError("Requires an image to boot")
+
+    if not os.path.isfile(options.image):
+        raise RuntimeError("Cannot find base image file: " + options.image)
+
+    if options.kernel and not os.path.isfile(options.kernel):
+        raise RuntimeError("Cannot find kernel file: " + options.kernel)
+
+    if options.initrd and not os.path.isfile(options.initrd):
+        raise RuntimeError("Cannot find initrd file: " + options.initrd)
+
+    vmdir = tempfile.mkdtemp(prefix="vm-", dir=options.tmpfs)
+    atexit.register(shutil.rmtree, vmdir, ignore_errors=True)
+
+    if options.vmdirfile:
+        with open(options.vmdirfile, 'w') as f:
+            f.write(vmdir + "\n")
+
+    for i in range(options.interfaces):
+        net = "10.0.%u.1/24" % (2 + i)
+        sock = os.path.join(vmdir, "net-" + str(i))
+
+        atexit.register(kill_proc,
+                        subprocess.Popen(["vde_switch", "-sock", sock],
+                                         stdin=subprocess.PIPE,
+                                         stdout=FNULL,
+                                         stderr=subprocess.STDOUT))
+
+        atexit.register(kill_proc,
+                        subprocess.Popen(["slirpvde", "--sock", sock,
+                                          "--dhcp", "--host", net],
+                                         stdin=subprocess.PIPE,
+                                         stdout=FNULL,
+                                         stderr=subprocess.STDOUT))
+
+    for vm_nr in range(options.nr_vms):
+        vm_run(options, vmdir, vm_nr)
+
+    while True:
+        os.wait()
+
+    try:
+        sys.stdout.flush()
+    except:
+        pass
+
+def vmdir_parse(path):
+    vmdir, foo, vm_nr = path.partition(":")
+    if not vm_nr:
+        vm_nr = 0
+
+    return (vmdir, vm_nr)
+
+def cmd_ssh():
+    """ssh into a virtual machine"""
+
+    if len(sys.argv) <= 1:
+        raise RuntimeError("Please provide vmdir to SSH to")
+
+    vmdir, vm_nr = vmdir_parse(sys.argv[1])
+
+    keyfile = os.path.join(DIR, "id_dsa")
+    subprocess.call(["chmod", "600", keyfile])
+
+    tmpdir = tempfile.mkdtemp(prefix="vm-start-")
+    atexit.register(shutil.rmtree, tmpdir, ignore_errors=True)
+
+    lwip_connect = os.path.join(tmpdir, "lwip-connect")
+
+    # this is terrible, but so is automake
+    subprocess.check_call(["gcc", "-O2", "-o", lwip_connect,
+                           os.path.join(DIR, "lwip-connect.c"),
+                           "-llwipv6"])
+
+    ip = "10.0.2." + str(15 + vm_nr)
+
+    sock = os.path.join(vmdir, "net-0")
+
+    # ServerAliveInterval is a hack - lwip_connect should notice when the socket
+    # has gone away an exit, but it appears to be a bug in liblwipv6
+    os.execvp("ssh",
+              ["ssh", "-t", "-i", keyfile,
+               "-F", "/dev/null",
+               "-o", "CheckHostIP=no",
+               "-o", "StrictHostKeyChecking=no",
+               "-o", "UserKnownHostsFile=/dev/null",
+               "-o", "NoHostAuthenticationForLocalhost=yes",
+               "-o", "ServerAliveInterval=1",
+               "-o", "ProxyCommand=%s %s %s 22" % (lwip_connect, sock, ip),
+               "root@127.0.0.1"] + sys.argv[2:])
+
+def vm_gdb(socket):
+    if len(sys.argv) <= 2:
+        raise RuntimeError("Please provide a vmdir and a vmlinux file")
+
+    vmdir, vm_nr = vmdir_parse(sys.argv[1])
+
+    os.execlp("gdb", "gdb",
+              "-ex", "set remote interrupt-on-connect",
+              "-ex", "target remote | socat UNIX-CONNECT:" +
+              os.path.join(vmdir, "vm-%u-%s" % (vm_nr, socket)) + ' -',
+              sys.argv[2])
+
+def cmd_gdb():
+    vm_gdb('gdb')
+
+def cmd_kgdb():
+    vm_gdb('kgdb')
+
+def cmd_mon():
+    if len(sys.argv)<=1:
+        raise RuntimeError("Please provide a vmdir")
+
+    vmdir, vm_nr = vmdir_parse(sys.argv[1])
+
+    os.execlp("minicom", "minicom", "-D", "unix#" +
+              os.path.join(vmdir, "vm-%u-mon" % vm_nr))
+
+def cmd_help():
+    """Print help for commands."""
+    print """Usage: vm-start [command] [args]
+
+  Commands:
+    start       setup and start one or more virtual machines
+    ssh         ssh to a virtual machine by tmpdir path (and optionally id)
+    gdb         connect to gbd
+    kgdb        connect to kgdb
+    mon         connect to the qemu monitor
+    help        print help for commands
+    """
+
+"""Main program."""
+
+# Allow exit handlers to be called
+for sig in (signal.SIGHUP,
+            signal.SIGINT,
+            signal.SIGQUIT,
+            signal.SIGILL,
+            signal.SIGABRT,
+            signal.SIGFPE,
+            signal.SIGPIPE,
+            signal.SIGTERM,
+            signal.SIGUSR1,
+            signal.SIGUSR2):
+    signal.signal(sig, lambda sig, frame: sys.exit(127))
+
+# if there is no command or args, print error message
+if len(sys.argv) == 1:
+    cmd_help()
+    raise RuntimeError("Please provide a command and appropriate arguments.")
+
+# if first arg is a help option or command, print help and exit
+if sys.argv[1] in ["-h", "--help", "help"]:
+    cmd_help()
+    sys.exit(0)
+
+# try to find the command in the global namespace
+try:
+    _cmd_name = "cmd_" + sys.argv[1]
+    _cmd_func = getattr(sys.modules[__name__], _cmd_name)
+except AttributeError:
+    raise RuntimeError("<%s> is not a valid command.\n" % sys.argv[1] +
+                       "Try 'vm-start help' for more info.")
+
+# remove the command from argv and execute the command function
+sys.argv.pop(1)
+try:
+    _cmd_func()
+except KeyboardInterrupt:
+    pass

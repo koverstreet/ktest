@@ -3,19 +3,20 @@
 set -o nounset
 set -o errexit
 set -o errtrace
+shopt -s lastpipe
 
 # check for typical shell script errors
 
 export PS4='+${LINENO}+ '
 
 KTESTDIR=$(dirname "$(readlink -f "$0")")
-VMSTART=$KTESTDIR/vm-start
+VMSTART=$KTESTDIR/vm-start-new
 
 . "$KTESTDIR/util.sh"
 . "$KTESTDIR/parse-test.sh"
 
 if which shellcheck > /dev/null 2>&1; then
-    shellcheck "$0"
+    shellcheck --exclude=SC2030 --exclude=SC2031 "$0"
     shellcheck "$KTESTDIR/util.sh"
     shellcheck -exclude=SC2034 "$KTESTDIR/parse-test.sh"
 fi
@@ -25,15 +26,12 @@ checkdep minicom
 checkdep socat
 checkdep qemu-system-x86_64 qemu-system-i386
 
-PRIORITY="0"		# hint for how long test should run
+PRIORITY=0		# hint for how long test should run
 KERNEL=""		# dir that has the kernel to run
                         #       set with: -k <path>
-WORK_DIR=""             # dir where vm meta data (id, logs, etc) gets stored
+IDFILE=""		# passed as --id to vmstart
                         #       set with: -w <path>
-LOG_INTERNAL="log.internal"
-                        # dir name which is mapped with virtfs to inside vm
-                        # at /var/log/datera
-                        #       path: $WORK_DIR/$LOG_INTERNAL
+OUTPUT_DIR=""		# dir for test output (logs, code coverage, etc.)
 SCRATCH_DIR="/tmp"      # dir where scratch drives are created
                         #       defaults: /tmp
                         #       auto-override: $HOME/.ktest/tmp
@@ -45,22 +43,14 @@ IMG="/var/lib/ktest/root"
 INTERACTIVE=0           # if set to 1, timeout is ignored completely
                         #       sets with: -I
 EXIT_ON_SUCCESS=0	# if true, exit on success, not failure or timeout
-CONTAINER_SRC_DIR=""	# dir which contains the datera containers
 
 # config files:
-[ -f "$KTESTDIR/ktestrc" ]	&& . "$KTESTDIR/ktestrc"
-[ -f /etc/ktestrc ]		&& . /etc/ktestrc
-[ -f "$HOME/.ktestrc" ]		&& . "$HOME/.ktestrc"
+[[ -f $KTESTDIR/ktestrc ]]	&& . "$KTESTDIR/ktestrc"
+[[ -f /etc/ktestrc ]]		&& . /etc/ktestrc
 
-# root image auto-override
-if [ -f "$HOME/.ktest/root" ]; then
-    IMG="$HOME/.ktest/root"
-fi
-
-# scratch drive dir auto-override
-if [ -d "$HOME/.ktest/tmp" ]; then
-    SCRATCH_DIR=$HOME/.ktest/tmp
-fi
+[[ -f $HOME/.ktestrc ]]		&& . "$HOME/.ktestrc"
+[[ -f $HOME/.ktest/root ]]	&& IMG="$HOME/.ktest/root"
+[[ -d $HOME/.ktest/tmp ]]	&& SCRATCH_DIR="$HOME/.ktest/tmp"
 
 usage()
 {
@@ -69,21 +59,26 @@ usage()
     echo "  boot        Boot a VM without running anything"
     echo "  run <test>  Run a kernel test"
     echo "  ssh         Login as root"
-    echo "  gdb         Connect to kgdb"
+    echo "  gdb         Connect to qemu's gdb interface"
+    echo "  kgdb        Connect to kgdb"
     echo "  mon         Connect to qemu monitor"
     echo
     echo "  options:"
     echo "      -x       bash debug statements"
-    echo "      -k <dir> build directory for kernel (default: kernel_source/.ktest)"
-    echo "      -w <dir> work directory (default: kernel build directory)"
-    echo "      -i <dir> VM root filesystem image (run cmd only)"
-    echo "      -I       disable timeout and VM stop on pass/fail (run cmd only)"
-    echo "      -S       disable timeout and VM stop on fail (run cmd only)"
-    echo "      -p <num> set test duration (higher is longer, default is 0)"
+    echo "      -k <dir> kernel to use (default: kernel_source/.ktest)"
+    echo "      -w <dir> work directory (default: .ktest"
+    echo "      -o <dir> output directory (default: ktest-out)"
+    echo
+    echo " options for ktest run:"
+    echo "      -i <dir> VM root filesystem image"
+    echo "      -p <num> hint for test duration (higher is longer, default is 0)"
+    echo "      -I       don't automatically stop VM"
+    echo "      -S       exit only on test success"
+    echo
+    echo "For kgdb to be enabled, either -I or -S must be specified"
 }
 
-#prints usage if no args
-if [[ $# -lt 1 ]]; then
+if [[ $# = 0 ]]; then
     usage
     exit 1
 fi
@@ -92,7 +87,7 @@ fi
 CMD="cmd_$1"
 shift
 
-while getopts "hp:i:k:ISw:x" arg; do
+while getopts "hp:i:k:ISw:o:x" arg; do
     case $arg in
 	h)
 	    usage
@@ -114,7 +109,10 @@ while getopts "hp:i:k:ISw:x" arg; do
 	    EXIT_ON_SUCCESS=1
 	    ;;
 	w)
-	    WORK_DIR=$OPTARG
+	    IDFILE="$OPTARG"
+	    ;;
+	o)
+	    OUTPUT_DIR="$OPTARG"
 	    ;;
 	x)
 	    set -x
@@ -123,17 +121,13 @@ while getopts "hp:i:k:ISw:x" arg; do
 done
 shift $(( OPTIND - 1 ))
 
-if [ -z "$KERNEL" ]; then
+if [[ -z $KERNEL ]]; then
     echo "Required parameter -k missing: kernel to boot"
     exit 1
 fi
 
-[ -z "$WORK_DIR" ] && WORK_DIR="./ktest.$$"
-
-mkdir -p "$WORK_DIR"
-WORK_DIR=$(readlink -e "$WORK_DIR")
-
-trap 'stty sane > /dev/null 2>&1 || true' EXIT
+[[ -z $IDFILE ]]	&& IDFILE=./.ktest-vm
+[[ -z $OUTPUT_DIR ]]	&& OUTPUT_DIR=./ktest-out
 
 check_mlxcard()
 {
@@ -143,231 +137,133 @@ check_mlxcard()
     fi
 }
 
-build_file_list()
+run_vm()
 {
-    install -m0644 "$KERNEL/vmlinuz" "$WORK_DIR/vmlinuz"
-    FILES="$WORK_DIR/vmlinuz"
-
-    if [ $# -eq 0 ]; then
-	install -m0755 "$KTESTDIR/rc.interactive" "$WORK_DIR/rc"
-	FILES+=" $WORK_DIR/rc"
-    else
-	TEST=$1
-	TEST=$(readlink -e "$TEST")
-
-	install -m0755 "$KTESTDIR/rc.interactive" "$WORK_DIR/rc.interactive"
-	FILES+=" $WORK_DIR/rc.interactive"
-
-	install -m0755 "$KTESTDIR/rc.testwrapper" "$WORK_DIR/rc"
-	FILES+=" $WORK_DIR/rc"
-
-	install -m0644 "$TEST" "$WORK_DIR/rc.test"
-	FILES+=" $WORK_DIR/rc.test"
-
-	parse_test_deps "$TEST"
-
-	if [ -n "$_INFINIBAND" ]; then
-	    VMSTART="sudo $VMSTART"
-	    check_mlxcard
-	fi
-
-	local containerdir="$WORK_DIR/container"
-
-	if [ -n "$_CONTAINERS" ]; then
-	    FILES+=" $containerdir"
-	    genisoimage_sudo=sudo
-	    sudo rm -rf "$containerdir"
-	    mkdir -p "$containerdir"
-	fi
-
-	for req in $_CONTAINERS; do
-	    local cvf="$CONTAINER_SRC_DIR/${req}.version.txt"
-
-	    if [ ! -e "$cvf" ]; then
-		echo "Container version file not found: $cvf"
-		exit 1
-	    fi
-
-	    local cv=$(cat "$cvf")
-	    local cf="$CONTAINER_SRC_DIR/${req}-${cv}.tar.gz"
-
-	    if [ ! -e "$cf" ]; then
-		echo "Container file not found: $cf"
-		exit 1
-	    fi
-
-	    local cdir="${req}-${cv}"
-	    local containerdir="$WORK_DIR/container"
-
-	    sudo tar xz -C "$containerdir" -f "$cf"
-	    if [ ! -d "$containerdir/$cdir" ]; then
-		echo "Container '$req' does not unpack into expected directory '$cdir'"
-		exit 1
-	    fi
-	    sudo ln -s "$cdir" "${containerdir}/${req}.chroot"
-	done
-    fi
-}
-
-prepare_vm()
-{
-    if [ ! -f "$IMG" ] ; then
+    if [[ ! -f $IMG ]]; then
 	echo "VM root filesystem not found, use vm_create_image to create one"
 	exit 1
     fi
 
-    # Might be overridden by test script
-    genisoimage_sudo=""
-
     # setup directory where logfs will be mounted from
-    rm -rf "$WORK_DIR/$LOG_INTERNAL"
-    mkdir -p "$WORK_DIR/$LOG_INTERNAL"
+    mkdir -p "$OUTPUT_DIR"
 
-    build_file_list "$@"
-
-    # shellcheck disable=SC2086
-    $genisoimage_sudo genisoimage -quiet -R		\
-	-input-charset utf-8				\
-	-o "$WORK_DIR/run.iso"				\
-	"$KERNEL/lib" $FILES || exit 1
-
-    if [ -n "$genisoimage_sudo" ]; then
-	$genisoimage_sudo chown "$USER" "$WORK_DIR/run.iso"
-    fi
-}
-
-run_lcov()
-{
-    which lcov >/dev/null 2>&1 || return 0
-
-    [ -d "$WORK_DIR/$LOG_INTERNAL/gcov.0" ] || return 0
-
-    local gcov_out=$WORK_DIR/gcov
-
-    rm -rf "$gcov_out"
-    mkdir "$gcov_out"
-
-    local info=$gcov_out/gcov.info
-    local html=$gcov_out/gcov.html
-    local tracefiles=""
-
-    for i in $WORK_DIR/$LOG_INTERNAL/gcov.*; do
-        local out=$gcov_out/$(basename "$i").info
-	tracefiles+=" --add-tracefile $out"
-
-	lcov --capture --quiet				\
-	    --directory "$i" --output-file "$out"
-    done
-
-    [ -n "$tracefiles" ] || return 0
-
-    echo "You may need to install perl-digest-MD5 for lcov"
-    echo "    sudo yum install perl-Digest-MD5"
-
-    # shellcheck disable=SC2086
-    lcov --quiet --output-file "$info" $tracefiles || true
-    genhtml --output-directory "$html" "$info" > /dev/null || true
-
-    echo
-    echo "LCOV report: file://$html/index.html"
-}
-
-run_vmstart()
-{
     local KGDB=""
 
-    [ "$EXIT_ON_SUCCESS" = 1 -o "$INTERACTIVE" = 1 ] && KGDB="--kgdb"
+    if [[ $EXIT_ON_SUCCESS = 1 || $INTERACTIVE = 1 ]]; then
+	KGDB="--kgdb"
+    fi
+
+    # kernel modules
+    FILES+=("$KERNEL/lib")
+
+    # kernel to kexec to for crash dumps
+    FILES+=("vmlinuz=$KERNEL/vmlinuz")
+
+    iso=$(mktemp --tmpdir ktest-XXXXXXXXXX.iso)
+    trap 'rm -f $iso' SIGINT SIGTERM EXIT
+
+    genisoimage -quiet -graft-points -input-charset utf-8 -R		\
+	-o "$iso" "${FILES[@]}"
+
+    set +o errexit
 
     # shellcheck disable=SC2086
-    $VMSTART start					\
-	-i "$IMG" -t "$SCRATCH_DIR"			\
-	-k "$KERNEL/vmlinuz"				\
-	-c "$WORK_DIR/run.iso"				\
-	--id "$WORK_DIR/id"				\
-	--fs "$WORK_DIR/$LOG_INTERNAL" logfs		\
-	--append="root=/dev/sda rw crashkernel=128M"	\
-	"$KGDB"						\
-        "$@"
+    $VMSTART start							\
+	--id "$IDFILE"							\
+	--tmpfs-dir="$SCRATCH_DIR"					\
+	--image="$IMG"							\
+	--kernel="$KERNEL/vmlinuz"					\
+	--cdrom="$iso"							\
+	--fs "$OUTPUT_DIR" logfs					\
+	--append="rw crashkernel=128M ktest.priority=$PRIORITY $_KERNEL_APPEND"\
+	--memory="$_MEM"						\
+	--cpus "$_CPUS"							\
+	--nr_vms="$_NR_VMS"						\
+	$KGDB $_SCRATCH|
+    {
+	if [[ $INTERACTIVE = 1 ]]; then
+	    cat
+	elif [[ $EXIT_ON_SUCCESS = 1 ]]; then
+	    sed -u -e '/TEST SUCCESS/ { p; Q7 }'
+	else
+	    timeout "$_TIMEOUT" $KTESTDIR/catch_test_success.awk
+	fi
+
+	ret=$?
+	kill %1
+    }
+
+    if [[ $ret = 124 ]]; then
+	echo 'TEST TIMEOUT'
+	exit 2
+    fi
+
+    # don't want sed exiting normally (saw neither TEST SUCCESS nor TEST FAILED)
+    # to be consider success:
+    [[ $ret = 7 ]]
 }
 
 cmd_boot()
 {
-    prepare_vm
+    INTERACTIVE=1
+    _KERNEL_APPEND=""
+    _MEM=1G
+    _CPUS=6
+    _NR_VMS=1
+    _SCRATCH=""
 
-    run_vmstart -m 1G --cpus 6
+    FILES=("rc=$KTESTDIR/rc.interactive")
+
+    run_vm
 }
 
 cmd_run()
 {
-    if [[ $# -lt 1 ]]; then
+    if [[ $# = 0 ]]; then
 	echo "ktest: missing test"
 	exit 1
     fi
 
-    prepare_vm "$1"
+    local TEST=$(readlink -e "$1")
 
-    rm -f "$WORK_DIR/output"
-    mkfifo "$WORK_DIR/output"
+    FILES=("rc=$KTESTDIR/rc.testwrapper")
+    FILES+=("rc.interactive=$KTESTDIR/rc.interactive")
+    FILES+=("rc.test=$TEST")
 
-    # shellcheck disable=SC2086
-    run_vmstart                                                 \
-	--append="root=/dev/sda rw ktest.priority=$PRIORITY crashkernel=128M"	\
-	-m "$_MEM"						\
-	--cpus "$_CPUS"						\
-	$_SCRATCH						\
-	$_INFINIBAND						\
-	$_VMCLUSTER </dev/null 2>&1 > "$WORK_DIR/output" &
+    parse_test_deps "$TEST"
 
-    err=0
-
-    if [ "$EXIT_ON_SUCCESS" = 1 ]; then
-	sed -u -e '/TEST SUCCESS/ { p; Q0 }'			\
-	       < "$WORK_DIR/output" || err=1
-    elif [ "$INTERACTIVE" = 1 ]; then
-	cat "$WORK_DIR/output"
-    else
-	timeout "$_TIMEOUT"					\
-	    sed -u -e '/TEST SUCCESS/ { p; Q0 }'		\
-		   -e '/TEST FAILED/  { p; Q1 }'		\
-		   < "$WORK_DIR/output" || err=1
+    if [ -n "$_INFINIBAND" ]; then
+	VMSTART="sudo $VMSTART"
+	check_mlxcard
     fi
 
-    $VMSTART stop "$(cat "$WORK_DIR/id")"
-
-    run_lcov
-
-    exit $err
+    run_vm "$TEST"
 }
 
 cmd_ssh()
 {
-    $VMSTART ssh "$(cat "$WORK_DIR/id")" "$@"
-}
-
-cmd_stop()
-{
-    exec "$VMSTART" ssh "$(cat "$WORK_DIR/id")"
+    $VMSTART ssh "$(cat "$IDFILE")" "$@"
 }
 
 cmd_gdb()
 {
-    exec "$VMSTART" gdb "$(cat "$WORK_DIR/id")" "$KERNEL/vmlinux"
+    exec "$VMSTART" gdb "$(cat "$IDFILE")" "$KERNEL/vmlinux"
 }
 
 cmd_kgdb()
 {
-    exec "$VMSTART" kgdb "$(cat "$WORK_DIR/id")" "$KERNEL/vmlinux"
+    exec "$VMSTART" kgdb "$(cat "$IDFILE")" "$KERNEL/vmlinux"
 }
 
 cmd_mon()
 {
-    exec "$VMSTART" mon "$(cat "$WORK_DIR/id")"
+    exec "$VMSTART" mon "$(cat "$IDFILE")"
 }
 
 # checks if command is valid
-if [ "$(type -t "$CMD")" != "function" ]; then
+if [[ $(type -t "$CMD") != function ]]; then
     usage
     exit 1
 fi
 
-eval "$CMD" "$@"
+$CMD "$@"

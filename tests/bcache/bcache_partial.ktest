@@ -3,16 +3,15 @@
 require-lib bcache-test-libs.sh
 
 config-scratch-devs 512M,2G,2G
-config-mem 512M
 
-config-timeout 60
+config-timeout 240
 
 main()
 {
     setup_tracing 'bcache:*'
 
-    make-bcache -C /dev/sdb /dev/sdc /dev/sdd
-    make-bcache --wipe-bcache -C /dev/sdd
+    bcacheadm format -C /dev/sdb -C /dev/sdc -C /dev/sdd
+    bcacheadm format --wipe-bcache -C /dev/sdd
 
     echo /dev/sdb > /sys/fs/bcache/register
 

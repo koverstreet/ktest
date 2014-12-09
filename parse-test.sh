@@ -6,9 +6,10 @@ parse_test_deps()
     _TIMEOUT=""
     _SCRATCH=""
     _KERNEL_CONFIG_REQUIRE=""
-    _CONTAINERS=""
     _INFINIBAND=""
-    _VMCLUSTER=""
+    _KERNEL_APPEND=""
+    _NR_VMS="1"
+    TEST_RUNNING=""
 
     local TEST=$1
     local TESTDIR="$(dirname "$TEST")"
@@ -22,7 +23,7 @@ parse_test_deps()
 	    exit 1
 	fi
 
-	FILES+=" $(readlink -f "$1")"
+	FILES+=("$(readlink -f "$1")")
     }
 
     require-lib()
@@ -69,11 +70,6 @@ parse_test_deps()
 	_add-file "$dir/$req"
     }
 
-    require-container()
-    {
-	_CONTAINERS+=" $1"
-    }
-
     require-kernel-config()
     {
 	_KERNEL_CONFIG_REQUIRE+=",$1"
@@ -110,16 +106,21 @@ parse_test_deps()
 	require-kernel-config INFINIBAND_IPOIB
     }
 
-    config-vmcount()
+    config-nr-vms()
     {
-	# what's going on here?
-	_VMCLUSTER="--cluster $1"
+	_NR_VMS=$1
     }
 
     config-timeout()
     {
 	_TIMEOUT=$1
     }
+
+    require-kernel-append()
+    {
+	_KERNEL_APPEND+=" $1"
+    }
+
 
     PATH+=":/sbin:/usr/sbin:/usr/local/sbin"
 

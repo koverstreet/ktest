@@ -1,5 +1,4 @@
 
 #datera defaults
 
-CONTAINER_SRC_DIR="/usr/share/DateraContainer"
 KERNEL=/usr/share/DateraContainer/kernel

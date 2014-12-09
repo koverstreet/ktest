@@ -8,7 +8,6 @@ config-cache 2G
 config-tier 4G
 config-bucket-size 32k
 config-block-size 4k
-config-mem 512M
 config-timeout 300
 config-volume 1600M
 

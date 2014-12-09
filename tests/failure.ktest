@@ -5,5 +5,5 @@ config-timeout 60
 
 main()
 {
-    true
+    false
 }

@@ -1,9 +1,9 @@
 #!/bin/bash
 
 config-mem 512M
-config-timeout 60
+config-timeout 10
 
 main()
 {
-    true
+    sleep 60
 }

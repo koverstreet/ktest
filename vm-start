@@ -25,6 +25,27 @@ from contextlib import contextmanager
 
 from optparse import OptionParser, OptionGroup
 
+# Decorator to wrap methods in logging
+def logwrap(f):
+    def inner(*args, **kwargs):
+        try:
+            reported_args = repr(args)
+        except:
+            reported_args = "[cannot parse args]"
+
+        try:
+            reported_kwargs = repr(kwargs)
+        except:
+            reported_kwargs = "[cannot parse kwargs]"
+
+        try:
+            logging.debug("BEGIN: %s %s %s" % (f.__name__, reported_args, reported_kwargs))
+            return f(*args, **kwargs)
+        finally:
+            logging.debug("END: %s %s %s" %(f.__name__, reported_args, reported_kwargs))
+    return inner
+
+
 # script directory and path
 DIR=os.path.dirname(__file__)       # path to script directory
 
@@ -83,6 +104,7 @@ def appendfile(filename, line):
 Functions of opening shelf to lock while
 reading and writing to shelf file
 """
+@logwrap
 def openLockedDb(file_lock, file_dict):
     lockFD = os.open(file_lock, os.O_RDONLY)
     fcntl.flock(lockFD, fcntl.LOCK_EX)
@@ -90,6 +112,7 @@ def openLockedDb(file_lock, file_dict):
     db.lockFD = lockFD
     return db
 
+@logwrap
 def closeLockedDb(db):
     db.close()
     fcntl.flock(db.lockFD, fcntl.LOCK_UN)
@@ -117,6 +140,7 @@ class Domain:
         else:
             raise AttributeError("%s instance has no attribute '%s'" % (self.__class__.__name__, name))
 
+    @logwrap
     def exists(self):
         """Does the VM this represents actually exist?"""
         try:
@@ -154,6 +178,7 @@ def vm_slot_update(id):
     finally:
         closeLockedDb(d)
 
+@logwrap
 def vm_slot_put(id):
     d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
     running_vms = d["running_vms"]
@@ -168,6 +193,7 @@ def vm_slot_put(id):
 
     closeLockedDb(d)
 
+@logwrap
 def vm_slot_get(tmpdir, ip, conx3):
     try:
         user = os.environ["SUDO_USER"]
@@ -236,6 +262,7 @@ def vm_slot_get(tmpdir, ip, conx3):
     closeLockedDb(d)
     return vm
 
+@logwrap
 def vm_lookup(id):
     d = openLockedDb(IP_FILE_LOCK, IP_FILE_DICT)
     running_vms = d["running_vms"]
@@ -248,7 +275,7 @@ def vm_lookup(id):
 
     return vm
 
-
+@logwrap
 def vm_cleanup(vmdir):
 
     idfile = os.path.join(vmdir,"id")
@@ -283,7 +310,6 @@ def vm_cleanup(vmdir):
         shutil.rmtree(vmdir)
     except:
         pass
-
 
 class VM(object):
     """Defines a virtual machine object.
@@ -345,7 +371,8 @@ class VM(object):
                 raise RuntimeError("mkfs.ext4 failed on '"+name+"'")
 
         # build qemu command and start
-        cmd = ["qemu-system-x86_64"]
+        cmd = ["stdbuf", "-oL",
+               "qemu-system-x86_64"]
         cmd.extend(["-machine", "accel=kvm"])
         cmd.extend(["-pidfile", os.path.join(self.tmpdir,"pid",)])
         cmd.extend(["-m", opts.mem])
@@ -354,9 +381,9 @@ class VM(object):
         if opts.kernel:
             cmd.extend(["-kernel", opts.kernel])
 
-            kernelParams = "console=ttyS0,115200"
+            kernelParams = "console=hvc0 root=/dev/sda"
             if opts.kgdb:
-                kernelParams += " kgdboc=ttyS2,115200"
+                kernelParams += " kgdboc=ttyS1,115200"
 
             if self.ipaddr:
                 kernelParams += " ip="+self.ipaddr
@@ -368,11 +395,13 @@ class VM(object):
             cmd.extend(["-initrd", opts.initrd])
 
         cmd.extend(["-nographic"])
-        cmd.extend(["-serial", self.console])
         cmd.extend(["-serial", "mon:unix:" + os.path.join(self.tmpdir,"con")+",server,nowait"])
         cmd.extend(["-serial", "unix:" + os.path.join(self.tmpdir,"kgdb")+",server,nowait"])
         cmd.extend(["-monitor", "unix:" + os.path.join(self.tmpdir,"mon")+",server,nowait"])
         cmd.extend(["-gdb", "unix:" + os.path.join(self.tmpdir,"gdb")+",server,nowait"])
+        cmd.extend(["-device", "virtio-serial"])
+        cmd.extend(["-chardev", self.console + ",id=console"])
+        cmd.extend(["-device", "virtconsole,chardev=console"])
 
 	# VirtIO-SCSI for root file system and scratch devices
 	cmd.extend(["-device", "virtio-scsi-pci,id=scsi-hba"])
@@ -421,6 +450,7 @@ class ClusteredVM(VM):
     """Defines a virtual machine object.
     """
 
+    @logwrap
     def __init__(self, vm_id, bridge, opts, vms_id, vm_tmpdir, vm_console):
         """Initialize the VM object with its essential data.
         """
@@ -460,6 +490,7 @@ class ClusteredVM(VM):
             subprocess.call(['sudo', '-n', '--', 'sysctl', '-q', '-w', "net.ipv6.conf.%s.disable_ipv6=0" % td["name"]])
             subprocess.check_call(['sudo', '-n', '--', 'brctl', 'addif', self.bridge.name, td["name"]])
 
+    @logwrap
     def run(self):
         cmd = self.build_cmdline()
         self.proc = subprocess.Popen(cmd, shell=False, close_fds=True)
@@ -485,6 +516,7 @@ class Cluster(object):
               signal.SIGUSR1,
               signal.SIGUSR2)
 
+    @logwrap
     def __init__(self, num_of_vms, opts):
         """Initialize the cluster object with bridge information.
         """
@@ -532,13 +564,14 @@ class Cluster(object):
             if vm == 0:
                 vm_console = opts.console
             else:
-                vm_console = 'file:%s' % os.path.join(vm_tmpdir, "console")
+                vm_console = 'file,path=%s' % os.path.join(vm_tmpdir, "console")
 
             self.vms.append(ClusteredVM(vm+2, self, opts, slot, vm_tmpdir, vm_console))
 
 
     # Network address generators indexed off node number for the MAC address,
     # IPv4 and IPv6 addresses.
+    @logwrap
     def bridge_allocate(self):
         self.cidr = 24
         self.v6cidr = 64
@@ -602,7 +635,7 @@ class Cluster(object):
     def ipv6gen(self, node):
         return "fd84:c772:8103:%0.4x::%0.4x" % (0xfa00 + self.idnum, node)
 
-
+    @logwrap
     def enable_dnsmasq(self):
         """Configure and start dnsmasq
 
@@ -656,6 +689,7 @@ class Cluster(object):
             except:
                 pass
 
+    @logwrap
     def run(self):
         """Setup and run the cluster.
         """
@@ -750,7 +784,7 @@ def cmd_start():
 
     opt.add_option("--console", dest="console",
         default="stdio",
-        help="where to attach the vm console (ex: stdio, file:foo)")
+        help="where to attach the vm console (ex: stdio, pipe,path=foo)")
 
     opt.add_option("--conx3", dest="conx3",
         default=False, action="store_true",
@@ -828,19 +862,20 @@ def cmd_start():
                          options, options.tmpdir, options.console)
             cmd = vm_proc.build_cmdline()
 
-            logging.warning("Executing: "+str(cmd))
+            print GREEN+"Starting VM ID: " + str(vm.vm_id) + NC
+            sys.stdout.flush()
 
-            p = subprocess.Popen(cmd, shell=False)
+            p = subprocess.Popen(cmd,
+                                 stderr=subprocess.STDOUT,
+                                 stdin=subprocess.PIPE)
 
             with vm_slot_update(vm.vm_id) as vm:
                 vm.pid = p.pid
 
-            print GREEN+"Vm ID: "+str(vm.vm_id)+NC
-
             p.wait()
             caught_signal[0] = True
         except Exception, e:
-	    print e
+            pass
 
     vm_cleanup(options.tmpdir)
     subprocess.call(["stty", "sane"],
@@ -1318,7 +1353,7 @@ def cmd_help():
 """Main program."""
 
 # Configure logging
-logging.basicConfig(stream=sys.stderr,format='%(levelname)s: %(message)s',level=logging.WARNING)
+logging.basicConfig(stream=sys.stderr,format='%(created)f: %(levelname)s: %(message)s',level=logging.WARNING)
 
 try:
     # if there is no command or args, print error message

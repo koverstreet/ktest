@@ -23,7 +23,7 @@ COREPKGS="basesystem bash biosdevname btrfs-progs coreutils"
 COREPKGS+=" curl dhclient e2fsprogs filesystem glibc hostname"
 COREPKGS+=" initscripts iproute iptables iputils kbd less man-db"
 COREPKGS+=" ncurses openssh-clients openssh-server parted passwd"
-COREPKGS+=" policycoreutils procps-ng rpm rsyslog setup shadow-utils"
+COREPKGS+=" policycoreutils procps-ng rpm setup shadow-utils"
 COREPKGS+=" sudo systemd tar util-linux vim-minimal xfsprogs yum"
 COREPKGS+=" NetworkManager"
 
@@ -37,7 +37,7 @@ PACKAGES+=" numactl-devel numactl-libs perl perl-libs perl-devel"
 PACKAGES+=" libunwind libunwind-devel"
 PACKAGES+=" libuuid libuuid-devel uuid-perl"
 PACKAGES+=" net-tools htop python-magic perf python-perf"
-PACKAGES+=" kexec-tools"
+PACKAGES+=" kexec-tools libnih"
 
 create_mount_image "$@"
 
@@ -117,18 +117,19 @@ DefaultStandardOutput=journal+console
 DefaultStandardError=journal+console
 ZZ
 
-rm -f "$MNT/etc/systemd/system/multi-user.target.wants/kdump.service"
-
 cp $VM_IMAGE_DIR/rc.local "$MNT/etc/rc.d/rc.local"
 chmod 755 "$MNT/etc/rc.d/rc.local"
 
-# Autologin to root on the console
-mkdir -p '/etc/systemd/system/serial-getty@ttyS0.service.d'
-cat > '/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf' <<-ZZ
-[Service]
-Type=Idle
-ExecStart=
-ExecStart=-/usr/sbin/agetty --autologin root -s %I 115200,38400,9600 linux
-ZZ
+chroot "$MNT" systemctl mask				\
+    avahi-daemon.service				\
+    crond.service					\
+    getty.target					\
+    kdump.service					\
+    lvm2-lvmetad.service				\
+    lvm2-monitor.service				\
+    polkit.service					\
+    rsyslog.service					\
+    systemd-journald.service				\
+    systemd-journal-flush.service
 
 finish_umount_image

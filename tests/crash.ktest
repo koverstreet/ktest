@@ -1,0 +1,9 @@
+#!/bin/bash
+
+config-mem 512M
+config-timeout 120
+
+main()
+{
+    echo c > /proc/sysrq-trigger
+}

@@ -3,9 +3,11 @@
 require-lib bcache-test-libs.sh
 
 config-cache 512M
-config-backing 512M,512M
-config-bucket-size 64k
+config-tier 2G
+config-bucket-size 32k 64k
 config-block-size 4k
+config-volume 1400M
+config-mem 512M
 
 config-timeout $(stress_timeout)
 
@@ -16,5 +18,7 @@ main()
     setup_bcache
     test_antagonist
     test_stress
+    stop_volumes
+    test_bcachefs_stress
     stop_bcache
 }
