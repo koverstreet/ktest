@@ -103,6 +103,10 @@ def vm_run(opts, vmdir, vm_nr):
                                      stderr=subprocess.STDOUT,
                                      stdin=subprocess.PIPE))
 
+def vm_cleanup(vmdir):
+    while os.path.isdir(vmdir):
+        shutil.rmtree(vmdir, ignore_errors=True)
+
 def cmd_start():
     """Start new virtual machines
     """
@@ -179,7 +183,7 @@ def cmd_start():
         raise RuntimeError("Cannot find initrd file: " + options.initrd)
 
     vmdir = tempfile.mkdtemp(prefix="vm-", dir=options.tmpfs)
-    atexit.register(shutil.rmtree, vmdir, ignore_errors=True)
+    atexit.register(vm_cleanup, vmdir)
 
     if options.vmdirfile:
         with open(options.vmdirfile, 'w') as f:
@@ -302,12 +306,10 @@ def cmd_help():
 
 # Allow exit handlers to be called
 for sig in (signal.SIGHUP,
-            signal.SIGINT,
             signal.SIGQUIT,
             signal.SIGILL,
             signal.SIGABRT,
-            signal.SIGFPE,
-            signal.SIGPIPE,
+            signal.SIGALRM,
             signal.SIGTERM,
             signal.SIGUSR1,
             signal.SIGUSR2):

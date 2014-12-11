@@ -41,8 +41,10 @@ int main(int argc, char **argv)
 		die("lwip_stack_new() error");
 
 	struct netif *interface = lwip_vdeif_add(stack, path);
-	if (!interface)
-		die("lwip_vdeif_add() error");
+	if (!interface) {
+		fprintf(stderr, "Couldn't connect to vde switch at %s\n", path);
+		exit(EXIT_FAILURE);
+	}
 
 	if (lwip_ifup(interface))
 		die("lwip_ifup() error");
