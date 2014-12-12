@@ -228,7 +228,7 @@ setup_bcache() {
 	done
     done
 
-    ln -s /sys/fs/bcache/*-* /root/c
+    ln -s /sys/fs/bcache/*-* /root/c || true
 }
 
 stop_volumes()
