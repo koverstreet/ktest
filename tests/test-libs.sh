@@ -275,7 +275,7 @@ expect_sysfs()
         if [ -e $file ]; then
             current="$(cat $file)"
             if [ "$current" != "$value" ]; then
-                echo "Mismatch: $file $value != $current"
+                echo "Mismatch for $file: got $current, want $value"
                 exit 1
             else
                 echo "OK: $file $value"
