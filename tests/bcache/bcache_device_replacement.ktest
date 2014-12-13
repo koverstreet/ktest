@@ -1,0 +1,47 @@
+#!/bin/bash
+
+require-lib bcache-test-libs.sh
+
+config-cache 512M
+config-tier 512M
+config-bucket-size 64k
+config-block-size 4k
+config-volume 1400M
+config-scratch-devs 512M
+
+config-timeout 120
+
+NUM_LINES=0
+
+num_lines()
+{
+    NUM_LINES=$(bcacheadm list-cachesets --list-devs | wc -l)
+}
+
+main()
+{
+    setup_tracing 'bcache:*'
+
+    setup_bcache
+
+    CSETUUID=`bcacheadm list-cachesets`
+
+    set -e
+    for i in {1..100}; do
+        bcacheadm format --csum-type=crc32c --bucket=64k --block=4k --cache_replacement_policy=lru --discard --wipe-bcache --data-replicas=1 --meta-replicas=1 --tier=1  --cache=/dev/sdd --cset-uuid=$CSETUUID
+
+        num_lines
+        [[ (( $NUM_LINES = 3 )) ]]
+
+        bcacheadm add-devs -u $CSETUUID /dev/sdd
+
+        bcacheadm list-cachesets --list-devs
+        num_lines
+        [[ (( $NUM_LINES = 4 )) ]]
+
+        bcacheadm rm-dev /dev/sdd
+        sleep 1
+    done
+
+    stop_bcache
+}

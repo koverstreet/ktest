@@ -371,7 +371,8 @@ class VM(object):
                 raise RuntimeError("mkfs.ext4 failed on '"+name+"'")
 
         # build qemu command and start
-        cmd = ["qemu-system-x86_64"]
+        cmd = ["stdbuf", "-oL",
+               "qemu-system-x86_64"]
         cmd.extend(["-machine", "accel=kvm"])
         cmd.extend(["-pidfile", os.path.join(self.tmpdir,"pid",)])
         cmd.extend(["-m", opts.mem])

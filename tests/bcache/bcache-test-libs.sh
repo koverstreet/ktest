@@ -5,9 +5,8 @@
 
 require-lib ../test-libs.sh
 
-require-bin make-bcache
-require-bin bcache-super-show
-require-bin bcachectl
+require-bin bcacheadm
+
 
 require-kernel-config BCACHE,BCACHE_DEBUG,CLOSURE_DEBUG
 
@@ -57,7 +56,7 @@ config-bucket-size()
 {
     BUCKET_SIZE=""
     for size in "$@"; do
-        BUCKET_SIZE="$BUCKET_SIZE--bucket $size "
+        BUCKET_SIZE="$BUCKET_SIZE--bucket=$size "
     done
 }
 
@@ -118,7 +117,7 @@ add_bcache_devs()
 
 make_bcache_flags()
 {
-    flags="$BUCKET_SIZE --block $BLOCK_SIZE --cache_replacement_policy=$REPLACEMENT"
+    flags="$BUCKET_SIZE --block=$BLOCK_SIZE --cache_replacement_policy=$REPLACEMENT"
     case "$DISCARD" in
 	0) ;;
 	1) flags+=" --discard" ;;
@@ -159,12 +158,12 @@ existing_bcache() {
     # Make sure bcache-super-show works -- the control plane wipes data
     # if this fails so its important that it doesn't break
     for dev in $CACHE $BDEV $TIER; do
-	bcache-super-show $dev
+	bcacheadm query-devs $dev
     done
 
     # Older kernel versions don't have /dev/bcache
     if [ -e /dev/bcache ]; then
-	bcachectl register $CACHE $TIER $BDEV
+	bcacheadm register $CACHE $TIER $BDEV
     else
 	for dev in $CACHE $TIER $BDEV; do
 	    echo $dev > /sys/fs/bcache/register
@@ -198,20 +197,28 @@ existing_bcache() {
 #
 setup_bcache() {
     make_bcache_flags="$(make_bcache_flags)"
-    make_bcache_flags+=" --wipe-bcache --cache $CACHE"
-    make_bcache_flags+=" --data-replicas $DATA_REPLICAS"
-    make_bcache_flags+=" --meta-replicas $META_REPLICAS"
+    make_bcache_flags+=" --wipe-bcache"
+    for cache in $CACHE; do
+        make_bcache_flags+=" --cache=$cache"
+    done
+    make_bcache_flags+=" --data-replicas=$DATA_REPLICAS"
+    make_bcache_flags+=" --meta-replicas=$META_REPLICAS"
 
     if [ "$TIER" != "" ]; then
-	make_bcache_flags+=" --tier 1 $TIER"
+	make_bcache_flags+=" --tier=1 "
+	for cache in $TIER; do
+		make_bcache_flags+=" --cache=$cache"
+	done
     fi
 
     if [ "$BDEV" != "" ]; then
-	make_bcache_flags+=" --bdev $BDEV"
+	for bdev in $BDEV; do
+		make_bcache_flags+=" --bdev=$bdev"
+	done
     fi
 
     # Let's change the checksum type just for fun
-    make-bcache --csum-type crc32c $make_bcache_flags
+    bcacheadm format --csum-type=crc32c $make_bcache_flags
 
     existing_bcache
 
@@ -220,6 +227,8 @@ setup_bcache() {
 	    echo $size > $file
 	done
     done
+
+    ln -s /sys/fs/bcache/*-* /root/c || true
 }
 
 stop_volumes()
@@ -291,4 +300,22 @@ test_bcachefs_stress()
     test_bonnie
     #test_fsx
     stop_bcachefs
+}
+
+bcache_status()
+{
+    DEVS=""
+    for dev in "$@"; do
+	DEVS="$DEVS$dev "
+    done
+    bcacheadm status $DEVS
+}
+
+bcache_dev_query()
+{
+    DEVS=""
+    for dev in "$@"; do
+	DEVS="$DEVS$dev "
+    done
+    bcacheadm query-devs $DEVS
 }

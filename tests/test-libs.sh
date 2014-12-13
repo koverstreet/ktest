@@ -3,6 +3,8 @@
 # ktest framework.
 #
 
+require-lib prelude.sh
+
 config-mem 1G
 
 require-kernel-config MD

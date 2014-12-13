@@ -1,0 +1,63 @@
+#!/bin/bash
+
+require-lib bcache-test-libs.sh
+
+config-cache 16M,16M
+config-tier 512M
+config-bucket-size 64k
+config-block-size 4k
+config-volume 350M
+config-data-replicas 1
+# config-scratch-devs 16M
+
+config-timeout $(stress_timeout)
+
+main()
+{
+    setup_tracing 'bcache:*'
+
+    setup_bcache
+
+    DEVNAME=`ls -d /sys/fs/bcache/*/cache0`
+
+    test_fio
+
+    (
+	# 1. Remove the tier 0 device -- everything live
+	# should move to the other tier 0 device.
+
+	echo "Removing device $DEVNAME"
+	echo 1 > $DEVNAME/unregister
+
+	# 2. Wait for data motion and device removal to succeed
+	# This is a bounded loop sleeping by 1 until the
+	# device is removed
+
+	COUNTER=0
+
+	while [ $COUNTER -lt 60 ]; do
+	    let COUNTER=COUNTER+1
+	    if [ -a $DEVNAME ]; then
+		sleep 1
+	    else
+	    	echo "Device $DEVNAME removed"
+		break
+	    fi
+	done
+    ) &
+
+    test_antagonist
+    test_fio
+
+    SUCCESS=1
+
+    if [ -a $DEVNAME ]; then
+	SUCCESS=0
+    fi
+
+    stop_bcache
+
+    if [ $SUCCESS -eq 0 ]; then
+	exit 1
+    fi
+}

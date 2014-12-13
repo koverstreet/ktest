@@ -10,8 +10,8 @@ main()
 {
     setup_tracing 'bcache:*'
 
-    make-bcache -C /dev/sdb /dev/sdc /dev/sdd
-    make-bcache --wipe-bcache -C /dev/sdd
+    bcacheadm format -C /dev/sdb -C /dev/sdc -C /dev/sdd
+    bcacheadm format --wipe-bcache -C /dev/sdd
 
     echo /dev/sdb > /sys/fs/bcache/register
 

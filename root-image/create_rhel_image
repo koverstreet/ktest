@@ -12,13 +12,6 @@ KTESTDIR=$VM_IMAGE_DIR/..
 
 checkdep yum rpm
 
-# This bootstrap can only run with the versions
-# of yum+rpm on RHEL 7 or a later Fedora, not on debian.
-source /etc/os-release
-test "$ID" = "dateros"
-test "$VERSION_ID" = "0.5.1"
-
-
 COREPKGS="basesystem bash biosdevname btrfs-progs coreutils"
 COREPKGS+=" curl dhclient e2fsprogs filesystem glibc hostname"
 COREPKGS+=" initscripts iproute iptables iputils kbd less man-db"
@@ -121,13 +114,15 @@ cp $VM_IMAGE_DIR/rc.local "$MNT/etc/rc.d/rc.local"
 chmod 755 "$MNT/etc/rc.d/rc.local"
 
 chroot "$MNT" systemctl mask				\
-    getty.target					\
-    kdump.service					\
     avahi-daemon.service				\
     crond.service					\
+    getty.target					\
+    kdump.service					\
     lvm2-lvmetad.service				\
     lvm2-monitor.service				\
+    polkit.service					\
     rsyslog.service					\
-    polkit.service
+    systemd-journald.service				\
+    systemd-journal-flush.service
 
 finish_umount_image

@@ -30,6 +30,7 @@ WORK_DIR=""		# dir where vm meta data (id, logs, etc) gets stored
 			#       defaults: $KERNEL_OUTPUT
 BUILD=1			# if set to 1, kernel will build
 			#       ignored with: -K (sets to 0)
+DEPS=1
 COVERAGE=""		# list of directories to enable code coverage for
 NJOBS=$(($(grep -c '^processor' /proc/cpuinfo) * 2))
 			# number of jobs to passed to make during kernel compile
@@ -81,7 +82,7 @@ fi
 CMD="cmd_$1"
 shift
 
-while getopts "hp:k:Kc:i:b:j:ISw:x" arg; do
+while getopts "hp:k:KDc:i:b:j:ISw:x" arg; do
     case $arg in
 	h)
 	    usage
@@ -96,6 +97,9 @@ while getopts "hp:k:Kc:i:b:j:ISw:x" arg; do
 	    ;;
 	K)
 	    BUILD=""
+	    ;;
+	D)
+	    DEPS=""
 	    ;;
 	c)
 	    if [ ! -d "$OPTARG" ]; then
@@ -194,25 +198,27 @@ build_kernel()
     rm -rf "$KERNEL_OUTPUT"
     mkdir -p "$KERNEL_OUTPUT"
 
-    local kconfig="$WORK_DIR/.config"
-    local config_tool="$KERNEL_SOURCE/scripts/config"
+    if [[ -n $DEPS ]]; then
+	local kconfig="$WORK_DIR/.config"
+	local config_tool="$KERNEL_SOURCE/scripts/config"
 
-    local OLDIFS=$IFS
-    IFS=','
+	[[ -f $kconfig ]] || install -m0644 "$KTESTDIR/defconfig" "$kconfig"
 
-    [[ -f $kconfig ]] || install -m0644 "$KTESTDIR/defconfig" "$kconfig"
+	local OLDIFS=$IFS
+	IFS=','
 
-    for opt in $_KERNEL_CONFIG_REQUIRE; do
-	[[ -n $opt ]] && kernel_opt set "$opt"
-    done
+	for opt in $_KERNEL_CONFIG_REQUIRE; do
+	    [[ -n $opt ]] && kernel_opt set "$opt"
+	done
 
-    do_make olddefconfig
+	do_make olddefconfig
 
-    for opt in $_KERNEL_CONFIG_REQUIRE; do
-	[[ -n $opt ]] && kernel_opt check "$opt"
-    done
+	for opt in $_KERNEL_CONFIG_REQUIRE; do
+	    [[ -n $opt ]] && kernel_opt check "$opt"
+	done
 
-    IFS=$OLDIFS
+	IFS=$OLDIFS
+    fi
 
     do_make
 
