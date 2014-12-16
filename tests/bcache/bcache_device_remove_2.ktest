@@ -1,0 +1,74 @@
+#!/bin/bash
+
+require-lib bcache-test-libs.sh
+
+config-cache 16M
+config-tier 512M
+config-bucket-size 64k
+config-block-size 4k
+config-volume 350M
+config-data-replicas 1
+config-scratch-devs 1G
+
+config-timeout $(stress_timeout)
+
+main()
+{
+    setup_tracing 'bcache:*'
+
+    setup_bcache
+
+    DEVNAME=`ls -d /sys/fs/bcache/*/cache1`
+
+    test_fio
+
+    (
+	# 1. Add a new device to tier 1
+
+	bcacheadm format --bucket=64k --block=4k --tier=1 -C /dev/sdd
+	echo "adding device 2"
+	echo /dev/sdd > /sys/fs/bcache/*/add_device
+
+	# 2. Start antagonist after the device addition
+	# (see comments in bcache_device_add.ktest)
+
+	test_antagonist
+
+	# 3. Remove the original tier 1 device -- everything live
+	# should move to the new device
+
+	sleep 5
+	echo "Removing device $DEVNAME"
+	echo 1 > $DEVNAME/unregister
+
+	# 4. Wait for data motion and device removal to succeed
+	# This should be in a bounded loop sleeping by 1 until the
+	# device is removed
+
+	COUNTER=0
+
+	while [ $COUNTER -lt 60 ]; do
+	    let COUNTER=COUNTER+1
+	    if [ -a $DEVNAME ]; then
+		sleep 1
+	    else
+		echo "Device $DEVNAME removed"
+		break
+	    fi
+	done
+    ) &
+
+    test_fio
+
+    SUCCESS=1
+
+    if [ -a $DEVNAME ]; then
+	SUCCESS=0
+    fi
+
+    stop_bcache
+
+    if [ $SUCCESS -eq 0 ]; then
+	exit 1
+    fi
+}

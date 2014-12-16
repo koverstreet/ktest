@@ -22,12 +22,12 @@ main()
 
     (
 	sleep 5
-	make-bcache --bucket 512k --block 2k --tier 1 -C /dev/sdd
+	bcacheadm format --bucket=512k --block=2k --tier=1 -C /dev/sdd
 	echo "adding device 1"
 	echo /dev/sdd > /sys/fs/bcache/*/add_device
 
 	sleep 5
-	make-bcache --bucket 512k --block 2k --tier 1 -C /dev/sde
+	bcacheadm format --bucket=512k --block=2k --tier=1 -C /dev/sde
 	echo "adding device 2"
 	echo /dev/sde > /sys/fs/bcache/*/add_device
 

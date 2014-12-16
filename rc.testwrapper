@@ -20,26 +20,9 @@ for i in `cat /proc/cmdline`; do
     esac
 done
 
-NR_REBOOTS=$([ -e /NR_REBOOTS ] && cat /NR_REBOOTS || echo 0)
-
-EXPECTED_REBOOT=$([ -e /EXPECTED_REBOOT ] && cat /EXPECTED_REBOOT || echo 0)
-
-if [ "$NR_REBOOTS" != "$EXPECTED_REBOOT" ]; then
-    echo "UNEXPECTED REBOOT: got $NR_REBOOTS expected $EXPECTED_REBOOT"
-    echo "TEST FAILED"
-    exit 1
-fi
-
-echo "TEST REBOOT $NR_REBOOTS"
-echo $((NR_REBOOTS + 1)) | dd of=/NR_REBOOTS oflag=direct
-
 copy_to_host()
 {
     cat /sys/kernel/debug/tracing/trace >> $LOGDIR/trace.txt
-
-    for file in $(find /sys -type f -perm u+r); do
-	echo -n "$file: "; cat $file 2>&1 || true
-    done >> $LOGDIR/sysfs.txt
 
     # Code coverage
     gcov_dir=/sys/kernel/debug/gcov
@@ -72,7 +55,7 @@ do_reboot()
 {
     copy_to_host
 
-    echo $((NR_REBOOTS + 1)) | dd of=/EXPECTED_REBOOT oflag=direct
+    echo $((NR_REBOOTS + 1)) | dd of=/EXPECTED_REBOOT oflag=direct 2> /dev/null
     echo b > /proc/sysrq-trigger
 }
 
@@ -132,7 +115,7 @@ config-infiniband()
     cd /cdrom
 }
 
-config-vmcount()
+config-nr-vms()
 {
     return 0
 }
@@ -142,10 +125,26 @@ config-timeout()
     return 0
 }
 
+NR_REBOOTS=$([ -e /NR_REBOOTS ] && cat /NR_REBOOTS || echo 0)
+
+EXPECTED_REBOOT=$([ -e /EXPECTED_REBOOT ] && cat /EXPECTED_REBOOT || echo 0)
+
+if [ "$NR_REBOOTS" != "$EXPECTED_REBOOT" ]; then
+    echo "UNEXPECTED REBOOT: got $NR_REBOOTS expected $EXPECTED_REBOOT"
+    echo "TEST FAILED"
+    exit 1
+fi
+
+echo "Test starting: NR_REBOOTS $NR_REBOOTS"
+echo $((NR_REBOOTS + 1)) | dd of=/NR_REBOOTS oflag=direct 2> /dev/null
+
 set +e
 
 (set -e; . rc.test; main)
 ret=$?
+
+echo "Test finished with ret $ret"
+echo "Copying output to host"
 
 # XXX: check dmesg for warnings, oopses, slab corruption, etc. before signaling
 # success
