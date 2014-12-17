@@ -66,7 +66,7 @@ parse_test_deps()
 
 	local dir="$(dirname "$f")"
 
-	for i in ${req[*]} ; do   
+	for i in ${req[*]} ; do
 	    (cd "$dir"; make -f "$(basename "$f")" "$i")
 	    _add-file "$dir/$i"
 	done

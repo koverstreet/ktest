@@ -5,7 +5,7 @@ CXXFLAGS = -std=c++11 -O2 -Wall -Werror -D_FILE_OFFSET_BITS=64 -I.
 CXXFLAGS += \
 	   -g\
 	   -I $(ROOTDIR)/usr/include	\
-	   -I $(SRC_ROOT)/linux-bcache/drivers/dfs/client \
+	   -I $(SRC_ROOT)/linux-headers \
 	   -I $(SRC_ROOT)/UnitTestCpp
 
 LDFLAGS += -luuid
