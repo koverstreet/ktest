@@ -55,7 +55,8 @@ parse_test_deps()
     require-make()
     {
 	local makefile=$1
-	local req=$2
+	shift
+	local req=( "$@" )
 
 	if [ "${makefile:0:1}" = "/" ]; then
 	    local f="$makefile"
@@ -65,9 +66,10 @@ parse_test_deps()
 
 	local dir="$(dirname "$f")"
 
-	(cd "$dir"; make -f "$(basename "$f")" "$req")
-
-	_add-file "$dir/$req"
+	for i in ${req[*]} ; do   
+	    (cd "$dir"; make -f "$(basename "$f")" "$i")
+	    _add-file "$dir/$i"
+	done
     }
 
     require-kernel-config()
