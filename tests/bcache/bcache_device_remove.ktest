@@ -17,14 +17,44 @@ main()
 
     setup_bcache
 
+    DEVNAME=`ls -d /sys/fs/bcache/*/cache4`
+
     (
+	# 1. Wait until test_fio is going.
 	sleep 10
-	echo "removing device 4"
-	echo 1 > /sys/fs/bcache/*/cache4/unregister
-	echo "removed"
+
+	# 2. Remove the tier 1 device -- everyting live
+	# should move to other devices
+
+	echo "Removing device $DEVNAME"
+	echo 1 > $DEVNAME/unregister
+
+	COUNTER=0
+
+	while [ $COUNTER -lt 60 ]; do
+	    let COUNTER=COUNTER+1
+	    if [ -a $DEVNAME ]; then
+		sleep 1
+	    else
+	    	echo "Device $DEVNAME removed"
+		break
+	    fi
+	done
+
     )&
 
     test_antagonist
     test_fio
+
+    SUCCESS=1
+
+    if [ -a $DEVNAME ]; then
+	SUCCESS=0
+    fi
+
     stop_bcache
+
+    if [ $SUCCESS -eq 0 ]; then
+	exit 1
+    fi
 }
