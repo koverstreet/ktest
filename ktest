@@ -168,6 +168,10 @@ run_vm()
 
     set +o errexit
 
+    if [[ $EXIT_ON_SUCCESS = 0 && $INTERACTIVE = 0 ]]; then
+	_KERNEL_APPEND="$_KERNEL_APPEND ktest.timeout=$_TIMEOUT"
+    fi
+
     # shellcheck disable=SC2086
     $VMSTART start							\
 	--id "$IDFILE"							\
@@ -187,7 +191,7 @@ run_vm()
 	elif [[ $EXIT_ON_SUCCESS = 1 ]]; then
 	    sed -u -e '/TEST SUCCESS/ { p; Q7 }'
 	else
-	    timeout "$_TIMEOUT" $KTESTDIR/catch_test_success.awk
+	    timeout "$((20 + _TIMEOUT))" $KTESTDIR/catch_test_success.awk
 	fi
 
 	ret=$?
@@ -196,7 +200,7 @@ run_vm()
 
     if [[ $ret = 124 ]]; then
 	echo 'TEST TIMEOUT'
-	exit 2
+	exit 1
     fi
 
     # don't want sed exiting normally (saw neither TEST SUCCESS nor TEST FAILED)
