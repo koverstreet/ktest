@@ -62,6 +62,7 @@ usage()
     echo "  gdb         Connect to qemu's gdb interface"
     echo "  kgdb        Connect to kgdb"
     echo "  mon         Connect to qemu monitor"
+    echo "  sysrq <key> Send magic sysrq key via monitor"
     echo
     echo "  options:"
     echo "      -x       bash debug statements"
@@ -258,6 +259,11 @@ cmd_kgdb()
 cmd_mon()
 {
     exec "$VMSTART" mon "$(cat "$IDFILE")"
+}
+
+cmd_sysrq()
+{
+    exec "$VMSTART" sysrq "$(cat "$IDFILE")" "$@"
 }
 
 # checks if command is valid

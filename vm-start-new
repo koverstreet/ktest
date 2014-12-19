@@ -295,6 +295,17 @@ def cmd_mon():
     os.execlp("minicom", "minicom", "-D", "unix#" +
               os.path.join(vmdir, "vm-%u-mon" % vm_nr))
 
+def cmd_sysrq():
+    if len(sys.argv) <= 2:
+        raise RuntimeError("Please provide a vmdir and a sysrq command")
+
+    vmdir, vm_nr = vmdir_parse(sys.argv[1])
+    mon_path = os.path.join(vmdir, "vm-%u-mon" % vm_nr)
+
+    os.execlp("bash", "bash", "-c",
+	      "echo sendkey alt-sysrq-%s | socat - UNIX-CONNECT:%s"
+	      % (sys.argv[2], mon_path))
+
 def cmd_help():
     """Print help for commands."""
     print """Usage: vm-start [command] [args]
@@ -305,6 +316,7 @@ def cmd_help():
     gdb         connect to gbd
     kgdb        connect to kgdb
     mon         connect to the qemu monitor
+    sysrq       send magic sysrq via qemu monitor
     help        print help for commands
     """
 
