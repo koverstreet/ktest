@@ -21,6 +21,11 @@ main()
 	setup_bcache
 	test_fio
 	echo readonly > /sys/fs/bcache/*/cache2/state
+	echo > /sys/fs/bcache/*/internal/trigger_gc
+	sleep 1
+	while [ "$(cat /sys/fs/bcache/*/internal/btree_gc_running)" = 1 ]; do
+	    sleep 1
+	done
 	do_reboot
     else
 	existing_bcache
