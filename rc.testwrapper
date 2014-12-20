@@ -135,6 +135,12 @@ if [ "$NR_REBOOTS" != "$EXPECTED_REBOOT" ]; then
     exit 1
 fi
 
+(
+    sleep $ktest_timeout
+    echo "TEST TIMEOUT - triggering crash"
+    echo c > /proc/sysrq-trigger
+) &
+
 echo "Test starting: NR_REBOOTS $NR_REBOOTS"
 echo $((NR_REBOOTS + 1)) | dd of=/NR_REBOOTS oflag=direct 2> /dev/null
 
