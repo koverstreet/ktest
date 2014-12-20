@@ -6,7 +6,6 @@ parse_test_deps()
     _TIMEOUT=""
     _SCRATCH=""
     _KERNEL_CONFIG_REQUIRE=""
-    _INFINIBAND=""
     _KERNEL_APPEND=""
     _NR_VMS="1"
     TEST_RUNNING=""
@@ -77,11 +76,8 @@ parse_test_deps()
 
     config-scratch-devs()
     {
-	if [ "$_SCRATCH" == "" ]; then
-	    _SCRATCH="-s $1"
-	else
-	    _SCRATCH+=",$1"
-	fi
+	[[ -n $_SCRATCH ]] && _SCRATCH+=","
+	_SCRATCH+="$1"
     }
 
     config-cpus()
@@ -96,8 +92,6 @@ parse_test_deps()
 
     config-infiniband()
     {
-	_INFINIBAND="--conx3"
-
 	require-kernel-config MLX4_EN
 	require-kernel-config MLX4_INFINIBAND
 	require-kernel-config INFINIBAND_MTHCA

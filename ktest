@@ -10,7 +10,7 @@ shopt -s lastpipe
 export PS4='+${LINENO}+ '
 
 KTESTDIR=$(dirname "$(readlink -f "$0")")
-VMSTART=$KTESTDIR/vm-start-new
+VMSTART=("$KTESTDIR/vm-start-new")
 
 . "$KTESTDIR/util.sh"
 . "$KTESTDIR/parse-test.sh"
@@ -27,19 +27,19 @@ checkdep socat
 checkdep qemu-system-x86_64 qemu-system-i386
 
 PRIORITY=0		# hint for how long test should run
-KERNEL=""		# dir that has the kernel to run
-                        #       set with: -k <path>
-IDFILE=""		# passed as --id to vmstart
-                        #       set with: -w <path>
-OUTPUT_DIR=""		# dir for test output (logs, code coverage, etc.)
-SCRATCH_DIR="/tmp"      # dir where scratch drives are created
-                        #       defaults: /tmp
-                        #       auto-override: $HOME/.ktest/tmp
 IMG="/var/lib/ktest/root"
                         # root image that will be booted
                         #       set with: -i <path>
                         #       defaults: /var/lib/ktest/root
                         #       auto-override: $HOME/.ktest/root
+KERNEL=""		# dir that has the kernel to run
+                        #       set with: -k <path>
+IDFILE=""		# passed as --id to vmstart
+                        #       set with: -w <path>
+OUTPUT_DIR=""		# dir for test output (logs, code coverage, etc.)
+TMPDIR="/tmp"		# dir where scratch drives are created
+                        #       defaults: /tmp
+                        #       auto-override: $HOME/.ktest/tmp
 INTERACTIVE=0           # if set to 1, timeout is ignored completely
                         #       sets with: -I
 EXIT_ON_SUCCESS=0	# if true, exit on success, not failure or timeout
@@ -50,7 +50,7 @@ EXIT_ON_SUCCESS=0	# if true, exit on success, not failure or timeout
 
 [[ -f $HOME/.ktestrc ]]		&& . "$HOME/.ktestrc"
 [[ -f $HOME/.ktest/root ]]	&& IMG="$HOME/.ktest/root"
-[[ -d $HOME/.ktest/tmp ]]	&& SCRATCH_DIR="$HOME/.ktest/tmp"
+[[ -d $HOME/.ktest/tmp ]]	&& TMPDIR="$HOME/.ktest/tmp"
 
 usage()
 {
@@ -103,17 +103,17 @@ while getopts "hp:i:k:ISw:o:x" arg; do
 	k)
 	    KERNEL=$OPTARG
 	    ;;
-	I)
-	    INTERACTIVE=1
-	    ;;
-	S)
-	    EXIT_ON_SUCCESS=1
-	    ;;
 	w)
 	    IDFILE="$OPTARG"
 	    ;;
 	o)
 	    OUTPUT_DIR="$OPTARG"
+	    ;;
+	I)
+	    INTERACTIVE=1
+	    ;;
+	S)
+	    EXIT_ON_SUCCESS=1
 	    ;;
 	x)
 	    set -x
@@ -130,13 +130,8 @@ fi
 [[ -z $IDFILE ]]	&& IDFILE=./.ktest-vm
 [[ -z $OUTPUT_DIR ]]	&& OUTPUT_DIR=./ktest-out
 
-check_mlxcard()
-{
-    if ! $VMSTART check conx3; then
-	echo "no free infiniband card present"
-	exit 1
-    fi
-}
+VMSTART+=("--idfile" "$IDFILE")
+VMSTART+=("--tmpdir" "$TMPDIR")
 
 run_vm()
 {
@@ -145,14 +140,12 @@ run_vm()
 	exit 1
     fi
 
+    VMSTART+=("start")
+    [[ $EXIT_ON_SUCCESS = 1 || $INTERACTIVE = 1 ]] && VMSTART+=("--kgdb")
+    [[ -n $_SCRATCH ]] && VMSTART+=("--scratchdev" "$_SCRATCH")
+
     # setup directory where logfs will be mounted from
     mkdir -p "$OUTPUT_DIR"
-
-    local KGDB=""
-
-    if [[ $EXIT_ON_SUCCESS = 1 || $INTERACTIVE = 1 ]]; then
-	KGDB="--kgdb"
-    fi
 
     # kernel modules
     FILES+=("$KERNEL/lib")
@@ -173,9 +166,7 @@ run_vm()
     fi
 
     # shellcheck disable=SC2086
-    $VMSTART start							\
-	--id "$IDFILE"							\
-	--tmpfs-dir="$SCRATCH_DIR"					\
+    "${VMSTART[@]}"							\
 	--image="$IMG"							\
 	--kernel="$KERNEL/vmlinuz"					\
 	--cdrom="$iso"							\
@@ -183,8 +174,7 @@ run_vm()
 	--append="rw crashkernel=128M ktest.priority=$PRIORITY $_KERNEL_APPEND"\
 	--memory="$_MEM"						\
 	--cpus "$_CPUS"							\
-	--nr_vms="$_NR_VMS"						\
-	$KGDB $_SCRATCH|
+	--nr_vms="$_NR_VMS"|
     {
 	if [[ $INTERACTIVE = 1 ]]; then
 	    cat
@@ -236,38 +226,32 @@ cmd_run()
     FILES+=("rc.test=$TEST")
 
     parse_test_deps "$TEST"
-
-    if [ -n "$_INFINIBAND" ]; then
-	VMSTART="sudo $VMSTART"
-	check_mlxcard
-    fi
-
     run_vm "$TEST"
 }
 
 cmd_ssh()
 {
-    $VMSTART ssh "$(cat "$IDFILE")" "$@"
+    exec "${VMSTART[@]}" ssh "$@"
 }
 
 cmd_gdb()
 {
-    exec "$VMSTART" gdb "$(cat "$IDFILE")" "$KERNEL/vmlinux"
+    exec "${VMSTART[@]}" gdb "$KERNEL/vmlinux"
 }
 
 cmd_kgdb()
 {
-    exec "$VMSTART" kgdb "$(cat "$IDFILE")" "$KERNEL/vmlinux"
+    exec "${VMSTART[@]}" kgdb "$KERNEL/vmlinux"
 }
 
 cmd_mon()
 {
-    exec "$VMSTART" mon "$(cat "$IDFILE")"
+    exec "${VMSTART[@]}" mon
 }
 
 cmd_sysrq()
 {
-    exec "$VMSTART" sysrq "$(cat "$IDFILE")" "$@"
+    exec "${VMSTART[@]}" sysrq "$@"
 }
 
 # checks if command is valid

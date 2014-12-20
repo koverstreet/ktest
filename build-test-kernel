@@ -297,6 +297,11 @@ cmd_mon()
     run_ktest mon "$@"
 }
 
+cmd_sysrq()
+{
+    run_ktest sysrq "$@"
+}
+
 cmd_help()
 {
     usage
