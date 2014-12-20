@@ -20,4 +20,4 @@ do_test()
 do_test success.ktest	0
 do_test failure.ktest	1
 do_test crash.ktest	1
-do_test timeout.ktest	2
+do_test timeout.ktest	1
