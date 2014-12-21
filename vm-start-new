@@ -98,7 +98,7 @@ def vm_run(vmdir, vm_nr):
                                      stderr=subprocess.STDOUT,
                                      stdin=subprocess.PIPE))
 
-def vm_cleanup(vmdir):
+def tmpdir_cleanup(vmdir):
     try:
         while True:
             os.wait()
@@ -119,7 +119,7 @@ def cmd_start():
         raise RuntimeError("Cannot find initrd file: " + args.initrd)
 
     vmdir = tempfile.mkdtemp(prefix="vm-", dir=args.tmpdir)
-    atexit.register(vm_cleanup, vmdir)
+    atexit.register(tmpdir_cleanup, vmdir)
 
     if args.idfile:
         with open(args.idfile, 'w') as f:
@@ -167,7 +167,7 @@ def cmd_ssh():
     subprocess.call(["chmod", "600", keyfile])
 
     tmpdir = tempfile.mkdtemp(prefix="vm-start-", dir=args.tmpdir)
-    atexit.register(shutil.rmtree, tmpdir, ignore_errors=True)
+    atexit.register(tmpdir_cleanup, tmpdir)
 
     lwip_connect = os.path.join(tmpdir, "lwip-connect")
 
@@ -182,16 +182,16 @@ def cmd_ssh():
 
     # ServerAliveInterval is a hack - lwip_connect should notice when the socket
     # has gone away an exit, but it appears to be a bug in liblwipv6
-    os.execvp("ssh",
-              ["ssh", "-t", "-i", keyfile,
-               "-F", "/dev/null",
-               "-o", "CheckHostIP=no",
-               "-o", "StrictHostKeyChecking=no",
-               "-o", "UserKnownHostsFile=/dev/null",
-               "-o", "NoHostAuthenticationForLocalhost=yes",
-               "-o", "ServerAliveInterval=1",
-               "-o", "ProxyCommand=%s %s %s 22" % (lwip_connect, sock, ip),
-               "root@127.0.0.1"] + extra_opts)
+    ret = subprocess.call(["ssh", "-t", "-i", keyfile,
+                           "-F", "/dev/null",
+                           "-o", "CheckHostIP=no",
+                           "-o", "StrictHostKeyChecking=no",
+                           "-o", "UserKnownHostsFile=/dev/null",
+                           "-o", "NoHostAuthenticationForLocalhost=yes",
+                           "-o", "ServerAliveInterval=1",
+                           "-o", "ProxyCommand=%s %s %s 22" % (lwip_connect, sock, ip),
+                           "root@127.0.0.1"] + extra_opts)
+    sys.exit(ret)
 
 def vm_gdb(socket):
     os.execvp("gdb",
