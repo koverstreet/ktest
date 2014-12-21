@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import argparse
 
 DIR = os.path.dirname(__file__)       # path to script directory
@@ -133,6 +134,9 @@ def cmd_start():
                                          stdin=subprocess.PIPE,
                                          stdout=FNULL,
                                          stderr=subprocess.STDOUT))
+
+        while not os.path.exists(os.path.join(sock, "ctl")):
+            time.sleep(0.1)
 
         atexit.register(kill_proc,
                         subprocess.Popen(["slirpvde", "--sock", sock,
@@ -299,8 +303,4 @@ parser_sysrq.add_argument("key")
 parser_sysrq.set_defaults(func=cmd_sysrq)
 
 (args, extra_opts) = parser.parse_known_args()
-
-try:
-    args.func()
-except KeyboardInterrupt:
-    pass
+args.func()
