@@ -181,7 +181,7 @@ run_vm()
 	elif [[ $EXIT_ON_SUCCESS = 1 ]]; then
 	    sed -u -e '/TEST SUCCESS/ { p; Q7 }'
 	else
-	    timeout "$((20 + _TIMEOUT))" $KTESTDIR/catch_test_success.awk
+	    timeout "$((60 + _TIMEOUT))" $KTESTDIR/catch_test_success.awk
 	fi
 
 	ret=$?
