@@ -9,6 +9,7 @@ config-mem 1G
 
 require-kernel-config MD
 require-kernel-config DYNAMIC_FAULT
+require-kernel-config XFS_FS
 
 require-make ../ltp-fsx/Makefile ltp-fsx
 
