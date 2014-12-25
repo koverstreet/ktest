@@ -1,32 +1,21 @@
 #!/bin/bash
 
-if [ "$1" = "deps" ]; then
-	echo "REQUIRE=../test-libs.sh,aio-multithread-test"
-	echo "MEM=256M"
-	echo "SCRATCH=2G"
-	exit
-fi
+require-lib		../prelude.sh
 
-echo "func free_ioctx +p"		> /sys/kernel/debug/dynamic_debug/control
-echo "func ioctx_alloc +p"		> /sys/kernel/debug/dynamic_debug/control
-echo "func sys_io_setup +p"		> /sys/kernel/debug/dynamic_debug/control
+config-timeout		60
+config-mem		512M
+config-scratch-devs	1G
 
-echo "file percpu-refcount.c +p"	> /sys/kernel/debug/dynamic_debug/control
+require-make aio-multithread-test.mak aio-multithread-test
 
-. test-libs.sh
+main()
+{
+    DEV=sdb
 
-DEV="vdb"
+    #echo "file aio.c +p" > /sys/kernel/debug/dynamic_debug/control
+    #echo "func do_io_submit  +p"	> /sys/kernel/debug/dynamic_debug/control
+    #echo "func io_submit_one +p"	> /sys/kernel/debug/dynamic_debug/control
+    #echo "func aio_run_iocb  +p"	> /sys/kernel/debug/dynamic_debug/control
 
-while true; do
-    /cdrom/aio-multithread-test /dev/vdb -1 &
-    pid=$!
-
-    sleep 2
-    kill -9 $pid
-done
-
-#test_fio $DEV
-#exit
-
-#prep_mkfs
-#prep_mounts
+    /cdrom/aio-multithread-test /dev/$DEV
+}
