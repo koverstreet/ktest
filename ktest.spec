@@ -18,4 +18,5 @@ make DESTDIR=%buildroot INSTALL=/usr/bin/install -C /bld/$RPM_PACKAGE_NAME insta
 
 %files
 %_bindir/vm-start
+%_bindir/testy
 %_bindir/vm-start-new
