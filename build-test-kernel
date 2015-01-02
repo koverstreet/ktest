@@ -82,7 +82,7 @@ fi
 CMD="cmd_$1"
 shift
 
-while getopts "hp:k:KDc:i:b:j:ISw:x" arg; do
+while getopts "hp:k:KDc:i:b:j:ISO:w:x" arg; do
     case $arg in
 	h)
 	    usage
@@ -128,8 +128,11 @@ while getopts "hp:k:KDc:i:b:j:ISw:x" arg; do
 	S)
 	    KTESTARGS+=" -S"
 	    ;;
-	w)
+	O)
 	    WORK_DIR=$OPTARG
+	    ;;
+	w)
+	    KTESTARGS+=" -w $OPTARG"
 	    ;;
 	x)
 	    KTESTARGS+=" -x"
@@ -292,6 +295,11 @@ cmd_kgdb()
 cmd_mon()
 {
     run_ktest mon "$@"
+}
+
+cmd_sysrq()
+{
+    run_ktest sysrq "$@"
 }
 
 cmd_help()

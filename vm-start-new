@@ -9,18 +9,13 @@ import signal
 import subprocess
 import sys
 import tempfile
-
-from optparse import OptionParser
+import time
+import argparse
 
 DIR = os.path.dirname(__file__)       # path to script directory
 
 DEFAULT_MEMORY = "1G"               # how much memory to give the vms
 DEFAULT_TMP = "/tmp"                # default directory for tmps
-
-# colors:
-GREEN = '\033[32m'
-CYAN = '\033[36m'
-NC = '\033[0m'
 
 FNULL = open(os.devnull, 'rw')
 
@@ -38,16 +33,16 @@ def qemu_disk(dev, filename, opts="", device="scsi-hd"):
 def qemu_socket(vmdir, vm_nr, name):
     return "unix:" + os.path.join(vmdir, "vm-%u-%s" % (vm_nr, name)) + ",server,nowait"
 
-def vm_run(opts, vmdir, vm_nr):
+def vm_run(vmdir, vm_nr):
     cmd = ["stdbuf", "-oL",
            "qemu-system-x86_64",
            "-machine", "accel=kvm",
-           "-m",        opts.mem,
-           "-smp",      "%d,sockets=%d" % (opts.cpus, opts.cpus),
+           "-m",        args.memory,
+           "-smp",      "%d,sockets=%d" % (args.cpus, args.cpus),
 
            "-nographic",
            "-device",   "virtio-serial",
-           "-chardev",  opts.console + ",id=console",
+           "-chardev",  args.console + ",id=console",
            "-device",   "virtconsole,chardev=console",
 
            "-serial",   qemu_socket(vmdir, vm_nr, "kgdb"),
@@ -56,18 +51,18 @@ def vm_run(opts, vmdir, vm_nr):
 
            "-device",   "virtio-rng-pci"]
 
-    if opts.kernel:
-        cmd.extend(["-kernel", opts.kernel])
+    if args.kernel:
+        cmd.extend(["-kernel", args.kernel])
 
-    if opts.initrd:
-        cmd.extend(["-initrd", opts.initrd])
+    if args.initrd:
+        cmd.extend(["-initrd", args.initrd])
 
     kernelParams = "console=hvc0 root=/dev/sda "
-    if opts.kgdb:
+    if args.kgdb:
         kernelParams += "kgdboc=ttyS0,115200 "
 
-    if opts.append:
-        kernelParams += opts.append
+    if args.append:
+        kernelParams += args.append
 
     cmd.extend(["-append", kernelParams])
 
@@ -75,23 +70,23 @@ def vm_run(opts, vmdir, vm_nr):
     cmd.extend(["-device", "virtio-scsi-pci,id=scsi-hba"])
 
     # Root file system comes first (sda)
-    cmd.extend(qemu_disk("root", opts.image, "snapshot=on,cache=unsafe"))
+    cmd.extend(qemu_disk("root", args.image, "snapshot=on,cache=unsafe"))
 
-    for i, size in enumerate(opts.scratch.split(",")):
+    for i, size in enumerate(args.scratchdev.split(",")):
         if size.strip():
             drive = os.path.join(vmdir, "vm-%u-disk-%u" % (vm_nr, i))
             subprocess.check_call(["fallocate", "-l", size, drive])
             cmd.extend(qemu_disk("scsi" + str(i), drive, "cache=unsafe"))
 
-    if opts.cdrom:
-        cmd.extend(qemu_disk("scsi-cd", opts.cdrom, "", "scsi-cd"))
+    if args.cdrom:
+        cmd.extend(qemu_disk("scsi-cd", args.cdrom, "", "scsi-cd"))
 
-    for fspath, fslabel in opts.filesystems:
+    for fspath, fslabel in args.fs:
         cmd.extend(["-virtfs", "local,path=" + fspath +
                     ",mount_tag=" + fslabel +
                     ",security_model=none"])
 
-    for i in range(opts.interfaces):
+    for i in range(args.interfaces):
         mac = "de:ad:be:ef:%0.2x:%0.2x" % (vm_nr, int(i))
         sock = os.path.join(vmdir, "net-" + str(i))
 
@@ -103,7 +98,7 @@ def vm_run(opts, vmdir, vm_nr):
                                      stderr=subprocess.STDOUT,
                                      stdin=subprocess.PIPE))
 
-def vm_cleanup(vmdir):
+def tmpdir_cleanup(vmdir):
     try:
         while True:
             os.wait()
@@ -114,88 +109,23 @@ def vm_cleanup(vmdir):
         shutil.rmtree(vmdir, ignore_errors=True)
 
 def cmd_start():
-    """Start new virtual machines
-    """
-    opt = OptionParser("Usage: %prog start [options] [number]",
-        description="Start one or more virtual machines")
+    if not os.path.isfile(args.image):
+        raise RuntimeError("Cannot find base image file: " + args.image)
 
-    opt.add_option("-i", "--image", dest="image",
-        help="root filesystem for the virtual machine(s)")
+    if args.kernel and not os.path.isfile(args.kernel):
+        raise RuntimeError("Cannot find kernel file: " + args.kernel)
 
-    opt.add_option("-k", "--kernel", dest="kernel",
-        help="kernel used to boot the virtual machine(s)")
+    if args.initrd and not os.path.isfile(args.initrd):
+        raise RuntimeError("Cannot find initrd file: " + args.initrd)
 
-    opt.add_option("-r", "--initrd", dest="initrd",
-        help="initial ramdisk for boot")
+    vmdir = tempfile.mkdtemp(prefix="vm-", dir=args.tmpdir)
+    atexit.register(tmpdir_cleanup, vmdir)
 
-    opt.add_option("-a", "--append", dest="append",
-        default="root=/dev/sda rw",
-        help="append kernel command line boot arguments")
-
-    opt.add_option("--kgdb", dest="kgdb", action="store_true",
-        help="enable kgdb")
-
-    opt.add_option("-c", "--cdrom", dest="cdrom",
-        help="cdrom image")
-
-    opt.add_option("-s", "--scratch-dev ", dest="scratch",
-        default="",
-        help="list of scratch device sizes. ex: 256M,2G")
-
-    opt.add_option("-t", "--tmpfs-dir", dest="tmpfs",
-        default=DEFAULT_TMP,
-        help="directory to use for temporary files/scratch devices")
-
-    opt.add_option("-m", "--memory", dest="mem",
-        default=DEFAULT_MEMORY,
-        help="amount of memory to be allocated per VM")
-
-    opt.add_option("--cpus", dest="cpus",
-        default="1", type="int",
-        help="number of CPUs allocated per VM")
-
-    opt.add_option("--fs", dest="filesystems",
-        action="append", nargs=2,
-        help="mount a directory (first argument) as " +
-        "a filesystem label (second argument) in the VM")
-
-    opt.add_option("--id", dest="vmdirfile",
-        help="file to write vm directory to")
-
-    opt.add_option("--console", dest="console",
-        default="stdio",
-        help="where to attach the vm console (ex: stdio, pipe,path=foo)")
-
-    opt.add_option("--nr_vms", dest="nr_vms",
-        default="1", type="int",
-        help="number of virtual machines to start")
-
-    opt.add_option("--interfaces", dest="interfaces",
-        default="1", type="int",
-        help="Specify the number of interfaces on the cluster nodes")
-
-    (options, args) = opt.parse_args()
-
-    if not options.image:
-        raise RuntimeError("Requires an image to boot")
-
-    if not os.path.isfile(options.image):
-        raise RuntimeError("Cannot find base image file: " + options.image)
-
-    if options.kernel and not os.path.isfile(options.kernel):
-        raise RuntimeError("Cannot find kernel file: " + options.kernel)
-
-    if options.initrd and not os.path.isfile(options.initrd):
-        raise RuntimeError("Cannot find initrd file: " + options.initrd)
-
-    vmdir = tempfile.mkdtemp(prefix="vm-", dir=options.tmpfs)
-    atexit.register(vm_cleanup, vmdir)
-
-    if options.vmdirfile:
-        with open(options.vmdirfile, 'w') as f:
+    if args.idfile:
+        with open(args.idfile, 'w') as f:
             f.write(vmdir + "\n")
 
-    for i in range(options.interfaces):
+    for i in range(args.interfaces):
         net = "10.0.%u.1/24" % (2 + i)
         sock = os.path.join(vmdir, "net-" + str(i))
 
@@ -205,6 +135,9 @@ def cmd_start():
                                          stdout=FNULL,
                                          stderr=subprocess.STDOUT))
 
+        while not os.path.exists(os.path.join(sock, "ctl")):
+            time.sleep(0.1)
+
         atexit.register(kill_proc,
                         subprocess.Popen(["slirpvde", "--sock", sock,
                                           "--dhcp", "--host", net],
@@ -212,8 +145,8 @@ def cmd_start():
                                          stdout=FNULL,
                                          stderr=subprocess.STDOUT))
 
-    for vm_nr in range(options.nr_vms):
-        vm_run(options, vmdir, vm_nr)
+    for vm_nr in range(args.nr_vms):
+        vm_run(vmdir, vm_nr)
 
     while True:
         os.wait()
@@ -223,26 +156,18 @@ def cmd_start():
     except:
         pass
 
-def vmdir_parse(path):
-    vmdir, foo, vm_nr = path.partition(":")
-    if not vm_nr:
-        vm_nr = 0
+def vmdir_read():
+    with open(args.idfile, 'r') as f:
+        path = f.readline()
 
-    return (vmdir, vm_nr)
+    return path.strip()
 
 def cmd_ssh():
-    """ssh into a virtual machine"""
-
-    if len(sys.argv) <= 1:
-        raise RuntimeError("Please provide vmdir to SSH to")
-
-    vmdir, vm_nr = vmdir_parse(sys.argv[1])
-
     keyfile = os.path.join(DIR, "id_dsa")
     subprocess.call(["chmod", "600", keyfile])
 
-    tmpdir = tempfile.mkdtemp(prefix="vm-start-")
-    atexit.register(shutil.rmtree, tmpdir, ignore_errors=True)
+    tmpdir = tempfile.mkdtemp(prefix="vm-start-", dir=args.tmpdir)
+    atexit.register(tmpdir_cleanup, tmpdir)
 
     lwip_connect = os.path.join(tmpdir, "lwip-connect")
 
@@ -251,34 +176,30 @@ def cmd_ssh():
                            os.path.join(DIR, "lwip-connect.c"),
                            "-llwipv6"])
 
-    ip = "10.0.2." + str(15 + vm_nr)
+    ip = "10.0.2." + str(15 + args.vm_nr)
 
-    sock = os.path.join(vmdir, "net-0")
+    sock = os.path.join(vmdir_read(), "net-0")
 
     # ServerAliveInterval is a hack - lwip_connect should notice when the socket
     # has gone away an exit, but it appears to be a bug in liblwipv6
-    os.execvp("ssh",
-              ["ssh", "-t", "-i", keyfile,
-               "-F", "/dev/null",
-               "-o", "CheckHostIP=no",
-               "-o", "StrictHostKeyChecking=no",
-               "-o", "UserKnownHostsFile=/dev/null",
-               "-o", "NoHostAuthenticationForLocalhost=yes",
-               "-o", "ServerAliveInterval=1",
-               "-o", "ProxyCommand=%s %s %s 22" % (lwip_connect, sock, ip),
-               "root@127.0.0.1"] + sys.argv[2:])
+    ret = subprocess.call(["ssh", "-t", "-i", keyfile,
+                           "-F", "/dev/null",
+                           "-o", "CheckHostIP=no",
+                           "-o", "StrictHostKeyChecking=no",
+                           "-o", "UserKnownHostsFile=/dev/null",
+                           "-o", "NoHostAuthenticationForLocalhost=yes",
+                           "-o", "ServerAliveInterval=1",
+                           "-o", "ProxyCommand=%s %s %s 22" % (lwip_connect, sock, ip),
+                           "root@127.0.0.1"] + extra_opts)
+    sys.exit(ret)
 
 def vm_gdb(socket):
-    if len(sys.argv) <= 2:
-        raise RuntimeError("Please provide a vmdir and a vmlinux file")
-
-    vmdir, vm_nr = vmdir_parse(sys.argv[1])
-
-    os.execlp("gdb", "gdb",
-              "-ex", "set remote interrupt-on-connect",
-              "-ex", "target remote | socat UNIX-CONNECT:" +
-              os.path.join(vmdir, "vm-%u-%s" % (vm_nr, socket)) + ' -',
-              sys.argv[2])
+    os.execvp("gdb",
+              ["gdb",
+               "-ex", "set remote interrupt-on-connect",
+               "-ex", "target remote | socat UNIX-CONNECT:" +
+               os.path.join(vmdir_read(), "vm-%u-%s" % (args.vm_nr, socket)) +
+               ' -'] + extra_opts)
 
 def cmd_gdb():
     vm_gdb('gdb')
@@ -287,40 +208,15 @@ def cmd_kgdb():
     vm_gdb('kgdb')
 
 def cmd_mon():
-    if len(sys.argv)<=1:
-        raise RuntimeError("Please provide a vmdir")
-
-    vmdir, vm_nr = vmdir_parse(sys.argv[1])
-
     os.execlp("minicom", "minicom", "-D", "unix#" +
-              os.path.join(vmdir, "vm-%u-mon" % vm_nr))
+              os.path.join(vmdir_read(), "vm-%u-mon" % args.vm_nr))
 
 def cmd_sysrq():
-    if len(sys.argv) <= 2:
-        raise RuntimeError("Please provide a vmdir and a sysrq command")
-
-    vmdir, vm_nr = vmdir_parse(sys.argv[1])
-    mon_path = os.path.join(vmdir, "vm-%u-mon" % vm_nr)
+    mon_path = os.path.join(vmdir_read(), "vm-%u-mon" % args.vm_nr)
 
     os.execlp("bash", "bash", "-c",
 	      "echo sendkey alt-sysrq-%s | socat - UNIX-CONNECT:%s"
-	      % (sys.argv[2], mon_path))
-
-def cmd_help():
-    """Print help for commands."""
-    print """Usage: vm-start [command] [args]
-
-  Commands:
-    start       setup and start one or more virtual machines
-    ssh         ssh to a virtual machine by tmpdir path (and optionally id)
-    gdb         connect to gbd
-    kgdb        connect to kgdb
-    mon         connect to the qemu monitor
-    sysrq       send magic sysrq via qemu monitor
-    help        print help for commands
-    """
-
-"""Main program."""
+	      % (args.key, mon_path))
 
 # Allow exit handlers to be called
 for sig in (signal.SIGHUP,
@@ -334,27 +230,77 @@ for sig in (signal.SIGHUP,
             signal.SIGUSR2):
     signal.signal(sig, lambda sig, frame: sys.exit(127))
 
-# if there is no command or args, print error message
-if len(sys.argv) == 1:
-    cmd_help()
-    raise RuntimeError("Please provide a command and appropriate arguments.")
+parser = argparse.ArgumentParser()
+parser.add_argument("--idfile", required=True)
+parser.add_argument("-t", "--tmpdir",
+    default=DEFAULT_TMP,
+    help="directory to use for temporary files/scratch devices")
+subparsers = parser.add_subparsers()
 
-# if first arg is a help option or command, print help and exit
-if sys.argv[1] in ["-h", "--help", "help"]:
-    cmd_help()
-    sys.exit(0)
+parser_start = subparsers.add_parser('start',
+    help='Start one or more virtual machine(s)')
+parser_start.add_argument("-i", "--image", required=True,
+    help="root filesystem for the virtual machine(s)")
+parser_start.add_argument("-k", "--kernel",
+    help="kernel used to boot the virtual machine(s)")
+parser_start.add_argument("-r", "--initrd",
+    help="initial ramdisk for boot")
+parser_start.add_argument("-a", "--append",
+    default="root=/dev/sda rw",
+    help="append kernel command line boot arguments")
+parser_start.add_argument("--kgdb", action="store_true",
+    help="enable kgdb")
+parser_start.add_argument("-c", "--cdrom",
+    help="cdrom image")
+parser_start.add_argument("-s", "--scratchdev",
+    default="",
+    help="list of scratch device sizes. ex: 256M,2G")
+parser_start.add_argument("-m", "--memory",
+    default=DEFAULT_MEMORY,
+    help="amount of memory to be allocated per VM")
+parser_start.add_argument("--cpus",
+    default="1", type=int,
+    help="number of CPUs allocated per VM")
+parser_start.add_argument("--fs",
+    action="append", nargs=2,
+    help="mount a directory (first argument) as " +
+    "a filesystem label (second argument) in the VM")
+parser_start.add_argument("--console",
+    default="stdio",
+    help="where to attach the vm console (ex: stdio, pipe,path=foo)")
+parser_start.add_argument("--nr_vms",
+    default="1", type=int,
+    help="number of virtual machines to start")
+parser_start.add_argument("--interfaces",
+    default="1", type=int,
+    help="Specify the number of interfaces on the cluster nodes")
+parser_start.set_defaults(func=cmd_start)
 
-# try to find the command in the global namespace
-try:
-    _cmd_name = "cmd_" + sys.argv[1]
-    _cmd_func = getattr(sys.modules[__name__], _cmd_name)
-except AttributeError:
-    raise RuntimeError("<%s> is not a valid command.\n" % sys.argv[1] +
-                       "Try 'vm-start help' for more info.")
+parser_ssh = subparsers.add_parser('ssh',
+    help='SSH into a running virtual machine')
+parser_ssh.add_argument("--vm_nr", default=0, type=int)
+parser_ssh.set_defaults(func=cmd_ssh)
 
-# remove the command from argv and execute the command function
-sys.argv.pop(1)
-try:
-    _cmd_func()
-except KeyboardInterrupt:
-    pass
+parser_gdb = subparsers.add_parser('gdb',
+    help='Run gdb and attach to QEMU')
+parser_gdb.add_argument("--vm_nr", default=0, type=int)
+parser_gdb.set_defaults(func=cmd_gdb)
+
+parser_kgdb = subparsers.add_parser('kgdb',
+    help='Run gdb and attach to kernel (kgdb)')
+parser_kgdb.add_argument("--vm_nr", default=0, type=int)
+parser_kgdb.set_defaults(func=cmd_kgdb)
+
+parser_mon = subparsers.add_parser('mon',
+    help='Attach to QEMU monitor')
+parser_mon.add_argument("--vm_nr", default=0, type=int)
+parser_mon.set_defaults(func=cmd_mon)
+
+parser_sysrq = subparsers.add_parser('sysrq',
+    help='Send magic sysrq key via qemu monitor')
+parser_sysrq.add_argument("--vm_nr", default=0, type=int)
+parser_sysrq.add_argument("key")
+parser_sysrq.set_defaults(func=cmd_sysrq)
+
+(args, extra_opts) = parser.parse_known_args()
+args.func()

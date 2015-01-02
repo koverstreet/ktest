@@ -16,9 +16,11 @@
 #include <libaio.h>
 #include <pthread.h>
 
+#define NR_WORKERS	4
+
 uint64_t nr_blocks = 1024 * 1024 * 4;
-int fd;
 io_context_t ioctx;
+int fd, exiting;
 
 uint64_t getblocks(int fd)
 {
@@ -42,7 +44,7 @@ static void *iothread(void *p)
 	char __attribute__((aligned(4096))) buf[4096];
 	unsigned seed = 0;
 
-	while (1) {
+	while (!exiting) {
 		struct iocb iocb[64];
 		struct iocb *iocbp[64];
 		unsigned i;
@@ -64,9 +66,10 @@ static void *iothread(void *p)
 		}
 
 		ret = io_submit(ioctx, 64, iocbp);
-		if (ret < 0 && ret != -EAGAIN)
+		if (ret < 0 && ret != -EAGAIN) {
 			printf("io_submit() error %i\n", ret);
-
+			exit(EXIT_FAILURE);
+		}
 	}
 
 	return NULL;
@@ -74,21 +77,21 @@ static void *iothread(void *p)
 
 int main(int argc, char **argv)
 {
-	pthread_t threads[4];
+	pthread_t threads[NR_WORKERS];
 	unsigned i;
+	int flags = 0;
 
-	memset(threads, 0, sizeof(pthread_t) * 4);
+	memset(threads, 0, sizeof(threads));
 
-#if 0
 	if (argc != 2) {
 		printf("Specify a file/device to test against\n");
 		exit(EXIT_FAILURE);
 	}
 
-	fd = open(argv[1], O_RDONLY|O_DIRECT);
-#else
-	fd = open("/dev/zero", O_RDONLY);
-#endif
+	if (strcmp(argv[1], "/dev/zero"))
+		flags = O_DIRECT;
+
+	fd = open(argv[1], O_RDONLY|flags);
 	if (fd < 0) {
 		perror("Open error");
 		exit(EXIT_FAILURE);
@@ -101,7 +104,7 @@ int main(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 
-	for (i = 0; i < 8; i++)
+	for (i = 0; i < NR_WORKERS; i++)
 		if (pthread_create(&threads[i], NULL, iothread, NULL)) {
 			printf("pthread_create() error\n");
 			exit(EXIT_FAILURE);
@@ -124,6 +127,11 @@ int main(int argc, char **argv)
 	}
 
 	printf("exiting\n");
+	exiting = 1;
+
+	for (i = 0; i < NR_WORKERS; i++)
+		pthread_join(threads[i], NULL);
+
 	io_destroy(ioctx);
 	printf("io_destroy done\n");
 
