@@ -984,7 +984,14 @@ def cmd_mon():
     vm = vm_lookup(int(sys.argv[1]))
 
     os.execlp("minicom", "minicom",
-          "-D", "unix#" + vm.tmpdir + "mon")
+              "-D", "unix#" + os.path.join(vm.tmpdir, "mon"))
+
+def cmd_sysrq():
+    if len(sys.argv) <= 2:
+        raise RuntimeError("Please provide a vm ID and a sysrq command")
+
+    os.execlp("echo sendkey alt-sysrq-%s | socat UNIX-CONNECT:%s" %
+	      (sys.argv[2], os.path.join(vm.tmpdir, "mon")))
 
 def cmd_check():
     """Check if a specific resource is available
@@ -1343,6 +1350,7 @@ def cmd_help():
     gdb         connect to gbd
     kgdb        connect to kgdb
     mon         connect to the qemu monitor
+    sysrq       send magic sysrq via qemu monitor
     check       check whether there are free resources
     list        list all running vms
     genips      generate a fresh vm database
