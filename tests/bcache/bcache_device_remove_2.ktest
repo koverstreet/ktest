@@ -2,7 +2,8 @@
 
 require-lib bcache-test-libs.sh
 
-config-cache 16M
+# config-cache 16M		16M occasionally causes deadlock in larger runs
+config-cache 64M
 config-tier 512M
 config-bucket-size 64k
 config-block-size 4k
