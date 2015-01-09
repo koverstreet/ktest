@@ -32,6 +32,7 @@ main()
 	exit 1
     else
 	test_fio
+	test_discard
 	stop_bcache
     fi
 }
