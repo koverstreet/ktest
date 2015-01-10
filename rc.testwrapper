@@ -51,9 +51,20 @@ copy_to_host()
     )
 }
 
+check_taint()
+{
+    read taint < /proc/sys/kernel/tainted
+
+    if [[ $taint != 0 ]]; then
+	echo "Failure because kernel tainted - check log for warnings"
+	echo "TEST FAILED"
+    fi
+}
+
 do_reboot()
 {
     copy_to_host
+    check_taint
 
     echo $((NR_REBOOTS + 1)) | dd of=/EXPECTED_REBOOT oflag=direct 2> /dev/null
     echo b > /proc/sysrq-trigger
@@ -156,6 +167,7 @@ echo "Copying output to host"
 # success
 
 copy_to_host
+check_taint
 
 if [ $ret = 0 ]; then
     echo "TEST SUCCESS"
