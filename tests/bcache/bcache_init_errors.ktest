@@ -30,6 +30,8 @@ main()
 	sleep 10
 	do_reboot
     else
+	    control=/sys/kernel/debug/dynamic_fault/control
+	    cat $control | grep cache_set_init
 	for id in {0..99}; do
 	    control=/sys/kernel/debug/dynamic_fault/control
 	    fault=cache_set_init_$id
@@ -37,13 +39,13 @@ main()
 	    grep -q $fault $control || exit 0
 
 	    echo "TESTING FAULT $id"
-	    echo "func $fault +f" > $control
+	    echo "class $fault enable" > $control
 
 	    echo /dev/sdb > /sys/fs/bcache/register || true
 	    echo /dev/sdc > /sys/fs/bcache/register || true
 
 	    sleep 2
-	    echo "func $fault -f" > $control
+	    echo "class $fault disable" > $control
 	    sleep 2
 
             if test -e /sys/fs/bcache/*-*-*-*-*; then
