@@ -29,17 +29,17 @@ META_REPLICAS=1
 #
 config-backing()
 {
-    add_bcache_devs BDEV $1
+    add_bcache_devs BDEV $1 1
 }
 
 config-cache()
 {
-    add_bcache_devs CACHE $1
+    add_bcache_devs CACHE $1 0
 }
 
 config-tier()
 {
-    add_bcache_devs TIER $1
+    add_bcache_devs TIER $1 1
 }
 
 config-volume()
@@ -101,6 +101,7 @@ get_next_virtio()
     echo "/dev/sd$letter"
 }
 
+# Usage: add_bcache_devs <variable> <sizes> <rotational>
 add_bcache_devs()
 {
     for size in $(echo $2 | tr ',' ' '); do
@@ -112,6 +113,9 @@ add_bcache_devs()
 	dev="$(get_next_virtio)"
 	VIRTIO_BLKDEVS=$(($VIRTIO_BLKDEVS + 1))
 	eval $1+="$dev"
+	if [ "$TEST_RUNNING" != "" ]; then
+	    echo "$3" > "/sys/block/$(basename "$dev")/queue/rotational"
+	fi
     done
 }
 

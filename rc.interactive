@@ -16,7 +16,6 @@ ulimit -c unlimited
 
 # Virtual block device tweaks
 for q in /sys/block/sd*/queue; do
-    echo 0 > $q/rotational
     echo noop > $q/scheduler
 done
 
