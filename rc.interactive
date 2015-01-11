@@ -22,7 +22,9 @@ done
 # Check if we are running the crashdump kernel
 if [ -s /proc/vmcore ]; then
     echo "Collecting crash dump..."
-    cp --sparse=always /proc/vmcore /var/log/datera/vmcore || true
+    vmcore_out=/var/log/datera/vmcore
+    rm -f "$vmcore_out"
+    cp --sparse=always /proc/vmcore "$vmcore_out" || true
     sync
     poweroff
 else
