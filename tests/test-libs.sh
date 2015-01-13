@@ -12,8 +12,6 @@ require-kernel-config DYNAMIC_FAULT
 require-kernel-config XFS_FS
 
 require-make ../ltp-fsx/Makefile ltp-fsx
-require-bin dss_ioctl_test
-require-bin dss_span
 
 # Wait for an IP or IPv6 address to show
 # up on a specific device.
