@@ -7,30 +7,5 @@ config-tier 4G
 config-bucket-size 32k
 config-block-size 4k
 config-volume 1600M
-config-cpus 1
 
-nr_iterations=$((($ktest_priority + 1) * 5))
-config-timeout $(($nr_iterations * 45 + $(stress_timeout)))
-
-main()
-{
-    setup_tracing 'bcache:*'
-
-    if [ $NR_REBOOTS = 0 ]; then
-	setup_bcache
-	setup_fs ext4
-    else
-	existing_bcache
-	existing_fs ext4
-    fi
-
-    [ $NR_REBOOTS = $nr_iterations ] && exit 0
-
-    test_antagonist
-
-    test_dbench &
-    test_bonnie &
-
-    sleep 30
-    do_reboot
-}
+require-lib reboot-fs.sh
