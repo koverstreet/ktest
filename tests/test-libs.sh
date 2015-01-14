@@ -405,7 +405,11 @@ test_stress()
 
 stress_timeout()
 {
-    echo $((($ktest_priority + 3) * 600))
+    n=$((($ktest_priority + 3) * 600))
+    if uname | grep -q -- -debug; then
+	n=$((n * 2))
+    fi
+    echo $n
 }
 
 block_device_verify_dd()
