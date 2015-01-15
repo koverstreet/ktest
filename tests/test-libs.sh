@@ -293,6 +293,10 @@ test_discard()
 
     killall -STOP systemd-udevd
 
+    if [ -f /sys/kernel/debug/bcache/* ]; then
+	cat /sys/kernel/debug/bcache/* > /dev/null
+    fi
+
     for dev in $DEVICES; do
         echo "Discarding ${dev}..."
         blkdiscard $dev
@@ -308,6 +312,16 @@ test_discard()
     expect_sysfs cache cached_buckets 0
     expect_sysfs cache cached_data 0
     expect_sysfs bdev dirty_data 0
+
+    if [ -f /sys/kernel/debug/bcache/* ]; then
+	tmp="$(mktemp)"
+	cat /sys/kernel/debug/bcache/* | tee "$tmp"
+	lines=$(cat "$tmp" | wc -l)
+
+	if [ "$lines" != "0" ]; then
+	    echo "Btree not empty"
+	fi
+    fi
 
     killall -CONT systemd-udevd
 }
