@@ -5,9 +5,6 @@ set -o errexit
 
 if [ "$#" -eq 0 ]; then
     echo "Usage: coveragetool <outputdir> <inputs>..."
-    echo
-    echo "You may need to install perl-digest-MD5 for lcov"
-    echo "    sudo yum install perl-Digest-MD5"
     exit 1
 fi
 
@@ -16,18 +13,22 @@ if ! which lcov; then
     exit 0
 fi
 
-gcov_out="$1"
+lcov_out="$1"
 shift
 
-info=$gcov_out/gcov.info
-html=$gcov_out/gcov.html
+info=$lcov_out/lcov.info
+html=$lcov_out/lcov.html
 tracefiles=""
 
-for i in $@; do
-    out=$gcov_out/$(basename "$i").info
+n=0
+
+for dir in $@; do
+    out=$lcov_out/lcov.${n}.info
     tracefiles+=" --add-tracefile $out"
 
-    lcov --capture --quiet --directory "$i" --output-file "$out"
+    lcov --capture --quiet --directory "$dir" --output-file "$out"
+
+    n=$((n+1))
 done
 
 [ -n "$tracefiles" ] || return 0
