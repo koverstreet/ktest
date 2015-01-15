@@ -8,7 +8,6 @@ config-tier 256M,256M,256M,256M,256M,256M,256M,256M,256M,256M
 config-bucket-size 64k
 config-block-size 4k
 config-volume 1900M
-config-bcache-sysfs journal_delay_ms 0
 config-bcache-sysfs btree_flush_delay 0
 
 config-timeout $(stress_timeout)
@@ -19,6 +18,18 @@ main()
 
     setup_bcache
     test_antagonist
+
+    (
+	while true; do
+	    # Lots of small journal entries
+	    echo 0 > /sys/fs/bcache/*/internal/journal_delay_ms
+	    sleep 5
+	    # Let the journal entries fill up
+	    echo 10000 > /sys/fs/bcache/*/internal/journal_delay_ms
+	    sleep 5
+	done
+    ) &
+
     test_stress
     stop_volumes
     test_bcachefs_stress
