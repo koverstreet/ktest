@@ -31,7 +31,7 @@ main()
         num_lines
         [[ (( $NUM_LINES = 3 )) ]]
 
-        bcacheadm add-devs -u $CSETUUID /dev/sdd
+        bcacheadm add-devs /dev/sdd
 
         bcacheadm list-cachesets --list-devs
         num_lines
