@@ -422,7 +422,7 @@ test_stress()
 stress_timeout()
 {
     n=$((($ktest_priority + 3) * 600))
-    if uname | grep -q -- -debug; then
+    if uname -a | grep -q -- -debug; then
 	n=$((n * 2))
     fi
     echo $n
