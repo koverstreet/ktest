@@ -209,7 +209,7 @@ setup_bcache() {
     make_bcache_flags+=" --meta-replicas=$META_REPLICAS"
 
     if [ "$TIER" != "" ]; then
-	make_bcache_flags+=" --tier=1 "
+	make_bcache_flags+=" --tier=1 --cache_replacement_policy=fifo"
 	for cache in $TIER; do
 		make_bcache_flags+=" --cache=$cache"
 	done
