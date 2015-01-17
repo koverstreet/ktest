@@ -18,7 +18,7 @@ parse_test_deps()
     _add-file()
     {
 	if [ ! -e "$1" ]; then
-	    echo "Dependency $req not found"
+	    echo "Dependency $1 not found"
 	    exit 1
 	fi
 
@@ -69,6 +69,19 @@ parse_test_deps()
 	    (cd "$dir"; make -f "$(basename "$f")" "$i")
 	    _add-file "$dir/$i"
 	done
+    }
+
+    require-file()
+    {
+	local file=$1
+
+	if [ "${file:0:1}" = "/" ]; then
+	    local f="$file"
+	else
+	    local f="$TESTDIR/$file"
+	fi
+
+	_add-file "$f"
     }
 
     require-kernel-config()

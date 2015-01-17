@@ -85,6 +85,11 @@ require-make()
     return 0
 }
 
+require-file()
+{
+    return 0
+}
+
 require-kernel-config()
 {
     return 0
