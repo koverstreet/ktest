@@ -1,0 +1,11 @@
+#!/bin/bash
+
+require-lib bcache-test-libs.sh
+
+config-cache 256M
+config-tier 2G
+config-bucket-size 64k
+config-block-size 4k
+config-volume 1G
+
+require-lib reboot-fs-verify.sh
