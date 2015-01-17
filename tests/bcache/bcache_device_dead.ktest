@@ -30,8 +30,6 @@ main()
     echo readonly > /sys/fs/bcache/*/errors
 
     test_antagonist
-    test_stress || true
-    stop_volumes
-    test_bcachefs_stress
+    ! test_fio
     stop_bcache
 }
