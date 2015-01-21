@@ -17,6 +17,7 @@ TIER=""
 VOLUME=""
 DISCARD=1
 WRITEBACK=0
+WRITEAROUND=0
 REPLACEMENT=lru
 
 VIRTIO_BLKDEVS=0
@@ -68,6 +69,11 @@ config-block-size()
 config-writeback()
 {
     WRITEBACK=1
+}
+
+config-writearound()
+{
+    WRITEAROUND=1
 }
 
 config-replacement()
@@ -126,6 +132,11 @@ make_bcache_flags()
 	0) ;;
 	1) flags+=" --discard" ;;
 	*) echo "Bad discard: $DISCARD"; exit ;;
+    esac
+    case "$WRITEAROUND" in
+	0) ;;
+	1) flags+=" --writearound" ;;
+	*) echo "Bad writearound: $WRITEAROUND"; exit ;;
     esac
     case "$WRITEBACK" in
 	0) ;;
