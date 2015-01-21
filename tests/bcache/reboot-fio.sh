@@ -1,7 +1,7 @@
 config-cpus 1
 
-nr_iterations=$(((ktest_priority + 1) * 8))
-config-timeout $((nr_iterations * 30))
+nr_iterations=$((((ktest_priority / 2) + 1) * 8))
+config-timeout $((nr_iterations * 60))
 
 # Usage: fio_pass read/write verify
 fio_pass()
