@@ -16,8 +16,11 @@ main()
 
     setup_bcache
 
-    for flag in /sys/fs/bcache/*/bdev*/verify; do
-	echo 1 > $flag
+    for bdev in /sys/fs/bcache/*/bdev*; do
+	if [ ! -f $bdev/verify ]; then
+	    exit 0
+	fi
+	echo 1 > $bdev/verify
     done
 
     test_antagonist
