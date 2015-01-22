@@ -19,6 +19,10 @@ main()
 
     if [ $NR_REBOOTS = 0 ]; then
 	setup_bcache
+	echo readonly > /sys/fs/bcache/*/cache1/state
+	echo readonly > /sys/fs/bcache/*/cache2/state
+	echo active > /sys/fs/bcache/*/cache1/state
+	echo active > /sys/fs/bcache/*/cache2/state
 	test_fio
 	echo readonly > /sys/fs/bcache/*/cache2/state
 	echo > /sys/fs/bcache/*/internal/trigger_gc
