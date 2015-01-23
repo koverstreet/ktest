@@ -2,8 +2,8 @@
 
 require-lib bcache-test-libs.sh
 
-config-cache 2G
-config-backing 4G
+config-cache 512M
+config-backing 2G
 config-bucket-size 32k
 config-block-size 4k
 config-writeback
