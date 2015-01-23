@@ -314,7 +314,7 @@ def vm_cleanup(vmdir):
 class VM(object):
     """Defines a virtual machine object.
     """
-
+    @logwrap
     def __init__(self, name, vm_id, conx3_id, opts, vm_tmpdir, vm_console):
         """Initialize the VM object with its essential data.
         """
@@ -432,6 +432,8 @@ class VM(object):
         if opts.conx3:
             print "Assigning vf: ", self.conx3_id
             cmd.extend(["-device", "pci-assign,host="+str(self.conx3_id)])
+            print "Using root for SR-IOV"
+            cmd=['sudo', '-n', '--'] + cmd            
 
         if self.tapdevs:
             for td in self.tapdevs:
@@ -455,7 +457,7 @@ class ClusteredVM(VM):
         """Initialize the VM object with its essential data.
         """
         name = "vm%d-%s" % (vm_id, bridge.name)
-        super(ClusteredVM, self).__init__(name, vm_id, None,
+        super(ClusteredVM, self).__init__(name, vm_id, vms_id.conx3_id,
                                           opts, vm_tmpdir, vm_console)
         self.vmsid    = vms_id
         self.bridge   = bridge
