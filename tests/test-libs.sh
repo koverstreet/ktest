@@ -140,7 +140,7 @@ setup_fs()
 stop_fs()
 {
     for dev in $DEVICES; do
-	umount /mnt/$dev || true
+	umount /mnt/$dev
     done
 }
 

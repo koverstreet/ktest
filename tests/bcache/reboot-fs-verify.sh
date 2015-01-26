@@ -67,6 +67,8 @@ main()
 	    find linux-3.19-rc4 -type f -exec sha1sum {} \; | sort -k 2 > sha1.txt
 	    diff sha1.txt /cdrom/sha1.txt > /dev/null
 
+	    cd /
+
 	    stop_fs
 	    test_discard
 	    ;;
