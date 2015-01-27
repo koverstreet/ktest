@@ -58,6 +58,7 @@ check_taint()
     if [[ $taint != 0 ]]; then
 	echo "Failure because kernel tainted - check log for warnings"
 	echo "TEST FAILED"
+	exit 0
     fi
 }
 
