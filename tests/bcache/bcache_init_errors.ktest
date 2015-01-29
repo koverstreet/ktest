@@ -2,14 +2,42 @@
 
 require-lib bcache-test-libs.sh
 
-require-kernel-config DYNAMIC_FAULT
-
 config-cache 2G
 config-tier 4G
 config-bucket-size 32k
 config-block-size 4k
 config-timeout 300
 config-volume 1600M
+
+test_faults()
+{
+    control=/sys/kernel/debug/dynamic_fault/control
+    grep $1 $control
+    echo
+
+    for id in {0..99}; do
+	fault="$1 index $id"
+
+	echo "class $fault enable" > $control || break
+
+	echo "TESTING FAULT $id"
+
+	echo "Registering sdb"
+	echo /dev/sdb > /sys/fs/bcache/register || true
+
+	echo "Registering sdc"
+	echo /dev/sdc > /sys/fs/bcache/register || true
+
+	sleep 2
+	echo "class $fault disable" > $control
+	sleep 2
+
+	if test -e /sys/fs/bcache/*-*-*-*-*; then
+	    echo "Registration should have failed"
+	    false
+	fi
+    done
+}
 
 main()
 {
@@ -30,30 +58,7 @@ main()
 	sleep 10
 	do_reboot
     else
-	    control=/sys/kernel/debug/dynamic_fault/control
-	    cat $control | grep cache_set_init
-	for id in {0..99}; do
-	    control=/sys/kernel/debug/dynamic_fault/control
-	    fault="cache_set_init index $id"
-
-	    echo "class $fault enable" > $control || exit 0
-
-	    echo "TESTING FAULT $id"
-
-	    echo "Registering sdb"
-	    echo /dev/sdb > /sys/fs/bcache/register || true
-
-	    echo "Registering sdc"
-	    echo /dev/sdc > /sys/fs/bcache/register || true
-
-	    sleep 2
-	    echo "class $fault disable" > $control
-	    sleep 2
-
-            if test -e /sys/fs/bcache/*-*-*-*-*; then
-                echo "Registration should have failed"
-                false
-            fi
-	done
+	test_faults "bcache:cache_set_init"
+	test_faults "bcache:meta:read"
     fi
 }
