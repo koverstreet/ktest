@@ -34,9 +34,9 @@ main()
 
 	echo "class $fault disable" > $control
 
-	echo "Stopping"
-	stop_bcache
-	echo "Stopping done"
+	/cdrom/bcacheadm unregister
+
+	sleep 5
     done
 
     stop_bcache
