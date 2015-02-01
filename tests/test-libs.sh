@@ -316,10 +316,11 @@ test_discard()
     if [ -f /sys/kernel/debug/bcache/* ]; then
 	tmp="$(mktemp)"
 	cat /sys/kernel/debug/bcache/* | tee "$tmp"
-	lines=$(cat "$tmp" | wc -l)
+	lines=$(grep -v discard "$tmp" | wc -l)
 
 	if [ "$lines" != "0" ]; then
 	    echo "Btree not empty"
+	    false
 	fi
     fi
 
