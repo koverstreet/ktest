@@ -1,0 +1,49 @@
+#!/bin/bash
+
+require-lib bcache-test-libs.sh
+
+config-cache 256M,256M
+config-tier 1G
+
+config-bucket-size 8k
+config-block-size 4k
+config-volume 600M
+
+config-timeout $(stress_timeout)
+
+main()
+{
+    setup_tracing 'bcache:*'
+
+    setup_bcache
+
+    if [ ! -f /sys/fs/bcache/*/internal/version_stress_test ]; then
+	return
+    fi
+
+    echo 1 > /sys/fs/bcache/*/internal/version_stress_test
+
+    test_antagonist
+
+    fio --eta=always - <<-ZZ
+    [global]
+    blocksize_range=4k-1M
+    ioengine=libaio
+    iodepth=16
+    direct=1
+    filename=/dev/bcache0
+    runtime=60
+    loops=10000
+
+    [read]
+    readwrite=randread
+
+    [write]
+    readwrite=randwrite
+
+    [discard]
+    readwrite=randtrim
+ZZ
+
+    stop_bcache
+}
