@@ -22,10 +22,10 @@ main()
     (
 	while true; do
 	    # Lots of small journal entries
-	    echo 0 > /sys/fs/bcache/*/internal/journal_delay_ms
+	    echo 0 > /sys/fs/bcache/*/journal_delay_ms
 	    sleep 5
 	    # Let the journal entries fill up
-	    echo 10000 > /sys/fs/bcache/*/internal/journal_delay_ms
+	    echo 10000 > /sys/fs/bcache/*/journal_delay_ms
 	    sleep 5
 	done
     ) &
