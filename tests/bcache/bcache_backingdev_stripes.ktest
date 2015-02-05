@@ -10,6 +10,8 @@ config-scratch-devs 256M,256M,256M,256M,256M
 config-bucket-size 64k
 config-block-size 4k
 
+config-writeback
+
 config-timeout $(stress_timeout)
 
 main()
