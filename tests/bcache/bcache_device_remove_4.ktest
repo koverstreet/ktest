@@ -1,0 +1,36 @@
+#!/bin/bash
+
+require-lib bcache-test-libs.sh
+
+config-cache 64M
+config-tier 64M,64M,64M
+config-bucket-size 64k
+config-block-size 4k
+config-data-replicas 1
+
+config-timeout $(stress_timeout)
+
+main()
+{
+    setup_tracing 'bcache:*'
+
+    setup_bcache
+    echo 1 > /sys/fs/bcache/*/cache2/unregister
+    sleep 3
+    echo 1 > /sys/fs/bcache/*/unregister
+    sleep 3
+
+    bcacheadm register /dev/sdb /dev/sdc /dev/sdd /dev/sde
+    sleep 3
+    echo > /sys/fs/bcache/*/unregister
+    sleep 3
+
+    bcacheadm format $(make_bcache_flags) --wipe-bcache -C /dev/sde
+
+    bcacheadm register /dev/sdb /dev/sdc /dev/sdd
+    sleep 3
+    echo /dev/sde > /sys/fs/bcache/*/add_device
+    sleep 3
+
+    stop_bcache
+}
