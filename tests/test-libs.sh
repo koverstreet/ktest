@@ -5,7 +5,7 @@
 
 require-lib prelude.sh
 
-config-mem 1G
+config-mem 2G
 
 require-kernel-config MD
 require-kernel-config DYNAMIC_FAULT
