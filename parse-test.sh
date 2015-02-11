@@ -122,7 +122,11 @@ parse_test_deps()
 
     config-timeout()
     {
-	_TIMEOUT=$1
+	n=$1
+	if [ "${EXTENDED_DEBUG:-0}" == 1 ]; then
+	    n=$((n * 2))
+	fi
+	_TIMEOUT=$n
     }
 
     require-kernel-append()

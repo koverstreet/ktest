@@ -422,11 +422,7 @@ test_stress()
 
 stress_timeout()
 {
-    n=$((($ktest_priority + 3) * 600))
-    if [ "${EXTENDED_DEBUG:-0}" == 1 ]; then
-	n=$((n * 2))
-    fi
-    echo $n
+    echo $((($ktest_priority + 3) * 600))
 }
 
 block_device_verify_dd()
