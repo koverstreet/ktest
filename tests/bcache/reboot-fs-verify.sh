@@ -10,7 +10,7 @@ else
     nr_iterations=3
 fi
 
-config-timeout $(($nr_iterations * 300))
+config-timeout $((nr_iterations * 300))
 
 main()
 {
