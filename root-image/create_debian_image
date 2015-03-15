@@ -12,7 +12,7 @@ KTESTDIR=$VM_IMAGE_DIR/..
 
 checkdep debootstrap
 
-PACKAGES="less,psmisc,openssh-server"
+PACKAGES="kexec-tools,less,psmisc,openssh-server"
 PACKAGES+=",make,gcc,g++,gdb,strace,valgrind"
 PACKAGES+=",hdparm,xfsprogs,btrfs-tools,mdadm,lvm2,aoetools,vblade"
 PACKAGES+=",linux-tools,blktrace,sysstat,fio,dbench,bonnie++"
@@ -22,7 +22,7 @@ EXCLUDE+=",debconf-i18n,info"
 
 MIRROR=http://ftp.us.debian.org/debian/
 
-create_mount_image
+create_mount_image $1
 
 debootstrap --include="$PACKAGES" --exclude="$EXCLUDE" sid "$MNT" $MIRROR
 
@@ -36,5 +36,28 @@ ZZ
 
 cp $VM_IMAGE_DIR/rc.local "$MNT/etc/rc.local"
 chmod 755 "$MNT/etc/rc.local"
+
+chroot "$MNT" systemctl mask				\
+    dev-hvc0.device					\
+    getty.target					\
+    getty-static.service				\
+    avahi-daemon.service				\
+    crond.service					\
+    kdump.service					\
+    hdparm.service					\
+    cdrom.mount						\
+    mdadm-raid.service					\
+    lvm2-lvmetad.service				\
+    lvm2-monitor.service				\
+    lvm2-lvmetad.socket					\
+    dm-event.socket					\
+    aoetools.service					\
+    sysstat.service					\
+    systemd-ask-password-console.path			\
+    systemd-ask-password-wall.path			\
+    systemd-journald.service				\
+    systemd-journal-flush.service			\
+    systemd-journald-dev-log.socket			\
+    systemd-journald.socket
 
 finish_umount_image

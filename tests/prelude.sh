@@ -65,7 +65,7 @@ require-kernel-config LOCKDEP_SUPPORT
 require-kernel-config PROVE_LOCKING
 
 require-kernel-config PROVE_RCU
-require-kernel-config RCU_CPU_STALL_VERBOSE
+#require-kernel-config RCU_CPU_STALL_VERBOSE
 
 # expensive, doesn't catch that much
 # require-kernel-config DEBUG_PAGEALLOC
