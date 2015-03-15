@@ -1,5 +1,11 @@
 #!/bin/bash
 
+set -o nounset
+set -o errexit
+set -o errtrace
+
+export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]}()}+ '
+
 dmesg -n 7
 echo 1 > /proc/sys/kernel/sysrq
 
