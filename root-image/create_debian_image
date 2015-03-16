@@ -18,7 +18,7 @@ PACKAGES+=",hdparm,xfsprogs,btrfs-tools,mdadm,lvm2,aoetools,vblade"
 PACKAGES+=",linux-tools,blktrace,sysstat,fio,dbench,bonnie++"
 
 EXCLUDE="dmidecode,nano,rsyslog,logrotate,cron,iptables,nfacct"
-EXCLUDE+=",debconf-i18n,info"
+EXCLUDE+=",debconf-i18n,info,gnupg"
 
 MIRROR=http://ftp.us.debian.org/debian/
 
@@ -50,14 +50,27 @@ chroot "$MNT" systemctl mask				\
     lvm2-lvmetad.service				\
     lvm2-monitor.service				\
     lvm2-lvmetad.socket					\
+    lvm2-activation-early.service			\
+    lvm2-activation.service				\
     dm-event.socket					\
     aoetools.service					\
     sysstat.service					\
+    kexec-load.service					\
+    kexec.service					\
     systemd-ask-password-console.path			\
     systemd-ask-password-wall.path			\
+    systemd-update-utmp-runlevel.service		\
+    systemd-update-utmp.service				\
     systemd-journald.service				\
     systemd-journal-flush.service			\
     systemd-journald-dev-log.socket			\
     systemd-journald.socket
+
+rm "$MNT/lib/udev/rules.d/*persistent*"
+rm "$MNT/lib/udev/rules.d/*lvm*"
+rm "$MNT/lib/udev/rules.d/*dm*"
+rm "$MNT/lib/udev/rules.d/*md-raid*"
+rm "$MNT/lib/udev/rules.d/*btrfs*"
+rm "$MNT/lib/udev/rules.d/*hdparm*"
 
 finish_umount_image
