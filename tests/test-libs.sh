@@ -200,48 +200,44 @@ test_fio()
 	cd $LOGDIR
 
 	for dev in $DEVICES; do
-	    fio --eta=always - <<-ZZ &
-		[global]
-		randrepeat=0
-		ioengine=libaio
-		iodepth=64
-		iodepth_batch=16
-		direct=1
-
-		numjobs=1
-
-		verify_fatal=1
-		verify_dump=1
-
-		filename=$dev
-
-		[seqwrite]
-		loops=$loops
-		blocksize_range=4k-128k
-		rw=write
-		verify=crc32c-intel
-
-		[randwrite]
-		stonewall
-		blocksize_range=4k-128k
-		loops=$loops
-		rw=randwrite
-		verify=meta
-
-		[randwrite_small]
-		stonewall
-		blocksize=4k
-		loops=$loops
-		rw=randwrite
-		verify=crc32c-intel
-
-		[randread]
-		stonewall
-		blocksize=4k
-		loops=$loops
-		rw=randread
-		verify=crc32c-intel
-		ZZ
+	    fio --eta=always		\
+		--randrepeat=0		\
+		--ioengine=libaio	\
+		--iodepth=64		\
+		--iodepth_batch=16	\
+		--direct=1		\
+		--numjobs=1		\
+		--verify_fatal=1	\
+		--verify_dump=1		\
+		--filename=$dev		\
+					\
+		--name=seqwrite		\
+		--stonewall		\
+		--loops=$loops		\
+		--rw=write		\
+		--bsrange=4k-128k	\
+		--verify=crc32c-intel	\
+					\
+		--name=randwrite	\
+		--stonewall		\
+		--loops=$loops		\
+		--rw=randwrite		\
+		--bsrange=4k-128k	\
+		--verify=meta		\
+					\
+		--name=randwrite_small	\
+		--stonewall		\
+		--loops=$loops		\
+		--rw=randwrite		\
+		--bs=4k			\
+		--verify=crc32c-intel	\
+					\
+		--name=randread		\
+		--stonewall		\
+		--loops=$loops		\
+		--rw=randread		\
+		--bs=4k			\
+		--verify=crc32c-intel	&
 	done
 
 	test_wait
