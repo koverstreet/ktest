@@ -148,6 +148,7 @@ shift $(( OPTIND - 1 ))
 
 mkdir -p "$WORK_DIR"
 WORK_DIR=$(readlink -f "$WORK_DIR")
+KERNEL_OUTPUT=$(readlink -f "$KERNEL_OUTPUT")
 
 run_ktest()
 {
@@ -228,7 +229,6 @@ build_kernel()
     install -m0644 "$WORK_DIR/vmlinux" "$KERNEL_OUTPUT/vmlinux"
     install -m0644 "$WORK_DIR/arch/x86/boot/bzImage" "$KERNEL_OUTPUT/vmlinuz"
     install -m0644 "$WORK_DIR/.config" "$KERNEL_OUTPUT/config"
-    mkdir -p "$KERNEL_OUTPUT/lib"
 
     do_make modules_install
 
