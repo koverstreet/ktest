@@ -1,44 +1,40 @@
-#!/bin/bash -e
+#!/bin/bash
 #
 # Create a VM image suitable for running automated tests
 # Output: vm_image
+
+set -o nounset
+set -o errexit
+set -o errtrace
 
 VM_IMAGE_DIR=$(dirname $(readlink -f $0))
 KTESTDIR=$VM_IMAGE_DIR/..
 
 . $KTESTDIR/util.sh
 
-. $VM_IMAGE_DIR/create_vm_image_common.sh
+if [ `id -u` != 0 ] ; then
+    echo this script must be run as root
+    exit 1
+fi
 
+checkdep fallocate util-linux
+checkdep mkfs.ext4 e2fsprogs
 checkdep debootstrap
+
+IMAGE_SIZE="2G"
 
 PACKAGES="kexec-tools,less,psmisc,openssh-server"
 PACKAGES+=",make,gcc,g++,gdb,strace,valgrind"
 PACKAGES+=",hdparm,xfsprogs,btrfs-tools,mdadm,lvm2,aoetools,vblade"
 PACKAGES+=",linux-tools,blktrace,sysstat,fio,dbench,bonnie++"
+PACKAGES+=",bc,attr,gawk"
 
 EXCLUDE="dmidecode,nano,rsyslog,logrotate,cron,iptables,nfacct"
 EXCLUDE+=",debconf-i18n,info,gnupg"
 
 MIRROR=http://ftp.us.debian.org/debian/
 
-create_mount_image $1
-
-debootstrap --include="$PACKAGES" --exclude="$EXCLUDE" sid "$MNT" $MIRROR
-
-cat > "$MNT/etc/network/interfaces" <<-ZZ
-auto lo
-iface lo inet loopback
-
-auto eth0
-iface eth0 inet dhcp
-ZZ
-
-cp $VM_IMAGE_DIR/rc.local "$MNT/etc/rc.local"
-chmod 755 "$MNT/etc/rc.local"
-
-chroot "$MNT" systemctl mask				\
-    dev-hvc0.device					\
+SYSTEMD_MASK=(dev-hvc0.device				\
     getty.target					\
     getty-static.service				\
     avahi-daemon.service				\
@@ -52,7 +48,6 @@ chroot "$MNT" systemctl mask				\
     lvm2-lvmetad.socket					\
     lvm2-activation-early.service			\
     lvm2-activation.service				\
-    dm-event.socket					\
     aoetools.service					\
     sysstat.service					\
     kexec-load.service					\
@@ -64,13 +59,98 @@ chroot "$MNT" systemctl mask				\
     systemd-journald.service				\
     systemd-journal-flush.service			\
     systemd-journald-dev-log.socket			\
-    systemd-journald.socket
+    systemd-journald.socket)
 
-rm "$MNT/lib/udev/rules.d/*persistent*"
-rm "$MNT/lib/udev/rules.d/*lvm*"
-rm "$MNT/lib/udev/rules.d/*dm*"
-rm "$MNT/lib/udev/rules.d/*md-raid*"
-rm "$MNT/lib/udev/rules.d/*btrfs*"
-rm "$MNT/lib/udev/rules.d/*hdparm*"
+usage()
+{
+    echo "create_vm_image: Create a virtual machine image for ktest"
+    echo "Usage: create_vm_image [ -m debian mirror ] filename"
+}
 
-finish_umount_image
+while getopts "hm:" arg; do
+    case $arg in
+	h)
+	    echo "-m	debian mirror"
+	    ;;
+	m)
+	    MIRROR=$OPTARG
+	    ;;
+    esac
+done
+shift $(( OPTIND - 1 ))
+
+if [[ $# = 0 ]]; then
+    usage
+    exit 1
+fi
+
+OUT=$1
+
+# Use the /tmp tmpfs for the build, its way faster
+TDIR=$(mktemp -d)
+trap 'echo "WARNING: left a mess in: $TDIR"' ERR
+mount -n -t tmpfs none "$TDIR"
+
+MNT="$TDIR/mount"
+FSFILE="$TDIR/fs"
+
+fallocate -l $IMAGE_SIZE $FSFILE
+mkfs.ext4 -F $FSFILE
+mkdir -p $MNT
+mount -n -o loop $FSFILE $MNT
+
+debootstrap --include="$PACKAGES" --exclude="$EXCLUDE" sid "$MNT" $MIRROR
+
+cat > "$MNT/etc/network/interfaces" <<-ZZ
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp
+ZZ
+
+install -m0755 "$VM_IMAGE_DIR/rc.local" "$MNT/etc/"
+install -m0644 "$VM_IMAGE_DIR/fstab" "$MNT/etc/"
+
+touch $MNT/etc/resolv.conf
+chmod 644 $MNT/etc/resolv.conf
+
+mkdir -p "$MNT/root/"
+install -m0644 "$MNT/etc/skel/.bashrc" "$MNT/root/"
+install -m0644 "$MNT/etc/skel/.profile" "$MNT/root/"
+
+mkdir -p "$MNT/root/.ssh"
+install -m0600 $KTESTDIR/id_dsa.pub "$MNT/root/.ssh/authorized_keys"
+
+mkdir -p "$MNT/cdrom"
+ln -s /cdrom/modules "$MNT/lib/modules"
+
+mkdir -p "$MNT/var/log/ktest" "$MNT/var/log/core"
+chmod 777 "$MNT/var/log/ktest" "$MNT/var/log/core"
+
+# Disable systemd/udev stuff we don't need:
+chroot "$MNT" systemctl mask "${SYSTEMD_MASK[@]}"
+
+rm -f "$MNT/lib/udev/rules.d/*persistent*"
+rm -f "$MNT/lib/udev/rules.d/*lvm*"
+rm -f "$MNT/lib/udev/rules.d/*dm*"
+rm -f "$MNT/lib/udev/rules.d/*md-raid*"
+rm -f "$MNT/lib/udev/rules.d/*btrfs*"
+rm -f "$MNT/lib/udev/rules.d/*hdparm*"
+
+# Unmount everything in the root
+awk '{print $2}' /proc/mounts
+    |grep "^$MNT"
+    |sort -r
+    |xargs umount
+
+rmdir $MNT
+
+# Trim deleted data from the image (around 75MB)
+e2fsck -f $FSFILE
+resize2fs -M $FSFILE      # shrinks the file
+mv -f $FSFILE $OUT
+resize2fs $OUT $IMAGE_SIZE      # re-grows as sparse
+
+umount -n $TDIR || :
+rmdir $TDIR && trap ERR   # No longer need the cleanup msg
