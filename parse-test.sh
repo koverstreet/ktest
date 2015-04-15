@@ -22,7 +22,8 @@ parse_test_deps()
 	    exit 1
 	fi
 
-	FILES+=("$(readlink -f "$1")")
+	# Make sure directories show up, not just their contents
+	FILES+=("$(basename "$1")=$(readlink -f "$1")")
     }
 
     require-lib()

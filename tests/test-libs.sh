@@ -365,6 +365,8 @@ test_sync()
 
 test_drop_caches()
 {
+    echo 4 > /proc/sys/vm/drop_caches
+
     while true; do
 	echo 3 > /proc/sys/vm/drop_caches
 	sleep 5

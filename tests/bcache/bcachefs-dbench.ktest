@@ -25,7 +25,8 @@ main()
 
     [ "$NR_REBOOTS" != "$nr_iterations" ] && (sleep 10; do_reboot) &
 
-    test_dbench || true
+    test_dbench
+    kill %1
 
     if [ "$NR_REBOOTS" != "$nr_iterations" ]; then
 	# Make sure we reboot and don't just exit
