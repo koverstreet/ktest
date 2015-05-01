@@ -221,9 +221,7 @@ def cmd_sysrq():
 # Allow exit handlers to be called
 for sig in (signal.SIGHUP,
             signal.SIGINT,
-            signal.SIGQUIT,
-            signal.SIGILL,
-            signal.SIGABRT,
+            signal.SIGPIPE,
             signal.SIGALRM,
             signal.SIGTERM,
             signal.SIGUSR1,
