@@ -155,13 +155,11 @@ run_ktest()
     arg=$1
     shift
 
-    # shellcheck disable=SC2086
     exec "$KTEST" "$arg" $KTESTARGS -k "$KERNEL_OUTPUT" "$@"
 }
 
 do_make()
 {
-    # shellcheck disable=SC2086
     make -C "$KERNEL_SOURCE" O="$WORK_DIR" -j "$NJOBS"			\
 	$COVERAGE							\
 	INSTALL_MOD_PATH="$KERNEL_OUTPUT"				\

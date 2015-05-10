@@ -15,12 +15,6 @@ VMSTART=("$KTESTDIR/vm-start")
 . "$KTESTDIR/util.sh"
 . "$KTESTDIR/parse-test.sh"
 
-if which shellcheck > /dev/null 2>&1; then
-    shellcheck --exclude=SC2030 --exclude=SC2031 "$0"
-    shellcheck "$KTESTDIR/util.sh"
-    shellcheck -exclude=SC2034 "$KTESTDIR/parse-test.sh"
-fi
-
 checkdep genisoimage
 checkdep minicom
 checkdep socat
@@ -165,7 +159,6 @@ run_vm()
 	_KERNEL_APPEND="$_KERNEL_APPEND ktest.timeout=$_TIMEOUT"
     fi
 
-    # shellcheck disable=SC2086
     "${VMSTART[@]}"							\
 	--image="$IMG"							\
 	--kernel="$KERNEL/vmlinuz"					\

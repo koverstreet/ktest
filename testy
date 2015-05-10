@@ -8,8 +8,6 @@ set -o errexit
 set -o pipefail
 export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]}()}+ '
 
-shellcheck "$0"
-
 KTESTDIR=$(dirname "$(readlink -f "$0")")
 
 # hack:
@@ -38,7 +36,6 @@ read_tests()
 	|while read line; do
 	    [[ -z $line ]] && continue
 
-            # shellcheck disable=SC2086
 	    set $line
 
 	    if [[ $# != 3 ]]; then
