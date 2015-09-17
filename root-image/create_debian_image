@@ -27,7 +27,7 @@ PACKAGES="kexec-tools,less,psmisc,openssh-server"
 PACKAGES+=",make,gcc,g++,gdb,strace,valgrind"
 PACKAGES+=",hdparm,xfsprogs,btrfs-tools,mdadm,lvm2,aoetools,vblade"
 PACKAGES+=",linux-tools,blktrace,sysstat,fio,dbench,bonnie++"
-PACKAGES+=",bc,attr,gawk"
+PACKAGES+=",bc,attr,gawk,acl"
 
 EXCLUDE="dmidecode,nano,rsyslog,logrotate,cron,iptables,nfacct"
 EXCLUDE+=",debconf-i18n,info,gnupg"
@@ -59,7 +59,8 @@ SYSTEMD_MASK=(dev-hvc0.device				\
     systemd-journald.service				\
     systemd-journal-flush.service			\
     systemd-journald-dev-log.socket			\
-    systemd-journald.socket)
+    systemd-journald.socket				\
+    time-sync.target)
 
 usage()
 {
@@ -139,10 +140,10 @@ rm -f "$MNT/lib/udev/rules.d/*btrfs*"
 rm -f "$MNT/lib/udev/rules.d/*hdparm*"
 
 # Unmount everything in the root
-awk '{print $2}' /proc/mounts
-    |grep "^$MNT"
-    |sort -r
-    |xargs umount
+awk '{print $2}' /proc/mounts|
+    grep "^$MNT"|
+    sort -r|
+    xargs umount
 
 rmdir $MNT
 

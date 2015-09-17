@@ -49,6 +49,11 @@ parse_test_deps()
 	local req=$1
 	local f="$(which "$req")"
 
+	if [[ -z $f ]]; then
+	    echo "Dependency $req not found"
+	    exit 1
+	fi
+
 	_add-file "$f"
     }
 

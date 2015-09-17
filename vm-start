@@ -57,12 +57,12 @@ def vm_run(vmdir, vm_nr):
     if args.initrd:
         cmd.extend(["-initrd", args.initrd])
 
-    kernelParams = "console=hvc0 root=/dev/sda "
+    kernelParams = "console=hvc0 root=/dev/sda rw "
     if args.kgdb:
         kernelParams += "kgdboc=ttyS0,115200 "
 
     if args.append:
-        kernelParams += args.append
+        kernelParams += " ".join(args.append)
 
     cmd.extend(["-append", kernelParams])
 
@@ -188,7 +188,7 @@ def cmd_ssh():
                            "-o", "StrictHostKeyChecking=no",
                            "-o", "UserKnownHostsFile=/dev/null",
                            "-o", "NoHostAuthenticationForLocalhost=yes",
-                           "-o", "ServerAliveInterval=1",
+                           "-o", "ServerAliveInterval=2",
                            "-o", "ProxyCommand=%s %s %s 22" % (lwip_connect, sock, ip),
                            "root@127.0.0.1"] + extra_opts)
     sys.exit(ret)
@@ -244,7 +244,7 @@ parser_start.add_argument("-k", "--kernel",
 parser_start.add_argument("-r", "--initrd",
     help="initial ramdisk for boot")
 parser_start.add_argument("-a", "--append",
-    default="root=/dev/sda rw",
+    action='append',
     help="append kernel command line boot arguments")
 parser_start.add_argument("--kgdb", action="store_true",
     help="enable kgdb")

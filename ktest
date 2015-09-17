@@ -164,7 +164,11 @@ run_vm()
 	--kernel="$KERNEL/vmlinuz"					\
 	--cdrom="$iso"							\
 	--fs "$OUTPUT_DIR" logfs					\
-	--append="rw crashkernel=128M ktest.priority=$PRIORITY $_KERNEL_APPEND quiet"\
+	--append="ktest.priority=$PRIORITY"				\
+	--append="crashkernel=128M"					\
+	--append="log_buf_len=8M"					\
+	--append="quiet"						\
+	--append="$_KERNEL_APPEND"					\
 	--memory="$_MEM"						\
 	--cpus "$_CPUS"							\
 	--nr_vms="$_NR_VMS"|
