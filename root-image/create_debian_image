@@ -28,11 +28,16 @@ PACKAGES+=",make,gcc,g++,gdb,strace,valgrind"
 PACKAGES+=",hdparm,xfsprogs,btrfs-tools,mdadm,lvm2,aoetools,vblade"
 PACKAGES+=",linux-tools,blktrace,sysstat,fio,dbench,bonnie++"
 PACKAGES+=",bc,attr,gawk,acl"
+PACKAGES+=",build-essential"
+
+# xfstests:
+PACKAGES+=",libtool-bin,xfslibs-dev,libattr1-dev,libaio-dev,libgdbm-dev,libacl1-dev"
 
 EXCLUDE="dmidecode,nano,rsyslog,logrotate,cron,iptables,nfacct"
 EXCLUDE+=",debconf-i18n,info,gnupg"
 
 MIRROR=http://ftp.us.debian.org/debian/
+ARCH=amd64
 
 SYSTEMD_MASK=(dev-hvc0.device				\
     getty.target					\
@@ -65,16 +70,20 @@ SYSTEMD_MASK=(dev-hvc0.device				\
 usage()
 {
     echo "create_vm_image: Create a virtual machine image for ktest"
-    echo "Usage: create_vm_image [ -m debian mirror ] filename"
+    echo "Usage: create_vm_image [ -m debian mirror ] [ -a architecture ] filename"
 }
 
-while getopts "hm:" arg; do
+while getopts "hm:a:" arg; do
     case $arg in
 	h)
-	    echo "-m	debian mirror"
+	    usage
+	    exit 0
 	    ;;
 	m)
 	    MIRROR=$OPTARG
+	    ;;
+	a)
+	    ARCH=$OPTARG
 	    ;;
     esac
 done
@@ -100,7 +109,7 @@ mkfs.ext4 -F $FSFILE
 mkdir -p $MNT
 mount -n -o loop $FSFILE $MNT
 
-debootstrap --include="$PACKAGES" --exclude="$EXCLUDE" sid "$MNT" $MIRROR
+debootstrap --arch=$ARCH --include="$PACKAGES" --exclude="$EXCLUDE" sid "$MNT" $MIRROR
 
 cat > "$MNT/etc/network/interfaces" <<-ZZ
 auto lo
