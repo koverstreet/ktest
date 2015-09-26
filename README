@@ -8,119 +8,65 @@ A test is contained within a single executable file (typically a bash script)
 that will be executed within a VM. Tests declare their dependencies, so that
 the ktest tool can run them in the proper environment.
 
-Example test dependencies, from tests/bcache:
-
-if [ "$1" = "deps" ]; then
-	echo "REQUIRE=test-libs.sh,make-bcache"
-	echo "MEM=512M"
-	echo "SCRATCH=512M,2G,2G"
-	exit
-fi
-
-The full list of possible requirements:
-
- * MEM (required): amount of memory for the VM
-
- * SCRATCH: scratch block devices, a comma separated list of sizes. They'll
-   be available within the VM as vda/vdb/etc.
-
- * REQUIRE: comma separated list of files/executables to make available within
-   the VM. They'll be available in the same directory as the test script
-   (/cdrom), and in PATH. The ktest run command will search for requirements
-   first relative to the test, then in your PATH.
-
- * LREQUIRE: Comma separated list of dependencies to include from the local
-   source tree - i.e. executables in the Linux kernel repository under tools/.
-
-The test can indicate success by echoing "TEST SUCCESS" to standard output;
-that will cause the vm to be shut down and ktest to return success. If the
-test doesn't echo "TEST SUCCESS" the vm will run forever - unless ktest was
-run with a timeout, in which case the vm will shut down and ktest will return
-failure once the timeout elapses.
-
-TOOLS:
-======
-
- * create_vm_image: Create a root filesystem suitable for running tests inside
-   a VM. Uses debootstrap to create a minimal debian installation with the
-   appropriate configuration.
-
- * vm-start: Simple python tool for running multiple kvm instances on a
-   machine with scratch devices that will be cleaned up when the vm exits, and
-   for allocating/freeing slots for networking - used by the ktest.
-
- * ktest: Builds a kernel and runs a specific test, using vm-start.
-
-
 GETTING STARTED:
 ================
-ktest works well in a 's chroot' environment. You need to have a debian package
-cloned in your working space from which you can run 's chroot' and then
-do the steps that follow.
 
-Before running ktests make sure that you have done s build bcache-tools so that
-make-bcache is installed in your path.
+You'll need to build a root filesystem image for the virtual machines. There's a
+script that fully automates this - it uses debootstrap, so you may have issues
+if you're not running debian/ubuntu.
 
-As root, create a root filesystem for the virtual machines and place it in
-either /var/lib/ktest/root or $HOME/.ktest/root:
+To use it, run (as root)
+# root-image/create_debian_image root 
 
-  # mkdir /var/lib/ktest
-  # create_vm_image /var/lib/ktest/root
+Stick it in /var/lib/ktest/root, that's where ktest looks for it by default.
 
-The vm-start tool needs a database initialized for the running vms, so it can
-allocate slots for networking and make sure scratch devices get cleaned up.
-The database will be world writable, and it lives in /etc/vms. To create it,
-as root run:
+TOOLS:
 
-  # vm-start genips
+Symlink the ones you're using somewhere into your path - there's no install
+procedure, they just expect to be run out of the git repository.
 
-ktest will use /tmp for the VM scratch devices by default; if you wish to use
-another directory you can create a symlink to it at $HOME/.ktest/tmp. I
-suggest using a tmpfs.
+ * build-test-kernel
 
-Similarly, the vm-start tool needs a database initialized for the running vms
-so it can allocate rdma capable pci cards in passthrough mode provided virtual
-functions are possible on such a card on the host. The database will be world
-writable, and it lives in /etc/vms. To create it, as root run:
-  # vm-start genconx3
-To assign such a rdma enabled virtual function to your vm run vm-start with
-the --conx3 switch
+   This is what you'll use most of the time for interactive kernel development.
+   It expects to be run from a Linux kernel source tree - it builds it, and runs
+   the specified test.
 
+   Normal usage:
+   $ build-test-kernel run -I ~/ktest/tests/bcache/xfstests.ktest
 
+   run builds a kernel and runs the specified test; there are other subcommands
+   for interacting with a running test VM (sshing in, using kgdb, etc.).
 
-USING KTEST:
-============
+   -I enables interactive mode (disables timeouts, enables kgdb instead of crash
+   dumps)
 
-From within the kernel source tree you wish to test, run
+ * ktest
 
-  $ ktest run <testfile>
+   This is what build-test-kernel calls into after building a kernel. ktest
+   takes a kernel image and a test, and parses the test and figures out the
+   correct parameters for running the virtual machine
 
-ktest will build a kernel (using .ktest for the output directory), launch a vm
-and start running your test. Output goes to standard output, CTRL-C will kill
-the vm and cleanup all scratch devices and sockets.
+ * testy
 
-ktest has a variety of other useful subcommands:
+   Simple tool for parsing "test lists" - files that specify which tests apply
+   to which source files/directories, and optionally running the appropriate
+   tests.
 
-  * ktest ssh logs in as root to a vm launched by ktest from the current
-    directory
+ * vm-start
 
-  * ktest gdb runs gdb and connects it to kgdb's serial interface
+   You'll probably never use this directly - this is the component that runs a
+   virtual machine (or multiple virtual machines, for tests that require
+   networking), creating scratch devices and networks (in userspace with
+   vde_switch) and so on.
 
-  * ktest mon connects to qemu's monitor interface
+TESTS:
+======
 
-These commands will connect to the vm that was run by ktest from the current
-directory.
+Tests are bash scripts; they specify dependencies/requirements (test libraries,
+binaries, kernel config options, etc.) by calling various predefined bash
+functions.
 
-  * ktest oldconfig, ktest config run make oldconfig and make nconfig on the
-    kernel configuration in .ktest - but passing the same options to make as
-    with ktest run, so as to avoid unnecessary recompiles.
+The test itself goes in a main() shell function; this will be run inside the VM.
 
-TODO:
-  * TEST_REQUIRE - recursively handle dependencies
-
-  * More tests, including integrating other existing tests - i.e. a shim for
-    xfstests
-
-  * Network tests - i.e. tests that require multiple VMs
-
-  * ???
+TODO: real documentation. For now, look at example tests - or parse-test.sh,
+which parses test requirements.
