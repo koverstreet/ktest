@@ -1,6 +1,5 @@
 #!/usr/bin/python
-# Copyright (c) 2013 Datera, Inc. All rights reserved
-# Datera, Inc. Confidential and Propriatory
+# GPLv2
 
 import atexit
 import os
