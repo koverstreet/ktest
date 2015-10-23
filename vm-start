@@ -36,6 +36,7 @@ def vm_run(vmdir, vm_nr):
     cmd = ["stdbuf", "-oL",
            "qemu-system-x86_64",
            "-machine", "accel=kvm",
+           "-cpu",      "host",
            "-m",        args.memory,
            "-smp",      "%d,sockets=%d" % (args.cpus, args.cpus),
 
@@ -129,7 +130,8 @@ def cmd_start():
         sock = os.path.join(vmdir, "net-" + str(i))
 
         atexit.register(kill_proc,
-                        subprocess.Popen(["vde_switch", "-sock", sock],
+                        subprocess.Popen(["vde_switch",
+                                          "-sock", sock],
                                          stdin=subprocess.PIPE,
                                          stdout=FNULL,
                                          stderr=subprocess.STDOUT))
@@ -138,8 +140,10 @@ def cmd_start():
             time.sleep(0.1)
 
         atexit.register(kill_proc,
-                        subprocess.Popen(["slirpvde", "--sock", sock,
-                                          "--dhcp", "--host", net],
+                        subprocess.Popen(["slirpvde",
+                                          "--sock", sock,
+                                          "--dhcp=10.0.2.2",
+                                          "--host", net],
                                          stdin=subprocess.PIPE,
                                          stdout=FNULL,
                                          stderr=subprocess.STDOUT))
@@ -175,7 +179,7 @@ def cmd_ssh():
                            os.path.join(DIR, "lwip-connect.c"),
                            "-llwipv6"])
 
-    ip = "10.0.2." + str(15 + args.vm_nr)
+    ip = "10.0.2." + str(2 + args.vm_nr)
 
     sock = os.path.join(vmdir_read(), "net-0")
 

@@ -31,7 +31,7 @@ static void lwip_setnonblocking(int fd)
 
 int main(int argc, char **argv)
 {
-	if (argc < 3)
+	if (argc < 4)
 		die("insufficient arguments");
 
 	char *path = argv[1];
