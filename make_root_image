@@ -7,12 +7,11 @@ set -o nounset
 set -o errexit
 set -o errtrace
 
-VM_IMAGE_DIR=$(dirname $(readlink -f $0))
-KTESTDIR=$VM_IMAGE_DIR/..
+KTESTDIR=$(dirname "$(readlink -f "$0")")
 
-. $KTESTDIR/util.sh
+. "$KTESTDIR/util.sh"
 
-if [ `id -u` != 0 ] ; then
+if [[ $(id -u) != 0 ]] ; then
     echo this script must be run as root
     exit 1
 fi
@@ -96,18 +95,13 @@ fi
 
 OUT=$1
 
-# Use the /tmp tmpfs for the build, its way faster
-TDIR=$(mktemp -d)
-trap 'echo "WARNING: left a mess in: $TDIR"' ERR
-mount -n -t tmpfs none "$TDIR"
+MNT=$(mktemp -d)
+trap 'echo "WARNING: left a mess in: $MNT"' ERR
 
-MNT="$TDIR/mount"
-FSFILE="$TDIR/fs"
-
-fallocate -l $IMAGE_SIZE $FSFILE
-mkfs.ext4 -F $FSFILE
-mkdir -p $MNT
-mount -n -o loop $FSFILE $MNT
+fallocate -l "$IMAGE_SIZE" "$OUT"
+mkfs.ext4 -F "$OUT"
+mkdir -p "$MNT"
+mount -n -o loop "$OUT" "$MNT"
 
 debootstrap --arch=$ARCH --include="$PACKAGES" --exclude="$EXCLUDE" sid "$MNT" $MIRROR
 
@@ -119,18 +113,22 @@ auto eth0
 iface eth0 inet dhcp
 ZZ
 
-install -m0755 "$VM_IMAGE_DIR/rc.local" "$MNT/etc/"
-install -m0644 "$VM_IMAGE_DIR/fstab" "$MNT/etc/"
+cat > "$MNT/etc/fstab" <<-ZZ
+debugfs				/sys/kernel/debug	debugfs		defaults	0	0
+configfgs			/sys/kernel/config	configfs	defaults	0	0
+ZZ
 
-touch $MNT/etc/resolv.conf
-chmod 644 $MNT/etc/resolv.conf
+install -m0755 "$KTESTDIR/rc.local" "$MNT/etc/"
+
+touch "$MNT/etc/resolv.conf"
+chmod 644 "$MNT/etc/resolv.conf"
 
 mkdir -p "$MNT/root/"
 install -m0644 "$MNT/etc/skel/.bashrc" "$MNT/root/"
 install -m0644 "$MNT/etc/skel/.profile" "$MNT/root/"
 
 mkdir -p "$MNT/root/.ssh"
-install -m0600 $KTESTDIR/id_dsa.pub "$MNT/root/.ssh/authorized_keys"
+install -m0600 "$KTESTDIR/id_dsa.pub" "$MNT/root/.ssh/authorized_keys"
 
 mkdir -p "$MNT/cdrom"
 ln -s /cdrom/modules "$MNT/lib/modules"
@@ -154,13 +152,9 @@ awk '{print $2}' /proc/mounts|
     sort -r|
     xargs umount
 
-rmdir $MNT
+rmdir "$MNT"
 
 # Trim deleted data from the image (around 75MB)
-e2fsck -f $FSFILE
-resize2fs -M $FSFILE      # shrinks the file
-mv -f $FSFILE $OUT
-resize2fs $OUT $IMAGE_SIZE      # re-grows as sparse
-
-umount -n $TDIR || :
-rmdir $TDIR && trap ERR   # No longer need the cleanup msg
+e2fsck -f "$OUT"
+resize2fs -M "$OUT"		# shrinks the file
+resize2fs "$OUT" "$IMAGE_SIZE"	# re-grows as sparse

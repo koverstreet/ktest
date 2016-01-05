@@ -1,2 +1,0 @@
-debugfs				/sys/kernel/debug	debugfs		defaults	0	0
-configfgs			/sys/kernel/config	configfs	defaults	0	0
