@@ -1,0 +1,11 @@
+#!/bin/bash
+
+#/cdrom/bcache format --error_action=panic --cache $@
+/cdrom/bcache format				\
+    --error_action=panic			\
+    --cache $@
+
+#    --data_csum_type=crc32c			\
+#    --compression_type=gzip			\
+#    --block=512					\
+#    --bucket=8k					\

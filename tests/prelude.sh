@@ -2,7 +2,6 @@
 # Normal kernel functionality:
 
 require-kernel-config EXT4_FS
-require-kernel-config EXT4_USE_FOR_EXT23
 require-kernel-config EXT4_FS_POSIX_ACL
 require-kernel-config TMPFS
 require-kernel-config INOTIFY_USER
@@ -50,29 +49,32 @@ require-kernel-config ENABLE_MUST_CHECK
 
 require-kernel-config MAGIC_SYSRQ
 require-kernel-config DEBUG_INFO
+require-kernel-config DEBUG_INFO_DWARF4
+require-kernel-config GDB_SCRIPTS
 require-kernel-config DEBUG_KERNEL
 require-kernel-config PANIC_ON_OOPS
 
-require-kernel-config DEBUG_LIST
-require-kernel-config DEBUG_ATOMIC_SLEEP
-require-kernel-config DEBUG_MUTEXES
-require-kernel-config DEBUG_PREEMPT
+# Tracing
+require-kernel-config FTRACE
+#require-kernel-config ENABLE_DEFAULT_TRACERS
 
-require-kernel-config DEBUG_SLAB
-require-kernel-config DEBUG_SPINLOCK
+# More expensive
+#require-kernel-config DYNAMIC_DEBUG
 
-require-kernel-config LOCKDEP_SUPPORT
-require-kernel-config PROVE_LOCKING
+# Expensive
+#require-kernel-config DEBUG_LIST
+#require-kernel-config DEBUG_ATOMIC_SLEEP
+#require-kernel-config DEBUG_MUTEXES
+#require-kernel-config DEBUG_PREEMPT
 
-require-kernel-config PROVE_RCU
+#require-kernel-config DEBUG_SLAB
+#require-kernel-config DEBUG_SPINLOCK
+
+#require-kernel-config LOCKDEP_SUPPORT
+#require-kernel-config PROVE_LOCKING
+
+#require-kernel-config PROVE_RCU
 #require-kernel-config RCU_CPU_STALL_VERBOSE
 
 # expensive, doesn't catch that much
 # require-kernel-config DEBUG_PAGEALLOC
-
-# Tracing
-require-kernel-config DYNAMIC_DEBUG
-require-kernel-config FTRACE
-require-kernel-config ENABLE_DEFAULT_TRACERS
-
-

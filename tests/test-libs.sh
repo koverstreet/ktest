@@ -8,7 +8,7 @@ require-lib prelude.sh
 config-mem 2G
 
 require-kernel-config MD
-require-kernel-config DYNAMIC_FAULT
+require-kernel-config DEBUG_FS,DYNAMIC_FAULT
 require-kernel-config XFS_FS
 
 require-make ../ltp-fsx/Makefile ltp-fsx
@@ -200,44 +200,41 @@ test_fio()
 	cd $LOGDIR
 
 	for dev in $DEVICES; do
-	    fio --eta=always		\
+	    /cdrom/fio --eta=always	\
 		--randrepeat=0		\
 		--ioengine=libaio	\
 		--iodepth=64		\
 		--iodepth_batch=16	\
 		--direct=1		\
 		--numjobs=1		\
+		--verify=meta		\
 		--verify_fatal=1	\
 		--verify_dump=1		\
 		--filename=$dev		\
 					\
 		--name=seqwrite		\
 		--stonewall		\
-		--loops=$loops		\
 		--rw=write		\
 		--bsrange=4k-128k	\
-		--verify=crc32c-intel	\
+		--loops=$loops		\
 					\
 		--name=randwrite	\
 		--stonewall		\
-		--loops=$loops		\
 		--rw=randwrite		\
 		--bsrange=4k-128k	\
-		--verify=meta		\
+		--loops=$loops		\
 					\
 		--name=randwrite_small	\
 		--stonewall		\
-		--loops=$loops		\
 		--rw=randwrite		\
 		--bs=4k			\
-		--verify=crc32c-intel	\
+		--loops=$loops		\
 					\
 		--name=randread		\
 		--stonewall		\
-		--loops=$loops		\
 		--rw=randread		\
 		--bs=4k			\
-		--verify=crc32c-intel	&
+		--loops=$loops		&
 	done
 
 	test_wait
@@ -298,10 +295,12 @@ test_discard()
         blkdiscard $dev
     done
 
-    # Wait for btree GC to finish so that the counts are actually up to date
-    while [ "$(cat /sys/fs/bcache/*/internal/btree_gc_running)" != "0" ]; do
-	sleep 1
-    done
+    if [[ -f /sys/fs/bcache/*/internal/btree_gc_running ]]; then
+	# Wait for btree GC to finish so that the counts are actually up to date
+	while [ "$(cat /sys/fs/bcache/*/internal/btree_gc_running)" != "0" ]; do
+	    sleep 1
+	done
+    fi
 
     expect_sysfs cache dirty_buckets 0
     expect_sysfs cache dirty_data 0

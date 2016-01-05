@@ -1,0 +1,136 @@
+#!/bin/bash
+
+require-lib bcache-test-libs.sh
+
+require-file mkfs.bcache
+require-file xfstests
+
+require-kernel-config FAULT_INJECTION,FAULT_INJECTION_DEBUG_FS,FAIL_MAKE_REQUEST
+require-kernel-config BLK_DEV_DM,DM_FLAKEY,DM_SNAPSHOT
+require-kernel-config USER_NS
+require-kernel-config BLK_DEV,BLK_DEV_LOOP
+
+require-kernel-config CRYPTO_CRC32C_INTEL
+require-kernel-config CRYPTO_POLY1305_X86_64
+require-kernel-config CRYPTO_CHACHA20_X86_64
+
+require-kernel-config 64BIT=y
+
+#require-file util-linux-2.27~rc1
+#require-file linux-3.13.tar
+
+config-bucket-size 16k
+config-block-size 512
+
+#config-cache 2G
+#config-scratch-devs 2G
+
+# 038,048,312 require > 10G
+config-cache 14G
+config-scratch-devs 14G
+
+config-timeout $(stress_timeout)
+
+main()
+{
+    useradd fsgqa
+
+    #systemctl mask systemd-udevd.service
+    #systemctl stop systemd-udevd.service
+
+    systemctl unmask			\
+	lvm2-lvmetad.service		\
+	lvm2-monitor.service		\
+	lvm2-lvmetad.socket		\
+	lvm2-activation.service
+
+    systemctl start			\
+	lvm2-lvmetad.service		\
+	lvm2-monitor.service		\
+	lvm2-lvmetad.socket
+
+    #lvm2-activation-early.service
+
+    export TEST_DEV=/dev/sdb
+    export TEST_DIR=/mnt/bcachefs
+    export FSTYP=bcache
+    export SCRATCH_DEV=/dev/sdc
+    export SCRATCH_MNT=/mnt/scratch
+
+    mkdir -p $TEST_DIR $SCRATCH_MNT
+
+    #echo 1 > /sys/module/bcache/parameters/expensive_debug_checks
+    #echo 1 > /sys/module/bcache/parameters/debug_check_bkeys
+    #echo 1 > /sys/module/bcache/parameters/btree_gc_coalesce_disabled
+
+    setup_tracing 'bcache:*'
+
+    bcache_format
+
+    mount -o data_checksum=crc32c,compression=gzip $CACHE /mnt/bcachefs
+
+    #/cdrom/bcache device_show /mnt/bcachefs
+    #exit
+    #mount $CACHE /mnt/bcachefs
+
+    #cd /mnt/bcachefs
+    #tar xf /cdrom/linux-3.13.tar
+    #dbench -t 120 20
+    #exit
+
+    #mount -o remount,ro /mnt/bcachefs
+    #mount -o remount,rw /mnt/bcachefs
+
+    #(
+    #    cd /mnt/bcachefs
+    #    /cdrom/xfstests/ltp/fsx -N 10000	\
+    #        -R -W				\
+    #        -P /root				\
+    #        test
+    #)
+
+    cp -a /cdrom/xfstests /root
+    cd /root/xfstests
+    #make clean && make
+
+    ln -sf /bin/bash /bin/sh
+
+    #test_antagonist
+    #echo "class race	frequency 100"	> /sys/kernel/debug/dynamic_fault/control
+
+    # -enospc stuff:
+    #./check generic/102 generic/274 generic/275
+
+    # flakey - locks up:
+    #./check generic/081
+
+    # stress tests:
+    while true; do
+	#./check generic/012
+	#./check generic/021
+	#./check generic/091
+	#./check generic/112
+	#./check generic/127
+	#./check generic/299
+
+	#./check generic/019 generic/075 generic/083	\
+	#    generic/113 generic/130 generic/269 generic/316
+
+	#./check generic/059 generic/075 generic/091	\
+	#    generic/112 generic/127 generic/263	\
+	#    generic/313 generic/316
+
+	#./check generic/299
+	./check generic/???
+    done
+
+    ./check generic/102 generic/214 generic/215 generic/237 generic/239	\
+	generic/240 generic/241 generic/246 generic/247 generic/248	\
+	generic/255 generic/257 generic/263 generic/274 generic/275	\
+	generic/277 generic/285
+
+    ./check generic/042 generic/102 generic/106 generic/214 generic/215	\
+	generic/239 generic/240 generic/241 generic/246 generic/247	\
+	generic/248 generic/255 generic/257 generic/263 generic/274	\
+	generic/275 generic/285
+}

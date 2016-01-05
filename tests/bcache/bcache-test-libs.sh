@@ -5,10 +5,12 @@
 
 require-lib ../test-libs.sh
 
-require-bin bcacheadm
+require-bin bcache
 
+require-kernel-config BCACHE,BCACHE_DEBUG
 
-require-kernel-config BCACHE,BCACHE_DEBUG,CLOSURE_DEBUG
+#Expensive:
+#require-kernel-config CLOSURE_DEBUG
 
 SYSFS=""
 BDEV=""
@@ -125,25 +127,50 @@ add_bcache_devs()
     done
 }
 
-make_bcache_flags()
+bcache_format()
 {
-    flags="$BUCKET_SIZE --block=$BLOCK_SIZE --cache_replacement_policy=$REPLACEMENT"
+    flags=""
+
+    #flags+=" --verison=0"
+
     case "$DISCARD" in
 	0) ;;
 	1) flags+=" --discard" ;;
 	*) echo "Bad discard: $DISCARD"; exit ;;
     esac
-    case "$WRITEAROUND" in
-	0) ;;
-	1) flags+=" --writearound" ;;
-	*) echo "Bad writearound: $WRITEAROUND"; exit ;;
-    esac
-    case "$WRITEBACK" in
-	0) ;;
-	1) flags+=" --writeback" ;;
-	*) echo "Bad writeback: $WRITEBACK"; exit ;;
-    esac
-    echo $flags
+
+    #case "$WRITEAROUND" in
+    #    0) ;;
+    #    1) flags+=" --writearound" ;;
+    #    *) echo "Bad writearound: $WRITEAROUND"; exit ;;
+    #esac
+    #case "$WRITEBACK" in
+    #    0) ;;
+    #    1) flags+=" --writeback" ;;
+    #    *) echo "Bad writeback: $WRITEBACK"; exit ;;
+    #esac
+
+    for cache in $CACHE; do
+	flags+=" --cache=$cache"
+    done
+
+    flags+=" --tier=1 --cache_replacement_policy=fifo"
+    for cache in $TIER; do
+	flags+=" --cache=$cache"
+    done
+
+    for bdev in $BDEV; do
+	flags+=" --bdev=$bdev"
+    done
+
+    bcache format --metadata_csum_type=crc32c	\
+	--error_action=panic				\
+	"$BUCKET_SIZE"					\
+	--block="$BLOCK_SIZE"				\
+	--cache_replacement_policy="$REPLACEMENT"	\
+	--data_replicas="$DATA_REPLICAS"		\
+	--meta_replicas="$META_REPLICAS"		\
+	$flags
 }
 
 add_device() {
@@ -170,20 +197,27 @@ existing_bcache() {
     DEVICES=
     DEVICE_COUNT=0
 
-    # Make sure bcache-super-show works -- the control plane wipes data
-    # if this fails so its important that it doesn't break
-    for dev in $CACHE $BDEV $TIER; do
-	bcacheadm query-devs $dev
-    done
-
     # Older kernel versions don't have /dev/bcache
-    if [ -e /dev/bcache ]; then
-	bcacheadm register $CACHE $TIER $BDEV
+    #if [ -e /dev/bcache-ctl ]; then
+    if false; then
+	echo "registering via bcacheadm"
+
+	# Make sure bcache-super-show works -- the control plane wipes data
+	# if this fails so its important that it doesn't break
+	for dev in $CACHE $BDEV $TIER; do
+	    bcache query-devs $dev
+	done
+
+	bcache register $CACHE $TIER $BDEV
     else
+	echo "registering via sysfs"
+
 	for dev in $CACHE $TIER $BDEV; do
 	    echo $dev > /sys/fs/bcache/register
 	done
     fi
+
+    echo "registered"
 
     # If we have one or more backing devices, then we get
     # one bcacheN per backing device.
@@ -193,7 +227,9 @@ existing_bcache() {
 
     udevadm settle
 
-    wait_on_dev /dev/bcache_extent0 $DEVICES
+    if [ -e /dev/bcache-ctl ]; then
+	wait_on_dev /dev/bcache0-ctl $DEVICES
+    fi
 
     cache_set_settings
 
@@ -211,34 +247,14 @@ existing_bcache() {
 # Registers all bcache devices after running make-bcache.
 #
 setup_bcache() {
-    make_bcache_flags="$(make_bcache_flags)"
-    make_bcache_flags+=" --wipe-bcache"
-    for cache in $CACHE; do
-        make_bcache_flags+=" --cache=$cache"
-    done
-    make_bcache_flags+=" --data-replicas=$DATA_REPLICAS"
-    make_bcache_flags+=" --meta-replicas=$META_REPLICAS"
-
-    if [ "$TIER" != "" ]; then
-	make_bcache_flags+=" --tier=1 --cache_replacement_policy=fifo"
-	for cache in $TIER; do
-		make_bcache_flags+=" --cache=$cache"
-	done
-    fi
-
-    if [ "$BDEV" != "" ]; then
-	for bdev in $BDEV; do
-		make_bcache_flags+=" --bdev=$bdev"
-	done
-    fi
-
-    # Let's change the checksum type just for fun
-    bcacheadm format --csum-type=crc32c $make_bcache_flags
+    bcache_format
 
     existing_bcache
+    sleep 2
 
     for size in $VOLUME; do
-	for file in /sys/fs/bcache/*/flash_vol_create; do
+	for file in /sys/fs/bcache/*/blockdev_volume_create; do
+	    echo "creating volume $size via $file"
 	    echo $size > $file
 	done
     done
@@ -262,10 +278,8 @@ cache_set_settings()
 {
     for dir in $(ls -d /sys/fs/bcache/*-*-*); do
 	true
-	echo 0 > $dir/btree_scan_ratelimit
-
 	#echo 0 > $dir/synchronous
-	echo panic > $dir/errors
+	#echo panic > $dir/errors
 
 	#echo 0 > $dir/journal_delay_ms
 	#echo 1 > $dir/internal/key_merging_disabled
@@ -275,13 +289,19 @@ cache_set_settings()
 	echo 0 > $dir/congested_read_threshold_us
 	echo 0 > $dir/congested_write_threshold_us
 
-	echo 1 > $dir/internal/copy_gc_enabled
+	#echo 1 > $dir/internal/copy_gc_enabled
 
 	# Disable damping effect since test cache devices are so small
-	echo 1 > $dir/internal/tiering_rate_p_term_inverse
-	echo 1 > $dir/internal/foreground_write_rate_p_term_inverse
+
+	[[ -f $dir/internal/tiering_rate_p_term_inverse ]] &&
+	    echo 1 > $dir/internal/tiering_rate_p_term_inverse
+
+	[[ -f $dir/internal/foreground_write_rate_p_term_inverse ]] &&
+	    echo 1 > $dir/internal/foreground_write_rate_p_term_inverse
+
 	for dev in $(ls -d $dir/cache[0-9]*); do
-	    echo 1 > $dev/copy_gc_rate_p_term_inverse
+	    [[ -f $dev/copy_gc_rate_p_term_inverse ]] &&
+		echo 1 > $dev/copy_gc_rate_p_term_inverse
 	done
     done
 }
@@ -297,7 +317,7 @@ setup_bcachefs()
 {
     uuid=$(ls -d /sys/fs/bcache/*-*-* | sed -e 's/.*\///')
     mkdir -p /mnt/bcachefs
-    mount -t bcachefs $uuid /mnt/bcachefs
+    mount $uuid /mnt/bcachefs
 
     # for fs workloads to know mount point
     DEVICES=bcachefs
@@ -323,7 +343,7 @@ bcache_status()
     for dev in "$@"; do
 	DEVS="$DEVS$dev "
     done
-    bcacheadm status $DEVS
+    bcache status $DEVS
 }
 
 bcache_dev_query()
@@ -332,5 +352,5 @@ bcache_dev_query()
     for dev in "$@"; do
 	DEVS="$DEVS$dev "
     done
-    bcacheadm query-devs $DEVS
+    bcache query-devs $DEVS
 }
