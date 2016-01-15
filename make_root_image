@@ -36,7 +36,6 @@ EXCLUDE="dmidecode,nano,rsyslog,logrotate,cron,iptables,nfacct"
 EXCLUDE+=",debconf-i18n,info,gnupg"
 
 MIRROR=http://ftp.us.debian.org/debian/
-ARCH=amd64
 
 SYSTEMD_MASK=(dev-hvc0.device				\
     getty.target					\
@@ -69,20 +68,20 @@ SYSTEMD_MASK=(dev-hvc0.device				\
 usage()
 {
     echo "create_vm_image: Create a virtual machine image for ktest"
-    echo "Usage: create_vm_image [ -m debian mirror ] [ -a architecture ] filename"
+    echo "Usage: create_vm_image [ -m debian mirror ] [ -a architecture ] new_image"
 }
 
-while getopts "hm:a:" arg; do
+while getopts "ha:m:" arg; do
     case $arg in
 	h)
 	    usage
 	    exit 0
 	    ;;
-	m)
-	    MIRROR=$OPTARG
-	    ;;
 	a)
 	    ARCH=$OPTARG
+	    ;;
+	m)
+	    MIRROR=$OPTARG
 	    ;;
     esac
 done
@@ -92,6 +91,8 @@ if [[ $# = 0 ]]; then
     usage
     exit 1
 fi
+
+parse_arch "$ARCH"
 
 OUT=$1
 
@@ -103,7 +104,13 @@ mkfs.ext4 -F "$OUT"
 mkdir -p "$MNT"
 mount -n -o loop "$OUT" "$MNT"
 
-debootstrap --arch=$ARCH --include="$PACKAGES" --exclude="$EXCLUDE" sid "$MNT" $MIRROR
+debootstrap				\
+    --no-check-gpg			\
+    --arch="$DEBIAN_ARCH"		\
+    --include="$PACKAGES"		\
+    --exclude="$EXCLUDE"		\
+    --foreign				\
+    sid "$MNT" "$MIRROR"
 
 cat > "$MNT/etc/network/interfaces" <<-ZZ
 auto lo
@@ -137,7 +144,16 @@ mkdir -p "$MNT/var/log/ktest" "$MNT/var/log/core"
 chmod 777 "$MNT/var/log/ktest" "$MNT/var/log/core"
 
 # Disable systemd/udev stuff we don't need:
-chroot "$MNT" systemctl mask "${SYSTEMD_MASK[@]}"
+# systemctl mask doesn't work for foreign archs
+#chroot "$MNT" systemctl mask "${SYSTEMD_MASK[@]}"
+
+for i in "${SYSTEMD_MASK[@]}"; do
+    (cd "$MNT/etc/systemd/system"; ln -s /dev/null "$i")
+done
+
+# disable network interface renaming - it's unreliable
+mkdir -p "$MNT/etc/udev/rules.d/"
+ln -s /dev/null "$MNT/etc/udev/rules.d/80-net-setup-link.rules"
 
 rm -f "$MNT/lib/udev/rules.d/*persistent*"
 rm -f "$MNT/lib/udev/rules.d/*lvm*"
@@ -145,6 +161,26 @@ rm -f "$MNT/lib/udev/rules.d/*dm*"
 rm -f "$MNT/lib/udev/rules.d/*md-raid*"
 rm -f "$MNT/lib/udev/rules.d/*btrfs*"
 rm -f "$MNT/lib/udev/rules.d/*hdparm*"
+
+cat > "$MNT/etc/rc.local" <<-ZZ
+#!/bin/bash
+
+mount /dev/sr0 /cdrom
+
+export PATH=/cdrom:$PATH
+cd /cdrom
+./rc > /dev/console 2>&1 &
+disown
+ZZ
+chmod 755 "$MNT/etc/rc.local"
+
+cp /usr/bin/qemu-${QEMU_BIN%qemu-system-}-static "$MNT/usr/bin"
+
+DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
+ LC_ALL=C LANGUAGE=C LANG=C chroot "$MNT" /debootstrap/debootstrap --second-stage
+
+DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
+ LC_ALL=C LANGUAGE=C LANG=C chroot "$MNT" dpkg --configure -a
 
 # Unmount everything in the root
 awk '{print $2}' /proc/mounts|

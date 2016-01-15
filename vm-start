@@ -34,11 +34,10 @@ def qemu_socket(vmdir, vm_nr, name):
 
 def vm_run(vmdir, vm_nr):
     cmd = ["stdbuf", "-oL",
-           "qemu-system-x86_64",
-           "-machine", "accel=kvm",
-           "-cpu",      "host",
+           "qemu-system-" + args.architecture,
+           "-nodefaults",
+
            "-m",        args.memory,
-           "-smp",      "%d,sockets=%d" % (args.cpus, args.cpus),
 
            "-nographic",
            "-device",   "virtio-serial",
@@ -48,8 +47,13 @@ def vm_run(vmdir, vm_nr):
            "-serial",   qemu_socket(vmdir, vm_nr, "kgdb"),
            "-monitor",  qemu_socket(vmdir, vm_nr, "mon"),
            "-gdb",      qemu_socket(vmdir, vm_nr, "gdb"),
+           "-device",   "virtio-rng-pci"
+          ]
 
-           "-device",   "virtio-rng-pci"]
+    if args.architecture == "x86_64":
+        cmd.extend(["-cpu",      "host",
+                    "-machine", "accel=kvm",
+                    "-smp",      "%d,sockets=%d" % (args.cpus, args.cpus)])
 
     if args.kernel:
         cmd.extend(["-kernel", args.kernel])
@@ -240,6 +244,9 @@ subparsers = parser.add_subparsers()
 
 parser_start = subparsers.add_parser('start',
     help='Start one or more virtual machine(s)')
+parser_start.add_argument("--architecture",
+    default="x86_64",
+    help="qemu architecture")
 parser_start.add_argument("-i", "--image", required=True,
     help="root filesystem for the virtual machine(s)")
 parser_start.add_argument("-k", "--kernel",

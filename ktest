@@ -21,8 +21,7 @@ checkdep socat
 checkdep qemu-system-x86_64 qemu-system-i386
 
 PRIORITY=0		# hint for how long test should run
-IMG="/var/lib/ktest/root"
-                        # root image that will be booted
+IMG=""			# root image that will be booted
                         #       set with: -i <path>
                         #       defaults: /var/lib/ktest/root
                         #       auto-override: $HOME/.ktest/root
@@ -82,11 +81,14 @@ fi
 CMD="cmd_$1"
 shift
 
-while getopts "hp:i:k:ISw:o:x" arg; do
+while getopts "ha:p:i:k:ISw:o:x" arg; do
     case $arg in
 	h)
 	    usage
 	    exit 0
+	    ;;
+	a)
+	    ARCH=$OPTARG
 	    ;;
 	p)
 	    PRIORITY=$OPTARG
@@ -121,6 +123,9 @@ if [[ -z $KERNEL ]]; then
     exit 1
 fi
 
+parse_arch "$ARCH"
+
+[[ -z $IMG ]]		&& IMG=/var/lib/ktest/root.$DEBIAN_ARCH
 [[ -z $IDFILE ]]	&& IDFILE=./.ktest-vm
 [[ -z $OUTPUT_DIR ]]	&& OUTPUT_DIR=./ktest-out
 
@@ -160,6 +165,7 @@ run_vm()
     fi
 
     "${VMSTART[@]}"							\
+	--architecture="${QEMU_BIN#qemu-system-}"			\
 	--image="$IMG"							\
 	--kernel="$KERNEL/vmlinuz"					\
 	--cdrom="$iso"							\
