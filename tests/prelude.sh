@@ -1,47 +1,94 @@
 
+
+if [[ $KERNEL_ARCH = x86 ]]; then
+    require-kernel-config SMP
+    require-kernel-config MCORE2	# optimize for core2
+    require-kernel-config IA32_EMULATION
+    require-kernel-config IO_DELAY_0XED
+fi
+
+if [[ $KERNEL_ARCH = powerpc ]]; then
+    require-kernel-config ADVANCED_OPTIONS
+fi
 # Normal kernel functionality:
+require-kernel-config PREEMPT
+require-kernel-config NO_HZ
+require-kernel-config HZ_100
+require-kernel-config HIGH_RES_TIMERS
 
-require-kernel-config EXT4_FS
-require-kernel-config EXT4_FS_POSIX_ACL
-require-kernel-config TMPFS
-require-kernel-config INOTIFY_USER
+require-kernel-config SYSVIPC
+require-kernel-config CGROUPS
+require-kernel-config SLAB
+require-kernel-config SWAP		# systemd segfaults if you don't have swap support...
+require-kernel-config MODULES
+require-kernel-config DEVTMPFS
+require-kernel-config DEVTMPFS_MOUNT
+require-kernel-config BINFMT_SCRIPT
 
-require-kernel-config SCSI
-require-kernel-config BLK_DEV_SD # disk support
-require-kernel-config BLK_DEV_SR # cdrom support
+require-kernel-config PROC_KCORE	# XXX Needed?
 
-# systemd segfaults if you don't have swap support...
-require-kernel-config SWAP
-
-# shouldn't need this enabled, but systemd also complains
-require-kernel-config CONFIGFS_FS
-
-# KVM drivers/ktest functionality:
+# PCI:
+require-kernel-config PCI
 require-kernel-config VIRTIO_PCI
 
+# Console:
+require-kernel-config SERIAL_8250	# XXX can probably drop
+require-kernel-config SERIAL_8250_CONSOLE
 require-kernel-config VIRTIO_CONSOLE
 
+# Block devices:
+require-kernel-config SCSI
+require-kernel-config SCSI_LOWLEVEL	# what's this for?
+require-kernel-config SCSI_VIRTIO
+require-kernel-config BLK_DEV_SD	# disk support
+
+# Networking
+require-kernel-config NET
+require-kernel-config PACKET
+require-kernel-config UNIX
+require-kernel-config INET
+require-kernel-config IP_MULTICAST
+#require-kernel-config IP_PNP
+#require-kernel-config IP_PNP_DHCP
 require-kernel-config NETDEVICES
 require-kernel-config VIRTIO_NET
+
+# Filesystems:
+require-kernel-config TMPFS
+require-kernel-config INOTIFY_USER
+require-kernel-config CONFIGFS_FS	# systemd
+
+# Root filesystem:
+require-kernel-config EXT4_FS
+require-kernel-config EXT4_FS_POSIX_ACL
+
+# Tests are passed to VM as an iso image:
+require-kernel-config BLK_DEV_SR	# cdrom support
+require-kernel-config ISO9660_FS
+
 require-kernel-config NET_9P
 require-kernel-config NET_9P_VIRTIO
 require-kernel-config NETWORK_FILESYSTEMS
 require-kernel-config 9P_FS
 
-require-kernel-config SCSI_LOWLEVEL # what's this for?
-require-kernel-config SCSI_VIRTIO
-
-# tests are passed to VM as an iso image:
-require-kernel-config ISO9660_FS
-
 # Crash dumps
-require-kernel-config KEXEC
-require-kernel-config CRASH_DUMP
-require-kernel-config RELOCATABLE
+if [[ $KERNEL_ARCH = x86 ]]; then
+    require-kernel-config KEXEC
+    require-kernel-config CRASH_DUMP
+    require-kernel-config RELOCATABLE
+fi
 
 # KGDB:
 require-kernel-config KGDB
 require-kernel-config KGDB_SERIAL_CONSOLE
+
+# Profiling:
+require-kernel-config PROFILING
+require-kernel-config JUMP_LABEL
+
+# Tracing
+require-kernel-config FTRACE
+#require-kernel-config ENABLE_DEFAULT_TRACERS
 
 # Debugging options
 require-kernel-config ENABLE_WARN_DEPRECATED
@@ -53,10 +100,6 @@ require-kernel-config DEBUG_INFO_DWARF4
 require-kernel-config GDB_SCRIPTS
 require-kernel-config DEBUG_KERNEL
 require-kernel-config PANIC_ON_OOPS
-
-# Tracing
-require-kernel-config FTRACE
-#require-kernel-config ENABLE_DEFAULT_TRACERS
 
 # More expensive
 #require-kernel-config DYNAMIC_DEBUG

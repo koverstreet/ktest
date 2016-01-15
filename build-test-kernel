@@ -169,12 +169,36 @@ run_ktest()
     exec "$KTEST" "$arg" $KTESTARGS -k "$KERNEL_OUTPUT" "$@"
 }
 
+__do_make()
+{
+    ARCH="$KERNEL_ARCH" CROSS_COMPILE="$ARCH_TRIPLE-" make		\
+	-j "$NJOBS"							\
+	-C "$KERNEL_SOURCE"						\
+	O="$WORK_DIR"							\
+	INSTALL_MOD_PATH="$KERNEL_OUTPUT"				\
+	EXTRA_CFLAGS="-g3 -fvar-tracking -fvar-tracking-assignments"	\
+	$COVERAGE							\
+	"$@"
+}
+
+new_config()
+{
+    local kconfig="$WORK_DIR/.config"
+    local config_tool="$KERNEL_SOURCE/scripts/config"
+
+    __do_make allnoconfig
+
+    # Really undefine everything:
+    sed -i -e 's/\(CONFIG_.*\)=.*/# \1 is not set/' "$kconfig"
+}
+
 do_make()
 {
-    make -C "$KERNEL_SOURCE" O="$WORK_DIR" -j "$NJOBS"			\
-	$COVERAGE							\
-	INSTALL_MOD_PATH="$KERNEL_OUTPUT"				\
-	EXTRA_CFLAGS="-gdwarf-4 -g3 -fvar-tracking -fvar-tracking-assignments" "$@"
+    if [[ ! -f $WORK_DIR/.config ]]; then
+	new_config
+    fi
+
+    __do_make "$@"
 }
 
 kernel_opt()
@@ -215,7 +239,7 @@ build_kernel()
 	local kconfig="$WORK_DIR/.config"
 	local config_tool="$KERNEL_SOURCE/scripts/config"
 
-	[[ -f $kconfig ]] || install -m0644 "$KTESTDIR/defconfig" "$kconfig"
+	[[ ! -f $kconfig ]] && new_config
 
 	local OLDIFS=$IFS
 	IFS=','
@@ -224,7 +248,14 @@ build_kernel()
 	    [[ -n $opt ]] && kernel_opt set "$opt"
 	done
 
-	do_make olddefconfig
+	if [[ $BITS = 64 ]]; then
+	    kernel_opt set 64BIT
+	else
+	    kernel_opt clear 64BIT
+	fi
+
+	#do_make olddefconfig
+	do_make oldnoconfig
 
 	for opt in $_KERNEL_CONFIG_REQUIRE; do
 	    [[ -n $opt ]] && kernel_opt check "$opt"
