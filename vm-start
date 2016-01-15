@@ -170,7 +170,7 @@ def vmdir_read():
     return path.strip()
 
 def cmd_ssh():
-    keyfile = os.path.join(DIR, "id_dsa")
+    keyfile = os.path.join(DIR, "ssh_id")
     subprocess.call(["chmod", "600", keyfile])
 
     tmpdir = tempfile.mkdtemp(prefix="vm-start-", dir=args.tmpdir)
