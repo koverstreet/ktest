@@ -82,7 +82,7 @@ fi
 CMD="cmd_$1"
 shift
 
-while getopts "ha:p:k:KDc:i:b:j:ISO:w:x" arg; do
+while getopts "ha:p:k:KDc:i:b:j:ISO:w:s:x" arg; do
     case $arg in
 	h)
 	    usage
@@ -137,6 +137,9 @@ while getopts "ha:p:k:KDc:i:b:j:ISO:w:x" arg; do
 	    ;;
 	w)
 	    KTESTARGS+=" -w $OPTARG"
+	    ;;
+	s)
+	    KTESTARGS+=" -s $OPTARG"
 	    ;;
 	x)
 	    KTESTARGS+=" -x"

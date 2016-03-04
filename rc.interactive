@@ -13,7 +13,7 @@ echo 1 > /proc/sys/kernel/sysrq
 echo "mount logfs"
 LOGDIR=/var/log/ktest
 mkdir -p $LOGDIR
-mount -t 9p -o trans=virtio logfs /var/log/ktest
+mount -t 9p -o trans=virtio logfs $LOGDIR
 
 # Core dump settings
 echo 1 > /proc/sys/fs/suid_dumpable
@@ -36,5 +36,7 @@ if [ -s /proc/vmcore ]; then
 else
     # If debugging crash dumps, add "console=hvc0" to the append line
     # below:
-    kexec -p /cdrom/vmlinuz --append="root=/dev/sda rw maxcpus=1" || true
+    if which kexec > /dev/null; then
+	kexec -p /cdrom/vmlinuz --append="root=/dev/sda rw maxcpus=1" || true
+    fi
 fi

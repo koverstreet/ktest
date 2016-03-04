@@ -29,6 +29,7 @@ KERNEL=""		# dir that has the kernel to run
                         #       set with: -k <path>
 IDFILE=""		# passed as --id to vmstart
                         #       set with: -w <path>
+SCRATCHDIR=""
 OUTPUT_DIR=""		# dir for test output (logs, code coverage, etc.)
 TMPDIR="/tmp"		# dir where scratch drives are created
                         #       defaults: /tmp
@@ -81,7 +82,7 @@ fi
 CMD="cmd_$1"
 shift
 
-while getopts "ha:p:i:k:ISw:o:x" arg; do
+while getopts "ha:p:i:k:ISw:s:o:x" arg; do
     case $arg in
 	h)
 	    usage
@@ -101,6 +102,9 @@ while getopts "ha:p:i:k:ISw:o:x" arg; do
 	    ;;
 	w)
 	    IDFILE="$OPTARG"
+	    ;;
+	s)
+	    SCRATCHDIR="$OPTARG"
 	    ;;
 	o)
 	    OUTPUT_DIR="$OPTARG"
@@ -140,8 +144,18 @@ run_vm()
     fi
 
     VMSTART+=("start")
-    [[ $EXIT_ON_SUCCESS = 1 || $INTERACTIVE = 1 ]] && VMSTART+=("--kgdb")
+
+    [[ -n $SCRATCHDIR ]] && VMSTART+=("--scratchdir" "$SCRATCHDIR")
+
     [[ -n $_SCRATCH ]] && VMSTART+=("--scratchdev" "$_SCRATCH")
+
+    if [[ $EXIT_ON_SUCCESS = 1 || $INTERACTIVE = 1 ]]; then
+	case $KERNEL_ARCH in
+	    x86)
+		VMSTART+=("--kgdb")
+		;;
+	esac
+    fi
 
     # setup directory where logfs will be mounted from
     mkdir -p "$OUTPUT_DIR"

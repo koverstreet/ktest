@@ -29,7 +29,11 @@ PACKAGES+=",linux-tools,blktrace,sysstat,fio,dbench,bonnie++"
 PACKAGES+=",bc,attr,gawk,acl"
 PACKAGES+=",build-essential"
 
+# bcache-tools build dependencies:
+PACKAGES+=",pkg-config,libnih-dev,libblkid-dev,uuid-dev"
+
 # xfstests:
+PACKAGES+=",autoconf"
 PACKAGES+=",libtool-bin,xfslibs-dev,libattr1-dev,libaio-dev,libgdbm-dev,libacl1-dev"
 
 EXCLUDE="dmidecode,nano,rsyslog,logrotate,cron,iptables,nfacct"
@@ -135,7 +139,7 @@ install -m0644 "$MNT/etc/skel/.bashrc" "$MNT/root/"
 install -m0644 "$MNT/etc/skel/.profile" "$MNT/root/"
 
 mkdir -p "$MNT/root/.ssh"
-install -m0600 "$KTESTDIR/id_dsa.pub" "$MNT/root/.ssh/authorized_keys"
+install -m0600 "$KTESTDIR/ssh_id.pub" "$MNT/root/.ssh/authorized_keys"
 
 mkdir -p "$MNT/cdrom"
 ln -s /cdrom/modules "$MNT/lib/modules"
@@ -181,6 +185,9 @@ DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
 
 DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
  LC_ALL=C LANGUAGE=C LANG=C chroot "$MNT" dpkg --configure -a
+
+DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
+ LC_ALL=C LANGUAGE=C LANG=C chroot "$MNT" apt update
 
 # Unmount everything in the root
 awk '{print $2}' /proc/mounts|

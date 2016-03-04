@@ -122,8 +122,11 @@ def cmd_start():
     if args.initrd and not os.path.isfile(args.initrd):
         raise RuntimeError("Cannot find initrd file: " + args.initrd)
 
-    vmdir = tempfile.mkdtemp(prefix="vm-", dir=args.tmpdir)
-    atexit.register(tmpdir_cleanup, vmdir)
+    if args.scratchdir:
+        vmdir = args.scratchdir
+    else:
+        vmdir = tempfile.mkdtemp(prefix="vm-", dir=args.tmpdir)
+        atexit.register(tmpdir_cleanup, vmdir)
 
     if args.idfile:
         with open(args.idfile, 'w') as f:
@@ -247,6 +250,8 @@ parser_start = subparsers.add_parser('start',
 parser_start.add_argument("--architecture",
     default="x86_64",
     help="qemu architecture")
+parser_start.add_argument("--scratchdir",
+    help="use a prexisting scratch directory")
 parser_start.add_argument("-i", "--image", required=True,
     help="root filesystem for the virtual machine(s)")
 parser_start.add_argument("-k", "--kernel",

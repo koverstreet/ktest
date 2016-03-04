@@ -31,6 +31,11 @@ require-kernel-config PROC_KCORE	# XXX Needed?
 require-kernel-config PCI
 require-kernel-config VIRTIO_PCI
 
+# Clock:
+require-kernel-config RTC_CLASS
+require-kernel-config RTC_HCTOSYS
+require-kernel-config RTC_DRV_CMOS
+
 # Console:
 require-kernel-config SERIAL_8250	# XXX can probably drop
 require-kernel-config SERIAL_8250_CONSOLE
@@ -88,6 +93,7 @@ require-kernel-config JUMP_LABEL
 
 # Tracing
 require-kernel-config FTRACE
+require-kernel-config FTRACE_SYSCALLS
 #require-kernel-config ENABLE_DEFAULT_TRACERS
 
 # Debugging options

@@ -200,7 +200,7 @@ test_fio()
 	cd $LOGDIR
 
 	for dev in $DEVICES; do
-	    /cdrom/fio --eta=always	\
+	    fio --eta=always	\
 		--randrepeat=0		\
 		--ioengine=libaio	\
 		--iodepth=64		\

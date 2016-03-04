@@ -10,6 +10,9 @@ export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]
 
 TEST_RUNNING=1
 
+#hack
+KERNEL_ARCH=""
+
 . /cdrom/rc.interactive
 
 for i in `cat /proc/cmdline`; do
