@@ -11,7 +11,8 @@ echo 1 > /proc/sys/kernel/sysrq
 
 # Log file system visible to host
 echo "mount logfs"
-LOGDIR=/var/log/ktest
+
+LOGDIR=/ktest-out
 mkdir -p $LOGDIR
 mount -t 9p -o trans=virtio logfs $LOGDIR
 
@@ -28,9 +29,8 @@ done
 # Check if we are running the crashdump kernel
 if [ -s /proc/vmcore ]; then
     echo "Collecting crash dump..."
-    vmcore_out=/var/log/ktest/vmcore
-    rm -f "$vmcore_out"
-    cp --sparse=always /proc/vmcore "$vmcore_out" || true
+    rm -f "$LOGDIR/vmcore"
+    cp --sparse=always /proc/vmcore "$LOGDIR/vmcore" || true
     sync
     poweroff
 else

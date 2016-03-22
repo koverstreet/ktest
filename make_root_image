@@ -144,8 +144,8 @@ install -m0600 "$KTESTDIR/ssh_id.pub" "$MNT/root/.ssh/authorized_keys"
 mkdir -p "$MNT/cdrom"
 ln -s /cdrom/modules "$MNT/lib/modules"
 
-mkdir -p "$MNT/var/log/ktest" "$MNT/var/log/core"
-chmod 777 "$MNT/var/log/ktest" "$MNT/var/log/core"
+mkdir -p "$MNT/var/log/core"
+chmod 777 "$MNT/var/log/core"
 
 # Disable systemd/udev stuff we don't need:
 # systemctl mask doesn't work for foreign archs
