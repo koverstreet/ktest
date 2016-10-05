@@ -1,136 +1,91 @@
 #!/bin/bash
 
-require-lib bcache-test-libs.sh
+require-lib ../xfstests.sh
+#require-lib bcache-test-libs.sh
 
+require-kernel-config BCACHE
+#require-kernel-config BCACHE_DEBUG
+require-kernel-config COMPACTION
 require-file mkfs.bcache
-require-file xfstests
 
-require-kernel-config FAULT_INJECTION,FAULT_INJECTION_DEBUG_FS,FAIL_MAKE_REQUEST
-require-kernel-config BLK_DEV_DM,DM_FLAKEY,DM_SNAPSHOT
-require-kernel-config USER_NS
-require-kernel-config BLK_DEV,BLK_DEV_LOOP
+antagonist_shrink()
+{
+    while true; do
+	for file in $(find /sys/fs/bcache -name prune_cache); do
+	    echo 100000 > $file
+	done
+	sleep 0.5
+    done
+}
 
-require-kernel-config CRYPTO_CRC32C_INTEL
-require-kernel-config CRYPTO_POLY1305_X86_64
-require-kernel-config CRYPTO_CHACHA20_X86_64
+antagonist_expensive_debug_checks()
+{
+    # This only exists if CONFIG_BCACHE_DEBUG is on
+    p=/sys/module/bcache/parameters/expensive_debug_checks
 
-require-kernel-config 64BIT=y
+    if [ -f $p ]; then
+	while true; do
+	    echo 1 > $p
+	    sleep 5
+	    echo 0 > $p
+	    sleep 10
+	done
+    fi
+}
 
-#require-file util-linux-2.27~rc1
-#require-file linux-3.13.tar
+antagonist_trigger_gc()
+{
+    while true; do
+	sleep 5
+	echo 1 | tee /sys/fs/bcache/*/internal/trigger_gc > /dev/null 2>&1 || true
+    done
+}
 
-config-bucket-size 16k
-config-block-size 512
+antagonist_switch_crc()
+{
+    cd /sys/fs/bcache
 
-#config-cache 2G
-#config-scratch-devs 2G
-
-# 038,048,312 require > 10G
-config-cache 14G
-config-scratch-devs 14G
-
-config-timeout $(stress_timeout)
+    while true; do
+	sleep 2
+	echo crc64  | tee */options/data_checksum	> /dev/null 2>&1 || true
+	echo crc64 | tee */options/metadata_checksum	> /dev/null 2>&1 || true
+	echo crc64 | tee */options/str_hash		> /dev/null 2>&1 || true
+	#echo lz4    | tee */options/compression		> /dev/null 2>&1 || true
+	sleep 2
+	echo crc32c | tee */options/data_checksum	> /dev/null 2>&1 || true
+	echo crc32c | tee */options/metadata_checksum	> /dev/null 2>&1 || true
+	echo sha1   | tee */options/str_hash		> /dev/null 2>&1 || true
+	#echo gzip   | tee */options/compression		> /dev/null 2>&1 || true
+    done
+}
 
 main()
 {
-    useradd fsgqa
-
-    #systemctl mask systemd-udevd.service
-    #systemctl stop systemd-udevd.service
-
-    systemctl unmask			\
-	lvm2-lvmetad.service		\
-	lvm2-monitor.service		\
-	lvm2-lvmetad.socket		\
-	lvm2-activation.service
-
-    systemctl start			\
-	lvm2-lvmetad.service		\
-	lvm2-monitor.service		\
-	lvm2-lvmetad.socket
-
-    #lvm2-activation-early.service
-
-    export TEST_DEV=/dev/sdb
-    export TEST_DIR=/mnt/bcachefs
-    export FSTYP=bcache
-    export SCRATCH_DEV=/dev/sdc
-    export SCRATCH_MNT=/mnt/scratch
-
-    mkdir -p $TEST_DIR $SCRATCH_MNT
-
+    ulimit -c unlimited
+    #setup_tracing 'bcache:*'
     #echo 1 > /sys/module/bcache/parameters/expensive_debug_checks
-    #echo 1 > /sys/module/bcache/parameters/debug_check_bkeys
+    echo 1 > /sys/module/bcache/parameters/debug_check_bkeys || true
     #echo 1 > /sys/module/bcache/parameters/btree_gc_coalesce_disabled
+    #echo 1 > /sys/module/bcache/parameters/key_merging_disabled
 
-    setup_tracing 'bcache:*'
+    echo "class race frequency 100" > /sys/kernel/debug/dynamic_fault/control
 
-    bcache_format
+    (cd $LOGDIR/bcache-tools; make && make install)
 
-    mount -o data_checksum=crc32c,compression=gzip $CACHE /mnt/bcachefs
+    #antagonist_expensive_debug_checks &
+    #antagonist_shrink &
+    #antagonist_trigger_gc &
+    #antagonist_switch_crc &
 
-    #/cdrom/bcache device_show /mnt/bcachefs
-    #exit
-    #mount $CACHE /mnt/bcachefs
+    # XXX: test with this
+    # apt install -y stress-ng
 
-    #cd /mnt/bcachefs
-    #tar xf /cdrom/linux-3.13.tar
-    #dbench -t 120 20
-    #exit
+    # fail when testing different block sizes:
+    #test_xfstests bcache "generic/091 generic/114 generic/240 generic/263"
 
-    #mount -o remount,ro /mnt/bcachefs
-    #mount -o remount,rw /mnt/bcachefs
+    #test_xfstests bcache "generic/019 generic/077"
 
-    #(
-    #    cd /mnt/bcachefs
-    #    /cdrom/xfstests/ltp/fsx -N 10000	\
-    #        -R -W				\
-    #        -P /root				\
-    #        test
-    #)
+    test_xfstests bcache "generic/299"
 
-    cp -a /cdrom/xfstests /root
-    cd /root/xfstests
-    #make clean && make
-
-    ln -sf /bin/bash /bin/sh
-
-    #test_antagonist
-    #echo "class race	frequency 100"	> /sys/kernel/debug/dynamic_fault/control
-
-    # -enospc stuff:
-    #./check generic/102 generic/274 generic/275
-
-    # flakey - locks up:
-    #./check generic/081
-
-    # stress tests:
-    while true; do
-	#./check generic/012
-	#./check generic/021
-	#./check generic/091
-	#./check generic/112
-	#./check generic/127
-	#./check generic/299
-
-	#./check generic/019 generic/075 generic/083	\
-	#    generic/113 generic/130 generic/269 generic/316
-
-	#./check generic/059 generic/075 generic/091	\
-	#    generic/112 generic/127 generic/263	\
-	#    generic/313 generic/316
-
-	#./check generic/299
-	./check generic/???
-    done
-
-    ./check generic/102 generic/214 generic/215 generic/237 generic/239	\
-	generic/240 generic/241 generic/246 generic/247 generic/248	\
-	generic/255 generic/257 generic/263 generic/274 generic/275	\
-	generic/277 generic/285
-
-    ./check generic/042 generic/102 generic/106 generic/214 generic/215	\
-	generic/239 generic/240 generic/241 generic/246 generic/247	\
-	generic/248 generic/255 generic/257 generic/263 generic/274	\
-	generic/275 generic/285
+    test_xfstests bcache "generic/???"
 }

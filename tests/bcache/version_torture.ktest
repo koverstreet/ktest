@@ -1,0 +1,58 @@
+#!/bin/bash
+
+require-lib bcache-test-libs.sh
+
+config-cache 4G
+config-bucket-size 128k 
+config-block-size 2k
+config-volume 3G
+
+nr_iterations=10
+config-timeout $(($(stress_timeout) * 2))
+
+require-kernel-config BCACHE_NO_IO
+
+main()
+{
+    setup_tracing 'bcache:*'
+
+    [ "$NR_REBOOTS" == "$nr_iterations" ] && return 0
+
+    if [ $NR_REBOOTS != 0 ]; then
+	existing_bcache
+	sleep 10
+	return 0;
+
+	#echo 1 > /sys/fs/bcache/*/stop
+	#sleep 4
+
+	#echo "Starting another iteration:"
+    fi
+
+    bcacheadm format "$(make_bcache_flags)"			\
+	--wipe-bcache --csum-type=crc32c --btree-node=128k	\
+	--cache=$CACHE
+    existing_bcache
+    echo 3G > /sys/fs/bcache/*/flash_vol_create
+
+    test_antagonist
+
+    (sleep 30; do_reboot) &
+    #(sleep 30; killall -9 fio) &
+
+    /cdrom/fio --eta=always	\
+	--randrepeat=0		\
+	--ioengine=libaio	\
+	--iodepth=64		\
+	--iodepth_batch=16	\
+	--direct=1		\
+	--numjobs=1		\
+	--filename=/dev/bcache0	\
+				\
+	--name=randwrite	\
+	--rw=randwrite		\
+	--bs=4k || true
+
+    #echo 1 > /sys/fs/bcache/*/internal/verify_missing_no_versions
+    sleep 1000
+}

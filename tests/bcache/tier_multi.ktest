@@ -2,33 +2,30 @@
 
 require-lib bcache-test-libs.sh
 
-# XXX possibly broken with 1 mb buckets
-config-cache 2100MB
-config-bucket-size 2M
-
-#config-cache 2G
-#config-bucket-size 512k
-
-config-block-size 2k
-config-volume 1600M
+config-cache	    512M,512M
+config-tier	    2G,2G
+config-bucket-size  64k
+config-block-size   4k
+config-volume	    3500M
 
 config-timeout $(stress_timeout)
 
 main()
 {
     echo 1 > /sys/module/bcache/parameters/debug_check_bkeys
-    setup_tracing 'bcache:*'
 
+    setup_tracing 'bcache:*'
     (cd $LOGDIR/bcache-tools; make && make install)
 
     setup_bcache
-    #existing_bcache
-
     test_antagonist
     test_bcache_stress
-    #test_fio
-
-    stop_volumes
-    test_bcachefs_stress
     stop_bcache
+
+    sleep 5
+    existing_bcache
+    test_bcache_stress
+    stop_bcache
+
+    test_bcachefs_stress
 }

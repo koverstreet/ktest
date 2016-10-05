@@ -76,11 +76,10 @@ def vm_run(vmdir, vm_nr):
     # Root file system comes first (sda)
     cmd.extend(qemu_disk("root", args.image, "snapshot=on,cache=unsafe"))
 
-    for i, size in enumerate(args.scratchdev.split(",")):
-        if size.strip():
-            drive = os.path.join(vmdir, "vm-%u-disk-%u" % (vm_nr, i))
-            subprocess.check_call(["fallocate", "-l", size, drive])
-            cmd.extend(qemu_disk("scsi" + str(i), drive, "cache=unsafe"))
+    for i, size in enumerate(args.scratchdev):
+        drive = os.path.join(vmdir, "vm-%u-disk-%u" % (vm_nr, i))
+        subprocess.check_call(["fallocate", "-l", size, drive])
+        cmd.extend(qemu_disk("scsi" + str(i), drive, "cache=unsafe"))
 
     if args.cdrom:
         cmd.extend(qemu_disk("scsi-cd", args.cdrom, "", "scsi-cd"))
@@ -266,7 +265,8 @@ parser_start.add_argument("--kgdb", action="store_true",
 parser_start.add_argument("-c", "--cdrom",
     help="cdrom image")
 parser_start.add_argument("-s", "--scratchdev",
-    default="",
+    action="append",
+    default=[],
     help="list of scratch device sizes. ex: 256M,2G")
 parser_start.add_argument("-m", "--memory",
     default=DEFAULT_MEMORY,

@@ -8,10 +8,6 @@ config-timeout $(stress_timeout)
 
 main()
 {
-    #echo "file inode.c +p"		> /sys/kernel/debug/dynamic_debug/control
-    #echo "file dirent.c +p"	> /sys/kernel/debug/dynamic_debug/control
-    #echo "file fs.c +p"		> /sys/kernel/debug/dynamic_debug/control
-
     setup_blkdev
     test_stress
 }

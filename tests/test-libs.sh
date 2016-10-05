@@ -7,10 +7,6 @@ require-lib prelude.sh
 
 config-mem 2G
 
-require-kernel-config MD
-require-kernel-config DEBUG_FS,DYNAMIC_FAULT
-require-kernel-config XFS_FS
-
 require-make ../ltp-fsx/Makefile ltp-fsx
 
 # Wait for an IP or IPv6 address to show
@@ -200,13 +196,14 @@ test_fio()
 	cd $LOGDIR
 
 	for dev in $DEVICES; do
-	    fio --eta=always	\
+	    fio --eta=always		\
 		--randrepeat=0		\
 		--ioengine=libaio	\
 		--iodepth=64		\
 		--iodepth_batch=16	\
 		--direct=1		\
 		--numjobs=1		\
+		--buffer_compress_percentage=20\
 		--verify=meta		\
 		--verify_fatal=1	\
 		--verify_dump=1		\
@@ -259,82 +256,9 @@ test_fsx()
     echo "=== done fsx at $(date)"
 }
 
-expect_sysfs()
-{
-    prefix=$1
-    name=$2
-    value=$3
-
-    for file in $(echo /sys/fs/bcache/*/${prefix}*/${name}); do
-        if [ -e $file ]; then
-            current="$(cat $file)"
-            if [ "$current" != "$value" ]; then
-                echo "Mismatch for $file: got $current, want $value"
-                exit 1
-            else
-                echo "OK: $file $value"
-            fi
-        fi
-    done
-}
-
-test_discard()
-{
-    if [ "${BDEV:-}" == "" -a "${CACHE:-}" == "" ]; then
-        return
-    fi
-
-    killall -STOP systemd-udevd
-
-    if [ -f /sys/kernel/debug/bcache/* ]; then
-	cat /sys/kernel/debug/bcache/* > /dev/null
-    fi
-
-    for dev in $DEVICES; do
-        echo "Discarding ${dev}..."
-        blkdiscard $dev
-    done
-
-    if [[ -f /sys/fs/bcache/*/internal/btree_gc_running ]]; then
-	# Wait for btree GC to finish so that the counts are actually up to date
-	while [ "$(cat /sys/fs/bcache/*/internal/btree_gc_running)" != "0" ]; do
-	    sleep 1
-	done
-    fi
-
-    expect_sysfs cache dirty_buckets 0
-    expect_sysfs cache dirty_data 0
-    expect_sysfs cache cached_buckets 0
-    expect_sysfs cache cached_data 0
-    expect_sysfs bdev dirty_data 0
-
-    if [ -f /sys/kernel/debug/bcache/* ]; then
-	tmp="$(mktemp)"
-	cat /sys/kernel/debug/bcache/* | tee "$tmp"
-	lines=$(grep -v discard "$tmp" | wc -l)
-
-	if [ "$lines" != "0" ]; then
-	    echo "Btree not empty"
-	    false
-	fi
-    fi
-
-    killall -CONT systemd-udevd
-}
-
 # Bcache antagonists
 
-test_sysfs()
-{
-    if [ -d /sys/fs/bcache/*-* ]; then
-	find -H /sys/fs/bcache/ -type f -perm -0400 -exec cat {} \; \
-	    > /dev/null
-	find -H /sys/block/*/bcache/ -type f -perm -0400 -exec cat {} \; \
-	    > /dev/null
-    fi
-}
-
-test_fault()
+enable_faults()
 {
     f=/sys/kernel/debug/dynamic_fault/control
 
@@ -344,17 +268,17 @@ test_fault()
     echo "class race	frequency 100"	> $f
 }
 
-test_shrink()
+disable_faults()
 {
-    while true; do
-	for file in $(find /sys/fs/bcache -name prune_cache); do
-	    echo 100000 > $file
-	done
-	sleep 0.5
-    done
+    f=/sys/kernel/debug/dynamic_fault/control
+
+    [[ -f $f ]] || return
+
+    echo "class memory	disable"	> $f
+    echo "class race	disable"	> $f
 }
 
-test_sync()
+antagonist_sync()
 {
     while true; do
 	sync
@@ -362,7 +286,7 @@ test_sync()
     done
 }
 
-test_drop_caches()
+antagonist_drop_caches()
 {
     echo 4 > /proc/sys/vm/drop_caches
 
@@ -370,51 +294,6 @@ test_drop_caches()
 	echo 3 > /proc/sys/vm/drop_caches
 	sleep 5
     done
-}
-
-test_expensive_debug_checks()
-{
-    # This only exists if CONFIG_BCACHE_DEBUG is on
-    if [ -f $dir/internal/expensive_debug_checks ]; then
-	while true; do
-	    echo 1 > $dir/internal/expensive_debug_checks
-	    sleep 5
-	    echo 0 > $dir/internal/expensive_debug_checks
-	    sleep 10
-	done
-    fi
-}
-
-test_antagonist()
-{
-    test_sysfs
-
-    test_expensive_debug_checks &
-    test_shrink &
-    test_fault &
-    test_sync &
-    test_drop_caches &
-}
-
-test_stress()
-{
-    test_fio
-    test_discard
-
-    setup_fs ext4
-    test_dbench
-    test_bonnie
-    test_fsx
-    stop_fs
-    test_discard
-
-    if [ $ktest_priority -gt 0 ]; then
-	setup_fs xfs
-	test_dbench
-	test_bonnie
-	stop_fs
-	test_discard
-    fi
 }
 
 stress_timeout()

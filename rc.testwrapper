@@ -48,9 +48,9 @@ copy_to_host()
         set +e
         fuser -INT -k $LOGDIR $LOGDIR/*
         sync
-        sleep 1
-        fuser -k $LOGDIR $LOGDIR/*
-        umount $LOGDIR
+        #sleep 1
+        #fuser -k $LOGDIR $LOGDIR/*
+        #umount $LOGDIR
     )
 }
 
@@ -95,6 +95,16 @@ require-file()
 }
 
 require-kernel-config()
+{
+    return 0
+}
+
+require-kernel-append()
+{
+    return 0
+}
+
+scratch-dev()
 {
     return 0
 }

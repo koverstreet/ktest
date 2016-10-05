@@ -4,12 +4,13 @@ parse_test_deps()
     _CPUS="6"
     _MEM=""
     _TIMEOUT=""
-    _SCRATCH=""
     _KERNEL_CONFIG_REQUIRE=""
     _KERNEL_APPEND=""
     _NR_VMS="1"
+    _VMSTART_ARGS=(" ")
     TEST_RUNNING=""
 
+    local NEXT_SCRATCH_DEV="b"
     local TEST=$1
     local TESTDIR="$(dirname "$TEST")"
 
@@ -95,10 +96,26 @@ parse_test_deps()
 	_KERNEL_CONFIG_REQUIRE+=",$1"
     }
 
+    require-kernel-append()
+    {
+	_KERNEL_APPEND+=" $1"
+    }
+
+    scratch-dev()
+    {
+	local dev_size=$1
+	local dev_path="/dev/sd$NEXT_SCRATCH_DEV"
+
+	NEXT_SCRATCH_DEV=$(echo $NEXT_SCRATCH_DEV|tr "a-z" "b-z_")
+
+	_VMSTART_ARGS+=("--scratchdev" "$dev_size")
+
+	echo "$dev_path"
+    }
+
     config-scratch-devs()
     {
-	[[ -n $_SCRATCH ]] && _SCRATCH+=","
-	_SCRATCH+="$1"
+	_VMSTART_ARGS+=("--scratchdev" "$1")
     }
 
     config-cpus()
@@ -133,11 +150,6 @@ parse_test_deps()
 	    n=$((n * 2))
 	fi
 	_TIMEOUT=$n
-    }
-
-    require-kernel-append()
-    {
-	_KERNEL_APPEND+=" $1"
     }
 
 

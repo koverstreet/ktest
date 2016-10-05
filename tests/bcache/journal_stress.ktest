@@ -30,7 +30,7 @@ main()
 	done
     ) &
 
-    test_stress
+    test_bcache_stres
     stop_volumes
     test_bcachefs_stress
     stop_bcache

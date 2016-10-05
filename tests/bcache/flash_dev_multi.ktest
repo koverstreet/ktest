@@ -2,15 +2,10 @@
 
 require-lib bcache-test-libs.sh
 
-# XXX possibly broken with 1 mb buckets
-config-cache 2100MB
-config-bucket-size 2M
-
-#config-cache 2G
-#config-bucket-size 512k
-
-config-block-size 2k
-config-volume 1600M
+config-cache	    1G,1G
+config-bucket-size  512k
+config-block-size   2k
+config-volume	    1500M
 
 config-timeout $(stress_timeout)
 

@@ -8,6 +8,7 @@ export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]
 
 dmesg -n 7
 echo 1 > /proc/sys/kernel/sysrq
+ulimit -c unlimited
 
 # Log file system visible to host
 echo "mount logfs"
@@ -18,7 +19,7 @@ mount -t 9p -o trans=virtio logfs $LOGDIR
 
 # Core dump settings
 echo 1 > /proc/sys/fs/suid_dumpable
-echo "| /usr/bin/dd of=$LOGDIR/core.%e.PID%p.SIG%s.TIME%t" > /proc/sys/kernel/core_pattern
+echo "|/bin/cp --sparse=always /dev/stdin $LOGDIR/core.%e.PID%p.SIG%s.TIME%t" > /proc/sys/kernel/core_pattern
 ulimit -c unlimited
 
 # Virtual block device tweaks

@@ -4,9 +4,10 @@ require-lib bcache-test-libs.sh
 
 config-cache 512M
 config-tier 2G
-config-scratch-devs 1G,1G
+config-scratch-devs 1G
+config-scratch-devs 1G
 
-config-bucket-size 512k
+config-bucket-size 64k 
 config-block-size 2k
 
 config-volume 1400M
@@ -16,18 +17,19 @@ config-timeout $(stress_timeout)
 main()
 {
     setup_tracing 'bcache:*'
+    (cd $LOGDIR/bcache-tools; make && make install)
 
     setup_bcache
     echo "setup done"
 
     (
 	sleep 5
-	bcacheadm format --bucket=512k --block=2k --tier=1 -C /dev/sdd
+	bcache format --bucket=64k --block=2k --tier=1 -C /dev/sdd
 	echo "adding device 1"
 	echo /dev/sdd > /sys/fs/bcache/*/add_device
 
 	sleep 5
-	bcacheadm format --bucket=512k --block=2k --tier=1 -C /dev/sde
+	bcache format --bucket=64k --block=2k --tier=0 -C /dev/sde
 	echo "adding device 2"
 	echo /dev/sde > /sys/fs/bcache/*/add_device
 
@@ -39,6 +41,7 @@ main()
 
     test_fio
     test_discard
+    wait
 
     # Make sure we actually added those devices
     devices="$(ls -d /sys/fs/bcache/*/cache[0-9] | wc -l)"
@@ -47,14 +50,18 @@ main()
 	exit 1
     fi
 
-    # Make sure new devices are in tier 1
-    for device in cache2 cache3; do
-	tier="$(cat /sys/fs/bcache/*/${device}/tier)"
-	if [ "$tier" != 1 ]; then
-	    echo "${device} not in tier 1"
-	    exit 1
-	fi
-    done
+    # Make sure new devices are in correct tier
+    tier="$(cat /sys/fs/bcache/*/cache2/tier)"
+    if [ "$tier" != 1 ]; then
+	echo "cache2 not in tier 1"
+	exit 1
+    fi
+
+    tier="$(cat /sys/fs/bcache/*/cache3/tier)"
+    if [ "$tier" != 0 ]; then
+	echo "cache3 not in tier 0"
+	exit 1
+    fi
 
     stop_bcache
 }

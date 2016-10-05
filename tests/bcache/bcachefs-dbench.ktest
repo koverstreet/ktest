@@ -23,7 +23,7 @@ main()
 
     test_antagonist
 
-    [ "$NR_REBOOTS" != "$nr_iterations" ] && (sleep 10; do_reboot) &
+    [ "$NR_REBOOTS" != "$nr_iterations" ] && (sleep 20; do_reboot) &
 
     test_dbench
     kill %1

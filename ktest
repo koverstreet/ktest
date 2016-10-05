@@ -147,8 +147,6 @@ run_vm()
 
     [[ -n $SCRATCHDIR ]] && VMSTART+=("--scratchdir" "$SCRATCHDIR")
 
-    [[ -n $_SCRATCH ]] && VMSTART+=("--scratchdev" "$_SCRATCH")
-
     if [[ $EXIT_ON_SUCCESS = 1 || $INTERACTIVE = 1 ]]; then
 	case $KERNEL_ARCH in
 	    x86)
@@ -185,13 +183,13 @@ run_vm()
 	--cdrom="$iso"							\
 	--fs "$OUTPUT_DIR" logfs					\
 	--append="ktest.priority=$PRIORITY"				\
-	--append="crashkernel=128M"					\
 	--append="log_buf_len=8M"					\
 	--append="quiet"						\
 	--append="$_KERNEL_APPEND"					\
 	--memory="$_MEM"						\
 	--cpus "$_CPUS"							\
-	--nr_vms="$_NR_VMS"|
+	--nr_vms="$_NR_VMS"						\
+	"${_VMSTART_ARGS[@]}"|
     {
 	if [[ $INTERACTIVE = 1 ]]; then
 	    cat
@@ -222,7 +220,7 @@ cmd_boot()
     _MEM=1G
     _CPUS=6
     _NR_VMS=1
-    _SCRATCH=""
+    _VMSTART_ARGS=()
 
     FILES=("rc=$KTESTDIR/rc.interactive")
 

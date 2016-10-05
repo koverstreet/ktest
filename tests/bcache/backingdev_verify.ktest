@@ -24,6 +24,6 @@ main()
     done
 
     test_antagonist
-    test_stress
+    test_bcache_stres
     stop_bcache
 }

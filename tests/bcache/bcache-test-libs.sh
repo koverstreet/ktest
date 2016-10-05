@@ -5,9 +5,18 @@
 
 require-lib ../test-libs.sh
 
-require-bin bcache
+#require-bin bcache
+
+#require-file /home/kent/bcache-tools
 
 require-kernel-config BCACHE,BCACHE_DEBUG
+require-kernel-config COMPACTION
+
+if [[ $KERNEL_ARCH = x86 ]]; then
+    require-kernel-config CRYPTO_CRC32C_INTEL
+    require-kernel-config CRYPTO_POLY1305_X86_64
+    require-kernel-config CRYPTO_CHACHA20_X86_64
+fi
 
 #Expensive:
 #require-kernel-config CLOSURE_DEBUG
@@ -150,26 +159,46 @@ bcache_format()
     #    *) echo "Bad writeback: $WRITEBACK"; exit ;;
     #esac
 
-    for cache in $CACHE; do
-	flags+=" --cache=$cache"
+#    for cache in $CACHE; do
+#	flags+=" --cache=$cache"
+#    done
+
+#    flags+=" --tier=1 --cache_replacement_policy=fifo"
+#    for cache in $TIER; do
+#	flags+=" --cache=$cache"
+#    done
+
+#    for bdev in $BDEV; do
+#	flags+=" --bdev=$bdev"
+#    done
+
+#    bcache format					\
+#	--error_action=panic				\
+#	"$BUCKET_SIZE"					\
+#	--btree_node=32k				\
+#	--block="$BLOCK_SIZE"				\
+#	--cache_replacement_policy="$REPLACEMENT"	\
+#	--data_replicas="$DATA_REPLICAS"		\
+#	--meta_replicas="$META_REPLICAS"		\
+#	--data_csum_type=crc32c				\
+#	--compression_type=lz4				\
+#	$flags
+
+    for dev in $CACHE; do
+	flags+=" --tier=0 $dev"
     done
 
-    flags+=" --tier=1 --cache_replacement_policy=fifo"
-    for cache in $TIER; do
-	flags+=" --cache=$cache"
+    for dev in $TIER; do
+	flags+=" --tier=1 $dev"
     done
 
-    for bdev in $BDEV; do
-	flags+=" --bdev=$bdev"
-    done
-
-    bcache format --metadata_csum_type=crc32c	\
+    bcache format					\
 	--error_action=panic				\
 	"$BUCKET_SIZE"					\
+	--btree_node=32k				\
 	--block="$BLOCK_SIZE"				\
-	--cache_replacement_policy="$REPLACEMENT"	\
-	--data_replicas="$DATA_REPLICAS"		\
-	--meta_replicas="$META_REPLICAS"		\
+	--data_csum_type=crc32c				\
+	--compression_type=lz4				\
 	$flags
 }
 
@@ -265,13 +294,16 @@ setup_bcache() {
 stop_volumes()
 {
     for dev in /sys/block/bcache*/bcache/unregister; do
-	echo > $dev
+	echo 1 > $dev
     done
+    sleep 1
 }
 
 stop_bcache()
 {
-    echo 1 > /sys/fs/bcache/reboot
+    for dev in /sys/fs/bcache/*/unregister; do
+	echo 1 > $dev
+    done
 }
 
 cache_set_settings()
@@ -293,16 +325,16 @@ cache_set_settings()
 
 	# Disable damping effect since test cache devices are so small
 
-	[[ -f $dir/internal/tiering_rate_p_term_inverse ]] &&
-	    echo 1 > $dir/internal/tiering_rate_p_term_inverse
+	#[[ -f $dir/internal/tiering_rate_p_term_inverse ]] &&
+	#    echo 1 > $dir/internal/tiering_rate_p_term_inverse
 
 	[[ -f $dir/internal/foreground_write_rate_p_term_inverse ]] &&
 	    echo 1 > $dir/internal/foreground_write_rate_p_term_inverse
 
-	for dev in $(ls -d $dir/cache[0-9]*); do
-	    [[ -f $dev/copy_gc_rate_p_term_inverse ]] &&
-		echo 1 > $dev/copy_gc_rate_p_term_inverse
-	done
+	#for dev in $(ls -d $dir/cache[0-9]*); do
+	#    [[ -f $dev/copy_gc_rate_p_term_inverse ]] &&
+	#	echo 1 > $dev/copy_gc_rate_p_term_inverse
+	#done
     done
 }
 
@@ -313,11 +345,180 @@ cached_dev_settings()
     done
 }
 
+expect_sysfs()
+{
+    prefix=$1
+    name=$2
+    value=$3
+
+    for file in $(echo /sys/fs/bcache/*/${prefix}*/${name}); do
+        if [ -e $file ]; then
+            current="$(cat $file)"
+            if [ "$current" != "$value" ]; then
+                echo "Mismatch for $file: got $current, want $value"
+                exit 1
+            else
+                echo "OK: $file $value"
+            fi
+        fi
+    done
+}
+
+test_sysfs()
+{
+    if [ -d /sys/fs/bcache/*-* ]; then
+	find -H /sys/fs/bcache/ -type f -perm -0400 -exec cat {} \; \
+	    > /dev/null
+	find -H /sys/block/*/bcache/ -type f -perm -0400 -exec cat {} \; \
+	    > /dev/null
+    fi
+}
+
+antagonist_shrink()
+{
+    while true; do
+	for file in $(find /sys/fs/bcache -name prune_cache); do
+	    echo 100000 > $file
+	done
+	sleep 0.5
+    done
+}
+
+antagonist_expensive_debug_checks()
+{
+    # This only exists if CONFIG_BCACHE_DEBUG is on
+    p=/sys/module/bcache/parameters/expensive_debug_checks
+
+    if [ -f $p ]; then
+	while true; do
+	    echo 1 > $p
+	    sleep 5
+	    echo 0 > $p
+	    sleep 10
+	done
+    fi
+}
+
+antagonist_trigger_gc()
+{
+    while true; do
+	sleep 5
+	echo 1 | tee /sys/fs/bcache/*/internal/trigger_gc > /dev/null 2>&1 || true
+    done
+}
+
+antagonist_switch_crc()
+{
+    cd /sys/fs/bcache
+
+    while true; do
+	sleep 1
+	echo crc64 | tee */options/data_checksum	> /dev/null 2>&1 || true
+	echo crc64 | tee */options/metadata_checksum	> /dev/null 2>&1 || true
+	echo crc64 | tee */options/str_hash		> /dev/null 2>&1 || true
+	sleep 1
+	echo crc32c | tee */options/data_checksum	> /dev/null 2>&1 || true
+	echo crc32c | tee */options/metadata_checksum	> /dev/null 2>&1 || true
+	echo crc32c | tee */options/str_hash		> /dev/null 2>&1 || true
+    done
+}
+
+test_antagonist()
+{
+    antagonist_expensive_debug_checks &
+    antagonist_shrink &
+    antagonist_sync &
+    antagonist_trigger_gc &
+    antagonist_switch_crc &
+}
+
+test_discard()
+{
+    if [ "${BDEV:-}" == "" -a "${CACHE:-}" == "" ]; then
+        return
+    fi
+
+    killall -STOP systemd-udevd
+
+    if [ -f /sys/kernel/debug/bcache/* ]; then
+	cat /sys/kernel/debug/bcache/* > /dev/null
+    fi
+
+    for dev in $DEVICES; do
+        echo "Discarding ${dev}..."
+        blkdiscard $dev
+    done
+
+    if [[ -f /sys/fs/bcache/*/internal/btree_gc_running ]]; then
+	# Wait for btree GC to finish so that the counts are actually up to date
+	while [ "$(cat /sys/fs/bcache/*/internal/btree_gc_running)" != "0" ]; do
+	    sleep 1
+	done
+    fi
+
+    expect_sysfs cache dirty_buckets 0
+    expect_sysfs cache dirty_data 0
+    expect_sysfs cache cached_buckets 0
+    expect_sysfs cache cached_data 0
+    expect_sysfs bdev dirty_data 0
+
+    if [ -f /sys/kernel/debug/bcache/* ]; then
+	tmp="$(mktemp)"
+	cat /sys/kernel/debug/bcache/* | tee "$tmp"
+	lines=$(grep -v discard "$tmp" | wc -l)
+
+	if [ "$lines" != "0" ]; then
+	    echo "Btree not empty"
+	    false
+	fi
+    fi
+
+    killall -CONT systemd-udevd
+}
+
+test_bcache_stress()
+{
+    enable_faults
+
+    test_sysfs
+    test_fio
+    test_discard
+
+    setup_fs ext4
+    test_dbench
+    test_bonnie
+    test_fsx
+    stop_fs
+    test_discard
+
+    if [ $ktest_priority -gt 0 ]; then
+	setup_fs xfs
+	test_dbench
+	test_bonnie
+	stop_fs
+	test_discard
+    fi
+
+    disable_faults
+}
+
+# some bcachefs tests:
+
 setup_bcachefs()
 {
-    uuid=$(ls -d /sys/fs/bcache/*-*-* | sed -e 's/.*\///')
     mkdir -p /mnt/bcachefs
-    mount $uuid /mnt/bcachefs
+
+    MNT=""
+    for dev in $CACHE $TIER; do
+	if [[ -z $MNT ]]; then
+	    MNT=$dev
+	else
+	    MNT=$MNT:$dev
+	fi
+    done
+
+    echo "mount -t bcache $MNT /mnt/bcachefs"
+    mount -t bcache -o verbose_recovery $MNT /mnt/bcachefs
 
     # for fs workloads to know mount point
     DEVICES=bcachefs
@@ -331,9 +532,13 @@ stop_bcachefs()
 test_bcachefs_stress()
 {
     setup_bcachefs
+    #enable_faults
+
     test_dbench
     test_bonnie
-    #test_fsx
+    test_fsx
+
+    #disable_faults
     stop_bcachefs
 }
 

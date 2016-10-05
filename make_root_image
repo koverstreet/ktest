@@ -29,6 +29,9 @@ PACKAGES+=",linux-tools,blktrace,sysstat,fio,dbench,bonnie++"
 PACKAGES+=",bc,attr,gawk,acl"
 PACKAGES+=",build-essential"
 
+# suspend testing:
+PACKAGES+=",uswsusp"
+
 # bcache-tools build dependencies:
 PACKAGES+=",pkg-config,libnih-dev,libblkid-dev,uuid-dev"
 
@@ -36,8 +39,12 @@ PACKAGES+=",pkg-config,libnih-dev,libblkid-dev,uuid-dev"
 PACKAGES+=",autoconf"
 PACKAGES+=",libtool-bin,xfslibs-dev,libattr1-dev,libaio-dev,libgdbm-dev,libacl1-dev"
 
+# nfs testing:
+PACKAGES+=",nfs-kernel-server"
+
 EXCLUDE="dmidecode,nano,rsyslog,logrotate,cron,iptables,nfacct"
 EXCLUDE+=",debconf-i18n,info,gnupg"
+EXCLUDE+="libpam-systemd"
 
 MIRROR=http://ftp.us.debian.org/debian/
 
@@ -131,6 +138,8 @@ ZZ
 
 install -m0755 "$KTESTDIR/rc.local" "$MNT/etc/"
 
+cp -P "/etc/timezone" "/etc/localtime" "$MNT/etc/"
+
 touch "$MNT/etc/resolv.conf"
 chmod 644 "$MNT/etc/resolv.conf"
 
@@ -178,8 +187,6 @@ disown
 ZZ
 chmod 755 "$MNT/etc/rc.local"
 
-cp /usr/bin/qemu-${QEMU_BIN%qemu-system-}-static "$MNT/usr/bin"
-
 DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
  LC_ALL=C LANGUAGE=C LANG=C chroot "$MNT" /debootstrap/debootstrap --second-stage
 
@@ -188,6 +195,8 @@ DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
 
 DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
  LC_ALL=C LANGUAGE=C LANG=C chroot "$MNT" apt update
+
+rm "$MNT/var/cache/apt/archives/*.deb"
 
 # Unmount everything in the root
 awk '{print $2}' /proc/mounts|
