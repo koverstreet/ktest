@@ -6,6 +6,8 @@ require-lib ../xfstests.sh
 require-kernel-config BCACHE
 #require-kernel-config BCACHE_DEBUG
 require-kernel-config COMPACTION
+
+require-build-deb bcache-tools
 require-file mkfs.bcache
 
 antagonist_shrink()
@@ -85,7 +87,7 @@ main()
 
     #test_xfstests bcache "generic/019 generic/077"
 
-    test_xfstests bcache "generic/299"
+    #test_xfstests bcache "generic/299"
 
     test_xfstests bcache "generic/???"
 }

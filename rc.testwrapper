@@ -84,6 +84,11 @@ require-bin()
     return 0
 }
 
+require-build-deb()
+{
+    return 0
+}
+
 require-make()
 {
     return 0
@@ -124,27 +129,6 @@ config-mem()
     return 0
 }
 
-IB_MOD_DIRS="infiniband/core infiniband/hw/mlx4 infiniband/ulp/ipoib"
-
-config-infiniband()
-{
-    modprobe -v mlx4_core
-    
-    local driver_dir="/lib/modules/`uname -r`/kernel/drivers"
-
-    for mdir in $IB_MOD_DIRS ; do
-        local dir="$driver_dir/$mdir"
-        cd $dir
-        for file in * ; do
-            local mod_name=${file%%.*}
-            modprobe -v "$mod_name"
-        done
-    done
-
-    sleep 1
-    cd /cdrom
-}
-
 config-nr-vms()
 {
     return 0
@@ -154,6 +138,8 @@ config-timeout()
 {
     return 0
 }
+
+dpkg -i /cdrom/*.deb
 
 NR_REBOOTS=$([ -e /NR_REBOOTS ] && cat /NR_REBOOTS || echo 0)
 

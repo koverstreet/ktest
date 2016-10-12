@@ -14,13 +14,8 @@ config-timeout 60
 
 main()
 {
-    #exit 0
     #apt update
     #apt install -y nfs-kernel-server
-
-    dpkg -i $LOGDIR/libblkid1_2.28~rc1-1_amd64.deb
-
-    (cd $LOGDIR/bcache-tools; make && make install)
 
     mkdir /export1 /export2
 

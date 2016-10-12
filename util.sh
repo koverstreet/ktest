@@ -23,6 +23,17 @@ checkdep()
 	fi
 }
 
+# scratch dir cleaned up on exit
+TMPDIR=""
+
+get_tmpdir()
+{
+    if [[ -z $TMPDIR ]]; then
+	TMPDIR=$(mktemp --tmpdir -d ktest-XXXXXXXXXX)
+	trap 'rm -rf "$TMPDIR"' SIGINT SIGTERM EXIT
+    fi
+}
+
 ARCH=x86_64
 
 parse_arch()

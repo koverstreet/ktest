@@ -1,20 +1,12 @@
 #!/bin/bash
 
-require-lib ../test-libs.sh
-
-require-kernel-config BCACHE
-require-kernel-config BCACHE_DEBUG
-require-file mkfs.bcache
+require-lib bcache-test-libs.sh
 
 config-scratch-devs 1G
 config-timeout 60
 
 main()
 {
-    (cd $LOGDIR/bcache-tools; make && make install)
-
-    #apt install libscrypt-dev libkeyutils-dev libsodium-dev
-
     echo "" | bcache format --encrypted /dev/sdb
     echo "" | bcache unlock /dev/sdb
     mount -t bcache /dev/sdb /mnt

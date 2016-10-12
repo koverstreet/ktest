@@ -45,6 +45,42 @@ parse_test_deps()
 	TESTDIR="$old"
     }
 
+    # $1 is a source repository, which will be built (with make) and then turned
+    # into a dpkg
+    require-build-deb()
+    {
+	local req=$1
+	local path=$(readlink -e "$TESTDIR/$req")
+
+	checkdep debuild devscripts
+
+	if ! [[ -d $path ]]; then
+	    echo "build-deb dependency $req not found"
+	    exit 1
+	fi
+
+	get_tmpdir
+	local out="$TMPDIR/out"
+
+	pushd "$path"	> /dev/null
+	if ! make > "$out" 2>$1 && [[ $? -eq 2 ]]; then
+	    echo "Error building $req:"
+	    cat "$out"
+	    exit 1
+	fi
+
+	if ! debuild -nc -us -uc -i -I	> "$out" 2>$1; then
+	    echo "Error creating package for $req: $?"
+	    cat "$out"
+	    exit 1
+	fi
+	popd		> /dev/null
+
+	for deb in $path*.deb; do
+	    _add-file "$deb"
+	done
+    }
+
     require-bin()
     {
 	local req=$1
@@ -126,16 +162,6 @@ parse_test_deps()
     config-mem()
     {
 	_MEM=$1
-    }
-
-    config-infiniband()
-    {
-	require-kernel-config MLX4_EN
-	require-kernel-config MLX4_INFINIBAND
-	require-kernel-config INFINIBAND_MTHCA
-	require-kernel-config INFINIBAND_USER_MAD
-	require-kernel-config INFINIBAND_USER_ACCESS
-	require-kernel-config INFINIBAND_IPOIB
     }
 
     config-nr-vms()

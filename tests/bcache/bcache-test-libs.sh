@@ -4,10 +4,7 @@
 #
 
 require-lib ../test-libs.sh
-
-#require-bin bcache
-
-#require-file /home/kent/bcache-tools
+require-build-deb bcache-tools
 
 require-kernel-config BCACHE,BCACHE_DEBUG
 require-kernel-config COMPACTION
@@ -140,49 +137,11 @@ bcache_format()
 {
     flags=""
 
-    #flags+=" --verison=0"
-
     case "$DISCARD" in
 	0) ;;
 	1) flags+=" --discard" ;;
 	*) echo "Bad discard: $DISCARD"; exit ;;
     esac
-
-    #case "$WRITEAROUND" in
-    #    0) ;;
-    #    1) flags+=" --writearound" ;;
-    #    *) echo "Bad writearound: $WRITEAROUND"; exit ;;
-    #esac
-    #case "$WRITEBACK" in
-    #    0) ;;
-    #    1) flags+=" --writeback" ;;
-    #    *) echo "Bad writeback: $WRITEBACK"; exit ;;
-    #esac
-
-#    for cache in $CACHE; do
-#	flags+=" --cache=$cache"
-#    done
-
-#    flags+=" --tier=1 --cache_replacement_policy=fifo"
-#    for cache in $TIER; do
-#	flags+=" --cache=$cache"
-#    done
-
-#    for bdev in $BDEV; do
-#	flags+=" --bdev=$bdev"
-#    done
-
-#    bcache format					\
-#	--error_action=panic				\
-#	"$BUCKET_SIZE"					\
-#	--btree_node=32k				\
-#	--block="$BLOCK_SIZE"				\
-#	--cache_replacement_policy="$REPLACEMENT"	\
-#	--data_replicas="$DATA_REPLICAS"		\
-#	--meta_replicas="$META_REPLICAS"		\
-#	--data_csum_type=crc32c				\
-#	--compression_type=lz4				\
-#	$flags
 
     for dev in $CACHE; do
 	flags+=" --tier=0 $dev"
@@ -197,7 +156,7 @@ bcache_format()
 	"$BUCKET_SIZE"					\
 	--btree_node=32k				\
 	--block="$BLOCK_SIZE"				\
-	--data_csum_type=crc32c				\
+	--data_checksum_type=crc32c			\
 	--compression_type=lz4				\
 	$flags
 }

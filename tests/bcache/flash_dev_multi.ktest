@@ -14,8 +14,6 @@ main()
     echo 1 > /sys/module/bcache/parameters/debug_check_bkeys
     setup_tracing 'bcache:*'
 
-    (cd $LOGDIR/bcache-tools; make && make install)
-
     setup_bcache
     #existing_bcache
 

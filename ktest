@@ -31,7 +31,7 @@ IDFILE=""		# passed as --id to vmstart
                         #       set with: -w <path>
 SCRATCHDIR=""
 OUTPUT_DIR=""		# dir for test output (logs, code coverage, etc.)
-TMPDIR="/tmp"		# dir where scratch drives are created
+VM_TMPDIR="/tmp"	# dir where scratch drives are created
                         #       defaults: /tmp
                         #       auto-override: $HOME/.ktest/tmp
 INTERACTIVE=0           # if set to 1, timeout is ignored completely
@@ -44,7 +44,7 @@ EXIT_ON_SUCCESS=0	# if true, exit on success, not failure or timeout
 
 [[ -f $HOME/.ktestrc ]]		&& . "$HOME/.ktestrc"
 [[ -f $HOME/.ktest/root ]]	&& IMG="$HOME/.ktest/root"
-[[ -d $HOME/.ktest/tmp ]]	&& TMPDIR="$HOME/.ktest/tmp"
+[[ -d $HOME/.ktest/tmp ]]	&& VM_TMPDIR="$HOME/.ktest/tmp"
 
 usage()
 {
@@ -134,7 +134,7 @@ parse_arch "$ARCH"
 [[ -z $OUTPUT_DIR ]]	&& OUTPUT_DIR=./ktest-out
 
 VMSTART+=("--idfile" "$IDFILE")
-VMSTART+=("--tmpdir" "$TMPDIR")
+VMSTART+=("--tmpdir" "$VM_TMPDIR")
 
 run_vm()
 {
@@ -164,9 +164,9 @@ run_vm()
     # kernel to kexec to for crash dumps
     FILES+=("vmlinuz=$KERNEL/vmlinuz")
 
-    iso=$(mktemp --tmpdir ktest-XXXXXXXXXX.iso)
-    trap 'rm -f $iso' SIGINT SIGTERM EXIT
+    get_tmpdir
 
+    local iso="$TMPDIR/ktest.iso"
     genisoimage -quiet -graft-points -input-charset utf-8 -R		\
 	-o "$iso" "${FILES[@]}"
 

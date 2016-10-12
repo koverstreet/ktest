@@ -12,8 +12,6 @@ config-timeout $(stress_timeout)
 
 main()
 {
-    (cd $LOGDIR/bcache-tools; make && make install)
-
     setup_tracing 'bcache:*'
 
     setup_bcache
