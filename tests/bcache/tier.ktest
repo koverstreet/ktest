@@ -10,8 +10,6 @@ config-volume 1400M
 
 config-timeout $(stress_timeout)
 
-require-build-deb bcache-tools
-
 main()
 {
     echo 1 > /sys/module/bcache/parameters/debug_check_bkeys
