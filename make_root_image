@@ -123,6 +123,7 @@ debootstrap				\
     --foreign				\
     sid "$MNT" "$MIRROR"
 
+mkdir -p "$MNT/etc/network"
 cat > "$MNT/etc/network/interfaces" <<-ZZ
 auto lo
 iface lo inet loopback
