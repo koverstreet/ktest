@@ -37,6 +37,7 @@ VM_TMPDIR="/tmp"	# dir where scratch drives are created
 INTERACTIVE=0           # if set to 1, timeout is ignored completely
                         #       sets with: -I
 EXIT_ON_SUCCESS=0	# if true, exit on success, not failure or timeout
+VERBOSE=0		# if false, append quiet to kernel commad line
 
 # config files:
 [[ -f $KTESTDIR/ktestrc ]]	&& . "$KTESTDIR/ktestrc"
@@ -82,7 +83,7 @@ fi
 CMD="cmd_$1"
 shift
 
-while getopts "ha:p:i:k:ISw:s:o:x" arg; do
+while getopts "ha:p:i:k:ISw:s:o:vx" arg; do
     case $arg in
 	h)
 	    usage
@@ -114,6 +115,9 @@ while getopts "ha:p:i:k:ISw:s:o:x" arg; do
 	    ;;
 	S)
 	    EXIT_ON_SUCCESS=1
+	    ;;
+	v)
+	    VERBOSE=1
 	    ;;
 	x)
 	    set -x
@@ -176,6 +180,10 @@ run_vm()
 	_KERNEL_APPEND="$_KERNEL_APPEND ktest.timeout=$_TIMEOUT"
     fi
 
+    if [[ $VERBOSE = 0 ]]; then
+	_KERNEL_APPEND="$_KERNEL_APPEND quiet"
+    fi
+
     "${VMSTART[@]}"							\
 	--architecture="${QEMU_BIN#qemu-system-}"			\
 	--image="$IMG"							\
@@ -184,7 +192,6 @@ run_vm()
 	--fs "$OUTPUT_DIR" logfs					\
 	--append="ktest.priority=$PRIORITY"				\
 	--append="log_buf_len=8M"					\
-	--append="quiet"						\
 	--append="$_KERNEL_APPEND"					\
 	--memory="$_MEM"						\
 	--cpus "$_CPUS"							\

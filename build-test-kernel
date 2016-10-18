@@ -36,6 +36,7 @@ NJOBS=$(($(grep -c '^processor' /proc/cpuinfo) * 2))
 			# number of jobs to passed to make during kernel compile
 			#       sets with: -j
 			#       defaults to 2 * number of processor
+VERBOSE=0		# if false, append quiet to kernel commad line
 
 # config files:
 [[ -f $KTESTDIR/ktestrc ]]	&& . "$KTESTDIR/ktestrc"
@@ -82,7 +83,7 @@ fi
 CMD="cmd_$1"
 shift
 
-while getopts "ha:p:k:KDc:i:b:j:ISO:w:s:x" arg; do
+while getopts "ha:p:k:KDc:i:b:j:ISO:w:s:vx" arg; do
     case $arg in
 	h)
 	    usage
@@ -140,6 +141,9 @@ while getopts "ha:p:k:KDc:i:b:j:ISO:w:s:x" arg; do
 	    ;;
 	s)
 	    KTESTARGS+=" -s $OPTARG"
+	    ;;
+	v)
+	    KTESTARGS+=" -v"
 	    ;;
 	x)
 	    KTESTARGS+=" -x"
