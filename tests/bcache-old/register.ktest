@@ -1,0 +1,44 @@
+#!/bin/bash
+
+require-lib bcache-test-libs.sh
+
+config-cache 512M
+config-backing 2G,2G
+config-bucket-size 64k
+config-block-size 4k
+config-writeback
+config-scratch-devs 512M,2G,2G
+
+config-timeout 120
+
+main()
+{
+    setup_tracing 'bcache:*'
+
+    setup_bcache
+
+    echo "we should only have one extent device"
+    [ "$(ls /dev/bcache_extent* | wc -l)" -eq "1" ]
+
+    for file in /sys/block/*/bcache/{stop,detach}; do
+	if [ -f $file ]; then
+	    echo > $file || true
+	fi
+    done
+
+    echo "unregister"
+    echo > /sys/fs/bcache/*/unregister
+    sleep 5
+
+    echo "cache set should go away"
+    ls /sys/fs/bcache/*-*-* && false
+
+    echo "extent device should go away"
+    ls /dev/bcache_extent* && false
+
+    echo "we should be able to register again"
+    setup_bcache
+
+    echo "we should only have one extent device"
+    [ "$(ls /dev/bcache_extent* | wc -l)" -eq "1" ]
+}

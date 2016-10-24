@@ -1,0 +1,89 @@
+config-cpus 1
+
+nr_iterations=$((((ktest_priority / 2) + 1) * 8))
+config-timeout $((nr_iterations * 60))
+
+# Usage: fio_pass read/write verify
+fio_pass()
+{
+    (
+	# Our default working directory (/cdrom) is not writable,
+	# fio wants to write files when verify_dump is set, so
+	# change to a different directory.
+	cd $LOGDIR
+
+	for dev in $DEVICES; do
+	    fio --eta=always - <<-ZZ &
+		[global]
+		randrepeat=0
+		ioengine=libaio
+		iodepth=64
+		direct=1
+
+		verify_fatal=1
+		verify_dump=1
+
+		filename=$dev
+
+		[foo]
+		blocksize_range=4k-128k
+		rw=$1
+		verify=$2
+		ZZ
+	done
+
+	test_wait
+    )
+}
+
+main()
+{
+    setup_tracing 'bcache:*'
+
+    if [ $NR_REBOOTS = 0 ]; then
+	setup_bcache
+    else
+	existing_bcache
+    fi
+
+    test_antagonist
+
+    if [ "$NR_REBOOTS" == "$nr_iterations" ]; then
+	test_discard
+	stop_bcache
+    else
+	case $((NR_REBOOTS % 2)) in
+	    0)
+		workload=write
+		;;
+	    1)
+		workload=read
+		;;
+	esac
+
+	# Change verify type between successive write/read pairs
+	# to detect stale data
+	case $(((NR_REBOOTS / 2) % 2)) in
+	    0)
+		verify=crc32c-intel
+		;;
+	    1)
+		verify=meta
+		;;
+	esac
+
+	fio_pass $workload $verify
+
+	# Unclean vs unclean shutdown
+	case $(((NR_REBOOTS / 4) % 2)) in
+	    0)
+		echo > /sys/fs/bcache/*/journal_flush
+		;;
+	    1)
+		stop_bcache
+		;;
+	esac
+
+	do_reboot
+    fi
+}

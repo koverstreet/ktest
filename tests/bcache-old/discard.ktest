@@ -1,0 +1,74 @@
+#!/bin/bash
+
+require-lib bcache-test-libs.sh
+
+require-lib ../../../vm-tests/container_lib.sh
+require-container ioctl_test
+
+config-cache 2G
+config-bucket-size 512k
+config-block-size 2k
+config-volume 1400M
+
+config-timeout $(stress_timeout)
+
+mb_to_sec()
+{
+    local mb=$1
+    local sec=$((2*1024*$mb))
+    echo "$sec"
+}
+
+main()
+{
+    setup_bcache
+
+    bch_ioctl()
+    {
+	container_run ioctl_test /dev/bcache_extent0 $@
+    }
+
+    cd /root
+
+    echo "-------- READ TEST -------- "
+
+    dd if=/dev/zero of=bar bs=512 count=24
+    bch_ioctl read	      1 8     24 | diff -q bar -
+
+    echo "-------- UNIT TEST -------- "
+
+    # this portion specifically tests to make sure discard doesn't
+    # touch any surrounding keys
+
+    dd if=/dev/urandom of=foo bs=4096 count=1
+    touch bar
+
+    echo "initial state setup ..."
+    bch_ioctl write	      1 0     8 < foo
+    bch_ioctl write	      1 16    8 < foo
+    bch_ioctl write	      1 32    8 < foo
+
+    echo "initial state check ..."
+    bch_ioctl count_keys    0 1 0 2 0   |& grep "3 keys found";
+
+    echo "discard ...."
+    bch_ioctl discard	      1 8     24
+
+    echo "after discard check ..."
+    bch_ioctl list_keys	    0 1 0 2 0	|& grep "2 keys found"
+
+    bch_ioctl read	      1 0     8 | diff -q foo -
+    bch_ioctl read	      1 8     24 | diff -q bar -
+    bch_ioctl read	      1 32    8 | diff -q foo -
+   
+    echo "------- FIO TEST -------- "
+
+    test_fio
+
+    bch_ioctl list_keys       1 0 0 100 100
+    bch_ioctl count_keys      0 0 0 1 0 |& grep "ENOSPC"
+
+    echo "discard ...."
+    bch_ioctl discard	        0 0	"`mb_to_sec 1400`"
+    bch_ioctl count_keys      0 0 0 1 0 |& grep "0 keys found"
+}

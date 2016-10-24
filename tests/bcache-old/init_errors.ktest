@@ -1,0 +1,64 @@
+#!/bin/bash
+
+require-lib bcache-test-libs.sh
+
+config-cache 2G
+config-tier 4G
+config-bucket-size 32k
+config-block-size 4k
+config-timeout 300
+config-volume 1600M
+
+test_faults()
+{
+    control=/sys/kernel/debug/dynamic_fault/control
+    grep $1 $control
+    echo
+
+    for id in {0..99}; do
+	fault="$1 index $id"
+
+	echo "class $fault enable" > $control || break
+
+	echo "TESTING FAULT $id"
+
+	echo "Registering sdb"
+	echo /dev/sdb > /sys/fs/bcache/register || true
+
+	echo "Registering sdc"
+	echo /dev/sdc > /sys/fs/bcache/register || true
+
+	sleep 2
+	echo "class $fault disable" > $control
+	sleep 2
+
+	if test -e /sys/fs/bcache/*-*-*-*-*; then
+	    echo "Registration should have failed"
+	    false
+	fi
+    done
+}
+
+main()
+{
+    setup_tracing 'bcache:*'
+
+    if [ $NR_REBOOTS = 0 ]; then
+	setup_bcache
+
+	echo readonly > /sys/fs/bcache/*/errors
+
+	setup_fs ext4
+
+	test_antagonist
+
+	test_dbench &
+	test_bonnie &
+
+	sleep 10
+	do_reboot
+    else
+	test_faults "bcache:cache_set_init"
+	test_faults "bcache:meta:read"
+    fi
+}

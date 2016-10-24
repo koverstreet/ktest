@@ -1,0 +1,30 @@
+#!/bin/bash
+
+require-lib bcache-test-libs.sh
+
+config-cache 2G
+config-bucket-size 32k
+config-block-size 4k
+config-volume 1600M
+config-cpus 1
+config-timeout 600
+
+main()
+{
+    setup_tracing 'bcache:*'
+
+    if [ $NR_REBOOTS -eq 0 ]; then
+	setup_bcache
+	ls /dev/bcache*
+	block_device_dd /dev/bcache0
+    elif [ $NR_REBOOTS -eq 20 ]; then
+        stop_bcache
+	exit
+    else
+	existing_bcache
+	block_device_verify_dd /dev/bcache0
+	echo "test completed"
+	block_device_dd /dev/bcache0
+    fi
+    do_reboot
+}

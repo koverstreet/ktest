@@ -1,0 +1,11 @@
+#!/bin/bash
+
+require-lib bcache-test-libs.sh
+
+config-cache 2G
+config-backing 4G
+config-bucket-size 32k
+config-block-size 4k
+config-writeback
+
+require-lib reboot-fs.sh

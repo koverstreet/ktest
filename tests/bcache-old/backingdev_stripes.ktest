@@ -1,0 +1,30 @@
+#!/bin/bash
+
+require-lib bcache-test-libs.sh
+
+require-kernel-config BLK_DEV_MD,MD_RAID456
+
+config-cache 512M
+config-scratch-devs 256M,256M,256M,256M,256M
+
+config-bucket-size 64k
+config-block-size 4k
+
+config-writeback
+
+config-timeout $(stress_timeout)
+
+main()
+{
+    setup_tracing 'bcache:*'
+
+    mdadm --create /dev/md0 --level=5 --raid-devices=5 /dev/sd[cdefg]
+    cat /proc/mdstat
+
+    BDEV="/dev/md0"
+    setup_bcache
+
+    test_antagonist
+    test_fio
+    stop_bcache
+}

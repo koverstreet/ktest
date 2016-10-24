@@ -1,0 +1,27 @@
+#!/bin/bash
+
+require-lib bcache-test-libs.sh
+
+config-cache	    1G,1G
+config-bucket-size  512k
+config-block-size   2k
+config-volume	    1500M
+
+config-timeout $(stress_timeout)
+
+main()
+{
+    echo 1 > /sys/module/bcache/parameters/debug_check_bkeys
+    setup_tracing 'bcache:*'
+
+    setup_bcache
+    #existing_bcache
+
+    test_antagonist
+    test_bcache_stress
+    #test_fio
+
+    stop_volumes
+    test_bcachefs_stress
+    stop_bcache
+}

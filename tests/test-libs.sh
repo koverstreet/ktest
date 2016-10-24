@@ -262,10 +262,10 @@ enable_faults()
 {
     f=/sys/kernel/debug/dynamic_fault/control
 
-    [[ -f $f ]] || return
-
-    echo "class memory	frequency 100"	> $f
-    echo "class race	frequency 100"	> $f
+    if [[ -f $f ]]; then
+	echo "class memory	frequency 100"	> $f
+	echo "class race	frequency 100"	> $f
+    fi
 }
 
 disable_faults()
