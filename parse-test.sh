@@ -63,17 +63,24 @@ parse_test_deps()
 	local out="$TMPDIR/out"
 
 	pushd "$path"	> /dev/null
+
 	if ! make > "$out" 2>$1 && [[ $? -eq 2 ]]; then
 	    echo "Error building $req:"
 	    cat "$out"
 	    exit 1
 	fi
+	[[ $VERBOSE = 1 ]] && cat "$out"
 
-	if ! debuild -nc -us -uc -i -I	> "$out" 2>$1; then
+	# make -nc actually work:
+	rm -f debian/*.debhelper.log
+
+	if ! debuild --no-lintian -b -i -I -us -uc -nc > "$out" 2>$1; then
 	    echo "Error creating package for $req: $?"
 	    cat "$out"
 	    exit 1
 	fi
+	[[ $VERBOSE = 1 ]] && cat "$out"
+
 	popd		> /dev/null
 
 	for deb in $path*.deb; do
@@ -137,21 +144,14 @@ parse_test_deps()
 	_KERNEL_APPEND+=" $1"
     }
 
-    scratch-dev()
-    {
-	local dev_size=$1
-	local dev_path="/dev/sd$NEXT_SCRATCH_DEV"
-
-	NEXT_SCRATCH_DEV=$(echo $NEXT_SCRATCH_DEV|tr "a-z" "b-z_")
-
-	_VMSTART_ARGS+=("--scratchdev" "$dev_size")
-
-	echo "$dev_path"
-    }
-
     config-scratch-devs()
     {
-	_VMSTART_ARGS+=("--scratchdev" "$1")
+	_VMSTART_ARGS+=("--scratchdev=$1")
+    }
+
+    config-image()
+    {
+	_VMSTART_ARGS+=("--image=$1")
     }
 
     config-cpus()

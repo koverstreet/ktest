@@ -74,12 +74,18 @@ def vm_run(vmdir, vm_nr):
     cmd.extend(["-device", "virtio-scsi-pci,id=scsi-hba"])
 
     # Root file system comes first (sda)
-    cmd.extend(qemu_disk("root", args.image, "snapshot=on,cache=unsafe"))
 
-    for i, size in enumerate(args.scratchdev):
-        drive = os.path.join(vmdir, "vm-%u-disk-%u" % (vm_nr, i))
+    disknr = 0
+
+    for image in args.image:
+        cmd.extend(qemu_disk("scsi" + str(disknr), image, "snapshot=on,cache=unsafe"))
+        disknr += 1
+
+    for size in args.scratchdev:
+        drive = os.path.join(vmdir, "vm-%u-disk-%u" % (vm_nr, disknr))
         subprocess.check_call(["fallocate", "-l", size, drive])
-        cmd.extend(qemu_disk("scsi" + str(i), drive, "cache=unsafe"))
+        cmd.extend(qemu_disk("scsi" + str(disknr), drive, "cache=unsafe"))
+        disknr += 1
 
     if args.cdrom:
         cmd.extend(qemu_disk("scsi-cd", args.cdrom, "", "scsi-cd"))
@@ -112,9 +118,6 @@ def tmpdir_cleanup(vmdir):
         shutil.rmtree(vmdir, ignore_errors=True)
 
 def cmd_start():
-    if not os.path.isfile(args.image):
-        raise RuntimeError("Cannot find base image file: " + args.image)
-
     if args.kernel and not os.path.isfile(args.kernel):
         raise RuntimeError("Cannot find kernel file: " + args.kernel)
 
@@ -251,8 +254,6 @@ parser_start.add_argument("--architecture",
     help="qemu architecture")
 parser_start.add_argument("--scratchdir",
     help="use a prexisting scratch directory")
-parser_start.add_argument("-i", "--image", required=True,
-    help="root filesystem for the virtual machine(s)")
 parser_start.add_argument("-k", "--kernel",
     help="kernel used to boot the virtual machine(s)")
 parser_start.add_argument("-r", "--initrd",
@@ -264,6 +265,10 @@ parser_start.add_argument("--kgdb", action="store_true",
     help="enable kgdb")
 parser_start.add_argument("-c", "--cdrom",
     help="cdrom image")
+parser_start.add_argument("-i", "--image",
+    action="append",
+    default=[],
+    help="list of disk images for the virtual machine(s)")
 parser_start.add_argument("-s", "--scratchdev",
     action="append",
     default=[],

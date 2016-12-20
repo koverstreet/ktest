@@ -6,8 +6,8 @@
 require-lib ../test-libs.sh
 require-build-deb bcache-tools
 
+require-kernel-config MD
 require-kernel-config BCACHE,BCACHE_DEBUG
-require-kernel-config COMPACTION
 
 if [[ $KERNEL_ARCH = x86 ]]; then
     require-kernel-config CRYPTO_CRC32C_INTEL
@@ -157,7 +157,7 @@ bcache_format()
 	--btree_node=32k				\
 	--block="$BLOCK_SIZE"				\
 	--data_checksum_type=crc32c			\
-	--compression_type=lz4				\
+	--compression_type=none				\
 	$flags
 }
 

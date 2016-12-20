@@ -23,11 +23,16 @@ checkdep debootstrap
 IMAGE_SIZE="2G"
 
 PACKAGES="kexec-tools,less,psmisc,openssh-server"
-PACKAGES+=",make,gcc,g++,gdb,strace,valgrind"
-PACKAGES+=",hdparm,xfsprogs,btrfs-tools,mdadm,lvm2,aoetools,vblade"
-PACKAGES+=",linux-tools,blktrace,sysstat,fio,dbench,bonnie++"
+PACKAGES+=",make,gcc,g++,gdb,strace"
+PACKAGES+=",hdparm,btrfs-tools,mdadm,lvm2,aoetools,vblade"
+PACKAGES+=",linux-tools,blktrace,sysstat"
 PACKAGES+=",bc,attr,gawk,acl"
 PACKAGES+=",build-essential"
+
+# stress testing:
+PACKAGES+=",fio,dbench,bonnie++,fsmark"
+
+#PACKAGES+=",valgrind" #broken
 
 # suspend testing:
 PACKAGES+=",uswsusp"
@@ -36,8 +41,10 @@ PACKAGES+=",uswsusp"
 PACKAGES+=",pkg-config,libnih-dev,libblkid-dev,uuid-dev"
 
 # xfstests:
-PACKAGES+=",autoconf"
-PACKAGES+=",libtool-bin,xfslibs-dev,libattr1-dev,libaio-dev,libgdbm-dev,libacl1-dev"
+#PACKAGES+=",xfsprogs,xfslibs-dev"
+PACKAGES+=",autoconf,automake"
+PACKAGES+=",libtool-bin,libattr1-dev,libaio-dev,libgdbm-dev,libacl1-dev,gettext"
+PACKAGES+=",libssl-dev"
 
 # nfs testing:
 PACKAGES+=",nfs-kernel-server"
@@ -57,11 +64,7 @@ SYSTEMD_MASK=(dev-hvc0.device				\
     hdparm.service					\
     cdrom.mount						\
     mdadm-raid.service					\
-    lvm2-lvmetad.service				\
-    lvm2-monitor.service				\
-    lvm2-lvmetad.socket					\
     lvm2-activation-early.service			\
-    lvm2-activation.service				\
     aoetools.service					\
     sysstat.service					\
     kexec-load.service					\
@@ -188,6 +191,9 @@ disown
 ZZ
 chmod 755 "$MNT/etc/rc.local"
 
+# xfstests:
+chroot "$MNT" useradd fsgqa
+
 DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
  LC_ALL=C LANGUAGE=C LANG=C chroot "$MNT" /debootstrap/debootstrap --second-stage
 
@@ -197,7 +203,7 @@ DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
 DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
  LC_ALL=C LANGUAGE=C LANG=C chroot "$MNT" apt update
 
-rm "$MNT/var/cache/apt/archives/*.deb"
+rm -f "$MNT/var/cache/apt/archives/*.deb"
 
 # Unmount everything in the root
 awk '{print $2}' /proc/mounts|

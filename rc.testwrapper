@@ -109,12 +109,12 @@ require-kernel-append()
     return 0
 }
 
-scratch-dev()
+config-scratch-devs()
 {
     return 0
 }
 
-config-scratch-devs()
+config-image()
 {
     return 0
 }

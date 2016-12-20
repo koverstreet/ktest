@@ -66,16 +66,16 @@ main()
     ulimit -c unlimited
     #setup_tracing 'bcache:*'
     #echo 1 > /sys/module/bcache/parameters/expensive_debug_checks
+    #echo 1 > /sys/module/bcache/parameters/verify_btree_ondisk
     echo 1 > /sys/module/bcache/parameters/debug_check_bkeys || true
     #echo 1 > /sys/module/bcache/parameters/btree_gc_coalesce_disabled
     #echo 1 > /sys/module/bcache/parameters/key_merging_disabled
 
     echo "class race frequency 100" > /sys/kernel/debug/dynamic_fault/control
 
-    (cd $LOGDIR/bcache-tools; make && make install)
+    antagonist_shrink &
 
     #antagonist_expensive_debug_checks &
-    #antagonist_shrink &
     #antagonist_trigger_gc &
     #antagonist_switch_crc &
 
@@ -84,10 +84,6 @@ main()
 
     # fail when testing different block sizes:
     #test_xfstests bcache "generic/091 generic/114 generic/240 generic/263"
-
-    #test_xfstests bcache "generic/019 generic/077"
-
-    #test_xfstests bcache "generic/299"
 
     test_xfstests bcache "generic/???"
 }
