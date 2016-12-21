@@ -11,8 +11,6 @@ require-kernel-config BCACHE,BCACHE_DEBUG
 
 if [[ $KERNEL_ARCH = x86 ]]; then
     require-kernel-config CRYPTO_CRC32C_INTEL
-    require-kernel-config CRYPTO_POLY1305_X86_64
-    require-kernel-config CRYPTO_CHACHA20_X86_64
 fi
 
 #Expensive:
@@ -21,17 +19,14 @@ fi
 SYSFS=""
 BDEV=""
 CACHE=""
-TIER=""
 VOLUME=""
-DISCARD=1
 WRITEBACK=0
 WRITEAROUND=0
 REPLACEMENT=lru
+BUCKET_SIZE=""
+BLOCK_SIZE=""
 
 VIRTIO_BLKDEVS=0
-
-DATA_REPLICAS=1
-META_REPLICAS=1
 
 #
 # Bcache configuration
@@ -46,11 +41,6 @@ config-cache()
     add_bcache_devs CACHE $1 0
 }
 
-config-tier()
-{
-    add_bcache_devs TIER $1 1
-}
-
 config-volume()
 {
     for size in $(echo $1 | tr ',' ' '); do
@@ -63,15 +53,12 @@ config-volume()
 
 config-bucket-size()
 {
-    BUCKET_SIZE=""
-    for size in "$@"; do
-        BUCKET_SIZE="$BUCKET_SIZE--bucket=$size "
-    done
+    BUCKET_SIZE="--bucket=$1"
 }
 
 config-block-size()
 {
-    BLOCK_SIZE="$1"
+    BLOCK_SIZE="--block=$1"
 }
 
 config-writeback()
@@ -87,16 +74,6 @@ config-writearound()
 config-replacement()
 {
     REPLACEMENT="$1"
-}
-
-config-data-replicas()
-{
-    DATA_REPLICAS="$1"
-}
-
-config-meta-replicas()
-{
-    META_REPLICAS="$1"
 }
 
 config-bcache-sysfs()
@@ -135,30 +112,7 @@ add_bcache_devs()
 
 bcache_format()
 {
-    flags=""
-
-    case "$DISCARD" in
-	0) ;;
-	1) flags+=" --discard" ;;
-	*) echo "Bad discard: $DISCARD"; exit ;;
-    esac
-
-    for dev in $CACHE; do
-	flags+=" --tier=0 $dev"
-    done
-
-    for dev in $TIER; do
-	flags+=" --tier=1 $dev"
-    done
-
-    bcache format					\
-	--error_action=panic				\
-	"$BUCKET_SIZE"					\
-	--btree_node=32k				\
-	--block="$BLOCK_SIZE"				\
-	--data_checksum_type=crc32c			\
-	--compression_type=none				\
-	$flags
+    make-bcache $BUCKET_SIZE $BLOCK_SIZE -C $CACHE -B $BDEV
 }
 
 add_device() {
@@ -185,25 +139,11 @@ existing_bcache() {
     DEVICES=
     DEVICE_COUNT=0
 
-    # Older kernel versions don't have /dev/bcache
-    #if [ -e /dev/bcache-ctl ]; then
-    if false; then
-	echo "registering via bcacheadm"
+    echo "registering via sysfs"
 
-	# Make sure bcache-super-show works -- the control plane wipes data
-	# if this fails so its important that it doesn't break
-	for dev in $CACHE $BDEV $TIER; do
-	    bcache query-devs $dev
-	done
-
-	bcache register $CACHE $TIER $BDEV
-    else
-	echo "registering via sysfs"
-
-	for dev in $CACHE $TIER $BDEV; do
-	    echo $dev > /sys/fs/bcache/register
-	done
-    fi
+    for dev in $CACHE $BDEV; do
+	echo $dev > /sys/fs/bcache/register
+    done
 
     echo "registered"
 
@@ -215,20 +155,23 @@ existing_bcache() {
 
     udevadm settle
 
-    if [ -e /dev/bcache-ctl ]; then
-	wait_on_dev /dev/bcache0-ctl $DEVICES
-    fi
-
+    echo -n "setting cache set settings: "
     cache_set_settings
+    echo done
 
-    # Set up flash-only volumes.
+    echo -n "creating volumes: "
     for volume in $VOLUME; do
 	add_device
     done
+    echo done
 
+    echo -n "setting backing device settings: "
     cached_dev_settings
+    echo done
 
+    echo -n "doing sysfs test: "
     eval "$SYSFS"
+    echo done
 }
 
 #
@@ -269,7 +212,6 @@ cache_set_settings()
 {
     for dir in $(ls -d /sys/fs/bcache/*-*-*); do
 	true
-	#echo 0 > $dir/synchronous
 	#echo panic > $dir/errors
 
 	#echo 0 > $dir/journal_delay_ms
@@ -277,9 +219,11 @@ cache_set_settings()
 	#echo 1 > $dir/internal/btree_coalescing_disabled
 	#echo 1 > $dir/internal/verify
 
+	echo foo1
 	echo 0 > $dir/congested_read_threshold_us
 	echo 0 > $dir/congested_write_threshold_us
 
+	echo foo2
 	#echo 1 > $dir/internal/copy_gc_enabled
 
 	# Disable damping effect since test cache devices are so small
@@ -287,6 +231,7 @@ cache_set_settings()
 	#[[ -f $dir/internal/tiering_rate_p_term_inverse ]] &&
 	#    echo 1 > $dir/internal/tiering_rate_p_term_inverse
 
+	echo foo3
 	[[ -f $dir/internal/foreground_write_rate_p_term_inverse ]] &&
 	    echo 1 > $dir/internal/foreground_write_rate_p_term_inverse
 
@@ -294,6 +239,8 @@ cache_set_settings()
 	#    [[ -f $dev/copy_gc_rate_p_term_inverse ]] &&
 	#	echo 1 > $dev/copy_gc_rate_p_term_inverse
 	#done
+
+	echo foo4
     done
 }
 
@@ -325,12 +272,16 @@ expect_sysfs()
 
 test_sysfs()
 {
+    echo -n "test_sysfs(): "
+
     if [ -d /sys/fs/bcache/*-* ]; then
 	find -H /sys/fs/bcache/ -type f -perm -0400 -exec cat {} \; \
 	    > /dev/null
 	find -H /sys/block/*/bcache/ -type f -perm -0400 -exec cat {} \; \
 	    > /dev/null
     fi
+
+    echo done
 }
 
 antagonist_shrink()
@@ -366,29 +317,12 @@ antagonist_trigger_gc()
     done
 }
 
-antagonist_switch_crc()
-{
-    cd /sys/fs/bcache
-
-    while true; do
-	sleep 1
-	echo crc64 | tee */options/data_checksum	> /dev/null 2>&1 || true
-	echo crc64 | tee */options/metadata_checksum	> /dev/null 2>&1 || true
-	echo crc64 | tee */options/str_hash		> /dev/null 2>&1 || true
-	sleep 1
-	echo crc32c | tee */options/data_checksum	> /dev/null 2>&1 || true
-	echo crc32c | tee */options/metadata_checksum	> /dev/null 2>&1 || true
-	echo crc32c | tee */options/str_hash		> /dev/null 2>&1 || true
-    done
-}
-
 test_antagonist()
 {
     antagonist_expensive_debug_checks &
     antagonist_shrink &
     antagonist_sync &
-    antagonist_trigger_gc &
-    antagonist_switch_crc &
+    #antagonist_trigger_gc &
 }
 
 test_discard()
@@ -437,6 +371,7 @@ test_discard()
 
 test_bcache_stress()
 {
+    echo "test_bcache_stress():"
     enable_faults
 
     test_sysfs
@@ -459,62 +394,4 @@ test_bcache_stress()
     fi
 
     disable_faults
-}
-
-# some bcachefs tests:
-
-setup_bcachefs()
-{
-    mkdir -p /mnt/bcachefs
-
-    MNT=""
-    for dev in $CACHE $TIER; do
-	if [[ -z $MNT ]]; then
-	    MNT=$dev
-	else
-	    MNT=$MNT:$dev
-	fi
-    done
-
-    echo "mount -t bcache $MNT /mnt/bcachefs"
-    mount -t bcache -o verbose_recovery $MNT /mnt/bcachefs
-
-    # for fs workloads to know mount point
-    DEVICES=bcachefs
-}
-
-stop_bcachefs()
-{
-    umount /mnt/bcachefs
-}
-
-test_bcachefs_stress()
-{
-    setup_bcachefs
-    #enable_faults
-
-    test_dbench
-    test_bonnie
-    test_fsx
-
-    #disable_faults
-    stop_bcachefs
-}
-
-bcache_status()
-{
-    DEVS=""
-    for dev in "$@"; do
-	DEVS="$DEVS$dev "
-    done
-    bcache status $DEVS
-}
-
-bcache_dev_query()
-{
-    DEVS=""
-    for dev in "$@"; do
-	DEVS="$DEVS$dev "
-    done
-    bcache query-devs $DEVS
 }

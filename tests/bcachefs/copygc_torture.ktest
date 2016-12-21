@@ -1,0 +1,46 @@
+#!/bin/bash
+
+require-lib bcache-test-libs.sh
+
+config-scratch-devs 2150MB
+
+config-timeout $(stress_timeout)
+
+main()
+{
+    echo 1 > /sys/module/bcache/parameters/debug_check_bkeys
+    setup_tracing 'bcache:*'
+
+    bcache format --bucket=2M --max_journal_entry_size=2M /dev/sdb
+    mount /dev/sdb /mnt
+
+    test_antagonist
+
+    loops=$((($ktest_priority + 1) * 4))
+
+    fio --eta=always		\
+	--randrepeat=0		\
+	--ioengine=libaio	\
+	--iodepth=64		\
+	--iodepth_batch=16	\
+	--direct=1		\
+	--numjobs=1		\
+	--buffer_compress_percentage=0\
+	--filename=/mnt/fiotest	\
+	--filesize=1800M	\
+				\
+	--name=randwrite	\
+	--stonewall		\
+	--rw=randwrite		\
+	--bs=4k			\
+	--loops=$loops
+    exit 0
+
+    rm /mnt/fiotest
+
+    expect_sysfs cache dirty_buckets	0
+    expect_sysfs cache dirty_data	0
+    expect_sysfs cache cached_buckets	0
+    expect_sysfs cache cached_data	0
+    umount /mnt
+}
