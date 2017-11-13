@@ -1,0 +1,426 @@
+#!/bin/bash
+
+require-lib bcachefs-test-libs.sh
+
+require-kernel-config BLK_DEV_MD,MD_FAULTY
+
+config-scratch-devs 2G
+config-scratch-devs 2G
+
+config-volume 1400M
+
+config-timeout $(stress_timeout)
+
+test_device_add()
+{
+    setup_tracing 'bcachefs:*'
+
+    bcachefs format /dev/sdb
+
+    mount /dev/sdb /mnt
+
+    if false; then
+	fio --eta=always			\
+	    --randrepeat=0			\
+	    --ioengine=libaio			\
+	    --iodepth=64			\
+	    --iodepth_batch=16			\
+	    --direct=1				\
+	    --numjobs=1				\
+	    --buffer_compress_percentage=20	\
+	    --verify=meta			\
+	    --verify_fatal=1			\
+	    --verify_dump=1			\
+	    --filename=/mnt/fiotest		\
+	    --size=1G				\
+						\
+	    --name=randwrite			\
+	    --stonewall				\
+	    --rw=randwrite			\
+	    --bsrange=4k-128k &
+    fi
+
+    echo "Adding /dev/sdc"
+    bcachefs device add /mnt /dev/sdc
+    echo "Added /dev/sdc"
+
+    wait
+    umount /mnt
+    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
+
+    echo "Removing /dev/sdc"
+    bcachefs device set-state /mnt /dev/sdc failed
+    bcachefs device remove /mnt /dev/sdc
+    echo "Removed /dev/sdc"
+
+    umount /mnt
+    mount /dev/sdb /mnt
+    bcachefs device add /mnt /dev/sdc
+}
+
+test_device_add_errors()
+{
+    set_faults()
+    {
+	control=/sys/kernel/debug/dynamic_fault/control
+	grep $1 $control
+	echo
+
+	for id in {0..99}; do
+	    fault="$1 index $id"
+
+	    echo "class $fault enable" > $control || break
+
+	    echo "TESTING FAULT $id"
+
+	    echo "Registering sdd"
+	    echo /dev/sdd > /sys/fs/bcachefs/*/add_device || true
+	    sleep 2
+
+	    # Make sure we didn't actually added this device
+	    devices="$(ls -d /sys/fs/bcachefs/*/cache[0-9] | wc -l)"
+	    if [ "$devices" != 2 ]; then
+		echo "Found $devices devices"
+		exit 1
+	    fi
+
+	    sleep 2
+	    echo "class $fault disable" > $control
+	    sleep 2
+	done
+    }
+
+    setup_tracing 'bcachefs:*'
+
+    setup_bcache
+
+    bcacheadm format --bucket=32k --block=4k -C /dev/sdd
+
+    echo readonly > /sys/fs/bcachefs/*/errors
+
+    set_faults "bcachefs:add"
+    set_faults "bcachefs:cache_set_init:cache_alloc"
+    set_faults "bcachefs:cache_set_init:alloc_start"
+    set_faults "bcachefs:cache_set_init:read_super"
+}
+
+test_device_read_only()
+{
+    setup_tracing 'bcachefs:*'
+
+    if [ $NR_REBOOTS = 0 ]; then
+	setup_bcache
+	echo readonly > /sys/fs/bcachefs/*/cache1/state
+	echo readonly > /sys/fs/bcachefs/*/cache2/state
+	echo active > /sys/fs/bcachefs/*/cache1/state
+	echo active > /sys/fs/bcachefs/*/cache2/state
+	run_fio
+	echo readonly > /sys/fs/bcachefs/*/cache2/state
+	echo > /sys/fs/bcachefs/*/internal/trigger_gc
+	sleep 1
+	while [ "$(cat /sys/fs/bcachefs/*/internal/btree_gc_running)" = 1 ]; do
+	    sleep 1
+	done
+	do_reboot
+    else
+	existing_bcache
+	discard_all_devices
+	stop_bcache
+    fi
+}
+
+test_device_dead()
+{
+    setup_tracing 'bcachefs:*'
+
+    mdadm -B /dev/md0 -lfaulty -n1 $TIER
+    TIER=/dev/md0
+
+    (
+	sleep 10
+	mdadm -G /dev/md0 -pwrite-all
+	mdadm -G /dev/md0 -pread-persistent1
+    )&
+
+    setup_bcache
+    echo readonly > /sys/fs/bcachefs/*/errors
+
+    run_antagonist
+    ! run_fio
+    stop_bcache
+}
+
+test_device_dead_2()
+{
+    setup_tracing 'bcachefs:*'
+
+    parsed=(`echo $TIER | tr ' ' '\n'`)
+
+    mdadm -B /dev/md0 -lfaulty -n1 ${parsed[0]}
+    TIER="/dev/md0 ${parsed[1]}"
+
+    (
+	sleep 10
+	# mdadm -G /dev/md0 -pwrite-transient40
+	mdadm -G /dev/md0 -pread-persistent1
+    )&
+
+    setup_bcache
+    echo readonly > /sys/fs/bcachefs/*/errors
+
+    run_antagonist
+    ! run_fio
+    stop_bcache
+}
+
+test_device_remove()
+{
+    config-data-replicas 2
+
+    setup_tracing 'bcachefs:*'
+
+    setup_bcache
+
+    DEVNAME=`ls -d /sys/fs/bcachefs/*/cache4`
+
+    (
+	# 1. Wait until run_fio is going.
+	sleep 10
+
+	# 2. Remove the tier 1 device -- everyting live
+	# should move to other devices
+
+	echo "Removing device $DEVNAME"
+	echo 1 > $DEVNAME/unregister
+
+	COUNTER=0
+
+	while [ $COUNTER -lt 60 ]; do
+	    let COUNTER=COUNTER+1
+	    if [ -a $DEVNAME ]; then
+		sleep 1
+	    else
+	    	echo "Device $DEVNAME removed"
+		break
+	    fi
+	done
+
+    )&
+
+    run_antagonist
+    run_fio
+
+    SUCCESS=1
+
+    if [ -a $DEVNAME ]; then
+	SUCCESS=0
+    fi
+
+    stop_bcache
+
+    if [ $SUCCESS -eq 0 ]; then
+	exit 1
+    fi
+}
+
+test_device_remove_2()
+{
+    setup_tracing 'bcachefs:*'
+    config-data-replicas 1
+
+    setup_bcache
+
+    DEVNAME=`ls -d /sys/fs/bcachefs/*/cache1`
+
+    run_fio
+
+    (
+	# 1. Add a new device to tier 1
+
+	bcacheadm format --bucket=64k --block=4k --tier=1 -C /dev/sdd
+	echo "adding device 2"
+	echo /dev/sdd > /sys/fs/bcachefs/*/add_device
+
+	# 2. Start antagonist after the device addition
+	# (see comments in bcache_device_add.ktest)
+
+	run_antagonist
+
+	# 3. Remove the original tier 1 device -- everything live
+	# should move to the new device
+
+	sleep 5
+	echo "Removing device $DEVNAME"
+	echo 1 > $DEVNAME/unregister
+
+	# 4. Wait for data motion and device removal to succeed
+	# This should be in a bounded loop sleeping by 1 until the
+	# device is removed
+
+	COUNTER=0
+
+	while [ $COUNTER -lt 60 ]; do
+	    let COUNTER=COUNTER+1
+	    if [ -a $DEVNAME ]; then
+		sleep 1
+	    else
+		echo "Device $DEVNAME removed"
+		break
+	    fi
+	done
+    ) &
+
+    run_fio
+
+    SUCCESS=1
+
+    if [ -a $DEVNAME ]; then
+	SUCCESS=0
+    fi
+
+    stop_bcache
+
+    if [ $SUCCESS -eq 0 ]; then
+	exit 1
+    fi
+}
+
+test_device_remove_3()
+{
+    setup_tracing 'bcachefs:*'
+
+    setup_bcache
+
+    DEVNAME=`ls -d /sys/fs/bcachefs/*/cache0`
+
+    run_fio
+
+    (
+	# 1. Remove the tier 0 device -- everything live
+	# should move to the other tier 0 device.
+
+	echo "Removing device $DEVNAME"
+	echo 1 > $DEVNAME/unregister
+
+	# 2. Wait for data motion and device removal to succeed
+	# This is a bounded loop sleeping by 1 until the
+	# device is removed
+
+	COUNTER=0
+
+	while [ $COUNTER -lt 60 ]; do
+	    let COUNTER=COUNTER+1
+	    if [ -a $DEVNAME ]; then
+		sleep 1
+	    else
+	    	echo "Device $DEVNAME removed"
+		break
+	    fi
+	done
+    ) &
+
+    run_antagonist
+    run_fio
+
+    SUCCESS=1
+
+    if [ -a $DEVNAME ]; then
+	SUCCESS=0
+    fi
+
+    stop_bcache
+
+    if [ $SUCCESS -eq 0 ]; then
+	exit 1
+    fi
+}
+
+test_device_remove_4()
+{
+    setup_tracing 'bcachefs:*'
+
+    setup_bcache
+    echo 1 > /sys/fs/bcachefs/*/cache2/unregister
+    sleep 3
+    echo 1 > /sys/fs/bcachefs/*/unregister
+    sleep 3
+
+    bcacheadm register /dev/sdb /dev/sdc /dev/sdd /dev/sde
+    sleep 3
+    echo > /sys/fs/bcachefs/*/unregister
+    sleep 3
+
+    bcacheadm format $(make_bcache_flags) --wipe-bcachefs -C /dev/sde
+
+    bcacheadm register /dev/sdb /dev/sdc /dev/sdd
+    sleep 3
+    echo /dev/sde > /sys/fs/bcachefs/*/add_device
+    sleep 3
+
+    stop_bcache
+}
+
+test_device_replacement()
+{
+    setup_tracing 'bcachefs:*'
+
+    setup_bcache
+
+    CSETUUID=`bcacheadm list-cachesets`
+    set -e
+    for i in {1..10}; do
+        bcacheadm format --csum-type=crc32c --bucket=64k --block=4k --cache_replacement_policy=lru --discard --wipe-bcachefs --data-replicas=1 --meta-replicas=1 --tier=1  --cache=/dev/sdd --cset-uuid=$CSETUUID
+        bcacheadm add-devs /dev/sdd
+
+        bcacheadm list-cachesets --list-devs
+        num_lines
+        [[ (( $NUM_LINES = 4 )) ]]
+
+        # bcachefs device removal is async, wait for bcachefs to report that
+        # removal was successful
+        bcacheadm rm-dev /dev/sdd
+
+        # sleep until there are only 3 devices present
+        num_lines
+        while [[ (( $NUM_LINES != 3 )) ]]
+        do
+            sleep 1
+            num_lines
+        done
+    done
+
+    stop_bcache
+}
+
+test_device_set_failed()
+{
+    setup_tracing 'bcachefs:*'
+
+    setup_bcache
+
+    bcacheadm list-cachesets --list-devs
+
+    UUID=$(bcacheadm query-devs /dev/sdc --uuid-only)
+
+    # unregister the cacheset
+    bcacheadm unregister /dev/sdb /dev/sdc /dev/sdd
+    sleep 1
+
+    # register the cacheset again only with sdb/sdd
+    bcacheadm register /dev/sdb /dev/sdd
+    sleep 1
+
+    # Check that sdc is missing after reregistering
+    # Doing bcacheadm status on multiple devs ensures that we get the most
+    # up to date superblock
+    STATUS=$(bcacheadm status /dev/sdb /dev/sdc /dev/sdd | sed -n 3p | awk '{print $2}')
+    [[ (( $STATUS = "missing" )) ]]
+
+    bcacheadm set-failed -d $UUID
+
+    # Check that sdc is failed
+    STATUS=$(bcacheadm status /dev/sdb /dev/sdc /dev/sdd | sed -n 3p | awk '{print $2}')
+    [[ (( $STATUS = "failed" )) ]]
+
+    stop_bcache
+}

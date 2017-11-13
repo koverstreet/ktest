@@ -9,5 +9,5 @@ config-timeout $(stress_timeout)
 main()
 {
     setup_blkdev
-    test_stress
+    run_stress
 }

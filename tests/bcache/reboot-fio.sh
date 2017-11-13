@@ -32,7 +32,7 @@ fio_pass()
 		ZZ
 	done
 
-	test_wait
+	wait_all
     )
 }
 
@@ -46,10 +46,10 @@ main()
 	existing_bcache
     fi
 
-    test_antagonist
+    run_antagonist
 
     if [ "$NR_REBOOTS" == "$nr_iterations" ]; then
-	test_discard
+	discard_all_devices
 	stop_bcache
     else
 	case $((NR_REBOOTS % 2)) in

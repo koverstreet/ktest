@@ -30,7 +30,7 @@ main()
 	    setup_bcache
 	    setup_fs $FS
 
-	    test_antagonist
+	    run_antagonist
 
 	    cd /mnt/dev/bcache0
 
@@ -45,7 +45,7 @@ main()
 	    existing_bcache
 	    existing_fs $FS
 
-	    test_antagonist
+	    run_antagonist
 
 	    cd /mnt/dev/bcache0
 
@@ -59,7 +59,7 @@ main()
 	    existing_bcache
 	    existing_fs $FS
 
-	    test_antagonist
+	    run_antagonist
 
 	    cd /mnt/dev/bcache0
 
@@ -70,7 +70,7 @@ main()
 	    cd /
 
 	    stop_fs
-	    test_discard
+	    discard_all_devices
 	    ;;
     esac
 

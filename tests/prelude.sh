@@ -82,11 +82,11 @@ require-kernel-config NETWORK_FILESYSTEMS
 require-kernel-config 9P_FS
 
 # Crash dumps
-if [[ $KERNEL_ARCH = x86 ]]; then
-    require-kernel-config KEXEC
-    require-kernel-config CRASH_DUMP
-    require-kernel-config RELOCATABLE
-fi
+#if [[ $KERNEL_ARCH = x86 ]]; then
+#    require-kernel-config KEXEC
+#    require-kernel-config CRASH_DUMP
+#    require-kernel-config RELOCATABLE
+#fi
 
 # KGDB:
 require-kernel-config KGDB
@@ -111,8 +111,8 @@ require-kernel-config DEBUG_INFO_DWARF4
 require-kernel-config GDB_SCRIPTS
 require-kernel-config DEBUG_KERNEL
 require-kernel-config PANIC_ON_OOPS
-require-kernel-config DEBUG_RODATA
-require-kernel-config DEBUG_SET_MODULE_RONX
+#require-kernel-config DEBUG_RODATA
+#require-kernel-config DEBUG_SET_MODULE_RONX
 
 # More expensive
 #require-kernel-config DYNAMIC_DEBUG

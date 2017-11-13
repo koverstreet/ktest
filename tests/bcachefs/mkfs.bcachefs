@@ -1,0 +1,17 @@
+#!/bin/bash
+
+cmd=(bcachefs format)
+cmd+=(--force)
+#cmd+=(--block=1k)
+#cmd+=(--btree_node=4k)
+
+cmd+=(--error_action=panic)
+cmd+=(--metadata_checksum_type=crc32c)
+cmd+=(--data_checksum_type=crc32c)
+#cmd+=(--compression_type=lz4)
+#cmd+=(--encrypted)
+#cmd+=(--no_passphrase)
+
+cmd+=(--tier 1)
+
+"${cmd[@]}" "$@"

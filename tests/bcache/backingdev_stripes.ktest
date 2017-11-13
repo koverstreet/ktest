@@ -24,7 +24,7 @@ main()
     BDEV="/dev/md0"
     setup_bcache
 
-    test_antagonist
-    test_fio
+    run_antagonist
+    run_fio
     stop_bcache
 }

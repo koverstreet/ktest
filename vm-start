@@ -175,6 +175,8 @@ def vmdir_read():
     return path.strip()
 
 def cmd_ssh():
+    vmdir = vmdir_read()
+
     keyfile = os.path.join(DIR, "ssh_id")
     subprocess.call(["chmod", "600", keyfile])
 
@@ -187,10 +189,10 @@ def cmd_ssh():
     subprocess.check_call(["gcc", "-O2", "-o", lwip_connect,
                            os.path.join(DIR, "lwip-connect.c"),
                            "-llwipv6"])
-
     ip = "10.0.2." + str(2 + args.vm_nr)
+    sock = os.path.join(vmdir, "net-0")
 
-    sock = os.path.join(vmdir_read(), "net-0")
+    controlmaster = os.path.join(vmdir, "ssh_master")
 
     # ServerAliveInterval is a hack - lwip_connect should notice when the socket
     # has gone away an exit, but it appears to be a bug in liblwipv6
@@ -201,6 +203,9 @@ def cmd_ssh():
                            "-o", "UserKnownHostsFile=/dev/null",
                            "-o", "NoHostAuthenticationForLocalhost=yes",
                            "-o", "ServerAliveInterval=2",
+                           "-o", "ControlMaster=auto",
+                           "-o", "ControlPath=%s" % controlmaster,
+                           "-o", "ControlPersist=yes",
                            "-o", "ProxyCommand=%s %s %s 22" % (lwip_connect, sock, ip),
                            "root@127.0.0.1"] + extra_opts)
     sys.exit(ret)

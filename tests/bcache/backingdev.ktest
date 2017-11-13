@@ -17,7 +17,7 @@ main()
     setup_bcache
     echo "setup_bcache done"
 
-    test_antagonist
-    test_bcache_stress
+    run_antagonist
+    run_bcache_stress
     stop_bcache
 }

@@ -35,7 +35,7 @@ main()
     existing_bcache
     echo 3G > /sys/fs/bcache/*/flash_vol_create
 
-    test_antagonist
+    run_antagonist
 
     (sleep 30; do_reboot) &
     #(sleep 30; killall -9 fio) &

@@ -63,7 +63,7 @@ main()
    
     echo "------- FIO TEST -------- "
 
-    test_fio
+    run_fio
 
     bch_ioctl list_keys       1 0 0 100 100
     bch_ioctl count_keys      0 0 0 1 0 |& grep "ENOSPC"

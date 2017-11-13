@@ -1,32 +1,18 @@
 #!/bin/bash
 
-require-lib bcache-test-libs.sh
+require-lib bcachefs-test-libs.sh
 
-#config-cache 512M
-#config-backing 2G,2G
-#config-bucket-size 64k
-#config-block-size 4k
-#config-writeback
-
-config-cache 2G
-config-bucket-size 512k
-config-block-size 2k
-config-volume 1400M
-
+config-scratch-devs 2G
 config-timeout $(stress_timeout)
 
 require-kernel-config	PM,SUSPEND,PM_SLEEP,PM_DEBUG
-#require-bin		s2ram
-
 require-kernel-append	no_console_suspend
 
-main()
+test_suspend()
 {
     umount $LOGDIR
 
-    apt update; apt install --no-install-recommends -y uswsusp
-
-    #setup_tracing 'bcache:*'
+    #setup_tracing 'bcachefs:*'
 
     (
 	p="/sys/power"
@@ -35,20 +21,17 @@ main()
 	echo freezer	> $p/pm_test
 	echo freeze	> $p/state
 
-	#echo 1 > /sys/fs/bcache/suspend
+	#echo 1 > /sys/fs/bcachefs/suspend
 	#s2ram --no_kms --force
     )&
 
+    bcachefs format /dev/sdb
+    mount /dev/sdb /mnt
+
     if false; then
-	bcache_format
-	setup_bcachefs
-
-	test_dbench
+	run_dbench
     else
-	setup_bcache
-
-	test_antagonist
-
-	test_stress
+	run_antagonist
+	run_stress
     fi
 }

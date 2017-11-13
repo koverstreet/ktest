@@ -15,13 +15,13 @@ main()
     setup_tracing 'bcache:*'
 
     setup_bcache
-    test_antagonist
+    run_antagonist
 
     # Should fail since volume is too big
-    ! test_fio
+    ! run_fio
 
     echo 300M > /sys/fs/bcache/*/volume0/size
 
-    test_fio
+    run_fio
     stop_bcache
 }

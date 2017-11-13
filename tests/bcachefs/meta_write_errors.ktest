@@ -30,7 +30,7 @@ main()
 	echo "class $fault enable" > $control || break
 
 	# Should fail due to read only cache set
-	! test_fio
+	! run_fio
 
 	echo "class $fault disable" > $control
 

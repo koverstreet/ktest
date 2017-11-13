@@ -145,14 +145,14 @@ stop_fs()
 # The DEVICES variable must be set to a list of devices before any of the
 # below workloads are involed.
 
-test_wait()
+wait_all()
 {
     for job in $(jobs -p); do
 	wait $job
     done
 }
 
-test_bonnie()
+run_bonnie()
 {
     echo "=== start bonnie at $(date)"
     loops=$((($ktest_priority + 1) * 4))
@@ -162,13 +162,13 @@ test_bonnie()
 	    bonnie++ -x $loops -r 128 -u root -d /mnt/$dev &
 	done
 
-	test_wait
+	wait_all
     )
 
     echo "=== done bonnie at $(date)"
 }
 
-test_dbench()
+run_dbench()
 {
     echo "=== start dbench at $(date)"
     duration=$((($ktest_priority + 1) * 30))
@@ -178,13 +178,13 @@ test_dbench()
 	    dbench -S -t $duration 2 -D /mnt/$dev &
 	done
 
-	test_wait
+	wait_all
     )
 
     echo "=== done dbench at $(date)"
 }
 
-test_fio()
+run_fio()
 {
     echo "=== start fio at $(date)"
     loops=$(($ktest_priority / 2 + 1))
@@ -208,6 +208,7 @@ test_fio()
 		--verify_fatal=1	\
 		--verify_dump=1		\
 		--filename=$dev		\
+		--fill_fs=1		\
 					\
 		--name=seqwrite		\
 		--stonewall		\
@@ -234,13 +235,13 @@ test_fio()
 		--loops=$loops		&
 	done
 
-	test_wait
+	wait_all
     )
 
     echo "=== done fio at $(date)"
 }
 
-test_fsx()
+run_fsx()
 {
     echo "=== start fsx at $(date)"
     numops=$((($ktest_priority + 1) * 300000))
@@ -250,7 +251,7 @@ test_fsx()
 	    ltp-fsx -N $numops /mnt/$dev/foo &
 	done
 
-	test_wait
+	wait_all
     )
 
     echo "=== done fsx at $(date)"

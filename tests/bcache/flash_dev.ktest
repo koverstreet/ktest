@@ -22,11 +22,11 @@ main()
     setup_bcache
     #existing_bcache
 
-    test_antagonist
-    test_bcache_stress
-    #test_fio
+    run_antagonist
+    run_bcache_stress
+    #run_fio
 
     stop_volumes
-    test_bcachefs_stress
+    run_bcachefs_stress
     stop_bcache
 }

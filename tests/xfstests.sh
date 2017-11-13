@@ -17,7 +17,7 @@ config-scratch-devs 14G
 
 config-timeout $(stress_timeout)
 
-test_xfstests()
+run_xfstests()
 {
     FSTYP="$1"
     TESTS="$2"
@@ -29,22 +29,13 @@ test_xfstests()
     export LOGWRITES_DEV=/dev/sdd
     export FSTYP
 
-    ln -s $LOGDIR/log-writes/replay-log /usr/bin
+    grep -q fsgqa /etc/passwd || useradd fsgqa
+
+    ln -sf $LOGDIR/log-writes/replay-log /usr/bin
     #(cd $LOGDIR/xfsprogs; make install install-dev)
     (cd $LOGDIR/xfstests; make)
 
     ln -sf /bin/bash /bin/sh
-
-    systemctl unmask			\
-	lvm2-lvmetad.service		\
-	lvm2-monitor.service		\
-	lvm2-lvmetad.socket		\
-	lvm2-activation.service
-
-    systemctl start			\
-	lvm2-lvmetad.service		\
-	lvm2-monitor.service		\
-	lvm2-lvmetad.socket
 
     mkdir -p $TEST_DIR $SCRATCH_MNT
     mkfs.$FSTYP $TEST_DEV

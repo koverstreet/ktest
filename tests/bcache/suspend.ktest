@@ -43,12 +43,12 @@ main()
 	bcache_format
 	setup_bcachefs
 
-	test_dbench
+	run_dbench
     else
 	setup_bcache
 
-	test_antagonist
+	run_antagonist
 
-	test_stress
+	run_stress
     fi
 }

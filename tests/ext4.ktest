@@ -4,5 +4,5 @@ require-lib xfstests.sh
 
 main()
 {
-    test_xfstests ext4 "generic/???"
+    run_xfstests ext4 "generic/???"
 }

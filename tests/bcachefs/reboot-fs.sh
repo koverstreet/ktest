@@ -32,18 +32,18 @@ main()
 	rm -rf /mnt/$dev/*
     fi
 
-    test_antagonist
+    run_antagonist
 
     # Right before we end or switch to XFS, shut down bcache
     if [ $NR_REBOOTS = $nr_iterations -o $NR_REBOOTS = $((N - 1)) ]; then
-	test_dbench
-	test_bonnie
+	run_dbench
+	run_bonnie
 	stop_fs
-	test_discard
+	discard_all_devices
 	stop_bcache
     else
-	test_dbench &
-	test_bonnie &
+	run_dbench &
+	run_bonnie &
 
 	sleep 30
     fi

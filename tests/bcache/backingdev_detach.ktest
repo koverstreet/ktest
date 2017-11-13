@@ -28,7 +28,7 @@ main()
 	done
     )&
 
-    test_antagonist
-    test_fio
+    run_antagonist
+    run_fio
     stop_bcache
 }

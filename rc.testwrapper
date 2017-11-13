@@ -9,19 +9,70 @@ set -o errtrace
 export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]}()}+ '
 
 TEST_RUNNING=1
-
-#hack
 KERNEL_ARCH=""
 
-. /cdrom/rc.interactive
+dmesg --console-on
+dmesg --console-level 8
 
-for i in `cat /proc/cmdline`; do
+echo 1 > /proc/sys/kernel/sysrq
+ulimit -c unlimited
+
+# Log file system visible to host
+echo "mount logfs"
+
+LOGDIR=/ktest-out
+mkdir -p $LOGDIR
+mount -t 9p -o trans=virtio logfs $LOGDIR
+
+# Core dump settings
+echo 1 > /proc/sys/fs/suid_dumpable
+echo "|/bin/cp --sparse=always /dev/stdin $LOGDIR/core.%e.PID%p.SIG%s.TIME%t" > /proc/sys/kernel/core_pattern
+ulimit -c unlimited
+rm -f /ktest-out/core.*
+
+# Virtual block device tweaks
+for q in /sys/block/sd*/queue; do
+    echo noop > $q/scheduler
+done
+
+# Check if we are running the crashdump kernel
+if [[ -s /proc/vmcore ]]; then
+    echo "Collecting crash dump..."
+    rm -f "$LOGDIR/vmcore"
+    cp --sparse=always /proc/vmcore "$LOGDIR/vmcore" || true
+    sync
+    poweroff
+fi
+
+# If debugging crash dumps, add "console=hvc0" to the append line
+# below:
+if which kexec > /dev/null; then
+    kexec -p /cdrom/vmlinuz --append="root=/dev/sda rw maxcpus=1" || true
+fi
+
+NR_REBOOTS=0
+EXPECTED_REBOOT=0
+[[ -e /NR_REBOOTS ]]		&& NR_REBOOTS=$(</NR_REBOOTS)
+[[ -e /EXPECTED_REBOOT ]]	&& EXPECTED_REBOOT=$(</EXPECTED_REBOOT)
+
+if [[ $NR_REBOOTS != $EXPECTED_REBOOT ]]; then
+    echo "UNEXPECTED REBOOT: got $NR_REBOOTS expected $EXPECTED_REBOOT"
+    echo "TEST FAILED"
+    exit 1
+fi
+
+echo $((NR_REBOOTS + 1)) | dd of=/NR_REBOOTS oflag=direct 2> /dev/null
+
+for i in $(</proc/cmdline); do
     case $i in
 	ktest.*)
 	    export ktest_${i##ktest.}
 	    ;;
     esac
 done
+
+compgen -G "/cdrom/*.deb" > /dev/null && dpkg -i /cdrom/*.deb
+cd /root
 
 copy_to_host()
 {
@@ -30,14 +81,14 @@ copy_to_host()
     # Code coverage
     gcov_dir=/sys/kernel/debug/gcov
 
-    if [ -d $gcov_dir ]; then
+    if [[ -d $gcov_dir ]]; then
 	# find a destination dir that doesn't exist, so we can copy multiple
 	# sets of gcov data from different tests/reboots and merge them later
 
 	for i in {0..99}; do
 	    dst=$LOGDIR/gcov.$i
 
-	    if [ ! -d $dst ]; then
+	    if [[ ! -d $dst ]]; then
 		cp -dR $gcov_dir $dst
 		break
 	    fi
@@ -139,16 +190,33 @@ config-timeout()
     return 0
 }
 
-dpkg -i /cdrom/*.deb
+. rc.test
 
-NR_REBOOTS=$([ -e /NR_REBOOTS ] && cat /NR_REBOOTS || echo 0)
+if [[ $(type -t list_tests) == function ]]; then
+    tests=$(list_tests)
+else
+    tests=$(declare -F|grep --only-matching -E ' test_.*')
+fi
 
-EXPECTED_REBOOT=$([ -e /EXPECTED_REBOOT ] && cat /EXPECTED_REBOOT || echo 0)
+if [[ $(type -t run_test) != function ]]; then
+    run_test()
+    {
+	"$@"
+    }
+fi
 
-if [ "$NR_REBOOTS" != "$EXPECTED_REBOOT" ]; then
-    echo "UNEXPECTED REBOOT: got $NR_REBOOTS expected $EXPECTED_REBOOT"
-    echo "TEST FAILED"
+if [[ -z $tests ]]; then
+    echo "No tests found"
     exit 1
+fi
+
+testargs=$(</cdrom/testargs)
+if [[ -n $testargs ]]; then
+    tests=""
+
+    for i in $testargs; do
+	tests="$tests test_$i"
+    done
 fi
 
 if [[ -n ${ktest_timeout+x} ]]; then
@@ -159,16 +227,20 @@ if [[ -n ${ktest_timeout+x} ]]; then
     ) &
 fi
 
-echo "Test starting: NR_REBOOTS $NR_REBOOTS"
-echo $((NR_REBOOTS + 1)) | dd of=/NR_REBOOTS oflag=direct 2> /dev/null
+echo "Running tests $tests"
 
-set +e
+for i in $tests; do
+    echo "Running test $i"
 
-(set -e; . rc.test; main)
-ret=$?
+    set +e
+    (set -e; run_test $i)
+    ret=$?
+    set -e
 
-echo "Test finished with ret $ret"
-echo "Copying output to host"
+    echo "Test $i completed with ret $ret"
+
+    [[ $ret != 0 ]] && break
+done
 
 # XXX: check dmesg for warnings, oopses, slab corruption, etc. before signaling
 # success
@@ -176,7 +248,7 @@ echo "Copying output to host"
 copy_to_host
 check_taint
 
-if [ $ret = 0 ]; then
+if [[ $ret = 0 ]]; then
     echo "TEST SUCCESS"
 else
     echo "TEST FAILED"

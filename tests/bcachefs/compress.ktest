@@ -1,0 +1,156 @@
+#!/bin/bash
+
+require-lib bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+
+config-timeout $(stress_timeout)
+
+run_fio()
+{
+    loops=$((($ktest_priority + 1) * 4))
+
+    fio --eta=always				\
+	--randrepeat=0				\
+	--ioengine=libaio			\
+	--iodepth=64				\
+	--iodepth_batch=16			\
+	--direct=1				\
+	--numjobs=1				\
+	--filename=/mnt/fiotest		    	\
+	--filesize=3500M			\
+	--loops=$loops				\
+	--stonewall				\
+	"$@"
+}
+
+run_compress_csum_test()
+{
+    setup_tracing 'bcachefs:*'
+
+    bcachefs format "$@" /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    run_fio					\
+	--buffer_compress_percentage=20	    	\
+	--verify=meta				\
+	--verify_fatal=1			\
+	--filename=/mnt/fiotest			\
+	--size=3G				\
+						\
+	--name=randrw				\
+	--rw=randrw				\
+	--bsrange=4k-128k
+    umount /mnt
+}
+
+test_lz4()
+{
+    run_compress_csum_test --compression_type=lz4
+}
+
+test_gzip()
+{
+    run_compress_csum_test --compression_type=gzip
+}
+
+test_compress_no_checksum()
+{
+    run_compress_csum_test			\
+	--compression_type=lz4			\
+	--metadata_checksum_type=none	    	\
+	--data_checksum_type=none
+}
+
+test_no_checksum()
+{
+    run_compress_csum_test			\
+	--metadata_checksum_type=none		\
+	--data_checksum_type=none
+}
+
+test_crc64()
+{
+    run_compress_csum_test			\
+	--metadata_checksum_type=crc64		\
+	--data_checksum_type=crc64
+}
+
+test_crypto()
+{
+    setup_tracing 'bcachefs:*'
+
+    bcachefs format --encrypted --no_passphrase /dev/sdb
+
+    mount -t bcachefs /dev/sdb /mnt
+    umount /mnt
+
+    bcachefs fsck /dev/sdb
+
+    echo ""|bcachefs format -f --encrypted /dev/sdb
+    echo ""|bcachefs unlock /dev/sdb
+
+    mount -t bcachefs /dev/sdb /mnt
+    umount /mnt
+
+    bcachefs fsck /dev/sdb
+}
+
+test_copygc_torture()
+{
+    echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+    setup_tracing 'bcachefs:*'
+
+    #bcachefs format --bucket=2M /dev/sdb
+    bcachefs format --bucket=128k /dev/sdb
+    mount /dev/sdb /mnt
+
+    run_antagonist
+    run_fio					\
+	--buffer_compress_percentage=0	    	\
+	--filesize=3500M			\
+						\
+	--name=randwrite			\
+	--rw=randwrite				\
+	--bs=4k
+
+    rm /mnt/fiotest
+
+    expect_sysfs cache dirty_buckets	0
+    expect_sysfs cache dirty_data	0
+    expect_sysfs cache cached_buckets	0
+    expect_sysfs cache cached_data	0
+    umount /mnt
+}
+
+test_small_buckets()
+{
+    echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+    setup_tracing 'bcachefs:*'
+
+    bcachefs format --bucket=4k /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    run_fio					\
+	--name=randrw				\
+	--rw=randrw				\
+	--bs=4k
+    umount /mnt
+}
+
+test_small_nodes()
+{
+    echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+    setup_tracing 'bcachefs:*'
+
+    bcachefs format --bucket=256k --btree_node=4k /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    run_fio					\
+	--name=randrw				\
+	--rw=randrw				\
+	--bs=4k
+    umount /mnt
+}
+
+# tiering tests:

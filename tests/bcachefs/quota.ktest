@@ -1,18 +1,18 @@
 #!/bin/bash
 
-require-lib bcache-test-libs.sh
+require-lib bcachefs-test-libs.sh
 
-config-scratch-devs 2150MB
+config-scratch-devs 2G
 
 config-timeout $(stress_timeout)
 
 main()
 {
-    echo 1 > /sys/module/bcache/parameters/debug_check_bkeys
-    setup_tracing 'bcache:*'
+    echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+    setup_tracing 'bcachefs:*'
 
-    bcache format --bucket=2M --max_journal_entry_size=2M /dev/sdb
-    mount /dev/sdb /mnt
+    bcachefs format /dev/sdb
+    mount -o quota /dev/sdb /mnt
 
     test_antagonist
 
@@ -38,9 +38,5 @@ main()
 
     rm /mnt/fiotest
 
-    expect_sysfs cache dirty_buckets	0
-    expect_sysfs cache dirty_data	0
-    expect_sysfs cache cached_buckets	0
-    expect_sysfs cache cached_data	0
-    umount /mnt
+    #umount /mnt
 }

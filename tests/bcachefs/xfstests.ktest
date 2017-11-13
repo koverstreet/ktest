@@ -1,20 +1,19 @@
 #!/bin/bash
 
 require-lib ../xfstests.sh
-#require-lib bcache-test-libs.sh
+#require-lib bcachefs-test-libs.sh
 
-require-kernel-config BCACHE
-#require-kernel-config BCACHE_DEBUG
-require-kernel-config COMPACTION
+require-kernel-config BCACHEFS_FS
+require-kernel-config BCACHEFS_DEBUG
 
-require-build-deb bcache-tools
-require-file mkfs.bcache
+require-build-deb bcachefs-tools
+require-file mkfs.bcachefs
 
 antagonist_shrink()
 {
     while true; do
-	for file in $(find /sys/fs/bcache -name prune_cache); do
-	    echo 100000 > $file
+	for file in $(find /sys/fs/bcachefs -name prune_cache); do
+	    echo 100000 > $file 2> /dev/null || true
 	done
 	sleep 0.5
     done
@@ -23,7 +22,7 @@ antagonist_shrink()
 antagonist_expensive_debug_checks()
 {
     # This only exists if CONFIG_BCACHE_DEBUG is on
-    p=/sys/module/bcache/parameters/expensive_debug_checks
+    p=/sys/module/bcachefs/parameters/expensive_debug_checks
 
     if [ -f $p ]; then
 	while true; do
@@ -39,51 +38,96 @@ antagonist_trigger_gc()
 {
     while true; do
 	sleep 5
-	echo 1 | tee /sys/fs/bcache/*/internal/trigger_gc > /dev/null 2>&1 || true
+	echo 1 | tee /sys/fs/bcachefs/*/internal/trigger_gc > /dev/null 2>&1 || true
     done
 }
 
 antagonist_switch_crc()
 {
-    cd /sys/fs/bcache
+    cd /sys/fs/bcachefs
 
     while true; do
+	echo crc64	| tee */options/data_checksum	    > /dev/null 2>&1 || true
+	echo crc64	| tee */options/metadata_checksum   > /dev/null 2>&1 || true
+	echo crc64	| tee */options/str_hash	    > /dev/null 2>&1 || true
+	echo lz4	| tee */options/compression	    > /dev/null 2>&1 || true
 	sleep 2
-	echo crc64  | tee */options/data_checksum	> /dev/null 2>&1 || true
-	echo crc64 | tee */options/metadata_checksum	> /dev/null 2>&1 || true
-	echo crc64 | tee */options/str_hash		> /dev/null 2>&1 || true
-	#echo lz4    | tee */options/compression		> /dev/null 2>&1 || true
+
+	echo crc32c	| tee */options/data_checksum	    > /dev/null 2>&1 || true
+	echo crc32c	| tee */options/metadata_checksum   > /dev/null 2>&1 || true
+	echo siphash	| tee */options/str_hash	    > /dev/null 2>&1 || true
+	echo gzip	| tee */options/compression	    > /dev/null 2>&1 || true
 	sleep 2
-	echo crc32c | tee */options/data_checksum	> /dev/null 2>&1 || true
-	echo crc32c | tee */options/metadata_checksum	> /dev/null 2>&1 || true
-	echo sha1   | tee */options/str_hash		> /dev/null 2>&1 || true
-	#echo gzip   | tee */options/compression		> /dev/null 2>&1 || true
+
+	echo none	| tee */options/data_checksum	    > /dev/null 2>&1 || true
+	echo none	| tee */options/metadata_checksum   > /dev/null 2>&1 || true
+	echo none	| tee */options/compression	    > /dev/null 2>&1 || true
+	sleep 2
     done
+}
+
+list_tests()
+{
+    (cd /ktest-out/xfstests/tests; echo generic/???)
+}
+
+run_test()
+{
+    ulimit -c unlimited
+    #setup_tracing 'bcachefs:*'
+    #echo 1 > /sys/module/bcachefs/parameters/expensive_debug_checks
+    #echo 1 > /sys/module/bcachefs/parameters/verify_btree_ondisk
+    echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys || true
+    #echo 1 > /sys/module/bcachefs/parameters/btree_gc_coalesce_disabled
+    #echo 1 > /sys/module/bcachefs/parameters/key_merging_disabled
+
+    echo "class race frequency 100" > /sys/kernel/debug/dynamic_fault/control
+
+    #antagonist_shrink &
+    #antagonist_expensive_debug_checks &
+    #antagonist_trigger_gc &
+    #antagonist_switch_crc &
+
+    run_xfstests bcachefs "$@"
 }
 
 main()
 {
     ulimit -c unlimited
-    #setup_tracing 'bcache:*'
-    #echo 1 > /sys/module/bcache/parameters/expensive_debug_checks
-    #echo 1 > /sys/module/bcache/parameters/verify_btree_ondisk
-    echo 1 > /sys/module/bcache/parameters/debug_check_bkeys || true
-    #echo 1 > /sys/module/bcache/parameters/btree_gc_coalesce_disabled
-    #echo 1 > /sys/module/bcache/parameters/key_merging_disabled
+    #setup_tracing 'bcachefs:*'
+    #echo 1 > /sys/module/bcachefs/parameters/expensive_debug_checks
+    #echo 1 > /sys/module/bcachefs/parameters/verify_btree_ondisk
+    echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys || true
+    #echo 1 > /sys/module/bcachefs/parameters/btree_gc_coalesce_disabled
+    #echo 1 > /sys/module/bcachefs/parameters/key_merging_disabled
 
     echo "class race frequency 100" > /sys/kernel/debug/dynamic_fault/control
 
-    antagonist_shrink &
-
+    #antagonist_shrink &
     #antagonist_expensive_debug_checks &
     #antagonist_trigger_gc &
     #antagonist_switch_crc &
 
-    # XXX: test with this
-    # apt install -y stress-ng
+    if false; then
+	run_xfstests xfs "generic/055 generic/082 generic/219 generic/230
+	generic/231 generic/232 generic/233 generic/234 generic/235 generic/244
+	generic/270 generic/280 generic/305 generic/326 generic/327 generic/328
+	generic/379 generic/380 generic/381 generic/382 generic/383 generic/384
+	generic/385 generic/386 generic/400"
+    fi
 
-    # fail when testing different block sizes:
-    #test_xfstests bcache "generic/091 generic/114 generic/240 generic/263"
+    if false; then
+	#run_xfstests bcachefs "generic/235"
+	#exit
 
-    test_xfstests bcache "generic/???"
+	run_xfstests bcachefs "generic/055 generic/082 generic/219 generic/230
+	generic/231 generic/232 generic/233 generic/234 generic/235 generic/244
+	generic/270 generic/280 generic/305 generic/326 generic/327 generic/328
+	generic/379 generic/380 generic/381 generic/382 generic/383 generic/384
+	generic/385 generic/386 generic/400"
+    fi
+
+    run_xfstests bcachefs "generic/008"
+
+    run_xfstests bcachefs "generic/???"
 }

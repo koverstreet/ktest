@@ -178,14 +178,27 @@ run_ktest()
 
 __do_make()
 {
-    ARCH="$KERNEL_ARCH" CROSS_COMPILE="$ARCH_TRIPLE-" make		\
-	-j "$NJOBS"							\
-	-C "$KERNEL_SOURCE"						\
-	O="$WORK_DIR"							\
-	INSTALL_MOD_PATH="$KERNEL_OUTPUT"				\
-	EXTRA_CFLAGS="-g3 -fvar-tracking -fvar-tracking-assignments"	\
-	$COVERAGE							\
-	"$@"
+    if [[ $# = 1 && $1 = nconfig ]]; then
+	ARCH="$KERNEL_ARCH" CROSS_COMPILE="$ARCH_TRIPLE-" make	    		\
+	    --directory="$KERNEL_SOURCE"					\
+	    CC=gcc-5								\
+	    O="$WORK_DIR"							\
+	    INSTALL_MOD_PATH="$KERNEL_OUTPUT"					\
+	    EXTRA_CFLAGS="-g3 -fvar-tracking -fvar-tracking-assignments"	\
+	    $COVERAGE								\
+	    "$@"
+    else
+	ARCH="$KERNEL_ARCH" CROSS_COMPILE="$ARCH_TRIPLE-" make	    		\
+	    --output-sync=target						\
+	    --jobs="$NJOBS"							\
+	    --directory="$KERNEL_SOURCE"					\
+	    CC=gcc-5								\
+	    O="$WORK_DIR"							\
+	    INSTALL_MOD_PATH="$KERNEL_OUTPUT"					\
+	    EXTRA_CFLAGS="-g3 -fvar-tracking -fvar-tracking-assignments"	\
+	    $COVERAGE								\
+	    "$@"
+    fi
 }
 
 new_config()
@@ -293,14 +306,6 @@ build_kernel()
     rm -f "$KERNEL_OUTPUT"/modules/lib/modules/*/source
 }
 
-cmd_boot()
-{
-    _KERNEL_CONFIG_REQUIRE=""
-
-    [[ -n $BUILD ]] && build_kernel
-    run_ktest boot
-}
-
 cmd_run()
 {
     if [[ $# = 0 ]]; then
@@ -320,7 +325,12 @@ cmd_run()
 
     [[ -n $BUILD ]] && build_kernel
 
-    run_ktest run "$TEST"
+    run_ktest run "$@"
+}
+
+cmd_boot()
+{
+    cmd_run "$KTESTDIR/boot.ktest"
 }
 
 cmd_oldconfig()

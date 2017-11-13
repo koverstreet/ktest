@@ -17,7 +17,7 @@ main()
     setup_tracing 'bcache:*'
 
     setup_bcache
-    test_antagonist
+    run_antagonist
 
     (
 	while true; do
@@ -32,6 +32,6 @@ main()
 
     test_bcache_stres
     stop_volumes
-    test_bcachefs_stress
+    run_bcachefs_stress
     stop_bcache
 }

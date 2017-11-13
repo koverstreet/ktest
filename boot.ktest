@@ -1,0 +1,11 @@
+#!/bin/bash
+
+require-lib tests/prelude.sh
+
+config-mem 2G
+config-timeout 600000
+
+main()
+{
+    exit 0
+}

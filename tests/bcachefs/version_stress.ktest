@@ -23,7 +23,7 @@ main()
 
     echo 1 > /sys/fs/bcache/*/internal/version_stress_test
 
-    test_antagonist
+    run_antagonist
 
     fio --eta=always - <<-ZZ
     [global]

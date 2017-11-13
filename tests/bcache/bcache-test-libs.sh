@@ -270,9 +270,9 @@ expect_sysfs()
     done
 }
 
-test_sysfs()
+read_all_sysfs()
 {
-    echo -n "test_sysfs(): "
+    echo -n "read_all_sysfs(): "
 
     if [ -d /sys/fs/bcache/*-* ]; then
 	find -H /sys/fs/bcache/ -type f -perm -0400 -exec cat {} \; \
@@ -317,7 +317,7 @@ antagonist_trigger_gc()
     done
 }
 
-test_antagonist()
+run_antagonist()
 {
     antagonist_expensive_debug_checks &
     antagonist_shrink &
@@ -325,7 +325,7 @@ test_antagonist()
     #antagonist_trigger_gc &
 }
 
-test_discard()
+discard_all_devices()
 {
     if [ "${BDEV:-}" == "" -a "${CACHE:-}" == "" ]; then
         return
@@ -369,28 +369,28 @@ test_discard()
     killall -CONT systemd-udevd
 }
 
-test_bcache_stress()
+run_bcache_stress()
 {
-    echo "test_bcache_stress():"
+    echo "run_bcache_stress():"
     enable_faults
 
-    test_sysfs
-    test_fio
-    test_discard
+    read_all_sysfs
+    run_fio
+    discard_all_devices
 
     setup_fs ext4
-    test_dbench
-    test_bonnie
-    test_fsx
+    run_dbench
+    run_bonnie
+    run_fsx
     stop_fs
-    test_discard
+    discard_all_devices
 
     if [ $ktest_priority -gt 0 ]; then
 	setup_fs xfs
-	test_dbench
-	test_bonnie
+	run_dbench
+	run_bonnie
 	stop_fs
-	test_discard
+	discard_all_devices
     fi
 
     disable_faults

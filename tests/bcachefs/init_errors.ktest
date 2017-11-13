@@ -1,6 +1,6 @@
 #!/bin/bash
 
-require-lib bcache-test-libs.sh
+require-lib bcachefs-test-libs.sh
 
 config-cache 2G
 config-tier 4G
@@ -23,16 +23,16 @@ test_faults()
 	echo "TESTING FAULT $id"
 
 	echo "Registering sdb"
-	echo /dev/sdb > /sys/fs/bcache/register || true
+	echo /dev/sdb > /sys/fs/bcachefs/register || true
 
 	echo "Registering sdc"
-	echo /dev/sdc > /sys/fs/bcache/register || true
+	echo /dev/sdc > /sys/fs/bcachefs/register || true
 
 	sleep 2
 	echo "class $fault disable" > $control
 	sleep 2
 
-	if test -e /sys/fs/bcache/*-*-*-*-*; then
+	if test -e /sys/fs/bcachefs/*-*-*-*-*; then
 	    echo "Registration should have failed"
 	    false
 	fi
@@ -41,24 +41,24 @@ test_faults()
 
 main()
 {
-    setup_tracing 'bcache:*'
+    setup_tracing 'bcachefs:*'
 
     if [ $NR_REBOOTS = 0 ]; then
 	setup_bcache
 
-	echo readonly > /sys/fs/bcache/*/errors
+	echo readonly > /sys/fs/bcachefs/*/errors
 
 	setup_fs ext4
 
-	test_antagonist
+	run_antagonist
 
-	test_dbench &
-	test_bonnie &
+	run_dbench &
+	run_bonnie &
 
 	sleep 10
 	do_reboot
     else
-	test_faults "bcache:cache_set_init"
-	test_faults "bcache:meta:read"
+	test_faults "bcachefs:cache_set_init"
+	test_faults "bcachefs:meta:read"
     fi
 }

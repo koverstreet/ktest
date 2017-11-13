@@ -23,7 +23,7 @@ main()
 	echo 1 > $dir/verify
     done
 
-    test_antagonist
+    run_antagonist
     test_bcache_stres
     stop_bcache
 }

@@ -50,10 +50,10 @@ main()
 
 	setup_fs ext4
 
-	test_antagonist
+	run_antagonist
 
-	test_dbench &
-	test_bonnie &
+	run_dbench &
+	run_bonnie &
 
 	sleep 10
 	do_reboot

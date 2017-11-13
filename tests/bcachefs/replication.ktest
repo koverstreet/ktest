@@ -1,23 +1,317 @@
 #!/bin/bash
 
-require-lib bcache-test-libs.sh
+require-lib bcachefs-test-libs.sh
 
-config-cache 256M,256M,256M
-config-backing 2G
-config-bucket-size 64k
-config-block-size 4k
-config-writeback
-config-data-replicas 3
-config-meta-replicas 3
+require-kernel-config BLK_DEV_MD
+require-kernel-config MD_FAULTY
+
+config-scratch-devs 4G
+config-scratch-devs 4G
 
 config-timeout $(stress_timeout)
 
+antagonist_shrink()
+{
+    while true; do
+	for file in $(find /sys/fs/bcachefs -name prune_cache); do
+	    echo 100000 > $file 2> /dev/null || true
+	done
+	sleep 0.5
+    done
+}
+
+do_fio_verify()
+{
+    fio --eta=always			\
+	--randrepeat=0			\
+	--ioengine=libaio		\
+	--iodepth=64			\
+	--iodepth_batch=16		\
+	--direct=1			\
+	--numjobs=1			\
+	--buffer_compress_percentage=20	\
+	--verify=meta			\
+	--verify_fatal=1		\
+	--verify_dump=1			\
+	--filename=/mnt/fiotest		\
+	--size=400M			\
+					\
+	--name=randwrite		\
+	--stonewall			\
+	--rw=randwrite			\
+	--bsrange=4k-128k		\
+	--loops=100			\
+	--runtime=20s			\
+					\
+	--name=seqread			\
+	--stonewall			\
+	--rw=read			\
+	--bs=1M
+}
+
+do_fio()
+{
+    fio --eta=always			\
+	--randrepeat=0			\
+	--ioengine=libaio		\
+	--iodepth=64			\
+	--iodepth_batch=16		\
+	--direct=1			\
+	--numjobs=1			\
+	--buffer_compress_percentage=20	\
+	--verify=meta			\
+	--verify_fatal=1		\
+	--filename=/mnt/fiotest		\
+	--size=1G			\
+					\
+	--name=randrw			\
+	--stonewall			\
+	--rw=randrw			\
+	--bsrange=4k-128k		\
+	"$@"
+}
+
+main1()
+{
+    bcachefs format			\
+	--metadata_replicas=2		\
+	--data_replicas=2		\
+	/dev/sdb /dev/sdc
+
+    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
+
+    do_fio
+
+    sleep 2
+
+    echo "failing /dev/sdc:"
+    bcachefs device set-state --force /mnt /dev/sdc failed
+    bcachefs device offline /mnt /dev/sdc
+    echo "/dev/sdc failed"
+
+    antagonist_shrink &
+
+    wait
+    umount /mnt
+}
+
+test_noreplicas()
+{
+    bcachefs format			\
+	--btree_node=8k			\
+	/dev/sdb
+
+    mount -t bcachefs /dev/sdb /mnt
+
+    do_fio --loop=10000
+
+    umount /mnt
+}
+
+test_twodevices()
+{
+    bcachefs format			\
+	--btree_node=8k			\
+	/dev/sdb /dev/sdc
+
+    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
+
+    do_fio --loop=10000
+
+    umount /mnt
+}
+
+test_replicas()
+{
+    bcachefs format			\
+	--btree_node=8k			\
+	--metadata_replicas=2		\
+	--data_replicas=2		\
+	/dev/sdb /dev/sdc
+
+    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
+
+    do_fio --loop=10000
+
+    umount /mnt
+}
+
+test_replicas_errors()
+{
+    mdadm -B /dev/md0 -lfaulty -n1 /dev/sdc
+
+    bcachefs format			\
+	--btree_node=8k			\
+	--metadata_replicas=2		\
+	--data_replicas=2		\
+	/dev/md0 /dev/sdb
+
+    mount -t bcachefs -o degraded /dev/sdb:/dev/md0 /mnt
+
+    mdadm -G /dev/md0 -pwrite-all
+    #mdadm -G /dev/md0 -pread-persistent1
+
+    do_fio --loop=100000
+
+    umount /mnt
+}
+
+test_replicas_offline()
+{
+    mdadm -B /dev/md0 -lfaulty -n1 /dev/sdc
+
+    bcachefs format			\
+	--btree_node=8k			\
+	--metadata_replicas=2		\
+	--data_replicas=2		\
+	/dev/md0 /dev/sdb
+
+    mount -t bcachefs -o degraded /dev/sdb:/dev/md0 /mnt
+
+    mdadm -G /dev/md0 -pwrite-all
+    #mdadm -G /dev/md0 -pread-persistent1
+
+    do_fio --loop=10
+    umount /mnt
+
+    mount -t bcachefs -o degraded /dev/sdb /mnt
+    do_fio --loop=1000
+    umount /mnt
+}
+
+main3()
+{
+    bcachefs format			\
+	--metadata_replicas=3		\
+	--data_replicas=2		\
+	--encrypted			\
+	--no_passphrase			\
+	/dev/sdb /dev/sdc /dev/sdd /dev/sde /dev/sdf
+
+    #mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf /mnt
+    mount -t bcachefs /dev/sdb /mnt
+    df -h /mnt
+    bcachefs device online /mnt /dev/sdc
+    df -h /mnt
+}
+
+main4()
+{
+    bcachefs format			\
+	--encrypted			\
+	--no_passphrase			\
+	/dev/sdb
+
+    bcachefs fsck			\
+	/dev/sdb
+}
+
+main5()
+{
+    cd /root
+    setup_tracing 'bcachefs:*'
+
+    bcachefs format			\
+	--compression_type=gzip		\
+	--metadata_replicas=2		\
+	--metadata_checksum_type=crc64	\
+	--data_checksum_type=crc64	\
+	--tier=2 /dev/sdb		\
+	--tier=3 /dev/sdc
+
+    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
+
+    while true; do
+	cp -a /usr /mnt
+	sync
+	echo 3 > /proc/sys/vm/drop_caches
+	find /mnt -type f | xargs cat > /dev/null
+	rm -rf /mnt/*
+    done
+}
+
+main6()
+{
+    cd /root
+    setup_tracing 'bcachefs:*'
+
+    bcachefs format			\
+	--metadata_replicas=2		\
+	/dev/sdb /dev/sdc
+
+    mount -t bcachefs -o degraded /dev/sdb:/dev/sdc /mnt
+    do_fio
+    umount /mnt
+}
+
+test_remove()
+{
+    offline=$1
+
+    bcachefs format			\
+	--btree_node=8k			\
+	--metadata_replicas=2		\
+	--data_replicas=2		\
+	/dev/sdb /dev/sdc
+
+    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
+
+    do_fio
+
+    sleep 2
+
+    bcachefs device set-state --force	/mnt 1 failed
+    echo "/dev/sdc failed"
+
+    if [[ $offline = 1 ]]; then
+	bcachefs device offline		/mnt 1
+	echo "/dev/sdc offline"
+    fi
+
+    bcachefs device remove --force	/mnt 1
+    sleep 1
+
+    bcachefs device remove --force	/mnt 1
+    echo "/dev/sdc removed"
+
+    #antagonist_shrink &
+
+    umount /mnt
+
+    mount -t bcachefs -o degraded /dev/sdb /mnt
+    umount /mnt
+}
+
+test_offline_remove()
+{
+    test_remove 1
+}
+
+test_online_remove()
+{
+    test_remove 0
+}
+
 main()
 {
-    setup_tracing 'bcache:*'
+    cd /root
+    ulimit -c unlimited
+    setup_tracing 'bcachefs:*'
 
-    setup_bcache
-    test_antagonist
-    test_bcache_stress
-    stop_bcache
+    #echo 1 > /sys/module/bcachefs/parameters/expensive_debug_checks
+    #echo 1 > /sys/module/bcachefs/parameters/verify_btree_ondisk
+    echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+
+    #antagonist_shrink &
+
+    #main1
+
+    #test_noreplicas
+    #test_twodevices
+
+    test_replicas
+    #test_replicas_errors
+    #test_replicas_offline
+
+    #test_offline_remove
 }

@@ -5,7 +5,6 @@ parse_test_deps()
     _MEM=""
     _TIMEOUT=""
     _KERNEL_CONFIG_REQUIRE=""
-    _KERNEL_APPEND=""
     _NR_VMS="1"
     _VMSTART_ARGS=(" ")
     TEST_RUNNING=""
@@ -141,17 +140,17 @@ parse_test_deps()
 
     require-kernel-append()
     {
-	_KERNEL_APPEND+=" $1"
+	_VMSTART_ARGS+=(--append="$1")
     }
 
     config-scratch-devs()
     {
-	_VMSTART_ARGS+=("--scratchdev=$1")
+	_VMSTART_ARGS+=(--scratchdev="$1")
     }
 
     config-image()
     {
-	_VMSTART_ARGS+=("--image=$1")
+	_VMSTART_ARGS+=(--image="$1")
     }
 
     config-cpus()

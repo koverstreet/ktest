@@ -29,7 +29,6 @@ KERNEL=""		# dir that has the kernel to run
                         #       set with: -k <path>
 IDFILE=""		# passed as --id to vmstart
                         #       set with: -w <path>
-SCRATCHDIR=""
 OUTPUT_DIR=""		# dir for test output (logs, code coverage, etc.)
 VM_TMPDIR="/tmp"	# dir where scratch drives are created
                         #       defaults: /tmp
@@ -105,7 +104,7 @@ while getopts "ha:p:i:k:ISw:s:o:vx" arg; do
 	    IDFILE="$OPTARG"
 	    ;;
 	s)
-	    SCRATCHDIR="$OPTARG"
+	    VMSTART+=(--scratchdir="$OPTARG")
 	    ;;
 	o)
 	    OUTPUT_DIR="$OPTARG"
@@ -124,7 +123,7 @@ while getopts "ha:p:i:k:ISw:s:o:vx" arg; do
 	    ;;
     esac
 done
-shift $(( OPTIND - 1 ))
+shift $((OPTIND - 1))
 
 if [[ -z $KERNEL ]]; then
     echo "Required parameter -k missing: kernel to boot"
@@ -137,30 +136,30 @@ parse_arch "$ARCH"
 [[ -z $IDFILE ]]	&& IDFILE=./.ktest-vm
 [[ -z $OUTPUT_DIR ]]	&& OUTPUT_DIR=./ktest-out
 
-VMSTART+=("--idfile" "$IDFILE")
-VMSTART+=("--tmpdir" "$VM_TMPDIR")
+VMSTART+=(--idfile="$IDFILE")
+VMSTART+=(--tmpdir="$VM_TMPDIR")
 
-run_vm()
+cmd_run()
 {
+    VMSTART+=("start")
+
     if [[ ! -f $IMG ]]; then
 	echo "VM root filesystem not found, use vm_create_image to create one"
 	exit 1
     fi
 
-    VMSTART+=("start")
-
-    [[ -n $SCRATCHDIR ]] && VMSTART+=("--scratchdir" "$SCRATCHDIR")
-
-    if [[ $EXIT_ON_SUCCESS = 1 || $INTERACTIVE = 1 ]]; then
-	case $KERNEL_ARCH in
-	    x86)
-		VMSTART+=("--kgdb")
-		;;
-	esac
+    if [[ $# = 0 ]]; then
+	echo "ktest: missing test"
+	exit 1
     fi
 
-    # setup directory where logfs will be mounted from
-    mkdir -p "$OUTPUT_DIR"
+    local TEST=$(readlink -e "$1")
+    shift
+
+    FILES=("rc=$KTESTDIR/rc.testwrapper")
+    FILES+=("rc.test=$TEST")
+
+    parse_test_deps "$TEST"
 
     # kernel modules
     FILES+=("$KERNEL/lib")
@@ -170,45 +169,53 @@ run_vm()
 
     get_tmpdir
 
+    local testargs="$TMPDIR/testargs"
+    echo "$@" > $testargs
+    FILES+=("$testargs")
+
     local iso="$TMPDIR/ktest.iso"
     genisoimage -quiet -graft-points -input-charset utf-8 -R		\
 	-o "$iso" "${FILES[@]}"
 
+    mkdir -p "$OUTPUT_DIR"
+
+    if [[ $EXIT_ON_SUCCESS = 1 || $INTERACTIVE = 1 ]]; then
+	case $KERNEL_ARCH in
+	    x86)
+		VMSTART+=("--kgdb")
+		;;
+	esac
+    fi
+
+    [[ $EXIT_ON_SUCCESS = 0 && $INTERACTIVE = 0 ]] &&			\
+	VMSTART+=(--append="ktest.timeout=$_TIMEOUT")
+
+    [[ $VERBOSE = 0 ]] && VMSTART+=(--append="quiet")
+
+    VMSTART+=(--architecture="${QEMU_BIN#qemu-system-}")
+    VMSTART+=(--image="$IMG")
+    VMSTART+=(--kernel="$KERNEL/vmlinuz")
+    VMSTART+=(--cdrom="$iso")
+    VMSTART+=(--fs "$OUTPUT_DIR" logfs)
+    VMSTART+=(--append=ktest.priority="$PRIORITY")
+    VMSTART+=(--append=log_buf_len=8M)
+    VMSTART+=(--memory="$_MEM")
+    VMSTART+=(--cpus="$_CPUS")
+    VMSTART+=(--nr_vms="$_NR_VMS")
+    VMSTART+=("${_VMSTART_ARGS[@]}")
+
     set +o errexit
 
-    if [[ $EXIT_ON_SUCCESS = 0 && $INTERACTIVE = 0 ]]; then
-	_KERNEL_APPEND="$_KERNEL_APPEND ktest.timeout=$_TIMEOUT"
+    if [[ $INTERACTIVE = 1 ]]; then
+	"${VMSTART[@]}"
+    elif [[ $EXIT_ON_SUCCESS = 1 ]]; then
+	"${VMSTART[@]}"|sed -u -e '/TEST SUCCESS/ { p; Q7 }'
+    else
+	timeout --foreground "$((60 + _TIMEOUT))" "${VMSTART[@]}"|
+	    $KTESTDIR/catch_test_success.awk
     fi
 
-    if [[ $VERBOSE = 0 ]]; then
-	_KERNEL_APPEND="$_KERNEL_APPEND quiet"
-    fi
-
-    "${VMSTART[@]}"							\
-	--architecture="${QEMU_BIN#qemu-system-}"			\
-	--image="$IMG"							\
-	--kernel="$KERNEL/vmlinuz"					\
-	--cdrom="$iso"							\
-	--fs "$OUTPUT_DIR" logfs					\
-	--append="ktest.priority=$PRIORITY"				\
-	--append="log_buf_len=8M"					\
-	--append="$_KERNEL_APPEND"					\
-	--memory="$_MEM"						\
-	--cpus "$_CPUS"							\
-	--nr_vms="$_NR_VMS"						\
-	"${_VMSTART_ARGS[@]}"|
-    {
-	if [[ $INTERACTIVE = 1 ]]; then
-	    cat
-	elif [[ $EXIT_ON_SUCCESS = 1 ]]; then
-	    sed -u -e '/TEST SUCCESS/ { p; Q7 }'
-	else
-	    timeout "$((60 + _TIMEOUT))" $KTESTDIR/catch_test_success.awk
-	fi
-
-	ret=$?
-	kill %1
-    }
+    ret=$?
 
     if [[ $ret = 124 ]]; then
 	echo 'TEST TIMEOUT'
@@ -223,32 +230,8 @@ run_vm()
 cmd_boot()
 {
     INTERACTIVE=1
-    _KERNEL_APPEND=""
-    _MEM=1G
-    _CPUS=6
-    _NR_VMS=1
-    _VMSTART_ARGS=()
 
-    FILES=("rc=$KTESTDIR/rc.interactive")
-
-    run_vm
-}
-
-cmd_run()
-{
-    if [[ $# = 0 ]]; then
-	echo "ktest: missing test"
-	exit 1
-    fi
-
-    local TEST=$(readlink -e "$1")
-
-    FILES=("rc=$KTESTDIR/rc.testwrapper")
-    FILES+=("rc.interactive=$KTESTDIR/rc.interactive")
-    FILES+=("rc.test=$TEST")
-
-    parse_test_deps "$TEST"
-    run_vm "$TEST"
+    cmd_run "$KTESTDIR/boot.ktest" "$@"
 }
 
 cmd_ssh()
