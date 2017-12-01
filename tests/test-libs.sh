@@ -7,7 +7,7 @@ require-lib prelude.sh
 
 config-mem 2G
 
-require-make ../ltp-fsx/Makefile ltp-fsx
+#require-make ../ltp-fsx/Makefile ltp-fsx
 
 # Wait for an IP or IPv6 address to show
 # up on a specific device.

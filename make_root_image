@@ -143,8 +143,6 @@ debugfs				/sys/kernel/debug	debugfs		defaults	0	0
 configfgs			/sys/kernel/config	configfs	defaults	0	0
 ZZ
 
-install -m0755 "$KTESTDIR/rc.local" "$MNT/etc/"
-
 cp -P "/etc/timezone" "/etc/localtime" "$MNT/etc/"
 
 touch "$MNT/etc/resolv.conf"

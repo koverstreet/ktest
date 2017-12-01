@@ -141,6 +141,10 @@ VMSTART+=(--tmpdir="$VM_TMPDIR")
 
 cmd_run()
 {
+
+    local CRASHDUMP=0
+    [[ $INTERACTIVE = 0 ]]  && CRASHDUMP=1
+
     VMSTART+=("start")
 
     if [[ ! -f $IMG ]]; then
@@ -190,7 +194,10 @@ cmd_run()
     [[ $EXIT_ON_SUCCESS = 0 && $INTERACTIVE = 0 ]] &&			\
 	VMSTART+=(--append="ktest.timeout=$_TIMEOUT")
 
-    [[ $VERBOSE = 0 ]] && VMSTART+=(--append="quiet")
+    [[ $VERBOSE = 0 ]]	    && VMSTART+=(--append="quiet systemd.show_status=0")
+
+    [[ $CRASHDUMP = 1 ]]    && VMSTART+=(--append="crashkernel=128M")
+    VMSTART+=(--append=ktest.crashdump=$CRASHDUMP)
 
     VMSTART+=(--architecture="${QEMU_BIN#qemu-system-}")
     VMSTART+=(--image="$IMG")
@@ -246,6 +253,8 @@ cmd_gdb()
 
 cmd_kgdb()
 {
+    "${VMSTART[@]}" sysrq g
+
     exec "${VMSTART[@]}" kgdb "$KERNEL/vmlinux"
 }
 

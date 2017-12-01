@@ -1,9 +1,0 @@
-#!/bin/bash
-
-mount /dev/sr0 /cdrom
-
-export PATH=/cdrom:$PATH
-cd /cdrom
-./rc > /dev/console 2>&1 &
-disown
-#exec ./rc > /dev/console

@@ -14,11 +14,18 @@ KERNEL_ARCH=""
 dmesg --console-on
 dmesg --console-level 8
 
+for i in $(</proc/cmdline); do
+    case $i in
+	ktest.*)
+	    export ktest_${i##ktest.}
+	    ;;
+    esac
+done
+
 echo 1 > /proc/sys/kernel/sysrq
 ulimit -c unlimited
 
 # Log file system visible to host
-echo "mount logfs"
 
 LOGDIR=/ktest-out
 mkdir -p $LOGDIR
@@ -46,7 +53,7 @@ fi
 
 # If debugging crash dumps, add "console=hvc0" to the append line
 # below:
-if which kexec > /dev/null; then
+if [[ $ktest_crashdump = 1 ]]; then
     kexec -p /cdrom/vmlinuz --append="root=/dev/sda rw maxcpus=1" || true
 fi
 
@@ -63,15 +70,12 @@ fi
 
 echo $((NR_REBOOTS + 1)) | dd of=/NR_REBOOTS oflag=direct 2> /dev/null
 
-for i in $(</proc/cmdline); do
-    case $i in
-	ktest.*)
-	    export ktest_${i##ktest.}
-	    ;;
-    esac
-done
-
-compgen -G "/cdrom/*.deb" > /dev/null && dpkg -i /cdrom/*.deb
+if compgen -G "/cdrom/*.deb" > /dev/null; then
+    if ! output=$(dpkg -i /cdrom/*.deb); then
+	echo $output
+	exit 1
+    fi
+fi
 cd /root
 
 copy_to_host()
@@ -195,13 +199,13 @@ config-timeout()
 if [[ $(type -t list_tests) == function ]]; then
     tests=$(list_tests)
 else
-    tests=$(declare -F|grep --only-matching -E ' test_.*')
+    tests=$(declare -F|sed -ne '/ test_/ s/.*test_// p')
 fi
 
 if [[ $(type -t run_test) != function ]]; then
     run_test()
     {
-	"$@"
+	test_$1
     }
 fi
 
@@ -211,13 +215,11 @@ if [[ -z $tests ]]; then
 fi
 
 testargs=$(</cdrom/testargs)
-if [[ -n $testargs ]]; then
-    tests=""
+[[ -n $testargs ]] && tests="$testargs"
 
-    for i in $testargs; do
-	tests="$tests test_$i"
-    done
-fi
+tests=$(echo $tests)
+
+echo "Running tests $tests"
 
 if [[ -n ${ktest_timeout+x} ]]; then
     (
@@ -226,8 +228,6 @@ if [[ -n ${ktest_timeout+x} ]]; then
 	echo c > /proc/sysrq-trigger
     ) &
 fi
-
-echo "Running tests $tests"
 
 for i in $tests; do
     echo "Running test $i"
