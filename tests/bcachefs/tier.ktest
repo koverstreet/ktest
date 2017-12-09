@@ -3,136 +3,74 @@
 require-lib bcachefs-test-libs.sh
 
 config-scratch-devs 1G
+config-scratch-devs 1G
 config-scratch-devs 4G
 config-scratch-devs 4G
 
 config-timeout $(stress_timeout)
 
+run_basic_tiering_test()
+{
+    if true; then
+	run_basic_fio_test "$@"			\
+	    --tier 0 /dev/sdb			\
+	    --tier 0 /dev/sdc			\
+	    --tier 1 /dev/sdd			\
+	    --tier 1 /dev/sde
+    else
+	run_basic_fio_test "$@"			\
+	    --foreground_target /dev/sdb	\
+	    --promote_target    /dev/sdb	\
+	    --background_target /dev/sdd	\
+	    /dev/sdb /dev/sdd
+    fi
+}
+
 test_tiering()
 {
-    echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
-    setup_tracing 'bcachefs:*'
+    run_basic_tiering_test
+}
 
-    bcachefs format			\
-	--compression_type=gzip		\
-	--metadata_replicas=2		\
-	--metadata_checksum_type=crc64	\
-	--data_checksum_type=crc64	\
-	--tier=0 /dev/sdb		\
-	--tier=1 /dev/sdc
-
-    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
-
-    echo 0 > /sys/fs/bcachefs/*/internal/copy_gc_enabled
-
-    run_antagonist
-
-    loops=$((($ktest_priority + 1) * 4))
-    loops=1000
-
-    fio --eta=always		\
-	--randrepeat=0		\
-	--ioengine=libaio	\
-	--iodepth=64		\
-	--iodepth_batch=16	\
-	--direct=1		\
-	--numjobs=1		\
-	--buffer_compress_percentage=50\
-	--filename=/mnt/fiotest	\
-	--filesize=2G		\
-				\
-	--name=randwrite	\
-	--stonewall		\
-	--rw=randwrite		\
-	--bs=64k		\
-	--loops=$loops
-    exit 0
-
-    while true; do
-	cp -a /usr /mnt
-	sync
-	echo 3 > /proc/sys/vm/drop_caches
-	find /mnt -type f | xargs cat > /dev/null
-	rm -rf /mnt/*
-    done
+test_tiering_no_checksum()
+{
+    run_basic_tiering_test --data_checksum_type=none
 }
 
 test_tiering_compression()
 {
-    setup_tracing 'bcachefs:*'
-
-    bcachefs format --compression_type=lz4	\
-	--tier 0 /dev/sdb			\
-	--tier 1 /dev/sdc
-    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
-
-    run_fio					\
-	--buffer_compress_percentage=20	    	\
-	--verify=meta				\
-	--verify_fatal=1			\
-	--filename=/mnt/fiotest			\
-	--size=3G				\
-						\
-	--name=randrw				\
-	--rw=randrw				\
-	--bsrange=4k-128k
-    umount /mnt
+    run_basic_tiering_test --compression_type=lz4
 }
 
-test_tiering_multi()
+test_tiering_crypto()
 {
-    echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+    run_basic_tiering_test --encrypted --no_passphrase	
+}
 
-    bcachefs format				\
-	--tier 0 /dev/sdb			\
-	--tier 1 /dev/sdc			\
-	--tier 1 /dev/sdd			\
-
-    setup_tracing 'bcachefs:*'
-
-    setup_bcache
-    run_antagonist
-    run_bcache_stress
-    stop_bcache
-
-    sleep 5
-    existing_bcache
-    run_bcache_stress
-    stop_bcache
-
-    run_bcachefs_stress
+test_tiering_crypto_lz4()
+{
+    run_basic_tiering_test --encrypted --no_passphrase --compression_type=lz4
 }
 
 test_tiering_replication()
 {
-    setup_tracing 'bcachefs:*'
-
-    bcachefs format				\
-	--metadata_replicas=2			\
-	--data_replicas=2			\
-	--tier 0 /dev/sdb			\
-	--tier 1 /dev/sdc			\
-	--tier 1 /dev/sdd			\
-
-    run_antagonist
-    run_bcache_stress
-    stop_volumes
-    run_bcachefs_stress
-    stop_bcache
+    run_basic_tiering_test --replicas=2
 }
 
 test_tiering_variable_buckets()
 {
-    setup_tracing 'bcachefs:*'
-
-    bcachefs format				\
+    run_basic_fio_test				\
 	--tier 0 --bucket=32k	/dev/sdb	\
-	--tier 1 --bucket=64k	/dev/sdc	\
-	--tier 1 --bucket=128k	/dev/sdd	\
+	--tier 0 --bucket=64k	/dev/sdc	\
+	--tier 1 --bucket=128k	/dev/sde	\
+	--tier 1 --bucket=256k	/dev/sdd
+}
 
-    run_antagonist
-    run_bcache_stress
-    stop_volumes
-    run_bcachefs_stress
-    stop_bcache
+test_tiering_variable_buckets_replicas()
+{
+    run_basic_fio_test				\
+	--replicas=2				\
+	--tier 0 --bucket=32k	/dev/sdb	\
+	--tier 0 --bucket=64k	/dev/sdc	\
+	--tier 1 --bucket=128k	/dev/sde	\
+	--tier 1 --bucket=256k	/dev/sdd	\
 }

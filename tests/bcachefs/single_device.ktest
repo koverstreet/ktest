@@ -1,0 +1,379 @@
+#!/bin/bash
+
+require-lib bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+
+config-timeout $(stress_timeout)
+
+test_lz4()
+{
+    run_basic_fio_test				\
+	--compression_type=lz4			\
+	/dev/sdb
+}
+
+test_gzip()
+{
+    run_basic_fio_test				\
+	--compression_type=gzip			\
+	/dev/sdb
+}
+
+test_compress_no_checksum()
+{
+    run_basic_fio_test				\
+	--compression_type=lz4			\
+	--metadata_checksum_type=none	    	\
+	--data_checksum_type=none		\
+	/dev/sdb
+}
+
+test_no_checksum()
+{
+    run_basic_fio_test				\
+	--metadata_checksum_type=none		\
+	--data_checksum_type=none		\
+	/dev/sdb
+}
+
+test_crc32c()
+{
+    run_basic_fio_test				\
+	--metadata_checksum_type=crc32c		\
+	--data_checksum_type=crc32c		\
+	/dev/sdb
+}
+
+test_crc64()
+{
+    run_basic_fio_test				\
+	--metadata_checksum_type=crc64		\
+	--data_checksum_type=crc64		\
+	/dev/sdb
+}
+
+test_crypto()
+{
+    run_basic_fio_test				\
+	--encrypted --no_passphrase		\
+	/dev/sdb
+    bcachefs fsck				\
+	/dev/sdb
+}
+
+test_crypto_lz4()
+{
+    run_basic_fio_test				\
+	--encrypted --no_passphrase		\
+	--compression_type=lz4			\
+	/dev/sdb
+}
+
+run_copygc_torture()
+{
+    bcachefs_antagonist
+
+    bcachefs format				\
+	--error_action=panic			\
+	--bucket=1M --btree_node=16k		\
+	"$@" /dev/sdb >/dev/null
+
+    mount /dev/sdb /mnt
+    #enable_memory_faults
+
+    ioengine=sync
+    fio						\
+	--filename=/mnt/fiotest			\
+	--ioengine=$ioengine			\
+	--name=write				\
+	--rw=write				\
+	--bs=16M				\
+	--fill_fs=1
+
+    loops=$((($ktest_priority + 1) * 4))
+    run_fio_base				\
+	--buffer_compress_percentage=0	    	\
+						\
+	--name=randrw				\
+	--stonewall				\
+	--rw=randrw				\
+	--loops=$loops				\
+	--bsrange=4k-64k
+
+    rm /mnt/fiotest
+
+    expect_sysfs cache dirty_buckets	0
+    expect_sysfs cache dirty_data	0
+    expect_sysfs cache cached_buckets	0
+    expect_sysfs cache cached_data	0
+
+    #disable_memory_faults
+    umount /mnt
+}
+
+test_copygc_torture()
+{
+    run_copygc_torture
+}
+
+test_copygc_torture_no_checksum()
+{
+    run_copygc_torture --data_checksum_type=none
+}
+
+test_copygc_torture_lz4()
+{
+    run_copygc_torture --compression_type=lz4
+}
+
+test_small_buckets()
+{
+    run_basic_fio_test				\
+	--bucket=4k				\
+	/dev/sdb
+}
+
+test_small_nodes()
+{
+    run_basic_fio_test				\
+	--bucket=256k				\
+	--btree_node=4k				\
+	/dev/sdb
+}
+
+test_crypto_passphrase()
+{
+    bcachefs_antagonist
+
+    echo ""|bcachefs format -f --encrypted /dev/sdb
+    echo ""|bcachefs unlock /dev/sdb
+
+    mount -t bcachefs /dev/sdb /mnt
+    umount /mnt
+    bcachefs fsck /dev/sdb
+}
+
+test_partial_overwritten_extents()
+{
+    bcachefs format				\
+	--error_action=panic			\
+	--encrypted --no_passphrase		\
+	/dev/sdb >/dev/null
+    mount -t bcachefs /dev/sdb /mnt
+
+    dd if=/dev/urandom	of=/mnt/foo  bs=32k  count=1 skip=0 oflag=direct
+    dd if=/mnt/foo	of=/dev/null bs=4k   count=8 skip=0 iflag=direct
+
+    dd if=/dev/urandom	of=/mnt/foo  bs=32k  count=1 skip=0 oflag=direct
+    dd if=/dev/zero	of=/mnt/foo  bs=4k   count=1 skip=0 oflag=direct conv=notrunc
+    dd if=/mnt/foo	of=/dev/null bs=4k   count=8 skip=0 iflag=direct
+
+    dd if=/dev/urandom	of=/mnt/bar  bs=32k  count=1 skip=0 oflag=direct
+    dd if=/dev/zero	of=/mnt/bar  bs=4k   count=1 skip=7 oflag=direct conv=notrunc
+    dd if=/mnt/bar	of=/dev/null bs=4k   count=8 skip=0 iflag=direct > /dev/null
+
+    dd if=/dev/urandom	of=/mnt/baz  bs=32k  count=1 skip=0 oflag=direct
+    dd if=/dev/zero	of=/mnt/baz  bs=4k   count=1 skip=0 oflag=direct conv=notrunc
+    dd if=/dev/zero	of=/mnt/baz  bs=4k   count=1 skip=7 oflag=direct conv=notrunc
+    dd if=/mnt/baz	of=/dev/null bs=4k   count=8 skip=0 iflag=direct > /dev/null
+    umount /mnt
+}
+
+# test the xattr interface for per-inode IO options:
+test_xattr()
+{
+    bcachefs format				\
+	--error_action=panic			\
+	/dev/sdb >/dev/null
+    mount -t bcachefs /dev/sdb /mnt
+
+    mkdir /mnt/foo
+    setfattr -n bcachefs.compression -v lz4 /mnt/foo
+    getfattr -n bcachefs.compression /mnt/foo
+
+    dd if=/dev/zero of=/mnt/foo/bar bs=128k count=1 oflag=direct
+    getfattr -n bcachefs.compression /mnt/foo/bar
+
+    setfattr -x bcachefs.compression /mnt/foo/bar
+    getfattr -n bcachefs.compression /mnt/foo/bar
+
+    umount /mnt
+}
+
+test_quota()
+{
+    bcachefs_antagonist
+
+    bcachefs format				\
+	--error_action=panic			\
+	/dev/sdb >/dev/null
+    mount -o quota /dev/sdb /mnt
+
+    loops=$((($ktest_priority + 1) * 4))
+
+    run_fio_randrw
+
+    rm /mnt/fiotest
+    umount /mnt
+}
+
+require-kernel-config NFSD
+require-kernel-config NFSD_V3
+require-kernel-config NFSD_V4
+
+test_nfs()
+{
+    mkdir /export1 /export2
+
+    bcachefs format				\
+	--error_action=panic			\
+	/dev/sdb >/dev/null
+    mount /dev/sdb /export2
+
+    echo "/export1  *(ro,insecure,all_squash,no_subtree_check)" >> /etc/exports
+    echo "/export2  *(ro,insecure,all_squash,no_subtree_check)" >> /etc/exports
+    exportfs -a
+}
+
+do_test_init_errors()
+{
+    control=/sys/kernel/debug/dynamic_fault/control
+    grep $1 $control
+    echo
+
+    for id in {0..99}; do
+	fault="$1 index $id"
+
+	echo "class $fault enable" > $control || break
+
+	echo "TESTING FAULT $id"
+
+	echo "Registering sdb"
+	echo /dev/sdb > /sys/fs/bcachefs/register || true
+
+	echo "Registering sdc"
+	echo /dev/sdc > /sys/fs/bcachefs/register || true
+
+	sleep 2
+	echo "class $fault disable" > $control
+	sleep 2
+
+	if test -e /sys/fs/bcachefs/*-*-*-*-*; then
+	    echo "Registration should have failed"
+	    false
+	fi
+    done
+}
+
+test_init_errors()
+{
+    setup_tracing 'bcachefs:*'
+
+    if [ $NR_REBOOTS = 0 ]; then
+	setup_bcache
+
+	echo readonly > /sys/fs/bcachefs/*/errors
+
+	setup_fs ext4
+
+	run_antagonist
+
+	run_dbench &
+	run_bonnie &
+
+	sleep 10
+	do_reboot
+    else
+	do_test_init_errors "bcachefs:cache_set_init"
+	do_test_init_errors "bcachefs:meta:read"
+    fi
+}
+
+require-kernel-config	PM,SUSPEND,PM_SLEEP,PM_DEBUG
+require-kernel-append	no_console_suspend
+
+test_suspend()
+{
+    umount $LOGDIR
+
+    #setup_tracing 'bcachefs:*'
+
+    (
+	p="/sys/power"
+
+	sleep 10
+	echo freezer	> $p/pm_test
+	echo freeze	> $p/state
+
+	#echo 1 > /sys/fs/bcachefs/suspend
+	#s2ram --no_kms --force
+    )&
+
+    bcachefs format				\
+	--error_action=panic			\
+	/dev/sdb >/dev/null
+    mount /dev/sdb /mnt
+
+    if false; then
+	run_dbench
+    else
+	run_antagonist
+	run_stress
+    fi
+}
+
+require-kernel-config MD,BLK_DEV_DM,DM_LOG_WRITES
+
+test_writelog()
+{
+    cd $LOGDIR
+    ln -s $LOGDIR/log-writes/replay-log /usr/bin
+
+    dmsetup create log --table "0 $(blockdev --getsz /dev/sdb) log-writes /dev/sdb /dev/sdc"
+
+    bcachefs format -f --btree_node=16k --error_action=panic /dev/mapper/log
+    dmsetup message log 0 mark mkfs
+
+    mount /dev/mapper/log /mnt
+    fs_mark -v -n 10000 -s 4096 -k -S 0 -D  1000 -N 1000 -d /mnt -t 10
+    umount /mnt
+
+    dmsetup remove log
+
+    nr_entries=$(replay-log --log /dev/sdc|cut -d= -f4)
+    nr_flush=$(replay-log --log /dev/sdc --list --start-mark mkfs --next-flush --next-fua|wc -l)
+    echo "Replaying $nr_flush/$nr_entries entries:"
+
+    dd if=/dev/zero of=/dev/sdb 2>/dev/null || true
+
+    prev=0
+    for e in $(replay-log --log /dev/sdc --list --start-mark mkfs --next-flush --next-fua); do
+	echo "testing entry $e"
+
+	replay-log --log /dev/sdc --replay /dev/sdb --start $prev --limit $(( $e - $prev + 1))
+	prev=$(( $e + 1 ))
+
+	dmsetup create snap --table "0 $(blockdev --getsz /dev/sdb) snapshot /dev/sdb /dev/sdd N 8"
+	mount -o ro /dev/mapper/snap /mnt
+	umount /mnt
+	dmsetup remove snap
+    done
+}
+
+test_journal_torture()
+{
+    bcachefs_antagonist
+
+    bcachefs format "$@" /dev/sdb   > /dev/null
+
+    mount -t bcachefs /dev/sdb /mnt
+    #enable_memory_faults
+
+    echo 0 > /sys/fs/bcachefs/*/journal_delay_ms
+
+    run_fio_randrw
+
+    #disable_memory_faults
+    umount /mnt
+}

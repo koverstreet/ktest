@@ -115,7 +115,7 @@ require-kernel-config PANIC_ON_OOPS
 #require-kernel-config DEBUG_SET_MODULE_RONX
 
 # More expensive
-#require-kernel-config DYNAMIC_DEBUG
+require-kernel-config DYNAMIC_DEBUG
 
 # Expensive
 #require-kernel-config DEBUG_LIST

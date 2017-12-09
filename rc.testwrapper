@@ -8,6 +8,9 @@ set -o errtrace
 
 export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]}()}+ '
 
+KTESTDIR=$(dirname "$(readlink -f "$0")")
+. "$KTESTDIR/util.sh"
+
 TEST_RUNNING=1
 KERNEL_ARCH=""
 
@@ -219,7 +222,12 @@ testargs=$(</cdrom/testargs)
 
 tests=$(echo $tests)
 
+tests_passed=()
+tests_failed=()
+
+echo
 echo "Running tests $tests"
+echo
 
 if [[ -n ${ktest_timeout+x} ]]; then
     (
@@ -230,25 +238,44 @@ if [[ -n ${ktest_timeout+x} ]]; then
 fi
 
 for i in $tests; do
-    echo "Running test $i"
+    echo "========= Running test $i"
+    echo
 
     set +e
     (set -e; run_test $i)
     ret=$?
     set -e
 
-    echo "Test $i completed with ret $ret"
+    kill $(list_descendants $$) >/dev/null 2>&1 || true
 
-    [[ $ret != 0 ]] && break
+    echo
+    echo "========= Test $i completed with ret $ret"
+
+    # XXX: check dmesg for warnings, oopses, slab corruption, etc. before
+    # signaling success
+
+    if [[ $ret = 0 ]]; then
+	tests_passed+=($i)
+    else
+	tests_failed+=($i)
+    fi
+
+    [[ $ret != 0 && $ktest_failfast = 1 ]] && break
+
+    for dev in /dev/sd*; do
+	[[ $dev = /dev/sda ]] && continue
+	umount $dev >/dev/null 2>&1 || true
+    done
 done
-
-# XXX: check dmesg for warnings, oopses, slab corruption, etc. before signaling
-# success
 
 copy_to_host
 check_taint
 
-if [[ $ret = 0 ]]; then
+echo
+echo "Passed: ${tests_passed[@]}"
+echo "Failed: ${tests_failed[@]}"
+
+if [[ ${#tests_failed[@]} = 0 ]]; then
     echo "TEST SUCCESS"
 else
     echo "TEST FAILED"

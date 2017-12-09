@@ -26,11 +26,16 @@ checkdep()
 # scratch dir cleaned up on exit
 TMPDIR=""
 
+cleanup_tmpdir()
+{
+    [[ -n $TMPDIR ]] && rm -rf "$TMPDIR"
+}
+
 get_tmpdir()
 {
     if [[ -z $TMPDIR ]]; then
-	TMPDIR=$(mktemp --tmpdir -d ktest-XXXXXXXXXX)
-	trap 'rm -rf "$TMPDIR"' SIGINT SIGTERM EXIT
+	TMPDIR=$(mktemp --tmpdir -d $(basename "$0")-XXXXXXXXXX)
+	trap 'rm -rf "$TMPDIR"' EXIT
     fi
 }
 
@@ -148,3 +153,21 @@ parse_arch()
 #	echo $1-linux-gnu
 #    fi
 #}
+
+list_descendants()
+{
+  local children=$(ps -o pid= --ppid "$1")
+
+  for pid in $children; do
+    list_descendants "$pid"
+  done
+
+  echo "$children"
+}
+
+join_by()
+{
+    local IFS="$1"
+    shift
+    echo "$*"
+}

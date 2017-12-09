@@ -11,53 +11,6 @@ config-volume 1400M
 
 config-timeout $(stress_timeout)
 
-test_device_add()
-{
-    setup_tracing 'bcachefs:*'
-
-    bcachefs format /dev/sdb
-
-    mount /dev/sdb /mnt
-
-    if false; then
-	fio --eta=always			\
-	    --randrepeat=0			\
-	    --ioengine=libaio			\
-	    --iodepth=64			\
-	    --iodepth_batch=16			\
-	    --direct=1				\
-	    --numjobs=1				\
-	    --buffer_compress_percentage=20	\
-	    --verify=meta			\
-	    --verify_fatal=1			\
-	    --verify_dump=1			\
-	    --filename=/mnt/fiotest		\
-	    --size=1G				\
-						\
-	    --name=randwrite			\
-	    --stonewall				\
-	    --rw=randwrite			\
-	    --bsrange=4k-128k &
-    fi
-
-    echo "Adding /dev/sdc"
-    bcachefs device add /mnt /dev/sdc
-    echo "Added /dev/sdc"
-
-    wait
-    umount /mnt
-    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
-
-    echo "Removing /dev/sdc"
-    bcachefs device set-state /mnt /dev/sdc failed
-    bcachefs device remove /mnt /dev/sdc
-    echo "Removed /dev/sdc"
-
-    umount /mnt
-    mount /dev/sdb /mnt
-    bcachefs device add /mnt /dev/sdc
-}
-
 test_device_add_errors()
 {
     set_faults()

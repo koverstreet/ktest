@@ -22,8 +22,14 @@ parse_test_deps()
 	    exit 1
 	fi
 
+	local f="$(basename "$1")=$(readlink -f "$1")"
+
+	for i in "${FILES[@]}"; do
+	    [[ $i = $f ]] && return
+	done
+
 	# Make sure directories show up, not just their contents
-	FILES+=("$(basename "$1")=$(readlink -f "$1")")
+	FILES+=("$f")
     }
 
     require-lib()
@@ -49,7 +55,10 @@ parse_test_deps()
     require-build-deb()
     {
 	local req=$1
+	local name=$(basename $req)
 	local path=$(readlink -e "$TESTDIR/$req")
+
+	[[ $BUILD_DEPS = 1 ]] || return 0
 
 	checkdep debuild devscripts
 
@@ -63,12 +72,19 @@ parse_test_deps()
 
 	pushd "$path"	> /dev/null
 
+	echo -n "building $name... "
+
 	if ! make > "$out" 2>$1 && [[ $? -eq 2 ]]; then
 	    echo "Error building $req:"
 	    cat "$out"
 	    exit 1
 	fi
 	[[ $VERBOSE = 1 ]] && cat "$out"
+
+	popd		> /dev/null
+
+	cp -drl $path $TMPDIR
+	pushd "$TMPDIR/$name" > /dev/null
 
 	# make -nc actually work:
 	rm -f debian/*.debhelper.log
@@ -78,11 +94,14 @@ parse_test_deps()
 	    cat "$out"
 	    exit 1
 	fi
+
+	echo done
+
 	[[ $VERBOSE = 1 ]] && cat "$out"
 
 	popd		> /dev/null
 
-	for deb in $path*.deb; do
+	for deb in $TMPDIR/$name*.deb; do
 	    _add-file "$deb"
 	done
     }

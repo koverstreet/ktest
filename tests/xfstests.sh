@@ -33,12 +33,12 @@ run_xfstests()
 
     ln -sf $LOGDIR/log-writes/replay-log /usr/bin
     #(cd $LOGDIR/xfsprogs; make install install-dev)
-    (cd $LOGDIR/xfstests; make)
+    (cd $LOGDIR/xfstests; make) > /dev/null
 
     ln -sf /bin/bash /bin/sh
 
     mkdir -p $TEST_DIR $SCRATCH_MNT
-    mkfs.$FSTYP $TEST_DEV
+    mkfs.$FSTYP -q $TEST_DEV
     mount $TEST_DEV $TEST_DIR
 
     cd $LOGDIR/xfstests

@@ -51,7 +51,8 @@ antagonist_shrink()
 {
     while true; do
 	for file in $(find /sys/fs/bcachefs -name prune_cache); do
-	    echo 100000 > $file
+	    echo 100000 > $file > /dev/null 2>&1 || true
+
 	done
 	sleep 0.5
     done
@@ -80,137 +81,110 @@ antagonist_trigger_gc()
     done
 }
 
+antagonist_switch_str_hash()
+{
+    cd /sys/fs/bcachefs
+
+    while true; do
+	for i in crc32c crc64 siphash; do
+	    echo $i | tee */options/str_hash > /dev/null 2>&1 || true
+	    sleep 2
+	done
+    done
+}
+
 antagonist_switch_crc()
 {
     cd /sys/fs/bcachefs
 
     while true; do
-	sleep 1
-	echo crc64 | tee */options/data_checksum	> /dev/null 2>&1 || true
-	echo crc64 | tee */options/metadata_checksum	> /dev/null 2>&1 || true
-	echo crc64 | tee */options/str_hash		> /dev/null 2>&1 || true
-	sleep 1
-	echo crc32c | tee */options/data_checksum	> /dev/null 2>&1 || true
-	echo crc32c | tee */options/metadata_checksum	> /dev/null 2>&1 || true
-	echo crc32c | tee */options/str_hash		> /dev/null 2>&1 || true
+	for i in crc32c crc64; do
+	    echo $i | tee */options/data_checksum */options/metadata_checksum > /dev/null 2>&1 || true
+	    sleep 2
+	done
     done
 }
 
-run_antagonist()
+bcachefs_antagonist()
 {
+    setup_tracing 'bcachefs:*'
+    #echo 1 > /sys/module/bcachefs/parameters/expensive_debug_checks
+    #echo 1 > /sys/module/bcachefs/parameters/verify_btree_ondisk
+    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+    #echo 1 > /sys/module/bcachefs/parameters/btree_gc_coalesce_disabled
+    #echo 1 > /sys/module/bcachefs/parameters/key_merging_disabled
+
+    enable_race_faults
+
     antagonist_expensive_debug_checks &
     antagonist_shrink &
     antagonist_sync &
     antagonist_trigger_gc &
-    antagonist_switch_crc &
+    antagonist_switch_str_hash &
 }
 
-discard_all_devices()
+run_fio_base()
 {
-    if [ "${BDEV:-}" == "" -a "${CACHE:-}" == "" ]; then
-        return
-    fi
+    fio --eta=always				\
+	--randrepeat=0				\
+	--ioengine=libaio			\
+	--iodepth=64				\
+	--iodepth_batch=16			\
+	--direct=1				\
+	--numjobs=1				\
+	--verify=meta				\
+	--verify_fatal=1			\
+	--filename=/mnt/fiotest		    	\
+	"$@"
+}
 
-    killall -STOP systemd-udevd
+run_fio()
+{
+    loops=$((($ktest_priority + 1) * 4))
 
-    if [ -f /sys/kernel/debug/bcachefs/* ]; then
-	cat /sys/kernel/debug/bcachefs/* > /dev/null
-    fi
+    fio --eta=always				\
+	--ioengine=libaio			\
+	--iodepth=64				\
+	--iodepth_batch=16			\
+	--direct=1				\
+	--numjobs=1				\
+	--verify=meta				\
+	--verify_fatal=1			\
+	--buffer_compress_percentage=50		\
+	--filename=/mnt/fiotest		    	\
+	--filesize=3500M			\
+	--loops=$loops				\
+	"$@"
+}
 
-    for dev in $DEVICES; do
-        echo "Discarding ${dev}..."
-        blkdiscard $dev
+run_fio_randrw()
+{
+    run_fio					\
+	--name=randrw				\
+	--rw=randrw				\
+	--bsrange=4k-1M
+}
+
+run_basic_fio_test()
+{
+    local devs=()
+
+    for i in "$@"; do
+	[[ ${i:0:1} != - ]] && devs+=($i)
     done
 
-    if [[ -f /sys/fs/bcachefs/*/internal/btree_gc_running ]]; then
-	# Wait for btree GC to finish so that the counts are actually up to date
-	while [ "$(cat /sys/fs/bcachefs/*/internal/btree_gc_running)" != "0" ]; do
-	    sleep 1
-	done
+    bcachefs_antagonist
+
+    if [[ $ktest_verbose = 1 ]]; then
+	bcachefs format --error_action=panic "$@"
+    else
+	bcachefs format --error_action=panic "$@" >/dev/null
     fi
+    mount -t bcachefs $(join_by : "${devs[@]}") /mnt
 
-    expect_sysfs cache dirty_buckets 0
-    expect_sysfs cache dirty_data 0
-    expect_sysfs cache cached_buckets 0
-    expect_sysfs cache cached_data 0
-    expect_sysfs bdev dirty_data 0
+    #enable_memory_faults
+    run_fio_randrw
+    #disable_memory_faults
 
-    if [ -f /sys/kernel/debug/bcachefs/* ]; then
-	tmp="$(mktemp)"
-	cat /sys/kernel/debug/bcachefs/* | tee "$tmp"
-	lines=$(grep -v discard "$tmp" | wc -l)
-
-	if [ "$lines" != "0" ]; then
-	    echo "Btree not empty"
-	    false
-	fi
-    fi
-
-    killall -CONT systemd-udevd
-}
-
-run_bcache_stress()
-{
-    enable_faults
-
-    read_all_sysfs
-    run_fio
-    discard_all_devices
-
-    setup_fs ext4
-    run_dbench
-    run_bonnie
-    run_fsx
-    stop_fs
-    discard_all_devices
-
-    if [ $ktest_priority -gt 0 ]; then
-	setup_fs xfs
-	run_dbench
-	run_bonnie
-	stop_fs
-	discard_all_devices
-    fi
-
-    disable_faults
-}
-
-# some bcachefs tests:
-
-setup_bcachefs()
-{
-    mkdir -p /mnt/bcachefs
-
-    MNT=""
-    for dev in $CACHE $TIER; do
-	if [[ -z $MNT ]]; then
-	    MNT=$dev
-	else
-	    MNT=$MNT:$dev
-	fi
-    done
-
-    echo "mount -t bcachefs $MNT /mnt/bcachefs"
-    mount -t bcachefs -o verbose_recovery $MNT /mnt/bcachefs
-
-    # for fs workloads to know mount point
-    DEVICES=bcachefs
-}
-
-stop_bcachefs()
-{
-    umount /mnt/bcachefs
-}
-
-run_bcachefs_stress()
-{
-    setup_bcachefs
-    #enable_faults
-
-    run_dbench
-    run_bonnie
-    run_fsx
-
-    #disable_faults
-    stop_bcachefs
+    umount /mnt
 }
