@@ -13,15 +13,15 @@ run_basic_tiering_test()
 {
     if true; then
 	run_basic_fio_test "$@"			\
-	    --tier 0 /dev/sdb			\
-	    --tier 0 /dev/sdc			\
-	    --tier 1 /dev/sdd			\
-	    --tier 1 /dev/sde
+	    --tier=0 /dev/sdb			\
+	    --tier=0 /dev/sdc			\
+	    --tier=1 /dev/sdd			\
+	    --tier=1 /dev/sde
     else
 	run_basic_fio_test "$@"			\
-	    --foreground_target /dev/sdb	\
-	    --promote_target    /dev/sdb	\
-	    --background_target /dev/sdd	\
+	    --foreground_target=/dev/sdb	\
+	    --promote_target=/dev/sdb		\
+	    --background_target=/dev/sdd	\
 	    /dev/sdb /dev/sdd
     fi
 }
@@ -59,18 +59,18 @@ test_tiering_replication()
 test_tiering_variable_buckets()
 {
     run_basic_fio_test				\
-	--tier 0 --bucket=32k	/dev/sdb	\
-	--tier 0 --bucket=64k	/dev/sdc	\
-	--tier 1 --bucket=128k	/dev/sde	\
-	--tier 1 --bucket=256k	/dev/sdd
+	--tier=0 --bucket=32k	/dev/sdb	\
+	--tier=0 --bucket=64k	/dev/sdc	\
+	--tier=1 --bucket=128k	/dev/sde	\
+	--tier=1 --bucket=256k	/dev/sdd
 }
 
 test_tiering_variable_buckets_replicas()
 {
     run_basic_fio_test				\
 	--replicas=2				\
-	--tier 0 --bucket=32k	/dev/sdb	\
-	--tier 0 --bucket=64k	/dev/sdc	\
-	--tier 1 --bucket=128k	/dev/sde	\
-	--tier 1 --bucket=256k	/dev/sdd	\
+	--tier=0 --bucket=32k	/dev/sdb	\
+	--tier=0 --bucket=64k	/dev/sdc	\
+	--tier=1 --bucket=128k	/dev/sde	\
+	--tier=1 --bucket=256k	/dev/sdd
 }

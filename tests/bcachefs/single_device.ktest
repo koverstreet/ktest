@@ -218,6 +218,7 @@ test_quota()
     umount /mnt
 }
 
+# test nfs exports:
 require-kernel-config NFSD
 require-kernel-config NFSD_V3
 require-kernel-config NFSD_V4
@@ -234,60 +235,6 @@ test_nfs()
     echo "/export1  *(ro,insecure,all_squash,no_subtree_check)" >> /etc/exports
     echo "/export2  *(ro,insecure,all_squash,no_subtree_check)" >> /etc/exports
     exportfs -a
-}
-
-do_test_init_errors()
-{
-    control=/sys/kernel/debug/dynamic_fault/control
-    grep $1 $control
-    echo
-
-    for id in {0..99}; do
-	fault="$1 index $id"
-
-	echo "class $fault enable" > $control || break
-
-	echo "TESTING FAULT $id"
-
-	echo "Registering sdb"
-	echo /dev/sdb > /sys/fs/bcachefs/register || true
-
-	echo "Registering sdc"
-	echo /dev/sdc > /sys/fs/bcachefs/register || true
-
-	sleep 2
-	echo "class $fault disable" > $control
-	sleep 2
-
-	if test -e /sys/fs/bcachefs/*-*-*-*-*; then
-	    echo "Registration should have failed"
-	    false
-	fi
-    done
-}
-
-test_init_errors()
-{
-    setup_tracing 'bcachefs:*'
-
-    if [ $NR_REBOOTS = 0 ]; then
-	setup_bcache
-
-	echo readonly > /sys/fs/bcachefs/*/errors
-
-	setup_fs ext4
-
-	run_antagonist
-
-	run_dbench &
-	run_bonnie &
-
-	sleep 10
-	do_reboot
-    else
-	do_test_init_errors "bcachefs:cache_set_init"
-	do_test_init_errors "bcachefs:meta:read"
-    fi
 }
 
 require-kernel-config	PM,SUSPEND,PM_SLEEP,PM_DEBUG
@@ -324,7 +271,6 @@ test_suspend()
 }
 
 require-kernel-config MD,BLK_DEV_DM,DM_LOG_WRITES
-
 test_writelog()
 {
     cd $LOGDIR
@@ -376,4 +322,182 @@ test_journal_torture()
 
     #disable_memory_faults
     umount /mnt
+}
+
+test_online_resize()
+{
+    bcachefs_antagonist
+
+    bcachefs format --fs_size=1G /dev/sdb   > /dev/null
+
+    mount -t bcachefs /dev/sdb /mnt
+    bcachefs device resize /dev/sdb
+
+    df -h /mnt
+    umount /mnt
+}
+
+test_offline_resize()
+{
+    bcachefs_antagonist
+
+    bcachefs format --fs_size=1G /dev/sdb   > /dev/null
+    bcachefs device resize /dev/sdb
+
+    mount -t bcachefs /dev/sdb /mnt
+    df -h /mnt
+    umount /mnt
+}
+
+test_sysfs()
+{
+    bcachefs format /dev/sdb   > /dev/null
+    mount -t bcachefs /dev/sdb /mnt
+
+    find -H /sys/fs/bcachefs/ -type f -perm -0400 -exec cat {} \; > /dev/null
+
+    umount /mnt
+}
+
+# migrate from other filesystems in place:
+
+migrate_from_fs()
+{
+    fstype=$1
+
+    if [[ $fstype = ext4 ]]; then
+	mkfs.$fstype -F /dev/sdb
+	mount -o user_xattr /dev/sdb /mnt
+    else
+	mkfs.$fstype -f /dev/sdb
+	mount /dev/sdb /mnt
+    fi
+
+    cp -a /usr /mnt
+
+    for i in /mnt/usr/bin/*; do
+	ln $i ${i}-migrate2
+	setfattr -n user.foo -v test $i 
+    done
+
+    dd if=/dev/zero of=/mnt/bcachefs bs=1M count=512 oflag=direct
+    sync
+
+    bcachefs migrate			\
+	--encrypted			\
+	--no_passphrase			\
+	-F -f /mnt | tee /root/migratelog
+    offset=$(grep -oE 'sb=[[:digit:]]+' /root/migratelog|sed -e 's/sb=//')
+
+    if true; then
+	mkdir -p /mnt2
+	mount -t bcachefs -o noexcl,nochanges,sb=$offset /dev/sdb /mnt2
+
+	rsync	--archive		\
+	    --acls			\
+	    --xattrs			\
+	    --checksum			\
+	    --exclude=/bcachefs	    	\
+	    --dry-run			\
+	    --itemize-changes	    	\
+	    /mnt/ /mnt2/ |tee /root/rsynclog
+
+	umount /mnt2
+	echo "rsync passed"
+    fi
+
+    umount /mnt
+    fsck.$fstype -n /dev/sdb
+
+    echo "Attempting to mount bcachefs filesystem with superblock offset"
+
+    mount -t bcachefs -o sb=$offset /dev/sdb /mnt
+    #rm /mnt/old_migrated_filesystem
+    umount /mnt
+
+    echo "Creating default superblock"
+
+    bcachefs migrate-superblock -d /dev/sdb -o $offset
+    mount -t bcachefs /dev/sdb /mnt
+    umount /mnt
+}
+
+test_migrate_from_ext4()
+{
+    migrate_from_fs ext4
+}
+
+require-kernel-config XFS_FS
+test_migrate_from_xfs()
+{
+    migrate_from_fs xfs
+}
+
+require-kernel-config BTRFS_FS
+test_migrate_from_btrfs()
+{
+    migrate_from_fs btrfs
+}
+
+test_migrate_from_bcachefs()
+{
+    migrate_from_fs bcachefs
+}
+
+# fault injection:
+
+test_init_faults()
+{
+    setup_tracing 'bcachefs:*'
+
+    bcachefs format				\
+	--error_action=readonly			\
+	/dev/sdb >/dev/null
+
+    # put some data on the filesystem
+    mount /dev/sdb /mnt
+
+    run_fio_randrw
+    # dbench would be better, create a directory structure
+    #run_dbench
+
+    umount /mnt
+
+    init_fault_fn()
+    {
+	set_faults "$1 enable"
+	# should fail:
+	! mount /dev/sdb /mnt
+    }
+
+    run_fault_injection_test bcachefs:bch_fs_init   init_fault_fn
+    run_fault_injection_test bcachefs:meta:read	    init_fault_fn
+}
+
+test_meta_write_faults()
+{
+    setup_tracing 'bcachefs:*'
+
+    bcachefs format				\
+	--error_action=readonly			\
+	/dev/sdb >/dev/null
+
+    meta_write_fault_fn()
+    {
+	mount /dev/sdb /mnt
+	(sleep 2; set_faults "$1 enable") &
+
+	# Should fail due to read only cache set
+	! run_fio
+
+	# XXX: verify we've gone RO
+	umount /mnt
+    }
+
+    run_fault_injection_test bcachefs:meta::write meta_write_fault_fn
+}
+
+test_foo()
+{
+    echo
 }

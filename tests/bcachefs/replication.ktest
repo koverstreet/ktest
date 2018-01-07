@@ -7,67 +7,96 @@ require-kernel-config MD_FAULTY
 
 config-scratch-devs 4G
 config-scratch-devs 4G
+config-scratch-devs 4G
 
 config-timeout $(stress_timeout)
 
 test_twodevices()
 {
     run_basic_fio_test			\
-	/dev/sdb /dev/sdc
+	/dev/sdb /dev/sdc /dev/sdd
 }
 
 test_replicas()
 {
     run_basic_fio_test			\
-	--metadata_replicas=2		\
-	--data_replicas=2		\
-	/dev/sdb /dev/sdc
+	--replicas=2			\
+	/dev/sdb /dev/sdc /dev/sdd
+}
+
+test_replicas_variable_buckets()
+{
+    run_basic_fio_test				\
+	--replicas=2				\
+	--tier=0 --bucket=32k	/dev/sdb	\
+	--tier=0 --bucket=64k	/dev/sdc	\
+	--tier=0 --bucket=128k	/dev/sdd
 }
 
 do_remove_test()
 {
     offline=$1
+    evacuate=$2
 
     bcachefs format			\
 	--error_action=panic		\
-	--metadata_replicas=2		\
-	--data_replicas=2		\
-	/dev/sdb /dev/sdc >/dev/null
+	--replicas=2			\
+	/dev/sdb /dev/sdc /dev/sdd >/dev/null
 
-    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
+    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
 
     run_fio_randrw >/dev/null &
     sleep 1
 
-    echo -n "failing /dev/sdb... "
-    bcachefs device set-state --force	/mnt 0 failed
-    echo "done"
-
     if [[ $offline = 1 ]]; then
 	echo -n "offlining /dev/sdb... "
-	bcachefs device offline		/mnt 0
+	bcachefs device offline --force	/mnt 0
+	echo "done"
+    fi
+
+    if [[ $evacuate = 1 ]]; then
+	if [[ $offline = 0 ]]; then
+	    bcachefs device set-state --force	/mnt 0 failed
+	fi
+
+	echo -n "evacuating /dev/sdb... "
+	bcachefs device evacuate	/mnt 0
 	echo "done"
     fi
 
     echo -n "removing /dev/sdb... "
-    bcachefs device remove --force	/mnt 0
+    if [[ $evacuate = 1 ]]; then
+	bcachefs device remove		/mnt 0
+    else
+	bcachefs device remove --force	/mnt 0
+    fi
     echo "done"
 
     wait
     umount /mnt
 
-    mount -t bcachefs /dev/sdc /mnt
+    mount -t bcachefs /dev/sdc:/dev/sdd /mnt
     umount /mnt
 }
 
 test_device_remove_offline()
 {
-    do_remove_test 1
+    do_remove_test 1 0
 }
 
 test_device_remove_online()
 {
-    do_remove_test 0
+    do_remove_test 0 0
+}
+
+test_device_evacuate_offline()
+{
+    do_remove_test 1 1
+}
+
+test_device_evacuate_online()
+{
+    do_remove_test 0 1
 }
 
 test_device_add()
@@ -80,9 +109,7 @@ test_device_add()
 
     mount /dev/sdb /mnt
 
-    if false; then
-	run_fio_randrw >/dev/null &
-    fi
+    run_fio_randrw >/dev/null &
 
     echo -n "adding /dev/sdc... "
     bcachefs device add /mnt /dev/sdc
@@ -106,6 +133,73 @@ test_device_add()
     umount /mnt
 }
 
+test_device_set_state()
+{
+    bcachefs format			\
+	--error_action=panic		\
+	--replicas=2			\
+	/dev/sdb /dev/sdc /dev/sdd >/dev/null
+
+    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+
+    run_fio_randrw >/dev/null &
+    for state in readonly failed spare; do
+	bcachefs device set-state --force   /mnt /dev/sdc $state
+	bcachefs device set-state	    /mnt /dev/sdc readwrite
+    done
+    wait
+
+    umount /mnt
+}
+
+test_device_add_faults()
+{
+    setup_tracing 'bcachefs:*'
+
+    bcachefs format				\
+	--error_action=readonly			\
+	/dev/sdb >/dev/null
+    mount /dev/sdb /mnt
+
+    device_add_fault_fn()
+    {
+	set_faults "$1 enable"
+	! bcachefs device add /mnt /dev/sdc
+    }
+
+    run_fault_injection_test bcachefs:add			device_add_fault_fn
+    run_fault_injection_test bcachefs:bch_fs_init:dev_alloc	device_add_fault_fn
+    run_fault_injection_test bcachefs:bch_fs_init:alloc_start	device_add_fault_fn
+    run_fault_injection_test bcachefs:bch_fs_init:read_super	device_add_fault_fn
+}
+
+test_device_readd()
+{
+    bcachefs format			\
+	--error_action=panic		\
+	--replicas=2			\
+	/dev/sdb /dev/sdc >/dev/null
+
+    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
+
+    run_fio_randrw >/dev/null &
+    sleep 1
+
+    echo -n "offlining /dev/sdb... "
+    bcachefs device offline --force	/mnt /dev/sdb
+    echo "done"
+
+    echo -n "onlining /dev/sdb... "
+    bcachefs device online /mnt /dev/sdb
+    echo "done"
+
+    wait
+    umount /mnt
+
+    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
+    umount /mnt
+}
+
 do_replicas_errors_test()
 {
     error_type=$1
@@ -116,8 +210,7 @@ do_replicas_errors_test()
 
     bcachefs format			\
 	--error_action=panic		\
-	--metadata_replicas=2		\
-	--data_replicas=2		\
+	--replicas=2			\
 	/dev/md0 /dev/sdb >/dev/null
 
     mount -t bcachefs -o degraded /dev/sdb:/dev/md0 /mnt
@@ -137,4 +230,22 @@ test_replicas_write_errors()
 test_replicas_read_errors()
 {
     do_replicas_errors_test read-persistent1
+}
+
+test_cmd_fs_usage()
+{
+    bcachefs format			\
+	--replicas=2			\
+	--bucket=128k			\
+	/dev/sdb /dev/sdc > /dev/null
+
+    echo -n "mounting... "
+    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
+    echo done
+
+    #run_fio_randrw --size=500M > /dev/null
+
+    cd /mnt
+    bcachefs fs usage
+    bcachefs fs usage -h
 }

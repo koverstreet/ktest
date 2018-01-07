@@ -19,7 +19,6 @@ setup_tracing()
     echo 1 > /sys/kernel/debug/tracing/tracing_on
 }
 
-
 # Fault injection
 
 set_faults()

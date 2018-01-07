@@ -8,9 +8,9 @@ list_tests()
     (cd /ktest-out/xfstests/tests; echo generic/???)
 }
 
-run_test()
+run_tests()
 {
-    #bcachefs_antagonist
+    bcachefs_antagonist
 
     run_xfstests bcachefs "$@"
 }

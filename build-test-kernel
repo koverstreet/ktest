@@ -187,6 +187,7 @@ __do_make()
     MAKE+=(--directory="$KERNEL_SOURCE")
     MAKE+=(O="$WORK_DIR")
     MAKE+=(INSTALL_MOD_PATH="$KERNEL_OUTPUT")
+    MAKE+=(EXTRA_CFLAGS="-g3")
     MAKE+=($COVERAGE)
     MAKE+=("$@")
 

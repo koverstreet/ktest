@@ -205,10 +205,62 @@ else
     tests=$(declare -F|sed -ne '/ test_/ s/.*test_// p')
 fi
 
+# may be overridden by test:
 if [[ $(type -t run_test) != function ]]; then
     run_test()
     {
 	test_$1
+    }
+fi
+
+# may be overridden by test:
+if [[ $(type -t run_tests) != function ]]; then
+    run_tests()
+    {
+	local tests=$1
+	local tests_passed=()
+	local tests_failed=()
+
+	echo
+	echo "Running tests $tests"
+	echo
+
+	for i in $tests; do
+	    echo "========= Running test $i"
+	    echo
+
+	    set +e
+	    (set -e; run_test $i)
+	    local ret=$?
+	    set -e
+
+	    kill $(list_descendants $$) >/dev/null 2>&1 || true
+
+	    echo
+	    echo "========= Test $i completed with ret $ret"
+
+	    # XXX: check dmesg for warnings, oopses, slab corruption, etc. before
+	    # signaling success
+
+	    if [[ $ret = 0 ]]; then
+		tests_passed+=($i)
+	    else
+		tests_failed+=($i)
+	    fi
+
+	    [[ $ret != 0 && $ktest_failfast = 1 ]] && break
+
+	    for dev in /dev/sd*; do
+		[[ $dev = /dev/sda ]] && continue
+		umount $dev >/dev/null 2>&1 || true
+	    done
+	done
+
+	echo
+	echo "Passed: ${tests_passed[@]}"
+	echo "Failed: ${tests_failed[@]}"
+
+	[[ ${#tests_failed[@]} != 0 ]] && return 1
     }
 fi
 
@@ -222,13 +274,6 @@ testargs=$(</cdrom/testargs)
 
 tests=$(echo $tests)
 
-tests_passed=()
-tests_failed=()
-
-echo
-echo "Running tests $tests"
-echo
-
 if [[ -n ${ktest_timeout+x} ]]; then
     (
 	sleep $ktest_timeout
@@ -237,45 +282,13 @@ if [[ -n ${ktest_timeout+x} ]]; then
     ) &
 fi
 
-for i in $tests; do
-    echo "========= Running test $i"
-    echo
-
-    set +e
-    (set -e; run_test $i)
-    ret=$?
-    set -e
-
-    kill $(list_descendants $$) >/dev/null 2>&1 || true
-
-    echo
-    echo "========= Test $i completed with ret $ret"
-
-    # XXX: check dmesg for warnings, oopses, slab corruption, etc. before
-    # signaling success
-
-    if [[ $ret = 0 ]]; then
-	tests_passed+=($i)
-    else
-	tests_failed+=($i)
-    fi
-
-    [[ $ret != 0 && $ktest_failfast = 1 ]] && break
-
-    for dev in /dev/sd*; do
-	[[ $dev = /dev/sda ]] && continue
-	umount $dev >/dev/null 2>&1 || true
-    done
-done
+ret=0
+run_tests $tests || ret=1
 
 copy_to_host
 check_taint
 
-echo
-echo "Passed: ${tests_passed[@]}"
-echo "Failed: ${tests_failed[@]}"
-
-if [[ ${#tests_failed[@]} = 0 ]]; then
+if [[ $ret = 0 ]]; then
     echo "TEST SUCCESS"
 else
     echo "TEST FAILED"

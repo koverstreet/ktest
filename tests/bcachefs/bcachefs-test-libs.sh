@@ -37,16 +37,6 @@ expect_sysfs()
     done
 }
 
-read_all_sysfs()
-{
-    if [ -d /sys/fs/bcachefs/*-* ]; then
-	find -H /sys/fs/bcachefs/ -type f -perm -0400 -exec cat {} \; \
-	    > /dev/null
-	find -H /sys/block/*/bcachefs/ -type f -perm -0400 -exec cat {} \; \
-	    > /dev/null
-    fi
-}
-
 antagonist_shrink()
 {
     while true; do
@@ -162,7 +152,8 @@ run_fio_randrw()
     run_fio					\
 	--name=randrw				\
 	--rw=randrw				\
-	--bsrange=4k-1M
+	--bsrange=4k-1M				\
+	"$@"
 }
 
 run_basic_fio_test()
@@ -187,4 +178,28 @@ run_basic_fio_test()
     #disable_memory_faults
 
     umount /mnt
+
+    # test remount:
+    mount -t bcachefs $(join_by : "${devs[@]}") /mnt
+    umount /mnt
+}
+
+require-kernel-config DEBUG_FS,DYNAMIC_FAULT
+run_fault_injection_test()
+{
+    local class="class $1"
+    local fn=$2
+
+    local control=/sys/kernel/debug/dynamic_fault/control
+    local nr=$(grep $class $control|wc -l)
+
+    for ((i=0; i<nr; i++)); do
+	echo -n "TESTING FAULT "; grep $class $control|sed -n $((i+1))p
+
+	local fault="$class index $i"
+	set_faults "$fault enable"
+
+	$fn $fault
+	set_faults "$fault disable"
+    done
 }

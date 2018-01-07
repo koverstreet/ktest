@@ -20,7 +20,7 @@ config-timeout $(stress_timeout)
 run_xfstests()
 {
     FSTYP="$1"
-    TESTS="$2"
+    shift
 
     export TEST_DEV=/dev/sdb
     export TEST_DIR=/mnt/test
@@ -43,5 +43,5 @@ run_xfstests()
 
     cd $LOGDIR/xfstests
     rm -f results/generic/*
-    ./check $TESTS
+    ./check "$@"
 }

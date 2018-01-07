@@ -134,6 +134,3 @@ require-kernel-config DYNAMIC_DEBUG
 
 # expensive, doesn't catch that much
 # require-kernel-config DEBUG_PAGEALLOC
-
-require-kernel-config DEBUG_FS
-require-kernel-config DYNAMIC_FAULT
