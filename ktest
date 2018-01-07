@@ -14,30 +14,7 @@ VMSTART=("$KTESTDIR/vm-start")
 
 . "$KTESTDIR/util.sh"
 . "$KTESTDIR/parse-test.sh"
-
-checkdep genisoimage
-checkdep minicom
-checkdep socat
-checkdep qemu-system-x86_64 qemu-system-i386
-
-PRIORITY=0		# hint for how long test should run
-IMG=""			# root image that will be booted
-                        #       set with: -i <path>
-                        #       defaults: /var/lib/ktest/root
-                        #       auto-override: $HOME/.ktest/root
-KERNEL=""		# dir that has the kernel to run
-                        #       set with: -k <path>
-IDFILE=""		# passed as --id to vmstart
-                        #       set with: -w <path>
-OUTPUT_DIR=""		# dir for test output (logs, code coverage, etc.)
-VM_TMPDIR="/tmp"	# dir where scratch drives are created
-                        #       defaults: /tmp
-                        #       auto-override: $HOME/.ktest/tmp
-INTERACTIVE=0           # if set to 1, timeout is ignored completely
-                        #       sets with: -I
-EXIT_ON_SUCCESS=0	# if true, exit on success, not failure or timeout
-FAILFAST=0
-VERBOSE=0		# if false, append quiet to kernel commad line
+. "$KTESTDIR/libktest.sh"
 
 # config files:
 [[ -f $KTESTDIR/ktestrc ]]	&& . "$KTESTDIR/ktestrc"
@@ -51,13 +28,7 @@ usage()
 {
     echo "ktest: Run generic virtual machine tests"
     echo "Usage: ktest cmd [options]"
-    echo "  boot        Boot a VM without running anything"
-    echo "  run <test>  Run a kernel test"
-    echo "  ssh         Login as root"
-    echo "  gdb         Connect to qemu's gdb interface"
-    echo "  kgdb        Connect to kgdb"
-    echo "  mon         Connect to qemu monitor"
-    echo "  sysrq <key> Send magic sysrq key via monitor"
+    ktest_usage_cmds
     echo
     echo "  options:"
     echo "      -x       bash debug statements"
@@ -71,7 +42,7 @@ usage()
     echo "      -I       don't automatically stop VM"
     echo "      -S       exit only on test success"
     echo
-    echo "For kgdb to be enabled, either -I or -S must be specified"
+    ktest_usage_post
 }
 
 if [[ $# = 0 ]]; then
@@ -80,204 +51,23 @@ if [[ $# = 0 ]]; then
 fi
 
 #parse command and shift for rest of arg parsing
-CMD="cmd_$1"
+CMD="ktest_$1"
 shift
 
-while getopts "ha:p:i:k:ISw:s:o:fvx" arg; do
+while getopts "h${ktest_args}" arg; do
     case $arg in
 	h)
 	    usage
 	    exit 0
 	    ;;
-	a)
-	    ARCH=$OPTARG
-	    ;;
-	p)
-	    PRIORITY=$OPTARG
-	    ;;
-	i)
-	    IMG=$OPTARG
-	    ;;
-	k)
-	    KERNEL=$OPTARG
-	    ;;
-	w)
-	    IDFILE="$OPTARG"
-	    ;;
-	s)
-	    VMSTART+=(--scratchdir="$OPTARG")
-	    ;;
-	o)
-	    OUTPUT_DIR="$OPTARG"
-	    ;;
-	I)
-	    INTERACTIVE=1
-	    ;;
-	S)
-	    EXIT_ON_SUCCESS=1
-	    ;;
-	f)
-	    FAILFAST=1
-	    ;;
-	v)
-	    VERBOSE=1
-	    ;;
-	x)
-	    set -x
-	    ;;
     esac
+    parse_ktest_arg $arg
 done
 shift $((OPTIND - 1))
 
-if [[ -z $KERNEL ]]; then
-    echo "Required parameter -k missing: kernel to boot"
-    exit 1
-fi
+parse_args_post
 
-parse_arch "$ARCH"
-
-[[ -z $IMG ]]		&& IMG=/var/lib/ktest/root.$DEBIAN_ARCH
-[[ -z $IDFILE ]]	&& IDFILE=./.ktest-vm
-[[ -z $OUTPUT_DIR ]]	&& OUTPUT_DIR=./ktest-out
-
-VMSTART+=(--idfile="$IDFILE")
-VMSTART+=(--tmpdir="$VM_TMPDIR")
-
-cmd_run()
-{
-
-    local CRASHDUMP=0
-    [[ $INTERACTIVE = 0 ]]  && CRASHDUMP=1
-
-    VMSTART+=("start")
-
-    if [[ ! -f $IMG ]]; then
-	echo "VM root filesystem not found, use vm_create_image to create one"
-	exit 1
-    fi
-
-    if [[ $# = 0 ]]; then
-	echo "ktest: missing test"
-	exit 1
-    fi
-
-    local TEST=$(readlink -e "$1")
-    shift
-
-    FILES=()
-    FILES+=("$KTESTDIR/util.sh")
-    FILES+=("rc=$KTESTDIR/rc.testwrapper")
-    FILES+=("rc.test=$TEST")
-
-    BUILD_DEPS=1
-    parse_test_deps "$TEST"
-
-    # kernel modules
-    FILES+=("$KERNEL/lib")
-
-    # kernel to kexec to for crash dumps
-    FILES+=("vmlinuz=$KERNEL/vmlinuz")
-
-    get_tmpdir
-
-    local testargs="$TMPDIR/testargs"
-    echo "$@" > $testargs
-    FILES+=("$testargs")
-
-    local iso="$TMPDIR/ktest.iso"
-    genisoimage -quiet -graft-points -input-charset utf-8 -R		\
-	-o "$iso" "${FILES[@]}"
-
-    mkdir -p "$OUTPUT_DIR"
-
-    if [[ $EXIT_ON_SUCCESS = 1 || $INTERACTIVE = 1 ]]; then
-	case $KERNEL_ARCH in
-	    x86)
-		VMSTART+=("--kgdb")
-		;;
-	esac
-    fi
-
-    [[ $EXIT_ON_SUCCESS = 0 && $INTERACTIVE = 0 ]] &&			\
-	VMSTART+=(--append="ktest.timeout=$_TIMEOUT")
-
-    [[ $VERBOSE = 0 ]]	    && VMSTART+=(--append="quiet systemd.show_status=0")
-
-    [[ $CRASHDUMP = 1 ]]    && VMSTART+=(--append="crashkernel=128M")
-    VMSTART+=(--append=ktest.crashdump=$CRASHDUMP)
-
-    VMSTART+=(--architecture="${QEMU_BIN#qemu-system-}")
-    VMSTART+=(--image="$IMG")
-    VMSTART+=(--kernel="$KERNEL/vmlinuz")
-    VMSTART+=(--cdrom="$iso")
-    VMSTART+=(--fs "$OUTPUT_DIR" logfs)
-    VMSTART+=(--append=ktest.priority="$PRIORITY")
-    VMSTART+=(--append=ktest.failfast="$FAILFAST")
-    VMSTART+=(--append=ktest.verbose="$VERBOSE")
-    VMSTART+=(--append=log_buf_len=8M)
-    VMSTART+=(--memory="$_MEM")
-    VMSTART+=(--cpus="$_CPUS")
-    VMSTART+=(--nr_vms="$_NR_VMS")
-    VMSTART+=("${_VMSTART_ARGS[@]}")
-
-    set +o errexit
-
-    if [[ $INTERACTIVE = 1 ]]; then
-	"${VMSTART[@]}"
-    elif [[ $EXIT_ON_SUCCESS = 1 ]]; then
-	"${VMSTART[@]}"|sed -u -e '/TEST SUCCESS/ { p; Q7 }'
-    else
-	timeout --foreground "$((60 + _TIMEOUT))" "${VMSTART[@]}"|
-	    $KTESTDIR/catch_test_success.awk
-    fi
-
-    ret=$?
-
-    if [[ $ret = 124 ]]; then
-	echo 'TEST TIMEOUT'
-	exit 1
-    fi
-
-    # don't want sed exiting normally (saw neither TEST SUCCESS nor TEST FAILED)
-    # to be consider success:
-    [[ $ret = 7 ]]
-}
-
-cmd_boot()
-{
-    INTERACTIVE=1
-
-    cmd_run "$KTESTDIR/boot.ktest" "$@"
-}
-
-cmd_ssh()
-{
-    exec "${VMSTART[@]}" ssh "$@"
-}
-
-cmd_gdb()
-{
-    exec "${VMSTART[@]}" gdb "$KERNEL/vmlinux"
-}
-
-cmd_kgdb()
-{
-    "${VMSTART[@]}" sysrq g
-
-    exec "${VMSTART[@]}" kgdb "$KERNEL/vmlinux"
-}
-
-cmd_mon()
-{
-    exec "${VMSTART[@]}" mon
-}
-
-cmd_sysrq()
-{
-    exec "${VMSTART[@]}" sysrq "$@"
-}
-
-# checks if command is valid
+# check if command is valid
 if [[ $(type -t "$CMD") != function ]]; then
     usage
     exit 1

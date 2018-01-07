@@ -283,7 +283,10 @@ if [[ -n ${ktest_timeout+x} ]]; then
 fi
 
 ret=0
-run_tests $tests || ret=1
+while [[ $ret = 0 ]]; do
+    run_tests $tests || ret=1
+    [[ $ktest_loop = 1 ]] || break
+done
 
 copy_to_host
 check_taint

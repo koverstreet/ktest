@@ -9,25 +9,20 @@ KTEST=$KTESTDIR/ktest
 
 . "$KTESTDIR/util.sh"
 . "$KTESTDIR/parse-test.sh"
+. "$KTESTDIR/libktest.sh"
 
-checkdep genisoimage
-checkdep minicom
-checkdep socat
 checkdep gcc
 checkdep make
-checkdep qemu-system-x86_64 qemu-system-i386
 
-KTESTARGS=""
-PRIORITY=0		# hint for how long test should run
 KERNEL_SOURCE="."	# dir of kernel source
 			#       set with: -k <path>
 			#       defaults: current directory
-KERNEL_OUTPUT=""	# dir where the kernel will get built
+KERNEL=""		# dir where the kernel will get built
 			#       set with: -b <path>
 			#       default: $KERNEL_SOURCE/$DEFAULT_DIR
 WORK_DIR=""		# dir where vm meta data (id, logs, etc) gets stored
 			#       set with: -w <path>
-			#       defaults: $KERNEL_OUTPUT
+			#       defaults: $KERNEL
 BUILD=1			# if set to 1, kernel will build
 			#       ignored with: -K (sets to 0)
 DEPS=1
@@ -36,7 +31,6 @@ NJOBS=$(($(grep -c '^processor' /proc/cpuinfo) * 2))
 			# number of jobs to passed to make during kernel compile
 			#       sets with: -j
 			#       defaults to 2 * number of processor
-VERBOSE=0		# if false, append quiet to kernel commad line
 
 # config files:
 [[ -f $KTESTDIR/ktestrc ]]	&& . "$KTESTDIR/ktestrc"
@@ -47,12 +41,7 @@ usage()
 {
     echo "build-test-kernel: Run generic virtual machine tests"
     echo "Usage: build-test-kernel cmd [options]"
-    echo "  boot        Boot a VM without running anything"
-    echo "  run <test>  Run a kernel test"
-    echo "  ssh         Login as root"
-    echo "  gdb         Connect to qemu's gdb interface"
-    echo "  kgdb        Connect to kgdb"
-    echo "  mon         Connect to qemu monitor"
+    ktest_usage_cmds
     echo "  oldconfig   Run make oldconfig"
     echo "  config      Run make nconfig"
     echo
@@ -71,7 +60,7 @@ usage()
     echo "      -I       don't automatically stop VM"
     echo "      -S       exit only on test success"
     echo
-    echo "For kgdb to be enabled, either -I or -S must be specified"
+    ktest_usage_post
 }
 
 if [[ $# = 0 ]]; then
@@ -80,24 +69,16 @@ if [[ $# = 0 ]]; then
 fi
 
 #parse command and shift for rest of arg parsing
-CMD="cmd_$1"
+CMD="$1"
 shift
 
-while getopts "ha:p:k:KDc:i:b:j:ISO:w:s:vx" arg; do
+while getopts "hKDc:b:j:O:${ktest_args}" arg; do
     case $arg in
 	h)
 	    usage
 	    exit 0
 	    ;;
-	a)
-	    ARCH=$OPTARG
-	    KTESTARGS+=" -a $OPTARG"
-	    ;;
-	p)
-	    PRIORITY=$OPTARG
-	    KTESTARGS+=" -p $OPTARG"
-	    ;;
-	k)
+	b)
 	    KERNEL_SOURCE=$(readlink -e "$OPTARG")
 	    ;;
 	K)
@@ -118,55 +99,29 @@ while getopts "ha:p:k:KDc:i:b:j:ISO:w:s:vx" arg; do
 	    OPTARG=$(echo "${OPTARG%/}"|tr / _)
 	    COVERAGE+=" GCOV_PROFILE_$OPTARG=y"
 	    ;;
-	i)
-	    KTESTARGS+=" -i $OPTARG"
-	    ;;
-	b)
-	    KERNEL_OUTPUT=$OPTARG
-	    ;;
 	j)
 	    NJOBS=$OPTARG
-	    ;;
-	I)
-	    KTESTARGS+=" -I"
-	    ;;
-	S)
-	    KTESTARGS+=" -S"
 	    ;;
 	O)
 	    WORK_DIR=$OPTARG
 	    ;;
-	w)
-	    KTESTARGS+=" -w $OPTARG"
-	    ;;
-	s)
-	    KTESTARGS+=" -s $OPTARG"
-	    ;;
-	v)
-	    VERBOSE=1
-	    KTESTARGS+=" -v"
-	    ;;
-	x)
-	    KTESTARGS+=" -x"
-	    set -x
-	    ;;
     esac
+    parse_ktest_arg $arg
 done
 shift $(( OPTIND - 1 ))
 
-parse_arch "$ARCH"
+parse_args_post
 
 checkdep "$ARCH_TRIPLE-gcc" "gcc-$ARCH_TRIPLE"
-checkdep $QEMU_BIN $QEMU_PACKAGE
 
-# set default parameters:
+# default parameters
 [[ -z $WORK_DIR ]]	&& WORK_DIR=$KERNEL_SOURCE/.build_test_kernel-$ARCH
-[[ -z $KERNEL_OUTPUT ]] && KERNEL_OUTPUT=$WORK_DIR/kpkg
+[[ -z $KERNEL ]]	&& KERNEL=$WORK_DIR/kpkg
 
 mkdir -p "$WORK_DIR"
 
 WORK_DIR=$(readlink -f "$WORK_DIR")
-KERNEL_OUTPUT=$(readlink -f "$KERNEL_OUTPUT")
+KERNEL=$(readlink -f "$KERNEL")
 KERNEL_CONFIG="$WORK_DIR/.config"
 
 run_ktest()
@@ -174,7 +129,7 @@ run_ktest()
     arg=$1
     shift
 
-    "$KTEST" "$arg" $KTESTARGS -k "$KERNEL_OUTPUT" "$@"
+    "$KTEST" "$arg" $KTESTARGS -k "$KERNEL" "$@"
 }
 
 __do_make()
@@ -186,7 +141,7 @@ __do_make()
     MAKE+=(--jobs="$NJOBS")
     MAKE+=(--directory="$KERNEL_SOURCE")
     MAKE+=(O="$WORK_DIR")
-    MAKE+=(INSTALL_MOD_PATH="$KERNEL_OUTPUT")
+    MAKE+=(INSTALL_MOD_PATH="$KERNEL")
     MAKE+=(EXTRA_CFLAGS="-g3")
     MAKE+=($COVERAGE)
     MAKE+=("$@")
@@ -269,8 +224,8 @@ kernel_opt()
 
 build_kernel()
 {
-    rm -rf "$KERNEL_OUTPUT"
-    mkdir -p "$KERNEL_OUTPUT"
+    rm -rf "$KERNEL"
+    mkdir -p "$KERNEL"
 
     echo -n "building kernel... "
 
@@ -308,22 +263,22 @@ build_kernel()
     local BOOT=$WORK_DIR/arch/$KERNEL_ARCH/boot
 
     if   [[ -f "$BOOT/bzImage" ]]; then
-	install -m0644 "$BOOT/bzImage"		"$KERNEL_OUTPUT/vmlinuz"
+	install -m0644 "$BOOT/bzImage"		"$KERNEL/vmlinuz"
     elif [[ -f "$BOOT/vmlinux.strip" ]]; then
-	install -m0644 "$BOOT/vmlinux.strip"	"$KERNEL_OUTPUT/vmlinuz"
+	install -m0644 "$BOOT/vmlinux.strip"	"$KERNEL/vmlinuz"
     else
-	install -m0644 "$WORK_DIR/vmlinux"	"$KERNEL_OUTPUT/vmlinuz"
+	install -m0644 "$WORK_DIR/vmlinux"	"$KERNEL/vmlinuz"
     fi
 
-    install -m0644 "$WORK_DIR/vmlinux" "$KERNEL_OUTPUT/vmlinux"
-    install -m0644 "$WORK_DIR/.config" "$KERNEL_OUTPUT/config"
+    install -m0644 "$WORK_DIR/vmlinux" "$KERNEL/vmlinux"
+    install -m0644 "$WORK_DIR/.config" "$KERNEL/config"
 
     do_make modules_install
     echo done
 
     # Remove symlinks, they'll break genisoimage which is following symlinks
-    rm -f "$KERNEL_OUTPUT"/modules/lib/modules/*/build
-    rm -f "$KERNEL_OUTPUT"/modules/lib/modules/*/source
+    rm -f "$KERNEL"/modules/lib/modules/*/build
+    rm -f "$KERNEL"/modules/lib/modules/*/source
 }
 
 cmd_run()
@@ -346,7 +301,7 @@ cmd_run()
 
     [[ -n $BUILD ]] && build_kernel
 
-    run_ktest run "$@"
+    ktest_run "$@"
 }
 
 cmd_boot()
@@ -364,38 +319,16 @@ cmd_config()
     do_make nconfig
 }
 
-cmd_ssh()
-{
-    run_ktest ssh "$@"
-}
-
-cmd_gdb()
-{
-    run_ktest gdb "$@"
-}
-
-cmd_kgdb()
-{
-    run_ktest kgdb "$@"
-}
-
-cmd_mon()
-{
-    run_ktest mon "$@"
-}
-
-cmd_sysrq()
-{
-    run_ktest sysrq "$@"
-}
-
 cmd_help()
 {
     usage
 }
 
-# checks if command is valid
-if [[ $(type -t "$CMD") != function ]]; then
+if [[ $(type -t "cmd_$CMD") == function ]]; then
+    CMD="cmd_$CMD"
+elif [[ $(type -t "ktest_$CMD") == function ]]; then
+    CMD="ktest_$CMD"
+else
     usage
     exit 1
 fi
