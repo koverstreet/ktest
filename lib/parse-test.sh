@@ -2,19 +2,17 @@ BUILD_DEPS=""
 
 parse_test_deps()
 {
-    _CPUS="6"
-    _MEM=""
-    _TIMEOUT=""
+    ktest_cpus="6"
+    ktest_mem=""
+    ktest_timeout=""
     _KERNEL_CONFIG_REQUIRE=""
     _NR_VMS="1"
-    _VMSTART_ARGS=(" ")
+    _VMSTART_ARGS=()
     TEST_RUNNING=""
 
     local NEXT_SCRATCH_DEV="b"
     local TESTPROG=$1
     local TESTDIR="$(dirname "$TESTPROG")"
-
-    ktest_priority=$PRIORITY
 
     require-lib()
     {
@@ -61,7 +59,7 @@ parse_test_deps()
 	    cat "$out"
 	    exit 1
 	fi
-	[[ $VERBOSE = 1 ]] && cat "$out"
+	[[ $ktest_verbose = 1 ]] && cat "$out"
 
 	popd		> /dev/null
 
@@ -79,7 +77,7 @@ parse_test_deps()
 
 	echo done
 
-	[[ $VERBOSE = 1 ]] && cat "$out"
+	[[ $ktest_verbose = 1 ]] && cat "$out"
 
 	popd		> /dev/null
     }
@@ -106,12 +104,12 @@ parse_test_deps()
 
     config-cpus()
     {
-	_CPUS=$1
+	ktest_cpus=$1
     }
 
     config-mem()
     {
-	_MEM=$1
+	ktest_mem=$1
     }
 
     config-nr-vms()
@@ -125,17 +123,17 @@ parse_test_deps()
 	if [ "${EXTENDED_DEBUG:-0}" == 1 ]; then
 	    n=$((n * 2))
 	fi
-	_TIMEOUT=$n
+	ktest_timeout=$n
     }
 
     . "$TESTPROG"
 
-    if [ -z "$_MEM" ]; then
+    if [ -z "$ktest_mem" ]; then
 	echo "test must specify config-mem"
 	exit 1
     fi
 
-    if [ -z "$_TIMEOUT" ]; then
+    if [ -z "$ktest_timeout" ]; then
 	echo "test must specify config-timeout"
 	exit 1
     fi

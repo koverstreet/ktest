@@ -4,11 +4,10 @@ set -o nounset
 set -o errexit
 set -o errtrace
 
-KTESTDIR=$(dirname "$(readlink -f "$0")")
-KTEST=$KTESTDIR/ktest
+ktest_dir=$(dirname "$(readlink -f "$0")")
+KTEST=$ktest_dir/ktest
 
-. "$KTESTDIR/lib/util.sh"
-. "$KTESTDIR/lib/libktest.sh"
+. "$ktest_dir/lib/libktest.sh"
 
 checkdep gcc
 checkdep make
@@ -16,12 +15,12 @@ checkdep make
 KERNEL_SOURCE="."	# dir of kernel source
 			#       set with: -k <path>
 			#       defaults: current directory
-KERNEL=""		# dir where the kernel will get built
+ktest_kernel=""		# dir where the kernel will get built
 			#       set with: -b <path>
 			#       default: $KERNEL_SOURCE/$DEFAULT_DIR
 WORK_DIR=""		# dir where vm meta data (id, logs, etc) gets stored
 			#       set with: -w <path>
-			#       defaults: $KERNEL
+			#       defaults: $ktest_kernel
 BUILD=1			# if set to 1, kernel will build
 			#       ignored with: -K (sets to 0)
 DEPS=1
@@ -31,10 +30,6 @@ NJOBS=$(($(grep -c '^processor' /proc/cpuinfo) * 2))
 			#       sets with: -j
 			#       defaults to 2 * number of processor
 
-# config files:
-[[ -f $KTESTDIR/ktestrc ]]	&& . "$KTESTDIR/ktestrc"
-[[ -f /etc/ktestrc ]]		&& . /etc/ktestrc
-[[ -f $HOME/.ktestrc ]]		&& . "$HOME/.ktestrc"
 
 usage()
 {
@@ -111,7 +106,7 @@ shift $(( OPTIND - 1 ))
 
 # default parameters
 [[ -z $WORK_DIR ]]	&& WORK_DIR=$KERNEL_SOURCE/.build_test_kernel-$ARCH
-[[ -z $KERNEL ]]	&& KERNEL=$WORK_DIR/kpkg
+[[ -z $ktest_kernel ]]	&& ktest_kernel=$WORK_DIR/kpkg
 
 mkdir -p "$WORK_DIR"
 
@@ -127,7 +122,7 @@ run_ktest()
     arg=$1
     shift
 
-    "$KTEST" "$arg" $KTESTARGS -k "$KERNEL" "$@"
+    "$KTEST" "$arg" $KTESTARGS -k "$ktest_kernel" "$@"
 }
 
 __do_make()
@@ -139,7 +134,7 @@ __do_make()
     MAKE+=(--jobs="$NJOBS")
     MAKE+=(--directory="$KERNEL_SOURCE")
     MAKE+=(O="$WORK_DIR")
-    MAKE+=(INSTALL_MOD_PATH="$KERNEL")
+    MAKE+=(INSTALL_MOD_PATH="$ktest_kernel")
     MAKE+=(EXTRA_CFLAGS="-g3")
     MAKE+=($COVERAGE)
     MAKE+=("$@")
@@ -153,7 +148,7 @@ __do_make()
 	quiet=0
     fi
 
-    if [[ $VERBOSE = 1 ]]; then
+    if [[ $ktest_verbose = 1 ]]; then
 	quiet=0
     fi
 
@@ -222,8 +217,8 @@ kernel_opt()
 
 build_kernel()
 {
-    rm -rf "$KERNEL"
-    mkdir -p "$KERNEL"
+    rm -rf "$ktest_kernel"
+    mkdir -p "$ktest_kernel"
 
     echo -n "building kernel... "
 
@@ -261,22 +256,22 @@ build_kernel()
     local BOOT=$WORK_DIR/arch/$KERNEL_ARCH/boot
 
     if   [[ -f "$BOOT/bzImage" ]]; then
-	install -m0644 "$BOOT/bzImage"		"$KERNEL/vmlinuz"
+	install -m0644 "$BOOT/bzImage"		"$ktest_kernel/vmlinuz"
     elif [[ -f "$BOOT/vmlinux.strip" ]]; then
-	install -m0644 "$BOOT/vmlinux.strip"	"$KERNEL/vmlinuz"
+	install -m0644 "$BOOT/vmlinux.strip"	"$ktest_kernel/vmlinuz"
     else
-	install -m0644 "$WORK_DIR/vmlinux"	"$KERNEL/vmlinuz"
+	install -m0644 "$WORK_DIR/vmlinux"	"$ktest_kernel/vmlinuz"
     fi
 
-    install -m0644 "$WORK_DIR/vmlinux" "$KERNEL/vmlinux"
-    install -m0644 "$WORK_DIR/.config" "$KERNEL/config"
+    install -m0644 "$WORK_DIR/vmlinux" "$ktest_kernel/vmlinux"
+    install -m0644 "$WORK_DIR/.config" "$ktest_kernel/config"
 
     do_make modules_install
     echo done
 
     # Remove symlinks, they'll break genisoimage which is following symlinks
-    rm -f "$KERNEL"/modules/lib/modules/*/build
-    rm -f "$KERNEL"/modules/lib/modules/*/source
+    rm -f "$ktest_kernel"/modules/lib/modules/*/build
+    rm -f "$ktest_kernel"/modules/lib/modules/*/source
 }
 
 cmd_run()
@@ -303,7 +298,7 @@ cmd_run()
 
 cmd_boot()
 {
-    cmd_run "$KTESTDIR/boot.ktest"
+    cmd_run "$ktest_dir/boot.ktest"
 }
 
 cmd_oldconfig()

@@ -1,27 +1,28 @@
 
-. "$KTESTDIR/lib/parse-test.sh"
+. "$ktest_dir/lib/util.sh"
+. "$ktest_dir/lib/parse-test.sh"
 
-VMSTART=("$KTESTDIR/vm-start")
+VMSTART=("$ktest_dir/vm-start")
 
-PRIORITY=0		# hint for how long test should run
-IMG=""			# root image that will be booted
+ktest_priority=0		# hint for how long test should run
+ktest_image=""			# root image that will be booted
                         #       set with: -i <path>
                         #       defaults: /var/lib/ktest/root
                         #       auto-override: $HOME/.ktest/root
-KERNEL=""		# dir that has the kernel to run
+ktest_kernel=""		# dir that has the kernel to run
                         #       set with: -k <path>
-IDFILE=""		# passed as --id to vmstart
+ktest_idfile=""		# passed as --id to vmstart
                         #       set with: -w <path>
-OUTPUT_DIR=""		# dir for test output (logs, code coverage, etc.)
-VM_TMPDIR="/tmp"	# dir where scratch drives are created
+ktest_out=""		# dir for test output (logs, code coverage, etc.)
+ktest_vmdir="/tmp"	# dir where scratch drives are created
                         #       defaults: /tmp
                         #       auto-override: $HOME/.ktest/tmp
-INTERACTIVE=0           # if set to 1, timeout is ignored completely
+ktest_interactive=0     # if set to 1, timeout is ignored completely
                         #       sets with: -I
-EXIT_ON_SUCCESS=0	# if true, exit on success, not failure or timeout
-FAILFAST=0
-LOOP=0
-VERBOSE=0		# if false, append quiet to kernel commad line
+ktest_exit_on_success=0	# if true, exit on success, not failure or timeout
+ktest_failfast=0
+ktest_loop=0
+ktest_verbose=0		# if false, append quiet to kernel commad line
 
 checkdep genisoimage
 checkdep minicom
@@ -29,12 +30,14 @@ checkdep socat
 checkdep qemu-system-x86_64 qemu-system-i386
 
 # config files:
-[[ -f $KTESTDIR/ktestrc ]]	&& . "$KTESTDIR/ktestrc"
+[[ -f $ktest_dir/ktestrc ]]	&& . "$ktest_dir/ktestrc"
 [[ -f /etc/ktestrc ]]		&& . /etc/ktestrc
-
 [[ -f $HOME/.ktestrc ]]		&& . "$HOME/.ktestrc"
-[[ -f $HOME/.ktest/root ]]	&& IMG="$HOME/.ktest/root"
-[[ -d $HOME/.ktest/tmp ]]	&& VM_TMPDIR="$HOME/.ktest/tmp"
+
+# defaults:
+[[ -f $HOME/.ktestrc ]]		&& . "$HOME/.ktestrc"
+[[ -f $HOME/.ktest/root ]]	&& ktest_image="$HOME/.ktest/root"
+[[ -d $HOME/.ktest/tmp ]]	&& ktest_vmdir="$HOME/.ktest/tmp"
 
 ktest_args="a:p:i:k:ISw:s:o:flvx"
 parse_ktest_arg()
@@ -46,37 +49,37 @@ parse_ktest_arg()
 	    ARCH=$OPTARG
 	    ;;
 	p)
-	    PRIORITY=$OPTARG
+	    ktest_priority=$OPTARG
 	    ;;
 	i)
-	    IMG=$OPTARG
+	    ktest_image=$OPTARG
 	    ;;
 	k)
-	    KERNEL=$OPTARG
+	    ktest_kernel=$OPTARG
 	    ;;
 	w)
-	    IDFILE="$OPTARG"
+	    ktest_idfile="$OPTARG"
 	    ;;
 	s)
 	    VMSTART+=(--scratchdir="$OPTARG")
 	    ;;
 	o)
-	    OUTPUT_DIR="$OPTARG"
+	    ktest_out="$OPTARG"
 	    ;;
 	I)
-	    INTERACTIVE=1
+	    ktest_interactive=1
 	    ;;
 	S)
-	    EXIT_ON_SUCCESS=1
+	    ktest_exit_on_success=1
 	    ;;
 	f)
-	    FAILFAST=1
+	    ktest_failfast=1
 	    ;;
 	l)
-	    LOOP=1
+	    ktest_loop=1
 	    ;;
 	v)
-	    VERBOSE=1
+	    ktest_verbose=1
 	    ;;
 	x)
 	    set -x
@@ -90,30 +93,27 @@ parse_args_post()
 
     checkdep $QEMU_BIN $QEMU_PACKAGE
 
-    [[ -z $IMG ]]		&& IMG=/var/lib/ktest/root.$DEBIAN_ARCH
-    [[ -z $IDFILE ]]		&& IDFILE=./.ktest-vm
-    [[ -z $OUTPUT_DIR ]]	&& OUTPUT_DIR=./ktest-out
+    [[ -z $ktest_image ]]	&& ktest_image=/var/lib/ktest/root.$DEBIAN_ARCH
+    [[ -z $ktest_idfile ]]	&& ktest_idfile=./.ktest-vm
+    [[ -z $ktest_out ]]		&& OUTPUT_DIR=./ktest-out
 
-    VMSTART+=(--idfile="$IDFILE")
-    VMSTART+=(--tmpdir="$VM_TMPDIR")
+    VMSTART+=(--idfile="$ktest_idfile")
+    VMSTART+=(--tmpdir="$ktest_vmdir")
 
-    KERNEL=$(readlink -f "$KERNEL")
-    OUTPUT_DIR=$(readlink -f "$OUTPUT_DIR")
+    ktest_kernel=$(readlink -f "$ktest_kernel")
+    ktest_out=$(readlink -f "$OUTPUT_DIR")
 }
 
 ktest_run()
 {
-    local CRASHDUMP=0
-    [[ $INTERACTIVE = 0 ]]  && CRASHDUMP=1
-
     VMSTART+=("start")
 
-    if [[ -z $KERNEL ]]; then
+    if [[ -z $ktest_kernel ]]; then
 	echo "Required parameter -k missing: kernel"
 	exit 1
     fi
 
-    if [[ ! -f $IMG ]]; then
+    if [[ ! -f $ktest_image ]]; then
 	echo "VM root filesystem not found, use vm_create_image to create one"
 	exit 1
     fi
@@ -123,19 +123,19 @@ ktest_run()
 	exit 1
     fi
 
-    local TEST=$(readlink -e "$1")
+    local ktest_test=$(readlink -e "$1")
     shift
+    local ktest_testargs="$@"
+    local home=$HOME
 
     get_tmpdir
-    local testargs="$TMPDIR/testargs"
-    echo "$@" > $testargs
 
     BUILD_DEPS=1
-    parse_test_deps "$TEST"
+    parse_test_deps "$ktest_test"
 
-    mkdir -p "$OUTPUT_DIR"
+    mkdir -p "$ktest_out"
 
-    if [[ $EXIT_ON_SUCCESS = 1 || $INTERACTIVE = 1 ]]; then
+    if [[ $ktest_exit_on_success = 1 || $ktest_interactive = 1 ]]; then
 	case $KERNEL_ARCH in
 	    x86)
 		VMSTART+=("--kgdb")
@@ -143,46 +143,37 @@ ktest_run()
 	esac
     fi
 
-    [[ $EXIT_ON_SUCCESS = 0 && $INTERACTIVE = 0 ]] &&			\
-	VMSTART+=(--append="ktest.timeout=$_TIMEOUT")
+    local ktest_tmp=$TMPDIR
+    local ktest_crashdump=0
+    [[ $ktest_interactive = 0 ]]	&& ktest_crashdump=1
 
-    [[ $VERBOSE = 0 ]]	    && VMSTART+=(--append="quiet systemd.show_status=0")
+    set|grep -vE '^[A-Z]' > "$TMPDIR/env"
 
-    [[ $CRASHDUMP = 1 ]]    && VMSTART+=(--append="crashkernel=128M")
-    VMSTART+=(--append=ktest.crashdump=$CRASHDUMP)
+    [[ $ktest_verbose = 0 ]]	&& VMSTART+=(--append="quiet systemd.show_status=0")
+
+    [[ $ktest_crashdump = 1 ]]	&& VMSTART+=(--append="crashkernel=128M")
 
     VMSTART+=(--architecture="${QEMU_BIN#qemu-system-}")
-    VMSTART+=(--image="$IMG")
-    VMSTART+=(--kernel="$KERNEL/vmlinuz")
-
+    VMSTART+=(--image="$ktest_image")
+    VMSTART+=(--kernel="$ktest_kernel/vmlinuz")
     VMSTART+=(--fs "/" host)
-    VMSTART+=(--append=ktest.dir="$KTESTDIR")
-    VMSTART+=(--append=ktest.kernel="$KERNEL")
-    VMSTART+=(--append=ktest.test="$TEST")
-    VMSTART+=(--append=ktest.out="$OUTPUT_DIR")
-    VMSTART+=(--append=ktest.tmp="$TMPDIR")
-
-    VMSTART+=(--append=ktest.priority="$PRIORITY")
-    VMSTART+=(--append=ktest.failfast="$FAILFAST")
-    VMSTART+=(--append=ktest.loop="$LOOP")
-    VMSTART+=(--append=ktest.verbose="$VERBOSE")
-    VMSTART+=(--append=ktest.testargs="$testargs")
-
+    VMSTART+=(--append=ktest.dir="$ktest_dir")
+    VMSTART+=(--append=ktest.env="$TMPDIR/env")
     VMSTART+=(--append=log_buf_len=8M)
-    VMSTART+=(--memory="$_MEM")
-    VMSTART+=(--cpus="$_CPUS")
+    VMSTART+=(--memory="$ktest_mem")
+    VMSTART+=(--cpus="$ktest_cpus")
     VMSTART+=(--nr_vms="$_NR_VMS")
     VMSTART+=("${_VMSTART_ARGS[@]}")
 
     set +o errexit
 
-    if [[ $INTERACTIVE = 1 ]]; then
+    if [[ $ktest_interactive = 1 ]]; then
 	"${VMSTART[@]}"
-    elif [[ $EXIT_ON_SUCCESS = 1 ]]; then
+    elif [[ $ktest_exit_on_success = 1 ]]; then
 	"${VMSTART[@]}"|sed -u -e '/TEST SUCCESS/ { p; Q7 }'
     else
-	timeout --foreground "$((60 + _TIMEOUT))" "${VMSTART[@]}"|
-	    $KTESTDIR/catch_test_success.awk
+	timeout --foreground "$((60 + ktest_timeout))" "${VMSTART[@]}"|
+	    $ktest_dir/catch_test_success.awk
     fi
 
     ret=$?
@@ -199,9 +190,9 @@ ktest_run()
 
 ktest_boot()
 {
-    INTERACTIVE=1
+    ktest_interactive=1
 
-    ktest_run "$KTESTDIR/boot.ktest" "$@"
+    ktest_run "$ktest_dir/boot.ktest" "$@"
 }
 
 ktest_ssh()
@@ -211,24 +202,24 @@ ktest_ssh()
 
 ktest_gdb()
 {
-    if [[ -z $KERNEL ]]; then
+    if [[ -z $ktest_kernel ]]; then
 	echo "Required parameter -k missing: kernel"
 	exit 1
     fi
 
-    exec "${VMSTART[@]}" gdb "$KERNEL/vmlinux"
+    exec "${VMSTART[@]}" gdb "$ktest_kernel/vmlinux"
 }
 
 ktest_kgdb()
 {
-    if [[ -z $KERNEL ]]; then
+    if [[ -z $ktest_kernel ]]; then
 	echo "Required parameter -k missing: kernel"
 	exit 1
     fi
 
     "${VMSTART[@]}" sysrq g
 
-    exec "${VMSTART[@]}" kgdb "$KERNEL/vmlinux"
+    exec "${VMSTART[@]}" kgdb "$ktest_kernel/vmlinux"
 }
 
 ktest_mon()

@@ -11,11 +11,18 @@ export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]
 TEST_RUNNING=1
 KERNEL_ARCH=""
 
-. "$KTESTDIR/lib/util.sh"
-. "$KTESTDIR/lib/parse-test.sh"
+. /host/$ktest_env
+ktest_dir="/host/$ktest_dir"
+
+. "$ktest_dir/lib/util.sh"
+. "$ktest_dir/lib/parse-test.sh"
 
 ln -sf "/host/$ktest_kernel/lib/modules" /lib/modules
 depmod -a
+
+mkdir -p /root/.ssh
+cat /host/$home/.ssh/id*.pub > /root/.ssh/authorized_keys
+chmod 600 /root/.ssh/authorized_keys
 
 dmesg --console-on
 dmesg --console-level 8
@@ -35,9 +42,7 @@ ulimit -c unlimited
 rm -f /ktest-out/core.*
 
 # Virtual block device tweaks
-for q in /sys/block/sd*/queue; do
-    echo noop > $q/scheduler
-done
+echo noop | tee /sys/block/sd*/queue/scheduler >/dev/null
 
 # Check if we are running the crashdump kernel
 if [[ -s /proc/vmcore ]]; then
@@ -131,10 +136,6 @@ do_reboot()
     echo b > /proc/sysrq-trigger
 }
 
-PRIORITY=$ktest_priority
-
-parse_test_deps "/host/$ktest_test"
-
 if [[ $(type -t list_tests) == function ]]; then
     tests=$(list_tests)
 else
@@ -153,15 +154,14 @@ fi
 if [[ $(type -t run_tests) != function ]]; then
     run_tests()
     {
-	local tests=$1
 	local tests_passed=()
 	local tests_failed=()
 
 	echo
-	echo "Running tests $tests"
+	echo "Running tests $@"
 	echo
 
-	for i in $tests; do
+	for i in $@; do
 	    echo "========= Running test $i"
 	    echo
 
@@ -204,12 +204,11 @@ if [[ -z $tests ]]; then
     exit 1
 fi
 
-testargs=$(</host/$ktest_tmp/testargs)
-[[ -n $testargs ]] && tests="$testargs"
+[[ -n $ktest_testargs ]] && tests="$ktest_testargs"
 
 tests=$(echo $tests)
 
-if [[ -n ${ktest_timeout+x} ]]; then
+if [[ $ktest_exit_on_success = 0 && $ktest_interactive = 0 ]]; then
     (
 	sleep $ktest_timeout
 	echo "TEST TIMEOUT - triggering crash"

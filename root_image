@@ -7,9 +7,9 @@ set -o nounset
 set -o errexit
 set -o errtrace
 
-KTESTDIR=$(dirname "$(readlink -f "$0")")
+ktest_dir=$(dirname "$(readlink -f "$0")")
 
-. "$KTESTDIR/lib/util.sh"
+. "$ktest_dir/lib/util.sh"
 
 if [[ $(id -u) != 0 ]] ; then
     echo this script must be run as root
@@ -125,8 +125,8 @@ parse_arch "$ARCH"
 
 update_files()
 {
-    install -m0644 "$KTESTDIR/lib/fstab" "$MNT/etc/fstab"
-    install -m0755 "$KTESTDIR/lib/rc.local" "$MNT/etc/rc.local"
+    install -m0644 "$ktest_dir/lib/fstab" "$MNT/etc/fstab"
+    install -m0755 "$ktest_dir/lib/rc.local" "$MNT/etc/rc.local"
 }
 
 cmd_update()
@@ -200,7 +200,7 @@ ZZ
     install -m0644 "$MNT/etc/skel/.profile" "$MNT/root/"
 
     mkdir -p "$MNT/root/.ssh"
-    install -m0600 "$KTESTDIR/ssh_id.pub" "$MNT/root/.ssh/authorized_keys"
+    install -m0600 "$ktest_dir/ssh_id.pub" "$MNT/root/.ssh/authorized_keys"
 
     mkdir -p "$MNT/var/log/core"
     chmod 777 "$MNT/var/log/core"

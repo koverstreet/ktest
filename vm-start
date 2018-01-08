@@ -174,9 +174,6 @@ def vmdir_read():
 def cmd_ssh():
     vmdir = vmdir_read()
 
-    keyfile = os.path.join(DIR, "ssh_id")
-    subprocess.call(["chmod", "600", keyfile])
-
     tmpdir = tempfile.mkdtemp(prefix="vm-start-", dir=args.tmpdir)
     atexit.register(tmpdir_cleanup, tmpdir)
 
@@ -193,7 +190,7 @@ def cmd_ssh():
 
     # ServerAliveInterval is a hack - lwip_connect should notice when the socket
     # has gone away an exit, but it appears to be a bug in liblwipv6
-    ret = subprocess.call(["ssh", "-t", "-i", keyfile,
+    ret = subprocess.call(["ssh", "-t",
                            "-F", "/dev/null",
                            "-o", "CheckHostIP=no",
                            "-o", "StrictHostKeyChecking=no",

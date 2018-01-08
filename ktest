@@ -9,18 +9,10 @@ shopt -s lastpipe
 
 export PS4='+${LINENO}+ '
 
-KTESTDIR=$(dirname "$(readlink -f "$0")")
+ktest_dir=$(dirname "$(readlink -f "$0")")
 
-. "$KTESTDIR/lib/util.sh"
-. "$KTESTDIR/libktest.sh"
-
-# config files:
-[[ -f $KTESTDIR/ktestrc ]]	&& . "$KTESTDIR/ktestrc"
-[[ -f /etc/ktestrc ]]		&& . /etc/ktestrc
-
-[[ -f $HOME/.ktestrc ]]		&& . "$HOME/.ktestrc"
-[[ -f $HOME/.ktest/root ]]	&& IMG="$HOME/.ktest/root"
-[[ -d $HOME/.ktest/tmp ]]	&& VM_TMPDIR="$HOME/.ktest/tmp"
+. "$ktest_dir/lib/util.sh"
+. "$ktest_dir/lib/libktest.sh"
 
 usage()
 {
