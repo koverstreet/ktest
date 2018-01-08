@@ -87,9 +87,6 @@ def vm_run(vmdir, vm_nr):
         cmd.extend(qemu_disk("scsi" + str(disknr), drive, "cache=unsafe"))
         disknr += 1
 
-    if args.cdrom:
-        cmd.extend(qemu_disk("scsi-cd", args.cdrom, "", "scsi-cd"))
-
     for fspath, fslabel in args.fs:
         cmd.extend(["-virtfs", "local,path=" + fspath +
                     ",mount_tag=" + fslabel +
@@ -187,7 +184,7 @@ def cmd_ssh():
 
     # this is terrible, but so is automake
     subprocess.check_call(["gcc", "-O2", "-o", lwip_connect,
-                           os.path.join(DIR, "lwip-connect.c"),
+                           os.path.join(DIR, "lib/lwip-connect.c"),
                            "-llwipv6"])
     ip = "10.0.2." + str(2 + args.vm_nr)
     sock = os.path.join(vmdir, "net-0")
@@ -268,8 +265,6 @@ parser_start.add_argument("-a", "--append",
     help="append kernel command line boot arguments")
 parser_start.add_argument("--kgdb", action="store_true",
     help="enable kgdb")
-parser_start.add_argument("-c", "--cdrom",
-    help="cdrom image")
 parser_start.add_argument("-i", "--image",
     action="append",
     default=[],

@@ -8,22 +8,17 @@ set -o errtrace
 
 export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]}()}+ '
 
-KTESTDIR=$(dirname "$(readlink -f "$0")")
-. "$KTESTDIR/util.sh"
-
 TEST_RUNNING=1
 KERNEL_ARCH=""
 
+. "$KTESTDIR/lib/util.sh"
+. "$KTESTDIR/lib/parse-test.sh"
+
+ln -sf "/host/$ktest_kernel/lib/modules" /lib/modules
+depmod -a
+
 dmesg --console-on
 dmesg --console-level 8
-
-for i in $(</proc/cmdline); do
-    case $i in
-	ktest.*)
-	    export ktest_${i##ktest.}
-	    ;;
-    esac
-done
 
 echo 1 > /proc/sys/kernel/sysrq
 ulimit -c unlimited
@@ -31,8 +26,7 @@ ulimit -c unlimited
 # Log file system visible to host
 
 LOGDIR=/ktest-out
-mkdir -p $LOGDIR
-mount -t 9p -o trans=virtio logfs $LOGDIR
+ln -s "/host/$ktest_out" $LOGDIR
 
 # Core dump settings
 echo 1 > /proc/sys/fs/suid_dumpable
@@ -57,7 +51,7 @@ fi
 # If debugging crash dumps, add "console=hvc0" to the append line
 # below:
 if [[ $ktest_crashdump = 1 ]]; then
-    kexec -p /cdrom/vmlinuz --append="root=/dev/sda rw maxcpus=1" || true
+    kexec -p /host/$ktest_kernel/vmlinuz --append="root=/dev/sda rw maxcpus=1" || true
 fi
 
 NR_REBOOTS=0
@@ -73,13 +67,18 @@ fi
 
 echo $((NR_REBOOTS + 1)) | dd of=/NR_REBOOTS oflag=direct 2> /dev/null
 
-if compgen -G "/cdrom/*.deb" > /dev/null; then
-    if ! output=$(dpkg -i /cdrom/*.deb); then
+if compgen -G "/host/$ktest_tmp/*.deb" > /dev/null; then
+    if ! output=$(dpkg -i /host/$ktest_tmp/*.deb); then
 	echo $output
 	exit 1
     fi
 fi
-cd /root
+
+get_stratch_devs()
+{
+    echo
+    sfdisk -X gpt /dev/sdb 
+}
 
 copy_to_host()
 {
@@ -132,72 +131,9 @@ do_reboot()
     echo b > /proc/sysrq-trigger
 }
 
-require-lib()
-{
-    . `basename "$1"`
-}
+PRIORITY=$ktest_priority
 
-require-bin()
-{
-    return 0
-}
-
-require-build-deb()
-{
-    return 0
-}
-
-require-make()
-{
-    return 0
-}
-
-require-file()
-{
-    return 0
-}
-
-require-kernel-config()
-{
-    return 0
-}
-
-require-kernel-append()
-{
-    return 0
-}
-
-config-scratch-devs()
-{
-    return 0
-}
-
-config-image()
-{
-    return 0
-}
-
-config-cpus()
-{
-    return 0
-}
-
-config-mem()
-{
-    return 0
-}
-
-config-nr-vms()
-{
-    return 0
-}
-
-config-timeout()
-{
-    return 0
-}
-
-. rc.test
+parse_test_deps "/host/$ktest_test"
 
 if [[ $(type -t list_tests) == function ]]; then
     tests=$(list_tests)
@@ -229,10 +165,9 @@ if [[ $(type -t run_tests) != function ]]; then
 	    echo "========= Running test $i"
 	    echo
 
-	    set +e
+	    local ret=0
 	    (set -e; run_test $i)
-	    local ret=$?
-	    set -e
+	    ret=$?
 
 	    kill $(list_descendants $$) >/dev/null 2>&1 || true
 
@@ -260,7 +195,7 @@ if [[ $(type -t run_tests) != function ]]; then
 	echo "Passed: ${tests_passed[@]}"
 	echo "Failed: ${tests_failed[@]}"
 
-	[[ ${#tests_failed[@]} != 0 ]] && return 1
+	return ${#tests_failed[@]}
     }
 fi
 
@@ -269,7 +204,7 @@ if [[ -z $tests ]]; then
     exit 1
 fi
 
-testargs=$(</cdrom/testargs)
+testargs=$(</host/$ktest_tmp/testargs)
 [[ -n $testargs ]] && tests="$testargs"
 
 tests=$(echo $tests)
@@ -282,9 +217,13 @@ if [[ -n ${ktest_timeout+x} ]]; then
     ) &
 fi
 
+cd /root
+
+set +e
 ret=0
 while [[ $ret = 0 ]]; do
-    run_tests $tests || ret=1
+    run_tests $tests
+    ret=$?
     [[ $ktest_loop = 1 ]] || break
 done
 

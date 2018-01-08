@@ -1,0 +1,16 @@
+#!/bin/bash
+
+for i in $(</proc/cmdline); do
+    case $i in
+	ktest.*)
+	    export ktest_${i##ktest.}
+	    ;;
+    esac
+done
+
+export KTESTDIR="/host/$ktest_dir"
+$KTESTDIR/lib/testrunner > /dev/console 2>&1 &
+disown
+
+#./rc > /dev/console 2>&1 &
+#disown

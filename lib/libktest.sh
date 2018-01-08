@@ -1,11 +1,7 @@
 
-KTESTDIR=$(dirname "$(readlink -f "$0")")
-VMSTART=("$KTESTDIR/vm-start")
+. "$KTESTDIR/lib/parse-test.sh"
 
-checkdep genisoimage
-checkdep minicom
-checkdep socat
-checkdep qemu-system-x86_64 qemu-system-i386
+VMSTART=("$KTESTDIR/vm-start")
 
 PRIORITY=0		# hint for how long test should run
 IMG=""			# root image that will be booted
@@ -26,6 +22,11 @@ EXIT_ON_SUCCESS=0	# if true, exit on success, not failure or timeout
 FAILFAST=0
 LOOP=0
 VERBOSE=0		# if false, append quiet to kernel commad line
+
+checkdep genisoimage
+checkdep minicom
+checkdep socat
+checkdep qemu-system-x86_64 qemu-system-i386
 
 # config files:
 [[ -f $KTESTDIR/ktestrc ]]	&& . "$KTESTDIR/ktestrc"
@@ -95,6 +96,9 @@ parse_args_post()
 
     VMSTART+=(--idfile="$IDFILE")
     VMSTART+=(--tmpdir="$VM_TMPDIR")
+
+    KERNEL=$(readlink -f "$KERNEL")
+    OUTPUT_DIR=$(readlink -f "$OUTPUT_DIR")
 }
 
 ktest_run()
@@ -122,29 +126,12 @@ ktest_run()
     local TEST=$(readlink -e "$1")
     shift
 
-    FILES=()
-    FILES+=("$KTESTDIR/util.sh")
-    FILES+=("rc=$KTESTDIR/rc.testwrapper")
-    FILES+=("rc.test=$TEST")
+    get_tmpdir
+    local testargs="$TMPDIR/testargs"
+    echo "$@" > $testargs
 
     BUILD_DEPS=1
     parse_test_deps "$TEST"
-
-    # kernel modules
-    FILES+=("$KERNEL/lib")
-
-    # kernel to kexec to for crash dumps
-    FILES+=("vmlinuz=$KERNEL/vmlinuz")
-
-    get_tmpdir
-
-    local testargs="$TMPDIR/testargs"
-    echo "$@" > $testargs
-    FILES+=("$testargs")
-
-    local iso="$TMPDIR/ktest.iso"
-    genisoimage -quiet -graft-points -input-charset utf-8 -R		\
-	-o "$iso" "${FILES[@]}"
 
     mkdir -p "$OUTPUT_DIR"
 
@@ -167,12 +154,20 @@ ktest_run()
     VMSTART+=(--architecture="${QEMU_BIN#qemu-system-}")
     VMSTART+=(--image="$IMG")
     VMSTART+=(--kernel="$KERNEL/vmlinuz")
-    VMSTART+=(--cdrom="$iso")
-    VMSTART+=(--fs "$OUTPUT_DIR" logfs)
+
+    VMSTART+=(--fs "/" host)
+    VMSTART+=(--append=ktest.dir="$KTESTDIR")
+    VMSTART+=(--append=ktest.kernel="$KERNEL")
+    VMSTART+=(--append=ktest.test="$TEST")
+    VMSTART+=(--append=ktest.out="$OUTPUT_DIR")
+    VMSTART+=(--append=ktest.tmp="$TMPDIR")
+
     VMSTART+=(--append=ktest.priority="$PRIORITY")
     VMSTART+=(--append=ktest.failfast="$FAILFAST")
     VMSTART+=(--append=ktest.loop="$LOOP")
     VMSTART+=(--append=ktest.verbose="$VERBOSE")
+    VMSTART+=(--append=ktest.testargs="$testargs")
+
     VMSTART+=(--append=log_buf_len=8M)
     VMSTART+=(--memory="$_MEM")
     VMSTART+=(--cpus="$_CPUS")

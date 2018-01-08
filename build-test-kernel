@@ -7,9 +7,8 @@ set -o errtrace
 KTESTDIR=$(dirname "$(readlink -f "$0")")
 KTEST=$KTESTDIR/ktest
 
-. "$KTESTDIR/util.sh"
-. "$KTESTDIR/parse-test.sh"
-. "$KTESTDIR/libktest.sh"
+. "$KTESTDIR/lib/util.sh"
+. "$KTESTDIR/lib/libktest.sh"
 
 checkdep gcc
 checkdep make
@@ -110,10 +109,6 @@ while getopts "hKDc:b:j:O:${ktest_args}" arg; do
 done
 shift $(( OPTIND - 1 ))
 
-parse_args_post
-
-checkdep "$ARCH_TRIPLE-gcc" "gcc-$ARCH_TRIPLE"
-
 # default parameters
 [[ -z $WORK_DIR ]]	&& WORK_DIR=$KERNEL_SOURCE/.build_test_kernel-$ARCH
 [[ -z $KERNEL ]]	&& KERNEL=$WORK_DIR/kpkg
@@ -121,8 +116,11 @@ checkdep "$ARCH_TRIPLE-gcc" "gcc-$ARCH_TRIPLE"
 mkdir -p "$WORK_DIR"
 
 WORK_DIR=$(readlink -f "$WORK_DIR")
-KERNEL=$(readlink -f "$KERNEL")
 KERNEL_CONFIG="$WORK_DIR/.config"
+
+parse_args_post
+
+checkdep "$ARCH_TRIPLE-gcc" "gcc-$ARCH_TRIPLE"
 
 run_ktest()
 {
@@ -291,7 +289,6 @@ cmd_run()
 
     local TEST=$1
 
-    BUILD_DEPS=0
     parse_test_deps "$TEST"
 
     if [[ -n $COVERAGE ]]; then

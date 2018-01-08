@@ -1,3 +1,4 @@
+BUILD_DEPS=""
 
 parse_test_deps()
 {
@@ -10,27 +11,10 @@ parse_test_deps()
     TEST_RUNNING=""
 
     local NEXT_SCRATCH_DEV="b"
-    local TEST=$1
-    local TESTDIR="$(dirname "$TEST")"
+    local TESTPROG=$1
+    local TESTDIR="$(dirname "$TESTPROG")"
 
     ktest_priority=$PRIORITY
-
-    _add-file()
-    {
-	if [ ! -e "$1" ]; then
-	    echo "Dependency $1 not found"
-	    exit 1
-	fi
-
-	local f="$(basename "$1")=$(readlink -f "$1")"
-
-	for i in "${FILES[@]}"; do
-	    [[ $i = $f ]] && return
-	done
-
-	# Make sure directories show up, not just their contents
-	FILES+=("$f")
-    }
 
     require-lib()
     {
@@ -41,8 +25,6 @@ parse_test_deps()
 	else
 	    local f="$TESTDIR/$req"
 	fi
-
-	_add-file "$f"
 
 	local old="$TESTDIR"
 	TESTDIR="$(dirname "$f")"
@@ -100,56 +82,6 @@ parse_test_deps()
 	[[ $VERBOSE = 1 ]] && cat "$out"
 
 	popd		> /dev/null
-
-	for deb in $TMPDIR/$name*.deb; do
-	    _add-file "$deb"
-	done
-    }
-
-    require-bin()
-    {
-	local req=$1
-	local f="$(which "$req")"
-
-	if [[ -z $f ]]; then
-	    echo "Dependency $req not found"
-	    exit 1
-	fi
-
-	_add-file "$f"
-    }
-
-    require-make()
-    {
-	local makefile=$1
-	shift
-	local req=( "$@" )
-
-	if [ "${makefile:0:1}" = "/" ]; then
-	    local f="$makefile"
-	else
-	    local f="$TESTDIR/$makefile"
-	fi
-
-	local dir="$(dirname "$f")"
-
-	for i in ${req[*]} ; do
-	    (cd "$dir"; make -f "$(basename "$f")" "$i")
-	    _add-file "$dir/$i"
-	done
-    }
-
-    require-file()
-    {
-	local file=$1
-
-	if [ "${file:0:1}" = "/" ]; then
-	    local f="$file"
-	else
-	    local f="$TESTDIR/$file"
-	fi
-
-	_add-file "$f"
     }
 
     require-kernel-config()
@@ -196,10 +128,7 @@ parse_test_deps()
 	_TIMEOUT=$n
     }
 
-
-    PATH+=":/sbin:/usr/sbin:/usr/local/sbin"
-
-    . "$TEST"
+    . "$TESTPROG"
 
     if [ -z "$_MEM" ]; then
 	echo "test must specify config-mem"
