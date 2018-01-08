@@ -197,7 +197,23 @@ ktest_boot()
 
 ktest_ssh()
 {
-    exec "${VMSTART[@]}" ssh "$@"
+    vmdir=$(<$ktest_idfile)
+    sock=$vmdir/net-0
+    ip="10.0.2.2"
+
+    (cd "$ktest_dir/lib"; make lwip-connect) > /dev/null
+
+    exec ssh -t -F /dev/null						\
+	-o CheckHostIP=no						\
+	-o StrictHostKeyChecking=no					\
+	-o UserKnownHostsFile=/dev/null					\
+	-o NoHostAuthenticationForLocalhost=yes				\
+	-o ServerAliveInterval=2					\
+	-o ControlMaster=auto						\
+	-o ControlPath="$vmdir/controlmaster"				\
+	-o ControlPersist=yes						\
+	-o ProxyCommand="$ktest_dir/lib/lwip-connect $sock $ip 22"	\
+	root@127.0.0.1 "$@"
 }
 
 ktest_gdb()
@@ -207,7 +223,11 @@ ktest_gdb()
 	exit 1
     fi
 
-    exec "${VMSTART[@]}" gdb "$ktest_kernel/vmlinux"
+    vmdir=$(<$ktest_idfile)
+
+    exec gdb -ex "set remote interrupt-on-connect"			\
+	     -ex "target remote | socat UNIX-CONNECT:$vmdir/vm-0-gdb -"	\
+	     "$ktest_kernel/vmlinux"
 }
 
 ktest_kgdb()
@@ -217,19 +237,28 @@ ktest_kgdb()
 	exit 1
     fi
 
-    "${VMSTART[@]}" sysrq g
+    ktest_sysrq g
 
-    exec "${VMSTART[@]}" kgdb "$ktest_kernel/vmlinux"
+    vmdir=$(<$ktest_idfile)
+
+    exec gdb -ex "set remote interrupt-on-connect"			\
+	     -ex "target remote | socat UNIX-CONNECT:$vmdir/vm-0-kgdb -"\
+	     "$ktest_kernel/vmlinux"
 }
 
 ktest_mon()
 {
-    exec "${VMSTART[@]}" mon
+    vmdir=$(<$ktest_idfile)
+
+    exec minicom -D "unix#$vmdir/vm-0-mon"
 }
 
 ktest_sysrq()
 {
-    exec "${VMSTART[@]}" sysrq "$@"
+    key=$1
+    vmdir=$(<$ktest_idfile)
+
+    echo sendkey alt-sysrq-$key | socat - "UNIX-CONNECT:$vmdir/vm-0-mon"
 }
 
 ktest_usage_cmds()
