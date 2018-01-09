@@ -154,7 +154,7 @@ __do_make()
 
     if [[ $quiet = 1 ]]; then
 	get_tmpdir
-	local out="$TMPDIR/build_output"
+	local out="$ktest_tmp/build_output"
 
 	if ! "${MAKE[@]}" > $out 2>&1; then
 	    echo

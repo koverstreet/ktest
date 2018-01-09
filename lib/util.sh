@@ -23,19 +23,16 @@ checkdep()
 	fi
 }
 
-# scratch dir cleaned up on exit
-TMPDIR=""
-
 cleanup_tmpdir()
 {
-    [[ -n $TMPDIR ]] && rm -rf "$TMPDIR"
+    [[ -n $ktest_tmp ]] && rm -rf "$ktest_tmp"
 }
 
 get_tmpdir()
 {
-    if [[ -z $TMPDIR ]]; then
-	TMPDIR=$(mktemp --tmpdir -d $(basename "$0")-XXXXXXXXXX)
-	trap 'rm -rf "$TMPDIR"' EXIT
+    if [[ -z ${ktest_tmp+x} ]]; then
+	ktest_tmp=$(mktemp --tmpdir -d $(basename "$0")-XXXXXXXXXX)
+	trap 'rm -rf "$ktest_tmp"' EXIT
     fi
 }
 

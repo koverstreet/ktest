@@ -48,7 +48,7 @@ parse_test_deps()
 	fi
 
 	get_tmpdir
-	local out="$TMPDIR/out"
+	local out="$ktest_tmp/out"
 
 	pushd "$path"	> /dev/null
 
@@ -63,8 +63,8 @@ parse_test_deps()
 
 	popd		> /dev/null
 
-	cp -drl $path $TMPDIR
-	pushd "$TMPDIR/$name" > /dev/null
+	cp -drl $path $ktest_tmp
+	pushd "$ktest_tmp/$name" > /dev/null
 
 	# make -nc actually work:
 	rm -f debian/*.debhelper.log

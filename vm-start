@@ -1,257 +1,138 @@
 #!/usr/bin/python
 # GPLv2
 
-import atexit
 import os
-import shutil
-import signal
 import subprocess
 import sys
-import tempfile
 import time
 import argparse
 
-DIR = os.path.dirname(__file__)       # path to script directory
-
 DEFAULT_MEMORY = "1G"               # how much memory to give the vms
-DEFAULT_TMP = "/tmp"                # default directory for tmps
 
 FNULL = open(os.devnull, 'rw')
-
-def kill_proc(p):
-    try:
-        p.kill()
-    except:
-        pass
 
 def qemu_disk(dev, filename, opts="", device="scsi-hd"):
     return ["-drive", "if=none,format=raw,id=" + dev +
             ",file=" + filename + "," + opts,
             "-device", device + ",bus=scsi-hba.0,drive=" + dev]
 
-def qemu_socket(vmdir, vm_nr, name):
-    return "unix:" + os.path.join(vmdir, "vm-%u-%s" % (vm_nr, name)) + ",server,nowait"
-
-def vm_run(vmdir, vm_nr):
-    cmd = ["stdbuf", "-oL",
-           "qemu-system-" + args.architecture,
-           "-nodefaults",
-
-           "-m",        args.memory,
-
-           "-nographic",
-           "-device",   "virtio-serial",
-           "-chardev",  args.console + ",id=console",
-           "-device",   "virtconsole,chardev=console",
-
-           "-serial",   qemu_socket(vmdir, vm_nr, "kgdb"),
-           "-monitor",  qemu_socket(vmdir, vm_nr, "mon"),
-           "-gdb",      qemu_socket(vmdir, vm_nr, "gdb"),
-           "-device",   "virtio-rng-pci"
-          ]
-
-    if args.architecture == "x86_64":
-        cmd.extend(["-cpu",      "host",
-                    "-machine", "accel=kvm",
-                    "-smp",      "%d,sockets=%d" % (args.cpus, args.cpus)])
-
-    if args.kernel:
-        cmd.extend(["-kernel", args.kernel])
-
-    if args.initrd:
-        cmd.extend(["-initrd", args.initrd])
-
-    kernelParams = "console=hvc0 root=/dev/sda rw "
-    if args.kgdb:
-        kernelParams += "kgdboc=ttyS0,115200 "
-
-    if args.append:
-        kernelParams += " ".join(args.append)
-
-    cmd.extend(["-append", kernelParams])
-
-    # VirtIO-SCSI for root file system and scratch devices
-    cmd.extend(["-device", "virtio-scsi-pci,id=scsi-hba"])
-
-    # Root file system comes first (sda)
-
-    disknr = 0
-
-    for image in args.image:
-        cmd.extend(qemu_disk("scsi" + str(disknr), image, "snapshot=on,cache=unsafe"))
-        disknr += 1
-
-    for size in args.scratchdev:
-        drive = os.path.join(vmdir, "vm-%u-disk-%u" % (vm_nr, disknr))
-        subprocess.check_call(["fallocate", "-l", size, drive])
-        cmd.extend(qemu_disk("scsi" + str(disknr), drive, "cache=unsafe"))
-        disknr += 1
-
-    for fspath, fslabel in args.fs:
-        cmd.extend(["-virtfs", "local,path=" + fspath +
-                    ",mount_tag=" + fslabel +
-                    ",security_model=none"])
-
-    for i in range(args.interfaces):
-        mac = "de:ad:be:ef:%0.2x:%0.2x" % (vm_nr, int(i))
-        sock = os.path.join(vmdir, "net-" + str(i))
-
-        cmd.extend(["-net", "nic,model=virtio,macaddr=" + mac,
-                    "-net", "vde,sock=" + sock])
-
-    atexit.register(kill_proc,
-                    subprocess.Popen(cmd,
-                                     stderr=subprocess.STDOUT,
-                                     stdin=subprocess.PIPE))
-
-def tmpdir_cleanup(vmdir):
-    try:
-        while True:
-            os.wait()
-    except:
-        pass
-
-    while os.path.isdir(vmdir):
-        shutil.rmtree(vmdir, ignore_errors=True)
-
-def cmd_start():
-    if args.kernel and not os.path.isfile(args.kernel):
-        raise RuntimeError("Cannot find kernel file: " + args.kernel)
-
-    if args.initrd and not os.path.isfile(args.initrd):
-        raise RuntimeError("Cannot find initrd file: " + args.initrd)
-
-    if args.scratchdir:
-        vmdir = args.scratchdir
-    else:
-        vmdir = tempfile.mkdtemp(prefix="vm-", dir=args.tmpdir)
-        atexit.register(tmpdir_cleanup, vmdir)
-
-    if args.idfile:
-        with open(args.idfile, 'w') as f:
-            f.write(vmdir + "\n")
-
-    for i in range(args.interfaces):
-        net = "10.0.%u.1/24" % (2 + i)
-        sock = os.path.join(vmdir, "net-" + str(i))
-
-        atexit.register(kill_proc,
-                        subprocess.Popen(["vde_switch",
-                                          "-sock", sock],
-                                         stdin=subprocess.PIPE,
-                                         stdout=FNULL,
-                                         stderr=subprocess.STDOUT))
-
-        while not os.path.exists(os.path.join(sock, "ctl")):
-            time.sleep(0.1)
-
-        atexit.register(kill_proc,
-                        subprocess.Popen(["slirpvde",
-                                          "--sock", sock,
-                                          "--dhcp=10.0.2.2",
-                                          "--host", net],
-                                         stdin=subprocess.PIPE,
-                                         stdout=FNULL,
-                                         stderr=subprocess.STDOUT))
-
-    for vm_nr in range(args.nr_vms):
-        vm_run(vmdir, vm_nr)
-
-    while True:
-        os.wait()
-
-    try:
-        sys.stdout.flush()
-    except:
-        pass
-
-# Allow exit handlers to be called
-for sig in (signal.SIGHUP,
-            signal.SIGINT,
-            signal.SIGPIPE,
-            signal.SIGALRM,
-            signal.SIGTERM,
-            signal.SIGUSR1,
-            signal.SIGUSR2):
-    signal.signal(sig, lambda sig, frame: sys.exit(127))
+def qemu_socket(vmdir, name):
+    return "unix:" + os.path.join(vmdir, "vm-" + name) + ",server,nowait"
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--idfile", required=True)
-parser.add_argument("-t", "--tmpdir",
-    default=DEFAULT_TMP,
-    help="directory to use for temporary files/scratch devices")
-subparsers = parser.add_subparsers()
-
-parser_start = subparsers.add_parser('start',
-    help='Start one or more virtual machine(s)')
-parser_start.add_argument("--architecture",
+parser.add_argument("--architecture",
     default="x86_64",
     help="qemu architecture")
-parser_start.add_argument("--scratchdir",
+parser.add_argument("--scratchdir",
     help="use a prexisting scratch directory")
-parser_start.add_argument("-k", "--kernel",
+parser.add_argument("-k", "--kernel",
     help="kernel used to boot the virtual machine(s)")
-parser_start.add_argument("-r", "--initrd",
+parser.add_argument("-r", "--initrd",
     help="initial ramdisk for boot")
-parser_start.add_argument("-a", "--append",
+parser.add_argument("-a", "--append",
     action='append',
     help="append kernel command line boot arguments")
-parser_start.add_argument("--kgdb", action="store_true",
+parser.add_argument("--kgdb", action="store_true",
     help="enable kgdb")
-parser_start.add_argument("-i", "--image",
+parser.add_argument("-i", "--image",
     action="append",
     default=[],
     help="list of disk images for the virtual machine(s)")
-parser_start.add_argument("-s", "--scratchdev",
+parser.add_argument("-s", "--scratchdev",
     action="append",
     default=[],
     help="list of scratch device sizes. ex: 256M,2G")
-parser_start.add_argument("-m", "--memory",
+parser.add_argument("-m", "--memory",
     default=DEFAULT_MEMORY,
     help="amount of memory to be allocated per VM")
-parser_start.add_argument("--cpus",
+parser.add_argument("--cpus",
     default="1", type=int,
     help="number of CPUs allocated per VM")
-parser_start.add_argument("--fs",
+parser.add_argument("--fs",
     action="append", nargs=2,
     help="mount a directory (first argument) as " +
     "a filesystem label (second argument) in the VM")
-parser_start.add_argument("--console",
-    default="stdio",
-    help="where to attach the vm console (ex: stdio, pipe,path=foo)")
-parser_start.add_argument("--nr_vms",
-    default="1", type=int,
-    help="number of virtual machines to start")
-parser_start.add_argument("--interfaces",
-    default="1", type=int,
-    help="Specify the number of interfaces on the cluster nodes")
-parser_start.set_defaults(func=cmd_start)
-
-parser_ssh = subparsers.add_parser('ssh',
-    help='SSH into a running virtual machine')
-parser_ssh.add_argument("--vm_nr", default=0, type=int)
-parser_ssh.set_defaults(func=cmd_ssh)
-
-parser_gdb = subparsers.add_parser('gdb',
-    help='Run gdb and attach to QEMU')
-parser_gdb.add_argument("--vm_nr", default=0, type=int)
-parser_gdb.set_defaults(func=cmd_gdb)
-
-parser_kgdb = subparsers.add_parser('kgdb',
-    help='Run gdb and attach to kernel (kgdb)')
-parser_kgdb.add_argument("--vm_nr", default=0, type=int)
-parser_kgdb.set_defaults(func=cmd_kgdb)
-
-parser_mon = subparsers.add_parser('mon',
-    help='Attach to QEMU monitor')
-parser_mon.add_argument("--vm_nr", default=0, type=int)
-parser_mon.set_defaults(func=cmd_mon)
-
-parser_sysrq = subparsers.add_parser('sysrq',
-    help='Send magic sysrq key via qemu monitor')
-parser_sysrq.add_argument("--vm_nr", default=0, type=int)
-parser_sysrq.add_argument("key")
-parser_sysrq.set_defaults(func=cmd_sysrq)
 
 (args, extra_opts) = parser.parse_known_args()
-args.func()
+
+if args.kernel and not os.path.isfile(args.kernel):
+    raise RuntimeError("Cannot find kernel file: " + args.kernel)
+
+if args.initrd and not os.path.isfile(args.initrd):
+    raise RuntimeError("Cannot find initrd file: " + args.initrd)
+
+vmdir = args.scratchdir
+
+cmd = ["stdbuf", "-oL",
+       "qemu-system-" + args.architecture,
+       "-nodefaults",
+
+       "-m",        args.memory,
+
+       "-nographic",
+       "-device",   "virtio-serial",
+       "-chardev",  "stdio,id=console",
+       "-device",   "virtconsole,chardev=console",
+
+       "-serial",   qemu_socket(vmdir, "kgdb"),
+       "-monitor",  qemu_socket(vmdir, "mon"),
+       "-gdb",      qemu_socket(vmdir, "gdb"),
+       "-device",   "virtio-rng-pci"
+      ]
+
+if args.architecture == "x86_64":
+    cmd.extend(["-cpu",      "host",
+                "-machine", "accel=kvm",
+                "-smp",      "%d,sockets=%d" % (args.cpus, args.cpus)])
+
+if args.kernel:
+    cmd.extend(["-kernel", args.kernel])
+
+if args.initrd:
+    cmd.extend(["-initrd", args.initrd])
+
+kernelParams = "console=hvc0 root=/dev/sda rw "
+if args.kgdb:
+    kernelParams += "kgdboc=ttyS0,115200 "
+
+if args.append:
+    kernelParams += " ".join(args.append)
+
+cmd.extend(["-append", kernelParams])
+
+# VirtIO-SCSI for root file system and scratch devices
+cmd.extend(["-device", "virtio-scsi-pci,id=scsi-hba"])
+
+# Root file system comes first (sda)
+
+disknr = 0
+
+for image in args.image:
+    cmd.extend(qemu_disk("scsi" + str(disknr), image, "snapshot=on,cache=unsafe"))
+    disknr += 1
+
+for size in args.scratchdev:
+    drive = os.path.join(vmdir, "disk-%u" % disknr)
+    subprocess.check_call(["fallocate", "-l", size, drive])
+    cmd.extend(qemu_disk("scsi" + str(disknr), drive, "cache=unsafe"))
+    disknr += 1
+
+for fspath, fslabel in args.fs:
+    cmd.extend(["-virtfs", "local,path=" + fspath +
+                ",mount_tag=" + fslabel +
+                ",security_model=none"])
+
+cmd.extend(["-net", "nic,model=virtio,macaddr=de:ad:be:ef:00:00",
+            "-net", "vde,sock=" + os.path.join(vmdir, "net")])
+
+subprocess.Popen(cmd,
+                 stderr=subprocess.STDOUT,
+                 stdin=subprocess.PIPE)
+
+while True:
+    os.wait()
+
+try:
+    sys.stdout.flush()
+except:
+    pass

@@ -2,8 +2,6 @@
 . "$ktest_dir/lib/util.sh"
 . "$ktest_dir/lib/parse-test.sh"
 
-VMSTART=("$ktest_dir/vm-start")
-
 ktest_priority=0		# hint for how long test should run
 ktest_image=""			# root image that will be booted
                         #       set with: -i <path>
@@ -14,9 +12,6 @@ ktest_kernel=""		# dir that has the kernel to run
 ktest_idfile=""		# passed as --id to vmstart
                         #       set with: -w <path>
 ktest_out=""		# dir for test output (logs, code coverage, etc.)
-ktest_vmdir="/tmp"	# dir where scratch drives are created
-                        #       defaults: /tmp
-                        #       auto-override: $HOME/.ktest/tmp
 ktest_interactive=0     # if set to 1, timeout is ignored completely
                         #       sets with: -I
 ktest_exit_on_success=0	# if true, exit on success, not failure or timeout
@@ -37,7 +32,6 @@ checkdep qemu-system-x86_64 qemu-system-i386
 # defaults:
 [[ -f $HOME/.ktestrc ]]		&& . "$HOME/.ktestrc"
 [[ -f $HOME/.ktest/root ]]	&& ktest_image="$HOME/.ktest/root"
-[[ -d $HOME/.ktest/tmp ]]	&& ktest_vmdir="$HOME/.ktest/tmp"
 
 ktest_args="a:p:i:k:ISw:s:o:flvx"
 parse_ktest_arg()
@@ -61,7 +55,7 @@ parse_ktest_arg()
 	    ktest_idfile="$OPTARG"
 	    ;;
 	s)
-	    VMSTART+=(--scratchdir="$OPTARG")
+	    ktest_tmp=$OPTARG
 	    ;;
 	o)
 	    ktest_out="$OPTARG"
@@ -97,17 +91,18 @@ parse_args_post()
     [[ -z $ktest_idfile ]]	&& ktest_idfile=./.ktest-vm
     [[ -z $ktest_out ]]		&& OUTPUT_DIR=./ktest-out
 
-    VMSTART+=(--idfile="$ktest_idfile")
-    VMSTART+=(--tmpdir="$ktest_vmdir")
-
     ktest_kernel=$(readlink -f "$ktest_kernel")
     ktest_out=$(readlink -f "$OUTPUT_DIR")
 }
 
+ktest_run_cleanup()
+{
+    rm -rf "$ktest_tmp"
+    kill -9 -- -$$
+}
+
 ktest_run()
 {
-    VMSTART+=("start")
-
     if [[ -z $ktest_kernel ]]; then
 	echo "Required parameter -k missing: kernel"
 	exit 1
@@ -128,12 +123,20 @@ ktest_run()
     local ktest_testargs="$@"
     local home=$HOME
 
+    local ktest_crashdump=0
+    [[ $ktest_interactive = 0 ]]	&& ktest_crashdump=1
+
     get_tmpdir
+    trap 'ktest_run_cleanup' EXIT
+    echo "$ktest_tmp" > "$ktest_idfile"
 
     BUILD_DEPS=1
     parse_test_deps "$ktest_test"
 
     mkdir -p "$ktest_out"
+
+    VMSTART=("$ktest_dir/vm-start")
+    VMSTART+=(--scratchdir="$ktest_tmp")
 
     if [[ $ktest_exit_on_success = 1 || $ktest_interactive = 1 ]]; then
 	case $KERNEL_ARCH in
@@ -143,14 +146,7 @@ ktest_run()
 	esac
     fi
 
-    local ktest_tmp=$TMPDIR
-    local ktest_crashdump=0
-    [[ $ktest_interactive = 0 ]]	&& ktest_crashdump=1
-
-    set|grep -vE '^[A-Z]' > "$TMPDIR/env"
-
     [[ $ktest_verbose = 0 ]]	&& VMSTART+=(--append="quiet systemd.show_status=0")
-
     [[ $ktest_crashdump = 1 ]]	&& VMSTART+=(--append="crashkernel=128M")
 
     VMSTART+=(--architecture="${QEMU_BIN#qemu-system-}")
@@ -158,12 +154,23 @@ ktest_run()
     VMSTART+=(--kernel="$ktest_kernel/vmlinuz")
     VMSTART+=(--fs "/" host)
     VMSTART+=(--append=ktest.dir="$ktest_dir")
-    VMSTART+=(--append=ktest.env="$TMPDIR/env")
+    VMSTART+=(--append=ktest.env="$ktest_tmp/env")
     VMSTART+=(--append=log_buf_len=8M)
     VMSTART+=(--memory="$ktest_mem")
     VMSTART+=(--cpus="$ktest_cpus")
     VMSTART+=(--nr_vms="$_NR_VMS")
     VMSTART+=("${_VMSTART_ARGS[@]}")
+
+    set|grep -vE '^[A-Z]' > "$ktest_tmp/env"
+
+    net="$ktest_tmp/net"
+    mkfifo "$ktest_tmp/vde_input"
+    tail -f "$ktest_tmp/vde_input" |vde_switch -sock "$net" >/dev/null &
+
+    while [[ ! -e "$net" ]]; do
+	sleep 0.1
+    done
+    slirpvde --sock "$net" "--dhcp=10.0.2.2" "--host" "10.0.2.1/24" >/dev/null 2>&1 &
 
     set +o errexit
 
@@ -198,7 +205,7 @@ ktest_boot()
 ktest_ssh()
 {
     vmdir=$(<$ktest_idfile)
-    sock=$vmdir/net-0
+    sock=$vmdir/net
     ip="10.0.2.2"
 
     (cd "$ktest_dir/lib"; make lwip-connect) > /dev/null
@@ -226,7 +233,7 @@ ktest_gdb()
     vmdir=$(<$ktest_idfile)
 
     exec gdb -ex "set remote interrupt-on-connect"			\
-	     -ex "target remote | socat UNIX-CONNECT:$vmdir/vm-0-gdb -"	\
+	     -ex "target remote | socat UNIX-CONNECT:$vmdir/vm-gdb -"	\
 	     "$ktest_kernel/vmlinux"
 }
 
@@ -242,7 +249,7 @@ ktest_kgdb()
     vmdir=$(<$ktest_idfile)
 
     exec gdb -ex "set remote interrupt-on-connect"			\
-	     -ex "target remote | socat UNIX-CONNECT:$vmdir/vm-0-kgdb -"\
+	     -ex "target remote | socat UNIX-CONNECT:$vmdir/vm-kgdb -"\
 	     "$ktest_kernel/vmlinux"
 }
 
@@ -258,7 +265,7 @@ ktest_sysrq()
     key=$1
     vmdir=$(<$ktest_idfile)
 
-    echo sendkey alt-sysrq-$key | socat - "UNIX-CONNECT:$vmdir/vm-0-mon"
+    echo sendkey alt-sysrq-$key | socat - "UNIX-CONNECT:$vmdir/vm-mon"
 }
 
 ktest_usage_cmds()
