@@ -5,9 +5,10 @@ parse_test_deps()
     ktest_cpus="6"
     ktest_mem=""
     ktest_timeout=""
+    ktest_kernel_append=""
+    ktest_scratch_devs=()
     _KERNEL_CONFIG_REQUIRE=""
-    _NR_VMS="1"
-    _VMSTART_ARGS=()
+    
     TEST_RUNNING=""
 
     local NEXT_SCRATCH_DEV="b"
@@ -89,17 +90,17 @@ parse_test_deps()
 
     require-kernel-append()
     {
-	_VMSTART_ARGS+=(--append="$1")
+	ktest_kernel_append+=" $1"
     }
 
     config-scratch-devs()
     {
-	_VMSTART_ARGS+=(--scratchdev="$1")
+	ktest_scratch_devs+=("$1")
     }
 
     config-image()
     {
-	_VMSTART_ARGS+=(--image="$1")
+	ktest_image=$1
     }
 
     config-cpus()
@@ -110,11 +111,6 @@ parse_test_deps()
     config-mem()
     {
 	ktest_mem=$1
-    }
-
-    config-nr-vms()
-    {
-	_NR_VMS=$1
     }
 
     config-timeout()

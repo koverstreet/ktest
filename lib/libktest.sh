@@ -89,10 +89,10 @@ parse_args_post()
 
     [[ -z $ktest_image ]]	&& ktest_image=/var/lib/ktest/root.$DEBIAN_ARCH
     [[ -z $ktest_idfile ]]	&& ktest_idfile=./.ktest-vm
-    [[ -z $ktest_out ]]		&& OUTPUT_DIR=./ktest-out
+    [[ -z $ktest_out ]]		&& ktest_out=./ktest-out
 
     ktest_kernel=$(readlink -f "$ktest_kernel")
-    ktest_out=$(readlink -f "$OUTPUT_DIR")
+    ktest_out=$(readlink -f "$ktest_out")
 }
 
 ktest_run_cleanup()
@@ -135,52 +135,75 @@ ktest_run()
 
     mkdir -p "$ktest_out"
 
-    VMSTART=("$ktest_dir/vm-start")
-    VMSTART+=(--scratchdir="$ktest_tmp")
-
-    if [[ $ktest_exit_on_success = 1 || $ktest_interactive = 1 ]]; then
-	case $KERNEL_ARCH in
-	    x86)
-		VMSTART+=("--kgdb")
-		;;
-	esac
-    fi
-
-    [[ $ktest_verbose = 0 ]]	&& VMSTART+=(--append="quiet systemd.show_status=0")
-    [[ $ktest_crashdump = 1 ]]	&& VMSTART+=(--append="crashkernel=128M")
-
-    VMSTART+=(--architecture="${QEMU_BIN#qemu-system-}")
-    VMSTART+=(--image="$ktest_image")
-    VMSTART+=(--kernel="$ktest_kernel/vmlinuz")
-    VMSTART+=(--fs "/" host)
-    VMSTART+=(--append=ktest.dir="$ktest_dir")
-    VMSTART+=(--append=ktest.env="$ktest_tmp/env")
-    VMSTART+=(--append=log_buf_len=8M)
-    VMSTART+=(--memory="$ktest_mem")
-    VMSTART+=(--cpus="$ktest_cpus")
-    VMSTART+=(--nr_vms="$_NR_VMS")
-    VMSTART+=("${_VMSTART_ARGS[@]}")
-
-    set|grep -vE '^[A-Z]' > "$ktest_tmp/env"
-
     net="$ktest_tmp/net"
     mkfifo "$ktest_tmp/vde_input"
-    tail -f "$ktest_tmp/vde_input" |vde_switch -sock "$net" >/dev/null &
+    tail -f "$ktest_tmp/vde_input" |vde_switch -sock "$net" >/dev/null 2>&1 &
 
     while [[ ! -e "$net" ]]; do
 	sleep 0.1
     done
     slirpvde --sock "$net" "--dhcp=10.0.2.2" "--host" "10.0.2.1/24" >/dev/null 2>&1 &
 
+    kernelargs="console=hvc0 root=/dev/sda rw"
+    kernelargs+=" ktest.dir=$ktest_dir"
+    kernelargs+=" ktest.env=$ktest_tmp/env"
+    kernelargs+=" log_buf_len=8M"
+    [[ $ktest_interactive = 1 ]] && kernelargs+=" kgdboc=ttyS0,115200"
+    [[ $ktest_verbose = 0 ]]	&& kernelargs+=" quiet systemd.show_status=0"
+    [[ $ktest_crashdump = 1 ]]	&& kernelargs+=" crashkernel=128M"
+
+    kernelargs+="$ktest_kernel_append"
+
+    qemu_cmd=("$QEMU_BIN"						\
+	-nodefaults							\
+	-nographic							\
+	-m		"$ktest_mem"					\
+	-smp		"$ktest_cpus"					\
+	-kernel		"$ktest_kernel/vmlinuz"				\
+	-append		"$kernelargs"					\
+	-device		virtio-serial					\
+	-chardev	stdio,id=console				\
+	-device		virtconsole,chardev=console			\
+	-serial		"unix:$ktest_tmp/vm-kgdb,server,nowait"		\
+	-monitor	"unix:$ktest_tmp/vm-mon,server,nowait"		\
+	-gdb		"unix:$ktest_tmp/vm-gdb,server,nowait"		\
+	-device		virtio-rng-pci					\
+	-net		nic,model=virtio,macaddr=de:ad:be:ef:00:00	\
+	-net		vde,sock="$net"					\
+	-virtfs		local,path=/,mount_tag=host,security_model=none	\
+	-device		virtio-scsi-pci,id=scsi-hba			\
+	-drive		if=none,format=raw,id=disk0,file="$ktest_image",snapshot=on\
+	-device		scsi-hd,bus=scsi-hba.0,drive=disk0		\
+    )
+
+    case $KERNEL_ARCH in
+	x86)
+	    qemu_cmd+=(-cpu host -machine accel=kvm)
+	    ;;
+    esac
+
+    local nr=1
+    for size in "${ktest_scratch_devs[@]}"; do
+	file="$ktest_tmp/dev-$nr"
+	fallocate -l "$size" "$file"
+
+	qemu_cmd+=(							\
+	    -drive	if=none,format=raw,id=disk$nr,file="$file",cache=unsafe\
+	    -device	scsi-hd,bus=scsi-hba.0,drive=disk$nr)
+	nr=$((nr + 1))
+    done
+
+    set|grep -vE '^[A-Z]' > "$ktest_tmp/env"
+
     set +o errexit
 
     if [[ $ktest_interactive = 1 ]]; then
-	"${VMSTART[@]}"
+	"${qemu_cmd[@]}"
     elif [[ $ktest_exit_on_success = 1 ]]; then
-	"${VMSTART[@]}"|sed -u -e '/TEST SUCCESS/ { p; Q7 }'
+	"${qemu_cmd[@]}"|sed -u -e '/TEST SUCCESS/ { p; Q7 }'
     else
-	timeout --foreground "$((60 + ktest_timeout))" "${VMSTART[@]}"|
-	    $ktest_dir/catch_test_success.awk
+	timeout --foreground "$((60 + ktest_timeout))" "${qemu_cmd[@]}"|
+	    $ktest_dir/lib/catch_test_success.awk
     fi
 
     ret=$?
