@@ -21,42 +21,84 @@ checkdep mkfs.ext4 e2fsprogs
 checkdep debootstrap
 
 IMAGE_SIZE="2G"
+MIRROR=http://ftp.us.debian.org/debian/
 
-PACKAGES="kexec-tools,less,psmisc,openssh-server"
-PACKAGES+=",make,gcc,g++,gdb,strace,ltrace"
-PACKAGES+=",hdparm,btrfs-tools,mdadm,lvm2,aoetools,vblade"
-PACKAGES+=",linux-tools,blktrace,sysstat"
-PACKAGES+=",bc,attr,gawk,acl"
-PACKAGES+=",build-essential"
-PACKAGES+=",rsync"
+usage()
+{
+    echo "root_image: create/update virtual machine root images for ktest"
+    echo "Usage: root_image cmd [options]"
+    echo "  create		Create a new image"
+    echo "  update		Update an existing image"
+    echo
+    echo "options:"
+    echo "  -h			Display this help and exit"
+    echo "  -a <arch>		Architecture for vm image"
+    echo "  -m <mirror>		Debian mirror"
+    echo "  -i <image>		Image to create/update, defaults to /var/lib/ktest/root.$arch"
+}
+
+if [[ $# = 0 ]]; then
+    usage
+    exit 1
+fi
+
+ktest_image=""
+CMD="cmd_$1"
+shift
+
+while getopts "ha:m:i:" arg; do
+    case $arg in
+	h)
+	    usage
+	    exit 0
+	    ;;
+	a)
+	    ARCH=$OPTARG
+	    ;;
+	m)
+	    MIRROR=$OPTARG
+	    ;;
+	i)
+	    ktest_image=$OPTARG
+	    ;;
+    esac
+done
+shift $(( OPTIND - 1 ))
+
+parse_arch "$ARCH"
+
+[[ -z $ktest_image ]] && ktest_image=/var/lib/ktest/root.$DEBIAN_ARCH
+
+mkdir -p "$(dirname "$ktest_image")"
+
+PACKAGES=(kexec-tools less psmisc openssh-server	\
+    build-essential make gcc g++			\
+    autoconf automake pkg-config libtool-bin		\
+    gdb strace ltrace linux-perf blktrace sysstat	\
+    hdparm btrfs-tools mdadm lvm2 aoetools vblade	\
+    bc attr gawk acl rsync)
 
 # stress testing:
-PACKAGES+=",fio,dbench,bonnie++,fsmark"
-
-#PACKAGES+=",valgrind" #broken
-
-# suspend testing:
-PACKAGES+=",uswsusp"
+PACKAGES+=(fio dbench bonnie++ fsmark)
 
 # bcache-tools build dependencies:
-PACKAGES+=",pkg-config,libblkid-dev,uuid-dev,libscrypt-dev"
-PACKAGES+=",libsodium-dev,libkeyutils-dev,liburcu-dev"
+PACKAGES+=(libblkid-dev uuid-dev libscrypt-dev)
+PACKAGES+=(libsodium-dev libkeyutils-dev liburcu-dev)
 
 # xfstests:
-#PACKAGES+=",xfsprogs,xfslibs-dev"
-PACKAGES+=",autoconf,automake"
-PACKAGES+=",libtool-bin,libattr1-dev,libaio-dev,libgdbm-dev,libacl1-dev,gettext"
-PACKAGES+=",libssl-dev"
-PACKAGES+=",quota"
+PACKAGES+=(xfsprogs xfslibs-dev quota)
+PACKAGES+=(libattr1-dev libaio-dev libgdbm-dev libacl1-dev gettext)
+PACKAGES+=(libssl-dev)
 
 # nfs testing:
-PACKAGES+=",nfs-kernel-server"
+PACKAGES+=(nfs-kernel-server)
 
-EXCLUDE="dmidecode,nano,rsyslog,logrotate,cron,iptables,nfacct"
-EXCLUDE+=",debconf-i18n,info,gnupg"
-EXCLUDE+="libpam-systemd"
+# suspend testing:
+[[ $KERNEL_ARCH = x86 ]] && PACKAGES+=(uswsusp)
 
-MIRROR=http://ftp.us.debian.org/debian/
+EXCLUDE=(dmidecode nano rsyslog logrotate cron		\
+    iptables nfacct					\
+    debconf-i18n info gnupg libpam-systemd)
 
 SYSTEMD_MASK=(dev-hvc0.device				\
     getty.target					\
@@ -76,119 +118,18 @@ SYSTEMD_MASK=(dev-hvc0.device				\
     systemd-ask-password-wall.path			\
     systemd-update-utmp-runlevel.service		\
     systemd-update-utmp.service				\
-    systemd-journald.service				\
-    systemd-journal-flush.service			\
-    systemd-journald-dev-log.socket			\
-    systemd-journald.socket				\
     time-sync.target)
 
-usage()
-{
-    echo "root_image_create: Create a virtual machine image for ktest"
-    echo "Usage: create_vm_image [ -m debian mirror ] [ -a architecture ] new_image"
-}
-
-if [[ $# = 0 ]]; then
-    usage
-    exit 1
-fi
-
-IMG=""
-CMD="cmd_$1"
-shift
-
-while getopts "ha:m:i:" arg; do
-    case $arg in
-	h)
-	    usage
-	    exit 0
-	    ;;
-	a)
-	    ARCH=$OPTARG
-	    ;;
-	m)
-	    MIRROR=$OPTARG
-	    ;;
-	i)
-	    IMG=$OPTARG
-	    ;;
-    esac
-done
-shift $(( OPTIND - 1 ))
-
-if [[ -z $IMG ]]; then
-    echo "Please specify an image"
-    exit 1
-fi
-
-parse_arch "$ARCH"
+export DEBIAN_FRONTEND=noninteractive
+export DEBCONF_NONINTERACTIVE_SEEN=true
+export LC_ALL=C
+export LANGUAGE=C
+export LANG=C
 
 update_files()
 {
     install -m0644 "$ktest_dir/lib/fstab" "$MNT/etc/fstab"
     install -m0755 "$ktest_dir/lib/rc.local" "$MNT/etc/rc.local"
-}
-
-cmd_update()
-{
-    if [[ ! -e $IMG ]]; then
-	echo "$IMG does not exist"
-	exit 1
-    fi
-
-    MNT=$(mktemp -d)
-    trap 'umount "$MNT"; rmdir "$MNT"' EXIT
-
-    mount "$IMG" "$MNT"
-    update_files
-
-    chroot "$MNT" apt update
-    chroot "$MNT" apt upgrade -y
-    chroot "$MNT" apt clean
-
-    umount	"$MNT"
-    rmdir	"$MNT"
-    trap '' EXIT
-
-    # Trim deleted data from the image (around 75MB)
-    e2fsck -f "$IMG"
-    resize2fs -M "$IMG"		# shrinks the file
-    resize2fs "$IMG" "$IMAGE_SIZE"	# re-grows as sparse
-}
-
-cmd_create()
-{
-    if [[ -e $IMG ]]; then
-	echo "$IMG already exists"
-	exit 1
-    fi
-
-    MNT=$(mktemp -d)
-    trap 'umount "$MNT"; rmdir "$MNT"; rm "$IMG"' EXIT
-
-    fallocate -l "$IMAGE_SIZE" "$IMG"
-    mkfs.ext4 -F "$IMG"
-    mkdir -p "$MNT"
-    mount "$IMG" "$MNT"
-
-    debootstrap				\
-	--no-check-gpg			\
-	--arch="$DEBIAN_ARCH"		\
-	--include="$PACKAGES"		\
-	--exclude="$EXCLUDE"		\
-	--foreign				\
-	sid "$MNT" "$MIRROR"
-
-    mkdir -p "$MNT/etc/network"
-    cat > "$MNT/etc/network/interfaces" <<-ZZ
-auto lo
-iface lo inet loopback
-
-auto eth0
-iface eth0 inet dhcp
-ZZ
-
-    update_files
 
     cp -P "/etc/timezone" "/etc/localtime" "$MNT/etc/"
 
@@ -200,22 +141,36 @@ ZZ
     install -m0644 "$MNT/etc/skel/.profile" "$MNT/root/"
 
     mkdir -p "$MNT/root/.ssh"
-    install -m0600 "$ktest_dir/ssh_id.pub" "$MNT/root/.ssh/authorized_keys"
 
     mkdir -p "$MNT/var/log/core"
     chmod 777 "$MNT/var/log/core"
 
     # Disable systemd/udev stuff we don't need:
+
     # systemctl mask doesn't work for foreign archs
     #chroot "$MNT" systemctl mask "${SYSTEMD_MASK[@]}"
 
     for i in "${SYSTEMD_MASK[@]}"; do
-	(cd "$MNT/etc/systemd/system"; ln -s /dev/null "$i")
+	(cd "$MNT/etc/systemd/system"; ln -sf /dev/null "$i")
     done
+
+    cat > "$MNT/etc/systemd/journald.conf" <<-ZZ
+[Journal]
+Storage=none
+ZZ
+
+    mkdir -p "$MNT/etc/network"
+    cat > "$MNT/etc/network/interfaces" <<-ZZ
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp
+ZZ
 
     # disable network interface renaming - it's unreliable
     mkdir -p "$MNT/etc/udev/rules.d/"
-    ln -s /dev/null "$MNT/etc/udev/rules.d/80-net-setup-link.rules"
+    ln -sf /dev/null "$MNT/etc/udev/rules.d/80-net-setup-link.rules"
 
     rm -f "$MNT/lib/udev/rules.d/*persistent*"
     rm -f "$MNT/lib/udev/rules.d/*lvm*"
@@ -223,22 +178,26 @@ ZZ
     rm -f "$MNT/lib/udev/rules.d/*md-raid*"
     rm -f "$MNT/lib/udev/rules.d/*btrfs*"
     rm -f "$MNT/lib/udev/rules.d/*hdparm*"
+}
 
-    # xfstests:
-    chroot "$MNT" useradd fsgqa
-
-    DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
-     LC_ALL=C LANGUAGE=C LANG=C chroot "$MNT" /debootstrap/debootstrap --second-stage
-
-    DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
-     LC_ALL=C LANGUAGE=C LANG=C chroot "$MNT" dpkg --configure -a
-
-    DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
-     LC_ALL=C LANGUAGE=C LANG=C chroot "$MNT" apt update
-
+update_packages()
+{
+    chroot "$MNT" apt update
+    chroot "$MNT" apt upgrade -y
+    chroot "$MNT" apt install -y "${PACKAGES[@]}"
     rm -f "$MNT/var/cache/apt/archives/*.deb"
+}
 
-    # Unmount everything in the root
+trim_image()
+{
+    e2fsck -f "$ktest_image"
+    resize2fs -M "$ktest_image"			# shrinks the file
+    resize2fs "$ktest_image" "$IMAGE_SIZE"	# re-grows as sparse
+}
+
+umount_image()
+{
+    # Unmount everything under $MNT
     awk '{print $2}' /proc/mounts|
 	grep "^$MNT"|
 	sort -r|
@@ -246,11 +205,58 @@ ZZ
 
     rmdir "$MNT"
     trap '' EXIT
+}
 
-    # Trim deleted data from the image (around 75MB)
-    e2fsck -f "$IMG"
-    resize2fs -M "$IMG"		# shrinks the file
-    resize2fs "$IMG" "$IMAGE_SIZE"	# re-grows as sparse
+cmd_update()
+{
+    if [[ ! -e $ktest_image ]]; then
+	echo "$ktest_image does not exist"
+	exit 1
+    fi
+
+    MNT=$(mktemp --tmpdir -d $(basename "$0")-XXXXXXXXXX)
+    trap 'umount_image' EXIT
+
+    mount "$ktest_image" "$MNT"
+
+    update_files
+    update_packages
+
+    umount_image
+    trim_image
+}
+
+cmd_create()
+{
+    if [[ -e $ktest_image ]]; then
+	echo "$ktest_image already exists"
+	exit 1
+    fi
+
+    MNT=$(mktemp --tmpdir -d $(basename "$0")-XXXXXXXXXX)
+    trap 'umount_image; rm "$ktest_image"' EXIT
+
+    fallocate -l "$IMAGE_SIZE" "$ktest_image"
+    mkfs.ext4 -F "$ktest_image"
+    mount "$ktest_image" "$MNT"
+
+    debootstrap					\
+	--no-check-gpg				\
+	--arch="$DEBIAN_ARCH"			\
+	--include=$(join_by "${PACKAGES[@]}")	\
+	--exclude=$(join_by "${EXCLUDE[@]}")	\
+	--foreign				\
+	sid "$MNT" "$MIRROR"
+
+    update_files
+
+    chroot "$MNT" /debootstrap/debootstrap --second-stage
+    chroot "$MNT" dpkg --configure -a
+
+    update_packages
+
+    umount_image
+    trim_image
 }
 
 if [[ $(type -t "$CMD") != function ]]; then

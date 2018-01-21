@@ -72,10 +72,6 @@ require-kernel-config CONFIGFS_FS	# systemd
 require-kernel-config EXT4_FS
 require-kernel-config EXT4_FS_POSIX_ACL
 
-# Tests are passed to VM as an iso image:
-require-kernel-config BLK_DEV_SR	# cdrom support
-require-kernel-config ISO9660_FS
-
 require-kernel-config NET_9P
 require-kernel-config NET_9P_VIRTIO
 require-kernel-config NETWORK_FILESYSTEMS

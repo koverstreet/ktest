@@ -2,8 +2,8 @@
 . "$ktest_dir/lib/util.sh"
 . "$ktest_dir/lib/parse-test.sh"
 
-ktest_priority=0		# hint for how long test should run
-ktest_image=""			# root image that will be booted
+ktest_priority=0	# hint for how long test should run
+ktest_image=""		# root image that will be booted
                         #       set with: -i <path>
                         #       defaults: /var/lib/ktest/root
                         #       auto-override: $HOME/.ktest/root

@@ -61,6 +61,16 @@ parse_arch()
 	    QEMU_PACKAGE=qemu-system-x86
 	    QEMU_BIN=qemu-system-x86_64
 	    ;;
+	mips)
+	    DEBIAN_ARCH=mips
+	    ARCH_TRIPLE=mips-linux-gnu
+
+	    KERNEL_ARCH=mips
+	    BITS=32
+
+	    QEMU_PACKAGE=qemu-system-mips
+	    QEMU_BIN=qemu-system-mips
+	    ;;
 	sparc)
 	    DEBIAN_ARCH=sparc
 	    ARCH_TRIPLE=sparc64-linux-gnu
@@ -150,17 +160,6 @@ parse_arch()
 #	echo $1-linux-gnu
 #    fi
 #}
-
-list_descendants()
-{
-  local children=$(ps -o pid= --ppid "$1")
-
-  for pid in $children; do
-    list_descendants "$pid"
-  done
-
-  echo "$children"
-}
 
 join_by()
 {

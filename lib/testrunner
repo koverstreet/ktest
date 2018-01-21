@@ -13,6 +13,7 @@ KERNEL_ARCH=""
 
 . /host/$ktest_env
 ktest_dir="/host/$ktest_dir"
+ktest_tmp="/host/$ktest_tmp"
 
 . "$ktest_dir/lib/util.sh"
 . "$ktest_dir/lib/parse-test.sh"
@@ -72,12 +73,25 @@ fi
 
 echo $((NR_REBOOTS + 1)) | dd of=/NR_REBOOTS oflag=direct 2> /dev/null
 
-if compgen -G "/host/$ktest_tmp/*.deb" > /dev/null; then
-    if ! output=$(dpkg -i /host/$ktest_tmp/*.deb); then
+if compgen -G "$ktest_tmp/*.deb" > /dev/null; then
+    if ! output=$(dpkg -i $ktest_tmp/*.deb); then
 	echo $output
 	exit 1
     fi
 fi
+
+out="$ktest_tmp/out"
+
+for i in "${ktest_make_install[@]}"; do
+    pushd "/host/$i" > /dev/null
+    if ! make install > "$out" 2>&1; then
+	echo "Error installing $i:"
+	cat "$out"
+	exit 1
+    fi
+    [[ $ktest_verbose = 1 ]] && cat "$out"
+    popd > /dev/null
+done
 
 get_stratch_devs()
 {
@@ -165,14 +179,16 @@ if [[ $(type -t run_tests) != function ]]; then
 	    echo "========= Running test $i"
 	    echo
 
+	    local start=$(date '+%s')
 	    local ret=0
 	    (set -e; run_test $i)
 	    ret=$?
+	    local finish=$(date '+%s')
 
-	    kill $(list_descendants $$) >/dev/null 2>&1 || true
+	    pkill -P $$ >/dev/null
 
 	    echo
-	    echo "========= Test $i completed with ret $ret"
+	    echo "========= Test $i completed with ret $ret $(($finish - $start))s"
 
 	    # XXX: check dmesg for warnings, oopses, slab corruption, etc. before
 	    # signaling success
@@ -181,14 +197,14 @@ if [[ $(type -t run_tests) != function ]]; then
 		tests_passed+=($i)
 	    else
 		tests_failed+=($i)
+
+		[[ $ktest_failfast = 1 ]] && break
+
+		for dev in /dev/sd*; do
+		    [[ $dev = /dev/sda ]] && continue
+		    umount $dev >/dev/null 2>&1 || true
+		done
 	    fi
-
-	    [[ $ret != 0 && $ktest_failfast = 1 ]] && break
-
-	    for dev in /dev/sd*; do
-		[[ $dev = /dev/sda ]] && continue
-		umount $dev >/dev/null 2>&1 || true
-	    done
 	done
 
 	echo
@@ -216,6 +232,7 @@ if [[ $ktest_exit_on_success = 0 && $ktest_interactive = 0 ]]; then
     ) &
 fi
 
+trap 'pkill -P $$ >/dev/null' EXIT
 cd /root
 
 set +e
