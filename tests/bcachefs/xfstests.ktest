@@ -3,6 +3,11 @@
 require-lib ../xfstests.sh
 require-lib bcachefs-test-libs.sh
 
+require-kernel-config BCACHEFS_POSIX_ACL
+require-kernel-config BCACHEFS_QUOTA
+
+require-make ~/src/linuxquota-code
+
 list_tests()
 {
     (cd /ktest-out/xfstests/tests; echo generic/???)

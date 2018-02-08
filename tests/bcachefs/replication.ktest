@@ -50,25 +50,25 @@ do_remove_test()
 
     if [[ $offline = 1 ]]; then
 	echo -n "offlining /dev/sdb... "
-	bcachefs device offline --force	/mnt 0
+	bcachefs device offline --force	/dev/sdb
 	echo "done"
     fi
 
     if [[ $evacuate = 1 ]]; then
 	if [[ $offline = 0 ]]; then
-	    bcachefs device set-state --force	/mnt 0 failed
+	    bcachefs device set-state --force	/dev/sdb failed
 	fi
 
 	echo -n "evacuating /dev/sdb... "
-	bcachefs device evacuate	/mnt 0
+	bcachefs device evacuate	/dev/sdb
 	echo "done"
     fi
 
     echo -n "removing /dev/sdb... "
     if [[ $evacuate = 1 ]]; then
-	bcachefs device remove		/mnt 0
+	bcachefs device remove		/dev/sdb
     else
-	bcachefs device remove --force	/mnt 0
+	bcachefs device remove --force	/dev/sdb
     fi
     echo "done"
 
@@ -109,7 +109,7 @@ test_device_add()
 
     mount /dev/sdb /mnt
 
-    run_fio_randrw >/dev/null &
+    run_fio_randrw|tail -n200 &
 
     echo -n "adding /dev/sdc... "
     bcachefs device add /mnt /dev/sdc
@@ -118,18 +118,6 @@ test_device_add()
     wait
     umount /mnt
     mount -t bcachefs /dev/sdb:/dev/sdc /mnt
-
-    echo -n "removing /dev/sdc... "
-    bcachefs device set-state /mnt /dev/sdc failed
-    bcachefs device remove /mnt /dev/sdc
-    echo "done"
-
-    umount /mnt
-
-    mount /dev/sdb /mnt
-    echo -n "readding /dev/sdc... "
-    bcachefs device add /mnt /dev/sdc
-    echo "done"
     umount /mnt
 }
 
@@ -144,33 +132,12 @@ test_device_set_state()
 
     run_fio_randrw >/dev/null &
     for state in readonly failed spare; do
-	bcachefs device set-state --force   /mnt /dev/sdc $state
-	bcachefs device set-state	    /mnt /dev/sdc readwrite
+	bcachefs device set-state --force   /dev/sdc $state
+	bcachefs device set-state	    /dev/sdc readwrite
     done
     wait
 
     umount /mnt
-}
-
-test_device_add_faults()
-{
-    setup_tracing 'bcachefs:*'
-
-    bcachefs format				\
-	--error_action=readonly			\
-	/dev/sdb >/dev/null
-    mount /dev/sdb /mnt
-
-    device_add_fault_fn()
-    {
-	set_faults "$1 enable"
-	! bcachefs device add /mnt /dev/sdc
-    }
-
-    run_fault_injection_test bcachefs:add			device_add_fault_fn
-    run_fault_injection_test bcachefs:bch_fs_init:dev_alloc	device_add_fault_fn
-    run_fault_injection_test bcachefs:bch_fs_init:alloc_start	device_add_fault_fn
-    run_fault_injection_test bcachefs:bch_fs_init:read_super	device_add_fault_fn
 }
 
 test_device_readd()
@@ -186,11 +153,11 @@ test_device_readd()
     sleep 1
 
     echo -n "offlining /dev/sdb... "
-    bcachefs device offline --force	/mnt /dev/sdb
+    bcachefs device offline --force	/dev/sdb
     echo "done"
 
     echo -n "onlining /dev/sdb... "
-    bcachefs device online /mnt /dev/sdb
+    bcachefs device online /dev/sdb
     echo "done"
 
     wait
@@ -243,9 +210,52 @@ test_cmd_fs_usage()
     mount -t bcachefs /dev/sdb:/dev/sdc /mnt
     echo done
 
-    #run_fio_randrw --size=500M > /dev/null
+    run_fio_randrw --size=500M > /dev/null
 
-    cd /mnt
-    bcachefs fs usage
-    bcachefs fs usage -h
+    bcachefs fs usage /mnt
+    bcachefs fs usage -h /mnt
+    umount /mnt
+}
+
+test_rereplicate()
+{
+    bcachefs format --error_action=panic /dev/sd[bcd] >/dev/null
+    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+
+    dd if=/dev/zero of=/mnt/test bs=1M count=1024 oflag=direct
+
+    #umount /mnt
+    #mount -t bcachefs -o metadata_replicas=2,data_replicas=2 /dev/sdb:/dev/sdc:/dev/sdd /mnt
+
+    echo 2 > /sys/fs/bcachefs/*/options/data_replicas
+    echo 2 > /sys/fs/bcachefs/*/options/metadata_replicas
+
+    bcachefs data rereplicate /mnt
+
+    bcachefs fs usage -h /mnt
+    umount /mnt
+
+    mount -t bcachefs -o degraded,fix_errors /dev/sdb:/dev/sdc /mnt
+    umount /mnt
+}
+
+disabled_test_device_add_faults()
+{
+    setup_tracing 'bcachefs:*'
+
+    bcachefs format				\
+	--error_action=remount-ro		\
+	/dev/sdb >/dev/null
+    mount /dev/sdb /mnt
+
+    device_add_fault_fn()
+    {
+	set_faults "$1 enable"
+	! bcachefs device add /mnt /dev/sdc
+    }
+
+    run_fault_injection_test bcachefs:add			device_add_fault_fn
+    run_fault_injection_test bcachefs:bch_fs_init:dev_alloc	device_add_fault_fn
+    run_fault_injection_test bcachefs:bch_fs_init:alloc_start	device_add_fault_fn
+    run_fault_injection_test bcachefs:bch_fs_init:read_super	device_add_fault_fn
 }

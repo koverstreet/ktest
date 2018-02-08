@@ -1,0 +1,96 @@
+#!/bin/bash
+
+require-lib ../prelude.sh
+
+require-make bcachefs-tools
+
+require-kernel-config BCACHEFS_FS
+
+if [[ $KERNEL_ARCH = x86 ]]; then
+    require-kernel-config CRYPTO_CRC32C_INTEL
+fi
+
+config-mem	    8G
+config-scratch-devs 8G
+config-timeout	    600
+
+btree_node_size=8k
+n=10M
+t=4
+
+perf_mkfs()
+{
+    bcachefs format				\
+	--error_action=panic			\
+	--bucket=$btree_node_size		\
+	--btree_node=$btree_node_size		\
+	/dev/sdb >/dev/null
+    mount /dev/sdb /mnt
+    ln -s /sys/fs/bcachefs/*/perf_test p
+}
+
+test_insert_overwrite()
+{
+    perf_mkfs
+
+    echo seq_insert		$n 1	> p
+    echo seq_insert		$n 1	> p
+    echo seq_overwrite		$n 1	> p
+}
+
+test_perf_profile()
+{
+    perf_mkfs
+
+    perf_4.14 record -g -o seq_insert -- echo seq_insert $n 1	> p
+    perf_4.14 record -g -o seq_lookup -- echo seq_lookup $n 1	> p
+
+    perf_4.14 stat -- echo seq_lookup $n 1	> p
+
+    #perf_4.14 record -g -o seq_delete -- echo seq_delete $n 1	> p
+}
+
+test_merge_torture()
+{
+    perf_mkfs
+    while true; do
+	echo seq_insert		$n 1	> p
+	echo seq_delete		$n 1	> p
+    done
+    umount /mnt
+}
+
+test_perf_all()
+{
+    settle=0
+
+    perf_mkfs
+    while true; do
+	echo starting benches
+
+	echo seq_insert		$n 1	> p
+	sleep $settle
+	echo seq_lookup		$n 1	> p
+	sleep $settle
+	echo seq_delete		$n 1	> p
+	sleep $settle
+
+	echo rand_insert	$n 1	> p
+	sleep $settle
+	echo seq_delete		$n 1	> p
+	sleep $settle
+	echo rand_insert	$n $t	> p
+	sleep $settle
+
+	echo rand_lookup	$n 1	> p
+	sleep $settle
+	echo rand_lookup	$n $t	> p
+	sleep $settle
+
+	echo rand_mixed		$n 1	> p
+	sleep $settle
+	echo rand_mixed		$n $t	> p
+	sleep $settle
+    done
+    umount /mnt
+}

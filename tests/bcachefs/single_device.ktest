@@ -208,7 +208,7 @@ test_quota()
     bcachefs format				\
 	--error_action=panic			\
 	/dev/sdb >/dev/null
-    mount -o quota /dev/sdb /mnt
+    mount -o usrquota,grpquota,prjquota /dev/sdb /mnt
 
     loops=$((($ktest_priority + 1) * 4))
 
@@ -359,6 +359,19 @@ test_sysfs()
     umount /mnt
 }
 
+disabled_test_swapfile()
+{
+    bcachefs format /dev/sdb   > /dev/null
+    mount -t bcachefs /dev/sdb /mnt
+
+    fallocate -l 1G /mnt/swapfile
+    mkswap  /mnt/swapfile
+    swapon  /mnt/swapfile
+    swapoff /mnt/swapfile
+
+    umount /mnt
+}
+
 # migrate from other filesystems in place:
 
 migrate_from_fs()
@@ -366,10 +379,10 @@ migrate_from_fs()
     fstype=$1
 
     if [[ $fstype = ext4 ]]; then
-	mkfs.$fstype -F /dev/sdb
+	mkfs.$fstype -F /dev/sdb	> /dev/null 2>&1
 	mount -o user_xattr /dev/sdb /mnt
     else
-	mkfs.$fstype -f /dev/sdb
+	mkfs.$fstype -f /dev/sdb	> /dev/null 2>&1
 	mount /dev/sdb /mnt
     fi
 
@@ -379,9 +392,6 @@ migrate_from_fs()
 	ln $i ${i}-migrate2
 	setfattr -n user.foo -v test $i 
     done
-
-    dd if=/dev/zero of=/mnt/bcachefs bs=1M count=512 oflag=direct
-    sync
 
     bcachefs migrate			\
 	--encrypted			\
@@ -412,7 +422,7 @@ migrate_from_fs()
     echo "Attempting to mount bcachefs filesystem with superblock offset"
 
     mount -t bcachefs -o sb=$offset /dev/sdb /mnt
-    #rm /mnt/old_migrated_filesystem
+    rm /mnt/old_migrated_filesystem
     umount /mnt
 
     echo "Creating default superblock"
@@ -495,9 +505,4 @@ test_meta_write_faults()
     }
 
     run_fault_injection_test bcachefs:meta::write meta_write_fault_fn
-}
-
-test_foo()
-{
-    echo
 }
