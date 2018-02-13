@@ -143,8 +143,8 @@ ktest_usage_post()
 
 ktest_run_cleanup()
 {
-    kill -9 -- -$$
     cleanup_tmpdir
+    kill -9 -- -$$
 }
 
 ktest_run()
