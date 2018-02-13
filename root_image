@@ -243,11 +243,11 @@ cmd_create()
     mkfs.ext4 -F "$ktest_image"
     mount "$ktest_image" "$MNT"
 
-    $debootstrap					\
+    DEBOOTSTRAP_DIR=$ktest_dir/debootstrap $debootstrap	\
 	--no-check-gpg					\
 	--arch="$DEBIAN_ARCH"				\
-	--include=$(join_by " " "${PACKAGES[@]}")	\
-	--exclude=$(join_by " " "${EXCLUDE[@]}")	\
+	--include=$(join_by , "${PACKAGES[@]}")		\
+	--exclude=$(join_by , "${EXCLUDE[@]}")		\
 	--foreign					\
 	sid "$MNT" "$MIRROR"
 
