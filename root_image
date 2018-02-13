@@ -127,12 +127,15 @@ export LC_ALL=C
 export LANGUAGE=C
 export LANG=C
 
+_chroot()
+{
+    PATH=/usr/sbin:/usr/bin:/sbin:/bin chroot "$@"
+}
+
 update_files()
 {
     install -m0644 "$ktest_dir/lib/fstab" "$MNT/etc/fstab"
     install -m0755 "$ktest_dir/lib/rc.local" "$MNT/etc/rc.local"
-
-    cp -P "/etc/timezone" "/etc/localtime" "$MNT/etc/"
 
     touch "$MNT/etc/resolv.conf"
     chmod 644 "$MNT/etc/resolv.conf"
@@ -149,7 +152,7 @@ update_files()
     # Disable systemd/udev stuff we don't need:
 
     # systemctl mask doesn't work for foreign archs
-    #chroot "$MNT" systemctl mask "${SYSTEMD_MASK[@]}"
+    #_chroot "$MNT" systemctl mask "${SYSTEMD_MASK[@]}"
 
     for i in "${SYSTEMD_MASK[@]}"; do
 	(cd "$MNT/etc/systemd/system"; ln -sf /dev/null "$i")
@@ -183,9 +186,9 @@ ZZ
 
 update_packages()
 {
-    chroot "$MNT" apt update
-    chroot "$MNT" apt upgrade -y
-    chroot "$MNT" apt install -y "${PACKAGES[@]}"
+    _chroot "$MNT" apt update
+    _chroot "$MNT" apt upgrade -y
+    _chroot "$MNT" apt install -y "${PACKAGES[@]}"
     rm -f "$MNT/var/cache/apt/archives/*.deb"
 }
 
@@ -253,8 +256,8 @@ cmd_create()
 
     update_files
 
-    chroot "$MNT" /debootstrap/debootstrap --second-stage
-    chroot "$MNT" dpkg --configure -a
+    _chroot "$MNT" /debootstrap/debootstrap --second-stage
+    _chroot "$MNT" dpkg --configure -a
 
     update_packages
 
