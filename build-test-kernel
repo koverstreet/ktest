@@ -112,7 +112,9 @@ KERNEL_CONFIG="$WORK_DIR/.config"
 
 parse_args_post
 
-checkdep "$ARCH_TRIPLE-gcc" "gcc-$ARCH_TRIPLE"
+if [[ -n $CROSS_COMPILE ]]; then
+    checkdep "$ARCH_TRIPLE-gcc" "gcc-$ARCH_TRIPLE"
+fi
 
 run_ktest()
 {
@@ -124,8 +126,12 @@ run_ktest()
 
 __do_make()
 {
-    export ARCH="$KERNEL_ARCH"
-    export CROSS_COMPILE="$ARCH_TRIPLE-"
+    echo CROSS_COMPILE=$CROSS_COMPILE
+
+    if [[ -n $CROSS_COMPILE ]]; then
+	export ARCH="$KERNEL_ARCH"
+	export CROSS_COMPILE="$ARCH_TRIPLE-"
+    fi
 
     local MAKE=(make)
     MAKE+=(--jobs="$ktest_njobs")

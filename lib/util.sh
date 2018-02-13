@@ -18,14 +18,14 @@ checkdep()
 	    # absolute path
 	    [[ -e $dep ]] && found=1
 	else
-	    which "$dep" > /dev/null && found=1
+	    which "$dep" > /dev/null 2>&1 && found=1
 	fi
 
 	if [[ $found = 0 ]]; then
 		echo -n "$dep not found"
 
-		if which apt-get > /dev/null && \
-			which sudo > /dev/null; then
+		if which apt-get > /dev/null 2>&1 && \
+			which sudo > /dev/null 2>&1; then
 			echo ", installing $package:"
 			sudo apt-get install -y "$package"
 		else
@@ -48,7 +48,8 @@ get_tmpdir()
     fi
 }
 
-ARCH=x86_64
+ARCH=$(uname -m)
+CROSS_COMPILE=""
 
 parse_arch()
 {
@@ -127,6 +128,10 @@ parse_arch()
 	    echo "Unsupported architecture $1"
 	    exit 1
     esac
+
+    if [[ $ARCH != $(uname -m) ]]; then
+	CROSS_COMPILE=1
+    fi
 }
 
 #debian_arch()
