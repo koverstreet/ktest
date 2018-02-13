@@ -143,27 +143,7 @@ __do_make()
 	MAKE+=("--output-sync=target")
     fi
 
-    local quiet=1
-    if [[ $# = 1 && $1 = nconfig ]]; then
-	quiet=0
-    fi
-
-    if [[ $ktest_verbose = 1 ]]; then
-	quiet=0
-    fi
-
-    if [[ $quiet = 1 ]]; then
-	get_tmpdir
-	local out="$ktest_tmp/build_output"
-
-	if ! "${MAKE[@]}" > $out 2>&1; then
-	    echo
-	    cat "$out"
-	    exit 1
-	fi
-    else
-	"${MAKE[@]}"
-    fi
+    "${MAKE[@]}"
 }
 
 new_config()
@@ -220,18 +200,13 @@ build_kernel()
     rm -rf "$ktest_kernel"
     mkdir -p "$ktest_kernel"
 
-    echo -n "building kernel... "
-
     if [[ -n $DEPS ]]; then
 	local kconfig="$WORK_DIR/.config"
 	local config_tool="$KERNEL_SOURCE/scripts/config"
 
 	[[ ! -f $kconfig ]] && new_config
 
-	local OLDIFS=$IFS
-	IFS=','
-
-	for opt in $_KERNEL_CONFIG_REQUIRE; do
+	for opt in "${ktest_kernel_config_require[@]}"; do
 	    [[ -n $opt ]] && kernel_opt set "$opt"
 	done
 
@@ -244,11 +219,9 @@ build_kernel()
 	#do_make olddefconfig
 	do_make oldnoconfig
 
-	for opt in $_KERNEL_CONFIG_REQUIRE; do
+	for opt in "${ktest_kernel_config_require[@]}"; do
 	    [[ -n $opt ]] && kernel_opt check "$opt"
 	done
-
-	IFS=$OLDIFS
     fi
 
     do_make
@@ -267,7 +240,6 @@ build_kernel()
     install -m0644 "$WORK_DIR/.config" "$ktest_kernel/config"
 
     do_make modules_install
-    echo done
 
     # Remove symlinks, they'll break genisoimage which is following symlinks
     rm -f "$ktest_kernel"/modules/lib/modules/*/build
@@ -287,11 +259,11 @@ cmd_run()
     parse_test_deps "$TEST"
 
     if [[ -n $COVERAGE ]]; then
-	_KERNEL_CONFIG_REQUIRE+=",GCOV_KERNEL"
-	_KERNEL_CONFIG_REQUIRE+=",GCOV_FORMAT_AUTODETECT"
+	ktest_kernel_config_require+=(GCOV_KERNEL)
+	ktest_kernel_config_require+=(GCOV_FORMAT_AUTODETECT)
     fi
 
-    [[ -n $BUILD ]] && build_kernel
+    [[ -n $BUILD ]] && run_quiet "building kernel" build_kernel
 
     ktest_run "$@"
 }

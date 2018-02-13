@@ -12,14 +12,14 @@ if [[ $KERNEL_ARCH = powerpc ]]; then
 fi
 
 # Normal kernel functionality:
-require-kernel-config PREEMPT
-require-kernel-config NO_HZ
+#require-kernel-config PREEMPT
+#require-kernel-config NO_HZ
+
 require-kernel-config HZ_100
 require-kernel-config HIGH_RES_TIMERS
 
 require-kernel-config SYSVIPC
 require-kernel-config CGROUPS
-#require-kernel-config SLAB
 require-kernel-config SWAP		# systemd segfaults if you don't have swap support...
 require-kernel-config MODULES,MODULE_UNLOAD
 require-kernel-config DEVTMPFS
@@ -27,6 +27,11 @@ require-kernel-config DEVTMPFS_MOUNT
 require-kernel-config BINFMT_SCRIPT
 
 require-kernel-config PROC_KCORE	# XXX Needed?
+
+# KVM guest support:
+require-kernel config HYPERVISOR_GUEST
+require-kernel config PARAVIRT
+require-kernel config KVM_GUEST
 
 # PCI:
 require-kernel-config PCI
@@ -58,8 +63,6 @@ require-kernel-config PACKET
 require-kernel-config UNIX
 require-kernel-config INET
 require-kernel-config IP_MULTICAST
-#require-kernel-config IP_PNP
-#require-kernel-config IP_PNP_DHCP
 require-kernel-config NETDEVICES
 require-kernel-config VIRTIO_NET
 
@@ -112,9 +115,9 @@ require-kernel-config PANIC_ON_OOPS
 
 # More expensive
 require-kernel-config DYNAMIC_DEBUG
+require-kernel-config DEBUG_LIST
 
 # Expensive
-#require-kernel-config DEBUG_LIST
 #require-kernel-config DEBUG_ATOMIC_SLEEP
 #require-kernel-config DEBUG_MUTEXES
 #require-kernel-config DEBUG_PREEMPT

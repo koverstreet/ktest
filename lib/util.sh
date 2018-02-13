@@ -167,3 +167,27 @@ join_by()
     shift
     echo "$*"
 }
+
+run_quiet()
+{
+    local msg=$1
+    shift
+
+    if [[ $ktest_verbose = 0 ]]; then
+	echo -n "$msg... "
+
+	get_tmpdir
+	local out="$ktest_tmp/put"
+
+	if ! ( "$@" ) > "$out" 2>&1; then
+	    echo
+	    cat "$out"
+	    exit 1
+	fi
+
+	echo done
+    else
+	echo "$msg:"
+	"$@"
+    fi
+}

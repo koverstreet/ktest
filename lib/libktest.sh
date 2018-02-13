@@ -19,10 +19,10 @@ ktest_failfast=0
 ktest_loop=0
 ktest_verbose=0		# if false, append quiet to kernel commad line
 
-checkdep genisoimage
 checkdep minicom
 checkdep socat
 checkdep qemu-system-x86_64 qemu-system-i386
+checkdep vde_switch vde2
 
 # config files:
 [[ -f $ktest_dir/ktestrc ]]	&& . "$ktest_dir/ktestrc"
@@ -184,11 +184,14 @@ ktest_run()
 
     local nr=1
     for size in "${ktest_scratch_devs[@]}"; do
+	#local devopts="cache.direct=on,cache.no-flush=on"
+	local devopts="cache=unsafe"
+
 	file="$ktest_tmp/dev-$nr"
 	fallocate -l "$size" "$file"
 
 	qemu_cmd+=(							\
-	    -drive	if=none,format=raw,id=disk$nr,file="$file",cache=unsafe\
+	    -drive	if=none,format=raw,id=disk$nr,file="$file","$devopts"\
 	    -device	scsi-hd,bus=scsi-hba.0,drive=disk$nr)
 	nr=$((nr + 1))
     done

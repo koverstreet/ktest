@@ -4,9 +4,8 @@
 #
 
 require-lib ../test-libs.sh
-require-build-deb bcachefs-tools
+require-make bcachefs-tools
 
-require-kernel-config MD
 require-kernel-config BCACHEFS_FS,BCACHEFS_DEBUG
 
 if [[ $KERNEL_ARCH = x86 ]]; then

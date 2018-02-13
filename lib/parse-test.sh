@@ -8,12 +8,13 @@ parse_test_deps()
     ktest_kernel_append=""
     ktest_scratch_devs=()
     ktest_make_install=()
-    _KERNEL_CONFIG_REQUIRE=""
+    ktest_kernel_config_require=()
     
     TEST_RUNNING=""
 
     local NEXT_SCRATCH_DEV="b"
     local TESTPROG=$1
+    local BUILD_ON_HOST=""
 
     require-lib()
     {
@@ -24,34 +25,14 @@ parse_test_deps()
 	popd				> /dev/null
     }
 
-    # $1 is a source repository, which will be built (with make) and then turned
-    # into a dpkg
-    require-build-deb()
+    do-build-deb()
     {
-	local req=$1
-	local name=$(basename $req)
-	local path=$(readlink -e "$req")
-
-	[[ $BUILD_DEPS = 1 ]] || return 0
-
-	checkdep debuild devscripts
-
-	if ! [[ -d $path ]]; then
-	    echo "build-deb dependency $req not found"
-	    exit 1
-	fi
+	local path=$(readlink -e "$1")
+	local name=$(basename $path)
 
 	get_tmpdir
-	local out="$ktest_tmp/out"
 
-	echo -n "building $name... "
-
-	if ! make -C "$path" > "$out" 2>&1; then
-	    echo "Error building $req:"
-	    cat "$out"
-	    exit 1
-	fi
-	[[ $ktest_verbose = 1 ]] && cat "$out"
+	make -C "$path"
 
 	cp -drl $path $ktest_tmp
 	pushd "$ktest_tmp/$name" > /dev/null
@@ -59,16 +40,26 @@ parse_test_deps()
 	# make -nc actually work:
 	rm -f debian/*.debhelper.log
 
-	if ! debuild --no-lintian -b -i -I -us -uc -nc > "$out" 2>&1; then
-	    echo "Error creating package for $req: $?"
-	    cat "$out"
+	debuild --no-lintian -b -i -I -us -uc -nc
+	popd > /dev/null
+    }
+
+    # $1 is a source repository, which will be built (with make) and then turned
+    # into a dpkg
+    require-build-deb()
+    {
+	local req=$1
+
+	[[ $BUILD_DEPS = 1 ]] || return 0
+
+	if ! [[ -d $req ]]; then
+	    echo "build-deb dependency $req not found"
 	    exit 1
 	fi
-	popd		> /dev/null
 
-	echo done
+	checkdep debuild devscripts
 
-	[[ $ktest_verbose = 1 ]] && cat "$out"
+	run_quiet "building $(basename $req)" do-build-deb $req
     }
 
     require-make()
@@ -79,22 +70,21 @@ parse_test_deps()
 
 	ktest_make_install+=("$req")
 
-	get_tmpdir
-	local out="$ktest_tmp/out"
-
-	echo -n "building $1... "
-	if ! make -C "$req" > "$out" 2>&1; then
-	    echo "Error building $req:"
-	    cat "$out"
-	    exit 1
+	if [[ -n $BUILD_ON_HOST ]]; then
+	    run_quiet "building $1" make -C "$req"
 	fi
-	[[ $ktest_verbose = 1 ]] && cat "$out"
-	echo done
     }
 
     require-kernel-config()
     {
-	_KERNEL_CONFIG_REQUIRE+=",$1"
+	local OLDIFS=$IFS
+	IFS=','
+
+	for i in $1; do
+	    ktest_kernel_config_require+=("$i")
+	done
+
+	IFS=$OLDIFS
     }
 
     require-kernel-append()

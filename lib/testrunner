@@ -15,6 +15,8 @@ KERNEL_ARCH=""
 ktest_dir="/host/$ktest_dir"
 ktest_tmp="/host/$ktest_tmp"
 
+ln -s $ktest_dir /ktest
+
 . "$ktest_dir/lib/util.sh"
 . "$ktest_dir/lib/parse-test.sh"
 
@@ -80,17 +82,8 @@ if compgen -G "$ktest_tmp/*.deb" > /dev/null; then
     fi
 fi
 
-out="$ktest_tmp/out"
-
 for i in "${ktest_make_install[@]}"; do
-    pushd "/host/$i" > /dev/null
-    if ! make install > "$out" 2>&1; then
-	echo "Error installing $i:"
-	cat "$out"
-	exit 1
-    fi
-    [[ $ktest_verbose = 1 ]] && cat "$out"
-    popd > /dev/null
+    run_quiet "building $(basename $i)" make -C "/host/$i" install
 done
 
 get_stratch_devs()

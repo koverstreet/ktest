@@ -8,11 +8,6 @@ require-kernel-config BCACHEFS_QUOTA
 
 require-make ~/src/linuxquota-code
 
-list_tests()
-{
-    (cd /ktest-out/xfstests/tests; echo generic/???)
-}
-
 run_tests()
 {
     bcachefs_antagonist

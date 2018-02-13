@@ -17,6 +17,11 @@ config-scratch-devs 14G
 
 config-timeout $(stress_timeout)
 
+list_tests()
+{
+    (cd "$ktest_dir/tests/xfstests/tests"; echo generic/???)
+}
+
 run_xfstests()
 {
     FSTYP="$1"
@@ -31,17 +36,16 @@ run_xfstests()
 
     grep -q fsgqa /etc/passwd || useradd fsgqa
 
-    ln -sf $LOGDIR/log-writes/replay-log /usr/bin
-    #(cd $LOGDIR/xfsprogs; make install install-dev)
-    (cd $LOGDIR/xfstests; make) > /dev/null
-
+    # required?
     ln -sf /bin/bash /bin/sh
 
     mkdir -p $TEST_DIR $SCRATCH_MNT
     mkfs.$FSTYP -q $TEST_DEV
     mount $TEST_DEV $TEST_DIR
 
-    cd $LOGDIR/xfstests
+    cd "$ktest_dir/tests/xfstests"
+    run_quiet "building xfstests" make
+
     rm -f results/generic/*
     ./check "$@"
 }

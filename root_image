@@ -8,6 +8,7 @@ set -o errexit
 set -o errtrace
 
 ktest_dir=$(dirname "$(readlink -f "$0")")
+debootstrap=$ktest_dir/debootstrap/debootstrap
 
 . "$ktest_dir/lib/util.sh"
 
@@ -18,7 +19,6 @@ fi
 
 checkdep fallocate util-linux
 checkdep mkfs.ext4 e2fsprogs
-checkdep debootstrap
 
 IMAGE_SIZE="2G"
 MIRROR=http://ftp.us.debian.org/debian/
@@ -81,14 +81,15 @@ PACKAGES=(kexec-tools less psmisc openssh-server	\
 # stress testing:
 PACKAGES+=(fio dbench bonnie++ fsmark)
 
-# bcache-tools build dependencies:
+# bcachefs-tools build dependencies:
 PACKAGES+=(libblkid-dev uuid-dev libscrypt-dev)
 PACKAGES+=(libsodium-dev libkeyutils-dev liburcu-dev)
+PACKAGES+=(zlib1g-dev libattr1-dev libaio-dev)
 
 # xfstests:
-PACKAGES+=(xfsprogs xfslibs-dev quota)
+PACKAGES+=(xfsprogs xfslibs-dev quota libcap2-bin)
 PACKAGES+=(libattr1-dev libaio-dev libgdbm-dev libacl1-dev gettext)
-PACKAGES+=(libssl-dev)
+PACKAGES+=(libssl-dev libgdbm-dev libgdbm-compat-dev)
 
 # nfs testing:
 PACKAGES+=(nfs-kernel-server)
@@ -240,12 +241,12 @@ cmd_create()
     mkfs.ext4 -F "$ktest_image"
     mount "$ktest_image" "$MNT"
 
-    debootstrap					\
-	--no-check-gpg				\
-	--arch="$DEBIAN_ARCH"			\
-	--include=$(join_by "${PACKAGES[@]}")	\
-	--exclude=$(join_by "${EXCLUDE[@]}")	\
-	--foreign				\
+    $debootstrap					\
+	--no-check-gpg					\
+	--arch="$DEBIAN_ARCH"				\
+	--include=$(join_by " " "${PACKAGES[@]}")	\
+	--exclude=$(join_by " " "${EXCLUDE[@]}")	\
+	--foreign					\
 	sid "$MNT" "$MIRROR"
 
     update_files
