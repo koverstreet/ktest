@@ -25,7 +25,7 @@ BUILD=1			# if set to 1, kernel will build
 			#       ignored with: -K (sets to 0)
 DEPS=1
 COVERAGE=""		# list of directories to enable code coverage for
-NJOBS=$(($(grep -c '^processor' /proc/cpuinfo) * 2))
+ktest_njobs=$(($(grep -c '^processor' /proc/cpuinfo) * 2))
 			# number of jobs to passed to make during kernel compile
 			#       sets with: -j
 			#       defaults to 2 * number of processor
@@ -40,19 +40,16 @@ usage()
     echo "  config      Run make nconfig"
     echo
     echo "  options:"
-    echo "      -x       bash debug statements"
-    echo "      -k <dir> kernel source dir"
-    echo "      -b <dir> build directory for kernel (default: kernel_source/.build-test-kernel)"
-    echo "      -w <dir> work directory (default: kernel build directory)"
-    echo "      -c <dir> enable coverage for this dir (only valid without -K)"
+    echo "      -k <dir>    kernel source dir"
+    echo "      -b <dir>    build directory for kernel (default: kernel_source/.build-test-kernel)"
+    echo "      -w <dir>    work directory (default: kernel build directory)"
+    echo "      -c <dir>    enable coverage for this dir (only valid without -K)"
+    ktest_usage_opts
     echo
     echo " options for build-test-kernel run:"
-    echo "      -K       don't build kernel"
-    echo "      -j <num> j option to make"
-    echo "      -i <dir> VM root filesystem image"
-    echo "      -p <num> hint for test duration (higher is longer, default is 0)"
-    echo "      -I       don't automatically stop VM"
-    echo "      -S       exit only on test success"
+    ktest_usage_run_opts
+    echo "      -j <num>    j option to make"
+    echo "      -K          don't rebuild kernel"
     echo
     ktest_usage_post
 }
@@ -94,7 +91,7 @@ while getopts "hKDc:b:j:O:${ktest_args}" arg; do
 	    COVERAGE+=" GCOV_PROFILE_$OPTARG=y"
 	    ;;
 	j)
-	    NJOBS=$OPTARG
+	    ktest_njobs=$OPTARG
 	    ;;
 	O)
 	    WORK_DIR=$OPTARG
@@ -131,7 +128,7 @@ __do_make()
     export CROSS_COMPILE="$ARCH_TRIPLE-"
 
     local MAKE=(make)
-    MAKE+=(--jobs="$NJOBS")
+    MAKE+=(--jobs="$ktest_njobs")
     MAKE+=(--directory="$KERNEL_SOURCE")
     MAKE+=(O="$WORK_DIR")
     MAKE+=(INSTALL_MOD_PATH="$ktest_kernel")

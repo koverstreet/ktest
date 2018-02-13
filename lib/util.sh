@@ -1,21 +1,33 @@
 
+ktest_no_cleanup_tmpdir=""
+
 checkdep()
 {
-	COMMAND=$1
+	local dep=$1
+	local package=$dep
 
 	if [[ $# -ge 2 ]]; then
-	    PACKAGE=$2
+	    package=$2
 	else
-	    PACKAGE=$COMMAND
+	    package=$dep
 	fi
 
-	if ! which "$COMMAND" > /dev/null; then
-		echo -n "$COMMAND not found"
+	local found=0
+
+	if [[ ${dep:0:1} = / ]]; then
+	    # absolute path
+	    [[ -e $dep ]] && found=1
+	else
+	    which "$dep" > /dev/null && found=1
+	fi
+
+	if [[ $found = 0 ]]; then
+		echo -n "$dep not found"
 
 		if which apt-get > /dev/null && \
 			which sudo > /dev/null; then
-			echo ", installing $PACKAGE:"
-			sudo apt-get install -y "$PACKAGE"
+			echo ", installing $package:"
+			sudo apt-get install -y "$package"
 		else
 			echo ", please install"
 			exit 1
@@ -25,7 +37,7 @@ checkdep()
 
 cleanup_tmpdir()
 {
-    [[ -n $ktest_tmp ]] && rm -rf "$ktest_tmp"
+    [[ -n $ktest_tmp && -z $ktest_no_cleanup_tmpdir ]] && rm -rf "$ktest_tmp"
 }
 
 get_tmpdir()

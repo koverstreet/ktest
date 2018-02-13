@@ -2,6 +2,11 @@
 . "$ktest_dir/lib/util.sh"
 . "$ktest_dir/lib/parse-test.sh"
 
+if [[ $(id -u) = 0 ]] ; then
+    echo $0 should not be run as root
+    exit 1
+fi
+
 ktest_priority=0	# hint for how long test should run
 ktest_image=""		# root image that will be booted
                         #       set with: -i <path>
@@ -21,8 +26,9 @@ ktest_verbose=0		# if false, append quiet to kernel commad line
 
 checkdep minicom
 checkdep socat
-checkdep qemu-system-x86_64 qemu-system-i386
-checkdep vde_switch vde2
+checkdep qemu-system-x86_64	qemu-system-x86
+checkdep vde_switch		vde2
+checkdep /usr/include/lwipv6.h	liblwipv6-dev
 
 # config files:
 [[ -f $ktest_dir/ktestrc ]]	&& . "$ktest_dir/ktestrc"
@@ -32,6 +38,8 @@ checkdep vde_switch vde2
 # defaults:
 [[ -f $HOME/.ktestrc ]]		&& . "$HOME/.ktestrc"
 [[ -f $HOME/.ktest/root ]]	&& ktest_image="$HOME/.ktest/root"
+
+# args:
 
 ktest_args="a:p:i:k:ISw:s:o:flvx"
 parse_ktest_arg()
@@ -56,6 +64,7 @@ parse_ktest_arg()
 	    ;;
 	s)
 	    ktest_tmp=$OPTARG
+	    ktest_no_cleanup_tmpdir=1
 	    ;;
 	o)
 	    ktest_out="$OPTARG"
@@ -95,10 +104,47 @@ parse_args_post()
     ktest_out=$(readlink -f "$ktest_out")
 }
 
+ktest_usage_opts()
+{
+    echo "      -x          bash debug statements"
+}
+
+ktest_usage_run_opts()
+{
+    echo "      -p <num>    hint for test duration (higher is longer, default is 0)"
+    echo "      -a <arch>   architecture"
+    echo "      -i <image>  ktest root image"
+    echo "      -s <dir>    directory for scratch drives"
+    echo "      -o <dir>    test output directory; defaults to ktest-out"
+    echo "      -I          interactive mode - don't shut down VM automatically"
+    echo "      -S          exit on test success"
+    echo "      -f          failfast - stop after first test failure"
+    echo "      -l          run all tests in infinite loop until failure"
+    echo "      -v          verbose mode"
+}
+
+ktest_usage_cmds()
+{
+    echo "  boot            Boot a VM without running anything"
+    echo "  run <test>      Run a kernel test"
+    echo "  ssh             Login as root"
+    echo "  gdb             Connect to qemu's gdb interface"
+    echo "  kgdb            Connect to kgdb"
+    echo "  mon             Connect to qemu monitor"
+    echo "  sysrq <key>     Send magic sysrq key via monitor"
+}
+
+ktest_usage_post()
+{
+    echo "For kgdb to be enabled, either -I or -S must be specified"
+}
+
+# subcommands:
+
 ktest_run_cleanup()
 {
-    rm -rf "$ktest_tmp"
     kill -9 -- -$$
+    cleanup_tmpdir
 }
 
 ktest_run()
@@ -292,20 +338,4 @@ ktest_sysrq()
     vmdir=$(<$ktest_idfile)
 
     echo sendkey alt-sysrq-$key | socat - "UNIX-CONNECT:$vmdir/vm-mon"
-}
-
-ktest_usage_cmds()
-{
-    echo "  boot        Boot a VM without running anything"
-    echo "  run <test>  Run a kernel test"
-    echo "  ssh         Login as root"
-    echo "  gdb         Connect to qemu's gdb interface"
-    echo "  kgdb        Connect to kgdb"
-    echo "  mon         Connect to qemu monitor"
-    echo "  sysrq <key> Send magic sysrq key via monitor"
-}
-
-ktest_usage_post()
-{
-    echo "For kgdb to be enabled, either -I or -S must be specified"
 }

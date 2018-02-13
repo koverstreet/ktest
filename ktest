@@ -21,16 +21,12 @@ usage()
     ktest_usage_cmds
     echo
     echo "  options:"
-    echo "      -x       bash debug statements"
-    echo "      -k <dir> kernel to use (default: kernel_source/.ktest)"
-    echo "      -w <dir> work directory (default: .ktest"
-    echo "      -o <dir> output directory (default: ktest-out)"
+    echo "      -k    <dir> kernel to use (default: kernel_source/.ktest)"
+    echo "      -w    <dir> work directory (default: .ktest"
+    ktest_usage_opts
     echo
     echo " options for ktest run:"
-    echo "      -i <dir> VM root filesystem image"
-    echo "      -p <num> hint for test duration (higher is longer, default is 0)"
-    echo "      -I       don't automatically stop VM"
-    echo "      -S       exit only on test success"
+    ktest_usage_run_opts
     echo
     ktest_usage_post
 }

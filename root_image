@@ -34,7 +34,7 @@ usage()
     echo "  -h			Display this help and exit"
     echo "  -a <arch>		Architecture for vm image"
     echo "  -m <mirror>		Debian mirror"
-    echo "  -i <image>		Image to create/update, defaults to /var/lib/ktest/root.$arch"
+    echo '  -i <image>		Image to create/update, defaults to /var/lib/ktest/root.$arch'
 }
 
 if [[ $# = 0 ]]; then
@@ -233,6 +233,8 @@ cmd_create()
 	echo "$ktest_image already exists"
 	exit 1
     fi
+
+    (cd "$ktest_dir"; git submodule update --init debootstrap)
 
     MNT=$(mktemp --tmpdir -d $(basename "$0")-XXXXXXXXXX)
     trap 'umount_image; rm "$ktest_image"' EXIT

@@ -29,9 +29,9 @@ require-kernel-config BINFMT_SCRIPT
 require-kernel-config PROC_KCORE	# XXX Needed?
 
 # KVM guest support:
-require-kernel config HYPERVISOR_GUEST
-require-kernel config PARAVIRT
-require-kernel config KVM_GUEST
+require-kernel-config HYPERVISOR_GUEST
+require-kernel-config PARAVIRT
+require-kernel-config KVM_GUEST
 
 # PCI:
 require-kernel-config PCI

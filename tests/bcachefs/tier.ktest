@@ -74,3 +74,34 @@ test_tiering_variable_buckets_replicas()
 	--tier=1 --bucket=128k	/dev/sde	\
 	--tier=1 --bucket=256k	/dev/sdd
 }
+
+test_device_add()
+{
+    bcachefs format				\
+	--error_action=panic			\
+	--tier=1 /dev/sdd			\
+	--tier=1 /dev/sde			\
+	> /dev/null
+
+    mount -t bcachefs /dev/sdd:/dev/sde /mnt
+
+    run_fio_randrw|tail -n200 &
+    bcachefs device add /mnt /dev/sdc
+
+    wait
+    umount /mnt
+}
+
+test_mount_umount_torture()
+{
+    bcachefs format --replicas=2		\
+	--tier=0 /dev/sdb			\
+	--tier=0 /dev/sdc			\
+	--tier=1 /dev/sdd			\
+	--tier=1 /dev/sde
+
+    for i in {0..10}; do
+	mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd:/dev/sde /mnt
+	umount /mnt
+    done
+}

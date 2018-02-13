@@ -9,7 +9,7 @@ config-scratch-devs 4G
 config-scratch-devs 4G
 
 config-timeout $(stress_timeout)
-require-make ~/src/linuxquota-code
+require-make linuxquota-code
 
 test_quota()
 {

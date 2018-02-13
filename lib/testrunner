@@ -82,8 +82,10 @@ if compgen -G "$ktest_tmp/*.deb" > /dev/null; then
     fi
 fi
 
+j=$(($(grep -c '^processor' /proc/cpuinfo) * 2))
+
 for i in "${ktest_make_install[@]}"; do
-    run_quiet "building $(basename $i)" make -C "/host/$i" install
+    run_quiet "building $(basename $i)" make -j $j -C "/host/$i" install
 done
 
 get_stratch_devs()
