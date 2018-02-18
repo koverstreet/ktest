@@ -11,6 +11,9 @@ export PS4='+${LINENO}+ '
 
 ktest_dir=$(dirname "$(readlink -f "$0")")
 
+ktest_kernel_binary=""	# dir that has the kernel to run
+                        #       set with: -k <path>
+
 . "$ktest_dir/lib/util.sh"
 . "$ktest_dir/lib/libktest.sh"
 
@@ -21,11 +24,10 @@ usage()
     ktest_usage_cmds
     echo
     echo "  options:"
-    echo "      -k    <dir> kernel to use (default: kernel_source/.ktest)"
-    echo "      -w    <dir> work directory (default: .ktest"
     ktest_usage_opts
     echo
     echo " options for ktest run:"
+    echo "      -k <dir>    kernel to run"
     ktest_usage_run_opts
     echo
     ktest_usage_post
@@ -40,8 +42,17 @@ fi
 CMD="ktest_$1"
 shift
 
-while getopts "h${ktest_args}" arg; do
+# check if command is valid
+if [[ $(type -t "$CMD") != function ]]; then
+    usage
+    exit 1
+fi
+
+while getopts "k:h${ktest_args}" arg; do
     case $arg in
+	k)
+	    ktest_kernel_binary=$OPTARG
+	    ;;
 	h)
 	    usage
 	    exit 0
@@ -51,12 +62,18 @@ while getopts "h${ktest_args}" arg; do
 done
 shift $((OPTIND - 1))
 
-parse_args_post
-
-# check if command is valid
-if [[ $(type -t "$CMD") != function ]]; then
-    usage
+if [[ -z $ktest_kernel_binary ]]; then
+    echo "required argument -k missing: kernel to run"
     exit 1
 fi
+
+if [[ ! -d $ktest_kernel_binary ]]; then
+    echo "kernel $ktest_kernel_binary does not exist"
+    exit 1
+fi
+
+ktest_kernel_binary=$(readlink -f "$ktest_kernel_binary")
+
+parse_args_post
 
 $CMD "$@"

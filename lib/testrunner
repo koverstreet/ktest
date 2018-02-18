@@ -20,7 +20,7 @@ ln -s $ktest_dir /ktest
 . "$ktest_dir/lib/util.sh"
 . "$ktest_dir/lib/parse-test.sh"
 
-ln -sf "/host/$ktest_kernel/lib/modules" /lib/modules
+ln -sf "/host/$ktest_kernel_binary/lib/modules" /lib/modules
 depmod -a
 
 mkdir -p /root/.ssh
@@ -59,7 +59,7 @@ fi
 # If debugging crash dumps, add "console=hvc0" to the append line
 # below:
 if [[ $ktest_crashdump = 1 ]]; then
-    kexec -p /host/$ktest_kernel/vmlinuz --append="root=/dev/sda rw maxcpus=1" || true
+    kexec -p /host/$ktest_kernel_binary/vmlinuz --append="root=/dev/sda rw maxcpus=1" || true
 fi
 
 NR_REBOOTS=0

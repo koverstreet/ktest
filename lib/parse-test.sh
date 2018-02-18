@@ -99,7 +99,7 @@ parse_test_deps()
 
     config-image()
     {
-	ktest_image=$1
+	ktest_root_image=$1
     }
 
     config-cpus()

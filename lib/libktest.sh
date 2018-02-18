@@ -7,16 +7,17 @@ if [[ $(id -u) = 0 ]] ; then
     exit 1
 fi
 
-ktest_priority=0	# hint for how long test should run
-ktest_image=""		# root image that will be booted
+ktest_root_image=""	# virtual machine root filesystem
                         #       set with: -i <path>
                         #       defaults: /var/lib/ktest/root
                         #       auto-override: $HOME/.ktest/root
-ktest_kernel=""		# dir that has the kernel to run
+ktest_kernel_binary=""		# dir that has the kernel to run
                         #       set with: -k <path>
 ktest_idfile=""		# passed as --id to vmstart
                         #       set with: -w <path>
 ktest_out=""		# dir for test output (logs, code coverage, etc.)
+
+ktest_priority=0	# hint for how long test should run
 ktest_interactive=0     # if set to 1, timeout is ignored completely
                         #       sets with: -I
 ktest_exit_on_success=0	# if true, exit on success, not failure or timeout
@@ -37,37 +38,31 @@ checkdep /usr/include/lwipv6.h	liblwipv6-dev
 
 # defaults:
 [[ -f $HOME/.ktestrc ]]		&& . "$HOME/.ktestrc"
-[[ -f $HOME/.ktest/root ]]	&& ktest_image="$HOME/.ktest/root"
+[[ -f $HOME/.ktest/root ]]	&& ktest_root_image="$HOME/.ktest/root"
 
 # args:
 
-ktest_args="a:p:i:k:ISw:s:o:flvx"
+ktest_args="i:s:w:a:p:ISFLvx"
 parse_ktest_arg()
 {
     local arg=$1
 
     case $arg in
-	a)
-	    ARCH=$OPTARG
-	    ;;
-	p)
-	    ktest_priority=$OPTARG
-	    ;;
 	i)
-	    ktest_image=$OPTARG
-	    ;;
-	k)
-	    ktest_kernel=$OPTARG
-	    ;;
-	w)
-	    ktest_idfile="$OPTARG"
+	    ktest_root_image=$OPTARG
 	    ;;
 	s)
 	    ktest_tmp=$OPTARG
 	    ktest_no_cleanup_tmpdir=1
 	    ;;
-	o)
-	    ktest_out="$OPTARG"
+	w)
+	    ktest_idfile="$OPTARG"
+	    ;;
+	a)
+	    ARCH=$OPTARG
+	    ;;
+	p)
+	    ktest_priority=$OPTARG
 	    ;;
 	I)
 	    ktest_interactive=1
@@ -75,10 +70,10 @@ parse_ktest_arg()
 	S)
 	    ktest_exit_on_success=1
 	    ;;
-	f)
+	F)
 	    ktest_failfast=1
 	    ;;
-	l)
+	L)
 	    ktest_loop=1
 	    ;;
 	v)
@@ -96,17 +91,17 @@ parse_args_post()
 
     checkdep $QEMU_BIN $QEMU_PACKAGE
 
-    [[ -z $ktest_image ]]	&& ktest_image=/var/lib/ktest/root.$DEBIAN_ARCH
+    [[ -z $ktest_root_image ]]	&& ktest_root_image=/var/lib/ktest/root.$DEBIAN_ARCH
     [[ -z $ktest_idfile ]]	&& ktest_idfile=./.ktest-vm
     [[ -z $ktest_out ]]		&& ktest_out=./ktest-out
 
-    ktest_kernel=$(readlink -f "$ktest_kernel")
     ktest_out=$(readlink -f "$ktest_out")
 }
 
 ktest_usage_opts()
 {
     echo "      -x          bash debug statements"
+    echo "      -h          display this help and exit"
 }
 
 ktest_usage_run_opts()
@@ -118,8 +113,8 @@ ktest_usage_run_opts()
     echo "      -o <dir>    test output directory; defaults to ktest-out"
     echo "      -I          interactive mode - don't shut down VM automatically"
     echo "      -S          exit on test success"
-    echo "      -f          failfast - stop after first test failure"
-    echo "      -l          run all tests in infinite loop until failure"
+    echo "      -F          failfast - stop after first test failure"
+    echo "      -L          run all tests in infinite loop until failure"
     echo "      -v          verbose mode"
 }
 
@@ -149,12 +144,12 @@ ktest_run_cleanup()
 
 ktest_run()
 {
-    if [[ -z $ktest_kernel ]]; then
+    if [[ -z $ktest_kernel_binary ]]; then
 	echo "Required parameter -k missing: kernel"
 	exit 1
     fi
 
-    if [[ ! -f $ktest_image ]]; then
+    if [[ ! -f $ktest_root_image ]]; then
 	echo "VM root filesystem not found, use vm_create_image to create one"
 	exit 1
     fi
@@ -205,7 +200,7 @@ ktest_run()
 	-nographic							\
 	-m		"$ktest_mem"					\
 	-smp		"$ktest_cpus"					\
-	-kernel		"$ktest_kernel/vmlinuz"				\
+	-kernel		"$ktest_kernel_binary/vmlinuz"			\
 	-append		"$kernelargs"					\
 	-device		virtio-serial					\
 	-chardev	stdio,id=console				\
@@ -218,7 +213,7 @@ ktest_run()
 	-net		vde,sock="$net"					\
 	-virtfs		local,path=/,mount_tag=host,security_model=none	\
 	-device		virtio-scsi-pci,id=scsi-hba			\
-	-drive		if=none,format=raw,id=disk0,file="$ktest_image",snapshot=on\
+	-drive		if=none,format=raw,id=disk0,file="$ktest_root_image",snapshot=on\
 	-device		scsi-hd,bus=scsi-hba.0,drive=disk0		\
     )
 
@@ -297,7 +292,7 @@ ktest_ssh()
 
 ktest_gdb()
 {
-    if [[ -z $ktest_kernel ]]; then
+    if [[ -z $ktest_kernel_binary ]]; then
 	echo "Required parameter -k missing: kernel"
 	exit 1
     fi
@@ -306,12 +301,12 @@ ktest_gdb()
 
     exec gdb -ex "set remote interrupt-on-connect"			\
 	     -ex "target remote | socat UNIX-CONNECT:$vmdir/vm-gdb -"	\
-	     "$ktest_kernel/vmlinux"
+	     "$ktest_kernel_binary/vmlinux"
 }
 
 ktest_kgdb()
 {
-    if [[ -z $ktest_kernel ]]; then
+    if [[ -z $ktest_kernel_binary ]]; then
 	echo "Required parameter -k missing: kernel"
 	exit 1
     fi
@@ -322,7 +317,7 @@ ktest_kgdb()
 
     exec gdb -ex "set remote interrupt-on-connect"			\
 	     -ex "target remote | socat UNIX-CONNECT:$vmdir/vm-kgdb -"\
-	     "$ktest_kernel/vmlinux"
+	     "$ktest_kernel_binary/vmlinux"
 }
 
 ktest_mon()
