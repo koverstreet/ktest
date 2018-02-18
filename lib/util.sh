@@ -194,9 +194,14 @@ run_quiet()
 	echo -n "$msg... "
 
 	get_tmpdir
-	local out="$ktest_tmp/put"
+	local out="$ktest_tmp/out-$msg"
 
-	if ! ( "$@" ) > "$out" 2>&1; then
+	set +e
+	(set -e; "$@") > "$out" 2>&1
+	local ret=$?
+	set -e
+
+	if [[ $ret != 0 ]]; then
 	    echo
 	    cat "$out"
 	    exit 1

@@ -24,7 +24,8 @@ WORK_DIR=""		# dir where vm meta data (id, logs, etc) gets stored
 BUILD=1			# if set to 1, kernel will build
 			#       ignored with: -K (sets to 0)
 DEPS=1
-COVERAGE=""		# list of directories to enable code coverage for
+COVERAGE=""		# doing code coverage?
+MAKEARGS=()
 ktest_njobs=$(($(grep -c '^processor' /proc/cpuinfo) * 2))
 			# number of jobs to passed to make during kernel compile
 			#       sets with: -j
@@ -88,7 +89,8 @@ while getopts "hKDc:b:j:O:${ktest_args}" arg; do
 
 	    # Strip trailing / from directory name, substitute _ for /
 	    OPTARG=$(echo "${OPTARG%/}"|tr / _)
-	    COVERAGE+=" GCOV_PROFILE_$OPTARG=y"
+	    MAKEARGS+=("GCOV_PROFILE_$OPTARG=y")
+	    COVERAGE=1
 	    ;;
 	j)
 	    ktest_njobs=$OPTARG
@@ -126,27 +128,22 @@ run_ktest()
 
 __do_make()
 {
-    echo CROSS_COMPILE=$CROSS_COMPILE
-
     if [[ -n $CROSS_COMPILE ]]; then
 	export ARCH="$KERNEL_ARCH"
 	export CROSS_COMPILE="$ARCH_TRIPLE-"
     fi
 
-    local MAKE=(make)
-    MAKE+=(--jobs="$ktest_njobs")
-    MAKE+=(--directory="$KERNEL_SOURCE")
-    MAKE+=(O="$WORK_DIR")
-    MAKE+=(INSTALL_MOD_PATH="$ktest_kernel")
-    MAKE+=(EXTRA_CFLAGS="-g3")
-    MAKE+=($COVERAGE)
-    MAKE+=("$@")
-
     if [[ $# = 0 || $1 != nconfig ]]; then
-	MAKE+=("--output-sync=target")
+	MAKEARGS+=("--output-sync=target")
     fi
 
-    "${MAKE[@]}"
+    make --jobs="$ktest_njobs"			\
+	--directory="$KERNEL_SOURCE"	    	\
+	O="$WORK_DIR"				\
+	INSTALL_MOD_PATH="$ktest_kernel"	\
+	EXTRA_CFLAGS="-g3"			\
+	"${MAKEARGS[@]}"			\
+	"$@"
 }
 
 new_config()
@@ -266,7 +263,9 @@ cmd_run()
 	ktest_kernel_config_require+=(GCOV_FORMAT_AUTODETECT)
     fi
 
-    [[ -n $BUILD ]] && run_quiet "building kernel" build_kernel
+    if [[ -n $BUILD ]]; then
+	run_quiet "building kernel" build_kernel
+    fi
 
     ktest_run "$@"
 }
