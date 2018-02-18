@@ -64,25 +64,16 @@ fi
 CMD="$1"
 shift
 
-if [[ $(type -t "cmd_$CMD") == function ]]; then
-    CMD="cmd_$CMD"
-elif [[ $(type -t "ktest_$CMD") == function ]]; then
-    CMD="ktest_$CMD"
-else
-    usage
-    exit 1
-fi
-
 while getopts "k:b:o:KDc:j:h${ktest_args}" arg; do
     case $arg in
 	k)
-	    ktest_kernel_source=$(readlink -e "$OPTARG")
+	    ktest_kernel_source="$OPTARG"
 	    ;;
 	b)
-	    ktest_kernel_build=$(readlink -e "$OPTARG")
+	    ktest_kernel_build="$OPTARG"
 	    ;;
 	o)
-	    ktest_kernel_binary=$(readlink -e "$OPTARG")
+	    ktest_kernel_binary="$OPTARG"
 	    ;;
 	K)
 	    BUILD=""
@@ -322,5 +313,14 @@ cmd_help()
 {
     usage
 }
+
+if [[ $(type -t "cmd_$CMD") == function ]]; then
+    CMD="cmd_$CMD"
+elif [[ $(type -t "ktest_$CMD") == function ]]; then
+    CMD="ktest_$CMD"
+else
+    usage
+    exit 1
+fi
 
 $CMD "$@"

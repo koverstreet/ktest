@@ -84,7 +84,7 @@ PACKAGES+=(fio dbench bonnie++ fsmark)
 # bcachefs-tools build dependencies:
 PACKAGES+=(libblkid-dev uuid-dev libscrypt-dev)
 PACKAGES+=(libsodium-dev libkeyutils-dev liburcu-dev)
-PACKAGES+=(zlib1g-dev libattr1-dev libaio-dev)
+PACKAGES+=(zlib1g-dev libattr1-dev libaio-dev libzstd-dev)
 
 # xfstests:
 PACKAGES+=(xfsprogs xfslibs-dev quota libcap2-bin)
