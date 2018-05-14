@@ -1,21 +1,43 @@
 
 
-if [[ $KERNEL_ARCH = x86 ]]; then
-    require-kernel-config SMP
-    require-kernel-config MCORE2	# optimize for core2
-    require-kernel-config IA32_EMULATION
-    require-kernel-config IO_DELAY_0XED
-fi
+have_kvmguest=0
+have_virtio=0
+have_suspend=0
 
-if [[ $KERNEL_ARCH = powerpc ]]; then
-    require-kernel-config ADVANCED_OPTIONS
-fi
+case $KERNEL_ARCH in
+    x86)
+	require-kernel-config SMP
+	require-kernel-config MCORE2	# optimize for core2
+	require-kernel-config IA32_EMULATION
+	require-kernel-config IO_DELAY_0XED
+
+	have_kvmguest=1
+	have_virtio=1
+	have_suspend=1
+	;;
+    powerpc)
+	require-kernel-config ADVANCED_OPTIONS
+
+	have_kvmguest=1
+	have_virtio=1
+	have_suspend=1
+	;;
+    mips)
+	require-kernel-config MIPS_MALTA
+	require-kernel-config CPU_MIPS${BITS}_R2
+	require-kernel-config CPU_BIG_ENDIAN=y
+	require-kernel-config CPU_LITTLE_ENDIAN=n
+
+	have_virtio=1
+	ktest_storage_bus=piix4-ide
+	;;
+esac
 
 # Normal kernel functionality:
 #require-kernel-config PREEMPT
 #require-kernel-config NO_HZ
+#require-kernel-config HZ_100
 
-require-kernel-config HZ_100
 require-kernel-config HIGH_RES_TIMERS
 
 require-kernel-config SYSVIPC
@@ -24,22 +46,58 @@ require-kernel-config SWAP		# systemd segfaults if you don't have swap support..
 require-kernel-config MODULES,MODULE_UNLOAD
 require-kernel-config DEVTMPFS
 require-kernel-config DEVTMPFS_MOUNT
+require-kernel-config BINFMT_ELF
 require-kernel-config BINFMT_SCRIPT
 
 require-kernel-config PROC_KCORE	# XXX Needed?
 
+require-kernel-config TTY
+require-kernel-config VT
+
 # KVM guest support:
-require-kernel-config HYPERVISOR_GUEST
-require-kernel-config PARAVIRT
-require-kernel-config KVM_GUEST
+if [[ $have_kvmguest = 1 ]]; then
+    require-kernel-config HYPERVISOR_GUEST
+    require-kernel-config PARAVIRT
+    require-kernel-config KVM_GUEST
+fi
+
+if [[ $have_virtio = 1 ]]; then
+    require-kernel-config VIRTIO_MENU
+    require-kernel-config VIRTIO_PCI
+    require-kernel-config HW_RANDOM_VIRTIO
+    require-kernel-config VIRTIO_CONSOLE
+    require-kernel-config VIRTIO_NET
+    require-kernel-config NET_9P_VIRTIO
+fi
+
+if [[ $have_suspend = 1 ]]; then
+    require-kernel-config PM
+    require-kernel-config SUSPEND
+    require-kernel-config PM_SLEEP
+    require-kernel-config PM_DEBUG
+    require-kernel-append no_console_suspend
+fi
+
+case $ktest_storage_bus in
+    virtio-scsi-pci)
+	require-kernel-config SCSI_VIRTIO
+	;;
+    ahci)
+	require-kernel-config ATA
+	require-kernel-config SATA_AHCI
+	;;
+    piix4-ide)
+	require-kernel-config ATA
+	require-kernel-config ATA_SFF
+	require-kernel-config ATA_PIIX
+	;;
+esac
 
 # PCI:
 require-kernel-config PCI
-require-kernel-config VIRTIO_PCI
 
 # Rng:
 require-kernel-config HW_RANDOM
-require-kernel-config HW_RANDOM_VIRTIO
 
 # Clock:
 require-kernel-config RTC_CLASS
@@ -49,12 +107,10 @@ require-kernel-config RTC_DRV_CMOS
 # Console:
 require-kernel-config SERIAL_8250	# XXX can probably drop
 require-kernel-config SERIAL_8250_CONSOLE
-require-kernel-config VIRTIO_CONSOLE
 
 # Block devices:
 require-kernel-config SCSI
 require-kernel-config SCSI_LOWLEVEL	# what's this for?
-require-kernel-config SCSI_VIRTIO
 require-kernel-config BLK_DEV_SD	# disk support
 
 # Networking
@@ -64,7 +120,6 @@ require-kernel-config UNIX
 require-kernel-config INET
 require-kernel-config IP_MULTICAST
 require-kernel-config NETDEVICES
-require-kernel-config VIRTIO_NET
 
 # Filesystems:
 require-kernel-config TMPFS
@@ -76,16 +131,15 @@ require-kernel-config EXT4_FS
 require-kernel-config EXT4_FS_POSIX_ACL
 
 require-kernel-config NET_9P
-require-kernel-config NET_9P_VIRTIO
 require-kernel-config NETWORK_FILESYSTEMS
 require-kernel-config 9P_FS
 
 # Crash dumps
-#if [[ $KERNEL_ARCH = x86 ]]; then
-#    require-kernel-config KEXEC
-#    require-kernel-config CRASH_DUMP
-#    require-kernel-config RELOCATABLE
-#fi
+if [[ $ktest_crashdump = 1 ]]; then
+    require-kernel-config KEXEC
+    require-kernel-config CRASH_DUMP
+    require-kernel-config RELOCATABLE
+fi
 
 # KGDB:
 require-kernel-config KGDB

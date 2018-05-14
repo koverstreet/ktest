@@ -38,12 +38,32 @@ if [[ $# = 0 ]]; then
     exit 1
 fi
 
+cmd_run()
+{
+    if [[ $# = 0 ]]; then
+	echo "ktest: missing test"
+	exit 1
+    fi
+
+    ktest_test=$1
+    shift
+    ktest_testargs="$@"
+
+    parse_test_deps "$ktest_test"
+
+    start_vm
+}
+
 #parse command and shift for rest of arg parsing
-CMD="ktest_$1"
+CMD="$1"
 shift
 
 # check if command is valid
-if [[ $(type -t "$CMD") != function ]]; then
+if [[ $(type -t "cmd_$CMD") == function ]]; then
+    CMD="cmd_$CMD"
+elif [[ $(type -t "ktest_$CMD") == function ]]; then
+    CMD="ktest_$CMD"
+else
     usage
     exit 1
 fi
@@ -61,18 +81,6 @@ while getopts "k:h${ktest_args}" arg; do
     parse_ktest_arg $arg
 done
 shift $((OPTIND - 1))
-
-if [[ -z $ktest_kernel_binary ]]; then
-    echo "required argument -k missing: kernel to run"
-    exit 1
-fi
-
-if [[ ! -d $ktest_kernel_binary ]]; then
-    echo "kernel $ktest_kernel_binary does not exist"
-    exit 1
-fi
-
-ktest_kernel_binary=$(readlink -f "$ktest_kernel_binary")
 
 parse_args_post
 

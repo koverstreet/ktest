@@ -1,16 +1,13 @@
-BUILD_DEPS=""
 
 parse_test_deps()
 {
     ktest_cpus="6"
     ktest_mem=""
     ktest_timeout=""
-    ktest_kernel_append=""
+    ktest_kernel_append=()
     ktest_scratch_devs=()
     ktest_make_install=()
     ktest_kernel_config_require=()
-    
-    TEST_RUNNING=""
 
     local NEXT_SCRATCH_DEV="b"
     local TESTPROG=$1
@@ -50,8 +47,6 @@ parse_test_deps()
     {
 	local req=$1
 
-	[[ $BUILD_DEPS = 1 ]] || return 0
-
 	if ! [[ -d $req ]]; then
 	    echo "build-deb dependency $req not found"
 	    exit 1
@@ -65,8 +60,6 @@ parse_test_deps()
     require-make()
     {
 	local req=$(readlink -e "$1")
-
-	[[ $BUILD_DEPS = 1 ]] || return 0
 
 	ktest_make_install+=("$req")
 
@@ -89,7 +82,7 @@ parse_test_deps()
 
     require-kernel-append()
     {
-	ktest_kernel_append+=" $1"
+	ktest_kernel_append+=($1)
     }
 
     config-scratch-devs()

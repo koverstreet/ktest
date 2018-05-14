@@ -48,13 +48,14 @@ get_tmpdir()
     fi
 }
 
-ARCH=$(uname -m)
+ktest_arch=$(uname -m)
 CROSS_COMPILE=""
 
 parse_arch()
 {
     case $1 in
 	x86|i386)
+	    ktest_arch=x86
 	    DEBIAN_ARCH=i386
 	    ARCH_TRIPLE=x86-linux-gnu
 
@@ -65,6 +66,7 @@ parse_arch()
 	    QEMU_BIN=qemu-system-x86_64
 	    ;;
 	x86_64|amd64)
+	    ktest_arch=x86_64
 	    DEBIAN_ARCH=amd64
 	    ARCH_TRIPLE=x86_64-linux-gnu
 
@@ -83,6 +85,16 @@ parse_arch()
 
 	    QEMU_PACKAGE=qemu-system-mips
 	    QEMU_BIN=qemu-system-mips
+	    ;;
+	mips64)
+	    DEBIAN_ARCH=mips
+	    ARCH_TRIPLE=mips-linux-gnu
+
+	    KERNEL_ARCH=mips
+	    BITS=64
+
+	    QEMU_PACKAGE=qemu-system-mips
+	    QEMU_BIN=qemu-system-mips64
 	    ;;
 	sparc)
 	    DEBIAN_ARCH=sparc
@@ -106,6 +118,8 @@ parse_arch()
 	    ;;
 	ppc|powerpc)
 	    DEBIAN_ARCH=powerpc
+	    MIRROR=http://deb.debian.org/debian-ports
+
 	    ARCH_TRIPLE=powerpc-linux-gnu
 
 	    KERNEL_ARCH=powerpc
@@ -116,6 +130,8 @@ parse_arch()
 	    ;;
 	ppc64)
 	    DEBIAN_ARCH=ppc64
+	    MIRROR=http://deb.debian.org/debian-ports
+
 	    ARCH_TRIPLE=powerpc-linux-gnu
 
 	    KERNEL_ARCH=powerpc
@@ -129,7 +145,7 @@ parse_arch()
 	    exit 1
     esac
 
-    if [[ $ARCH != $(uname -m) ]]; then
+    if [[ $ktest_arch != $(uname -m) ]]; then
 	CROSS_COMPILE=1
     fi
 }
@@ -191,7 +207,9 @@ run_quiet()
     shift
 
     if [[ $ktest_verbose = 0 ]]; then
-	echo -n "$msg... "
+	if [[ -n $msg ]]; then
+	    echo -n "$msg... "
+	fi
 
 	get_tmpdir
 	local out="$ktest_tmp/out-$msg"
@@ -207,9 +225,13 @@ run_quiet()
 	    exit 1
 	fi
 
-	echo done
+	if [[ -n $msg ]]; then
+	    echo done
+	fi
     else
-	echo "$msg:"
+	if [[ -n $msg ]]; then
+	    echo "$msg:"
+	fi
 	"$@"
     fi
 }

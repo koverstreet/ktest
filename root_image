@@ -53,7 +53,7 @@ while getopts "ha:m:i:" arg; do
 	    exit 0
 	    ;;
 	a)
-	    ARCH=$OPTARG
+	    ktest_arch=$OPTARG
 	    ;;
 	m)
 	    MIRROR=$OPTARG
@@ -65,7 +65,7 @@ while getopts "ha:m:i:" arg; do
 done
 shift $(( OPTIND - 1 ))
 
-parse_arch "$ARCH"
+parse_arch "$ktest_arch"
 
 [[ -z $ktest_image ]] && ktest_image=/var/lib/ktest/root.$DEBIAN_ARCH
 

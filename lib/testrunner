@@ -8,7 +8,6 @@ set -o errtrace
 
 export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]}()}+ '
 
-TEST_RUNNING=1
 KERNEL_ARCH=""
 
 . /host/$ktest_env
@@ -45,7 +44,7 @@ ulimit -c unlimited
 rm -f /ktest-out/core.*
 
 # Virtual block device tweaks
-echo noop | tee /sys/block/sd*/queue/scheduler >/dev/null
+echo none | tee /sys/block/sd*/queue/scheduler >/dev/null 2>&1 || true
 
 # Check if we are running the crashdump kernel
 if [[ -s /proc/vmcore ]]; then
@@ -115,14 +114,7 @@ copy_to_host()
 	done
     fi
 
-    (
-        set +e
-        fuser -INT -k $LOGDIR $LOGDIR/*
-        sync
-        #sleep 1
-        #fuser -k $LOGDIR $LOGDIR/*
-        #umount $LOGDIR
-    )
+    sync
 }
 
 check_taint()
@@ -171,7 +163,7 @@ if [[ $(type -t run_tests) != function ]]; then
 	echo
 
 	for i in $@; do
-	    echo "========= Running test $i"
+	    echo "========= TEST   $i"
 	    echo
 
 	    local start=$(date '+%s')
@@ -182,22 +174,22 @@ if [[ $(type -t run_tests) != function ]]; then
 
 	    pkill -P $$ >/dev/null
 
-	    echo
-	    echo "========= Test $i completed with ret $ret $(($finish - $start))s"
-
 	    # XXX: check dmesg for warnings, oopses, slab corruption, etc. before
 	    # signaling success
 
+	    echo
+
 	    if [[ $ret = 0 ]]; then
+		echo "========= PASSED $i in $(($finish - $start))s"
 		tests_passed+=($i)
 	    else
+		echo "========= FAILED $i in $(($finish - $start))s"
 		tests_failed+=($i)
 
 		[[ $ktest_failfast = 1 ]] && break
 
-		for dev in /dev/sd*; do
-		    [[ $dev = /dev/sda ]] && continue
-		    umount $dev >/dev/null 2>&1 || true
+		for mnt in $(awk '{print $2}' /proc/mounts|grep ^/mnt|sort -r); do
+		    umount $mnt >/dev/null 2>&1 || true
 		done
 	    fi
 	done
@@ -235,6 +227,7 @@ ret=0
 while [[ $ret = 0 ]]; do
     run_tests $tests
     ret=$?
+    pkill -P $$ >/dev/null
     [[ $ktest_loop = 1 ]] || break
 done
 

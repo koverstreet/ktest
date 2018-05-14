@@ -16,7 +16,8 @@ ktest_kernel_source="."	# dir of kernel source
 			#       set with: -k <path>
 			#       defaults: current directory
 ktest_kernel_build=""	# kernel build dir
-			# defaults to $ktest_kernel_source/.build-test-kernel-$ARCH
+			# defaults to
+			# $ktest_kernel_source/.build-test-kernel-$ktest_arch
 ktest_kernel_binary=""	# kernel output dir
 			# defaults to $ktest_kernel_build/kpkg
 
@@ -109,7 +110,7 @@ shift $(( OPTIND - 1 ))
 
 # default parameters
 [[ -z $ktest_kernel_source ]]	&& ktest_kernel_source="."
-[[ -z $ktest_kernel_build ]]	&& ktest_kernel_build="$ktest_kernel_source/.build_test_kernel-$ARCH"
+[[ -z $ktest_kernel_build ]]	&& ktest_kernel_build="$ktest_kernel_source/.build_test_kernel-$ktest_arch"
 [[ -z $ktest_kernel_binary ]]	&& ktest_kernel_binary="$ktest_kernel_build/kpgk"
 
 if [[ ! -d $ktest_kernel_source ]]; then
@@ -138,22 +139,23 @@ run_ktest()
     "$KTEST" "$arg" $KTESTARGS -k "$ktest_kernel_binary" "$@"
 }
 
-__do_make()
+do_make()
 {
     if [[ -n $CROSS_COMPILE ]]; then
 	export ARCH="$KERNEL_ARCH"
 	export CROSS_COMPILE="$ARCH_TRIPLE-"
     fi
 
-    if [[ $# = 0 || $1 != nconfig ]]; then
-	MAKEARGS+=("--output-sync=target")
-    fi
+    # work around a bug in make - maybe not needed anymore?
+#    if [[ $# = 0 || $1 != nconfig ]]; then
+#	MAKEARGS+=("--output-sync=target")
+#    fi
 
     make --jobs="$ktest_njobs"			\
 	--directory="$ktest_kernel_source"    	\
 	O="$ktest_kernel_build"			\
 	INSTALL_MOD_PATH="$ktest_kernel_binary"	\
-	EXTRA_CFLAGS="-g3"			\
+	SKIP_STACK_VALIDATION=1			\
 	"${MAKEARGS[@]}"			\
 	"$@"
 }
@@ -163,19 +165,14 @@ new_config()
     local kconfig="$ktest_kernel_build/.config"
     local config_tool="$ktest_kernel_source/scripts/config"
 
-    __do_make allnoconfig
+    if [[ ! -f $kconfig ]]; then
+	do_make allnoconfig
 
-    # Really undefine everything:
-    sed -i -e 's/\(CONFIG_.*\)=.*/# \1 is not set/' "$kconfig"
-}
+	# Really undefine everything:
+	sed -i -e 's/\(CONFIG_.*\)=.*/# \1 is not set/' "$kconfig"
 
-do_make()
-{
-    if [[ ! -f $ktest_kernel_build/.config ]]; then
-	new_config
+	kernel_opt set		${BITS}BIT
     fi
-
-    __do_make "$@"
 }
 
 kernel_opt()
@@ -229,30 +226,29 @@ build_kernel()
     touch "$magic"
 
     if [[ -n $DEPS ]]; then
-	local kconfig="$ktest_kernel_build/.config"
-	local config_tool="$ktest_kernel_source/scripts/config"
-
-	[[ ! -f $kconfig ]] && new_config
+	new_config
 
 	for opt in "${ktest_kernel_config_require[@]}"; do
 	    [[ -n $opt ]] && kernel_opt set "$opt"
 	done
 
-	if [[ $BITS = 64 ]]; then
-	    kernel_opt set 64BIT
-	else
-	    kernel_opt clear 64BIT
-	fi
-
-	#do_make olddefconfig
-	do_make oldnoconfig
+	do_make olddefconfig
 
 	for opt in "${ktest_kernel_config_require[@]}"; do
 	    [[ -n $opt ]] && kernel_opt check "$opt"
 	done
+
+	kernel_opt check ${BITS}BIT
     fi
 
-    do_make
+    case $KERNEL_ARCH in
+	mips)
+	    do_make vmlinuz
+	    ;;
+	*)
+	    do_make
+	    ;;
+    esac
 
     local BOOT=$ktest_kernel_build/arch/$KERNEL_ARCH/boot
 
@@ -267,6 +263,11 @@ build_kernel()
     install -m0644 "$ktest_kernel_build/vmlinux" "$ktest_kernel_binary/vmlinux"
     install -m0644 "$ktest_kernel_build/.config" "$ktest_kernel_binary/config"
 
+    # if there weren't actually any modules selected, make modules_install gets
+    # confused:
+    touch "$ktest_kernel_build/modules.order"
+    touch "$ktest_kernel_build/modules.builtin"
+
     do_make modules_install
 }
 
@@ -278,9 +279,11 @@ cmd_run()
 	exit 1
     fi
 
-    local TEST=$1
+    ktest_test=$1
+    shift
+    ktest_testargs="$@"
 
-    parse_test_deps "$TEST"
+    parse_test_deps "$ktest_test"
 
     if [[ -n $COVERAGE ]]; then
 	ktest_kernel_config_require+=(GCOV_KERNEL)
@@ -291,7 +294,7 @@ cmd_run()
 	run_quiet "building kernel" build_kernel
     fi
 
-    ktest_run "$@"
+    start_vm
 }
 
 cmd_boot()
@@ -301,11 +304,13 @@ cmd_boot()
 
 cmd_oldconfig()
 {
+    new_config
     do_make oldconfig
 }
 
 cmd_config()
 {
+    new_config
     do_make nconfig
 }
 
