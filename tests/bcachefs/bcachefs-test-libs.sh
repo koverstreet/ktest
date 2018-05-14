@@ -65,7 +65,7 @@ antagonist_expensive_debug_checks()
 antagonist_trigger_gc()
 {
     while true; do
-	sleep 5
+	sleep 2
 	echo 1 | tee /sys/fs/bcachefs/*/internal/trigger_gc > /dev/null 2>&1 || true
     done
 }
@@ -129,7 +129,7 @@ run_fio_base()
 
 run_fio()
 {
-    loops=$((($ktest_priority + 1) * 4))
+    local loops=$((($ktest_priority + 1) * 4))
 
     fio --eta=always				\
 	--ioengine=libaio			\
@@ -165,11 +165,8 @@ run_basic_fio_test()
 
     bcachefs_antagonist
 
-    if [[ $ktest_verbose = 1 ]]; then
-	bcachefs format --error_action=panic "$@"
-    else
-	bcachefs format --error_action=panic "$@" >/dev/null
-    fi
+    run_quiet "" bcachefs format --error_action=panic "$@"
+
     mount -t bcachefs $(join_by : "${devs[@]}") /mnt
 
     #enable_memory_faults

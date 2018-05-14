@@ -11,24 +11,29 @@ config-timeout $(stress_timeout)
 
 run_basic_tiering_test()
 {
-    if true; then
-	run_basic_fio_test "$@"			\
-	    --tier=0 /dev/sdb			\
-	    --tier=0 /dev/sdc			\
-	    --tier=1 /dev/sdd			\
-	    --tier=1 /dev/sde
-    else
-	run_basic_fio_test "$@"			\
-	    --foreground_target=/dev/sdb	\
-	    --promote_target=/dev/sdb		\
-	    --background_target=/dev/sdd	\
-	    /dev/sdb /dev/sdd
-    fi
+    run_basic_fio_test "$@"			\
+	--group=ssd.ssd1 /dev/sdb		\
+	--group=ssd.ssd2 /dev/sdc		\
+	--group=hdd.hdd1 /dev/sdd		\
+	--group=hdd.hdd2 /dev/sde		\
+	--foreground_target=ssd			\
+	--promote_target=ssd			\
+	--background_target=hdd
 }
 
 test_tiering()
 {
     run_basic_tiering_test
+}
+
+test_writethrough()
+{
+    run_basic_fio_test "$@"			\
+	--durability=0 --group=ssd /dev/sd[bc]	\
+	--durability=1 --group=hdd /dev/sd[de]	\
+	--foreground_target=ssd			\
+	--promote_target=ssd			\
+	--background_target=hdd
 }
 
 test_tiering_no_checksum()
@@ -58,30 +63,34 @@ test_tiering_replication()
 
 test_tiering_variable_buckets()
 {
-    run_basic_fio_test				\
-	--tier=0 --bucket=32k	/dev/sdb	\
-	--tier=0 --bucket=64k	/dev/sdc	\
-	--tier=1 --bucket=128k	/dev/sde	\
-	--tier=1 --bucket=256k	/dev/sdd
+    run_basic_fio_test					\
+	--group=ssd --bucket=32k	/dev/sdb	\
+	--group=ssd --bucket=64k	/dev/sdc	\
+	--group=hdd --bucket=128k	/dev/sde	\
+	--group=hdd --bucket=256k	/dev/sdd	\
+	--foreground_target=ssd				\
+	--promote_target=ssd				\
+	--background_target=hdd
 }
 
 test_tiering_variable_buckets_replicas()
 {
-    run_basic_fio_test				\
-	--replicas=2				\
-	--tier=0 --bucket=32k	/dev/sdb	\
-	--tier=0 --bucket=64k	/dev/sdc	\
-	--tier=1 --bucket=128k	/dev/sde	\
-	--tier=1 --bucket=256k	/dev/sdd
+    run_basic_fio_test					\
+	--replicas=2					\
+	--group=ssd --bucket=32k	/dev/sdb	\
+	--group=ssd --bucket=64k	/dev/sdc	\
+	--group=hdd --bucket=128k	/dev/sde	\
+	--group=hdd --bucket=256k	/dev/sdd	\
+	--foreground_target=ssd				\
+	--promote_target=ssd				\
+	--background_target=hdd
 }
 
 test_device_add()
 {
-    bcachefs format				\
-	--error_action=panic			\
-	--tier=1 /dev/sdd			\
-	--tier=1 /dev/sde			\
-	> /dev/null
+    run_quiet "" bcachefs format			\
+	--error_action=panic				\
+	--group=hdd /dev/sd[de]
 
     mount -t bcachefs /dev/sdd:/dev/sde /mnt
 
@@ -94,14 +103,65 @@ test_device_add()
 
 test_mount_umount_torture()
 {
-    bcachefs format --replicas=2		\
-	--tier=0 /dev/sdb			\
-	--tier=0 /dev/sdc			\
-	--tier=1 /dev/sdd			\
-	--tier=1 /dev/sde
+    run_quiet "" bcachefs format			\
+	--replicas=2					\
+	--group=ssd /dev/sd[bc]				\
+	--group=hdd /dev/sd[de]				\
+	--foreground_target=ssd				\
+	--promote_target=ssd				\
+	--background_target=hdd
 
     for i in {0..10}; do
 	mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd:/dev/sde /mnt
 	umount /mnt
     done
+}
+
+test_dm_log_writes()
+{
+    exit 1
+}
+
+disabled_test_change_replicas()
+{
+    run_quiet "" bcachefs format			\
+	--error_action=panic				\
+	--group=ssd /dev/sd[bc]				\
+	--group=hdd /dev/sd[de]				\
+	--foreground_target=ssd				\
+	--promote_target=ssd				\
+	--background_target=hdd
+
+    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd:/dev/sde /mnt
+
+    (
+	cd /sys/fs/bcachefs/*
+	while true; do
+	    echo 1 > options/data_replicas
+	    sleep 0.1
+	    echo 2 > options/data_replicas
+	    sleep 0.1
+	done
+    ) &
+
+    loops=$((($ktest_priority + 1) * 4))
+
+    fio --eta=always				\
+	--numjobs=1				\
+	--buffer_compress_percentage=50		\
+	--filename=/mnt/fiotest		    	\
+	--filesize=1500M			\
+	--loops=$loops				\
+	--name=randrw				\
+	--rw=randrw				\
+	--bsrange=4k-1M	
+
+#    while true; do
+#	dd if=/dev/zero of=/mnt/foo bs=1M count=1024 oflag=direct
+#	sync
+#	#rm /mnt/foo
+#    done
+
+    kill %1
+    umount /mnt
 }

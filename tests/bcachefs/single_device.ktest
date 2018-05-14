@@ -2,7 +2,7 @@
 
 require-lib bcachefs-test-libs.sh
 
-config-scratch-devs 4G
+config-scratch-devs 12G
 
 config-timeout $(stress_timeout)
 
@@ -18,6 +18,23 @@ test_gzip()
     run_basic_fio_test				\
 	--compression_type=gzip			\
 	/dev/sdb
+}
+
+test_zstd()
+{
+    run_basic_fio_test				\
+	--compression_type=zstd			\
+	/dev/sdb
+}
+
+disabled_test_background_compression()
+{
+    bcachefs format --error_action=panic	\
+	--background_compression_type=zstd	\
+	/dev/sdb
+    mount /dev/sdb /mnt
+    echo zstd > /sys/fs/bcachefs/*/options/background_compression
+    run_fio_randrw
 }
 
 test_compress_no_checksum()
@@ -74,10 +91,10 @@ run_copygc_torture()
 {
     bcachefs_antagonist
 
-    bcachefs format				\
+    run_quiet "" bcachefs format		\
 	--error_action=panic			\
 	--bucket=1M --btree_node=16k		\
-	"$@" /dev/sdb >/dev/null
+	"$@" /dev/sdb
 
     mount /dev/sdb /mnt
     #enable_memory_faults
@@ -156,10 +173,10 @@ test_crypto_passphrase()
 
 test_partial_overwritten_extents()
 {
-    bcachefs format				\
+    run_quiet "" bcachefs format		\
 	--error_action=panic			\
 	--encrypted --no_passphrase		\
-	/dev/sdb >/dev/null
+	/dev/sdb
     mount -t bcachefs /dev/sdb /mnt
 
     dd if=/dev/urandom	of=/mnt/foo  bs=32k  count=1 skip=0 oflag=direct
@@ -183,9 +200,9 @@ test_partial_overwritten_extents()
 # test the xattr interface for per-inode IO options:
 test_xattr()
 {
-    bcachefs format				\
+    run_quiet "" bcachefs format		\
 	--error_action=panic			\
-	/dev/sdb >/dev/null
+	/dev/sdb
     mount -t bcachefs /dev/sdb /mnt
 
     mkdir /mnt/foo
@@ -205,9 +222,9 @@ test_quota()
 {
     bcachefs_antagonist
 
-    bcachefs format				\
+    run_quiet "" bcachefs format		\
 	--error_action=panic			\
-	/dev/sdb >/dev/null
+	/dev/sdb
     mount -o usrquota,grpquota,prjquota /dev/sdb /mnt
 
     loops=$((($ktest_priority + 1) * 4))
@@ -227,18 +244,15 @@ test_nfs()
 {
     mkdir /export1 /export2
 
-    bcachefs format				\
+    run_quiet "" bcachefs format		\
 	--error_action=panic			\
-	/dev/sdb >/dev/null
+	/dev/sdb
     mount /dev/sdb /export2
 
     echo "/export1  *(ro,insecure,all_squash,no_subtree_check)" >> /etc/exports
     echo "/export2  *(ro,insecure,all_squash,no_subtree_check)" >> /etc/exports
     exportfs -a
 }
-
-require-kernel-config	PM,SUSPEND,PM_SLEEP,PM_DEBUG
-require-kernel-append	no_console_suspend
 
 test_suspend()
 {
@@ -257,9 +271,9 @@ test_suspend()
 	#s2ram --no_kms --force
     )&
 
-    bcachefs format				\
+    run_quiet "" bcachefs format		\
 	--error_action=panic			\
-	/dev/sdb >/dev/null
+	/dev/sdb
     mount /dev/sdb /mnt
 
     if false; then
@@ -311,7 +325,9 @@ test_journal_torture()
 {
     bcachefs_antagonist
 
-    bcachefs format "$@" /dev/sdb   > /dev/null
+    run_quiet "" bcachefs format		\
+	--error_action=panic			\
+	/dev/sdb
 
     mount -t bcachefs /dev/sdb /mnt
     #enable_memory_faults
@@ -328,7 +344,10 @@ test_online_resize()
 {
     bcachefs_antagonist
 
-    bcachefs format --fs_size=1G /dev/sdb   > /dev/null
+    run_quiet "" bcachefs format		\
+	--error_action=panic			\
+	--fs_size=1G				\
+	/dev/sdb
 
     mount -t bcachefs /dev/sdb /mnt
     bcachefs device resize /dev/sdb
@@ -341,7 +360,10 @@ test_offline_resize()
 {
     bcachefs_antagonist
 
-    bcachefs format --fs_size=1G /dev/sdb   > /dev/null
+    run_quiet "" bcachefs format		\
+	--error_action=panic			\
+	--fs_size=1G				\
+	/dev/sdb
     bcachefs device resize /dev/sdb
 
     mount -t bcachefs /dev/sdb /mnt
@@ -351,7 +373,9 @@ test_offline_resize()
 
 test_sysfs()
 {
-    bcachefs format /dev/sdb   > /dev/null
+    run_quiet "" bcachefs format		\
+	--error_action=panic			\
+	/dev/sdb
     mount -t bcachefs /dev/sdb /mnt
 
     find -H /sys/fs/bcachefs/ -type f -perm -0400 -exec cat {} \; > /dev/null
@@ -361,7 +385,9 @@ test_sysfs()
 
 disabled_test_swapfile()
 {
-    bcachefs format /dev/sdb   > /dev/null
+    run_quiet "" bcachefs format		\
+	--error_action=panic			\
+	/dev/sdb
     mount -t bcachefs /dev/sdb /mnt
 
     fallocate -l 1G /mnt/swapfile
@@ -379,10 +405,10 @@ migrate_from_fs()
     fstype=$1
 
     if [[ $fstype = ext4 ]]; then
-	mkfs.$fstype -F /dev/sdb	> /dev/null 2>&1
+	run_quiet "" mkfs.$fstype -F /dev/sdb
 	mount -o user_xattr /dev/sdb /mnt
     else
-	mkfs.$fstype -f /dev/sdb	> /dev/null 2>&1
+	run_quiet "" mkfs.$fstype -f /dev/sdb
 	mount /dev/sdb /mnt
     fi
 
@@ -460,9 +486,9 @@ test_init_faults()
 {
     setup_tracing 'bcachefs:*'
 
-    bcachefs format				\
+    run_quiet "" bcachefs format		\
 	--error_action=readonly			\
-	/dev/sdb >/dev/null
+	/dev/sdb
 
     # put some data on the filesystem
     mount /dev/sdb /mnt
@@ -488,9 +514,9 @@ test_meta_write_faults()
 {
     setup_tracing 'bcachefs:*'
 
-    bcachefs format				\
+    run_quiet "" bcachefs format		\
 	--error_action=readonly			\
-	/dev/sdb >/dev/null
+	/dev/sdb
 
     meta_write_fault_fn()
     {
@@ -505,4 +531,22 @@ test_meta_write_faults()
     }
 
     run_fault_injection_test bcachefs:meta::write meta_write_fault_fn
+}
+
+test_foo()
+{
+    run_quiet "" bcachefs format		\
+	--error_action=panic			\
+	--bucket=8M				\
+	--data_checksum_type=none		\
+	/dev/sdb
+
+    mount -t bcachefs /dev/sdb /mnt
+    dd if=/dev/zero of=/mnt/foo bs=4k count=81920
+    sync
+
+    umount /mnt
+    mount -t bcachefs /dev/sdb /mnt
+
+    #echo /mnt/foo|bcachefs frag-analyze
 }

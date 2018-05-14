@@ -5,6 +5,7 @@ require-lib bcachefs-test-libs.sh
 
 require-kernel-config BCACHEFS_POSIX_ACL
 require-kernel-config BCACHEFS_QUOTA
+require-kernel-config QUOTA
 
 require-make linuxquota-code
 
