@@ -138,8 +138,8 @@ ktest_usage_post()
 
 ktest_run_cleanup()
 {
+    kill -9 -- -$$ >/dev/null 2>&1 || true
     cleanup_tmpdir
-    kill -9 -- -$$
 }
 
 ktest_run()
