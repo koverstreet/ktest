@@ -20,7 +20,7 @@ fi
 checkdep fallocate util-linux
 checkdep mkfs.ext4 e2fsprogs
 
-IMAGE_SIZE="2G"
+IMAGE_SIZE="4G"
 MIRROR=http://ftp.us.debian.org/debian/
 
 usage()
@@ -75,7 +75,7 @@ PACKAGES=(kexec-tools less psmisc openssh-server	\
     build-essential make gcc g++			\
     autoconf automake pkg-config libtool-bin		\
     gdb strace ltrace linux-perf blktrace sysstat	\
-    hdparm btrfs-tools mdadm lvm2 aoetools vblade	\
+    hdparm btrfs-progs mdadm lvm2 aoetools vblade	\
     bc attr gawk acl rsync)
 
 # stress testing:
@@ -84,7 +84,7 @@ PACKAGES+=(fio dbench bonnie++ fsmark)
 # bcachefs-tools build dependencies:
 PACKAGES+=(libblkid-dev uuid-dev libscrypt-dev)
 PACKAGES+=(libsodium-dev libkeyutils-dev liburcu-dev)
-PACKAGES+=(zlib1g-dev libattr1-dev libaio-dev libzstd-dev)
+PACKAGES+=(zlib1g-dev libattr1-dev libaio-dev libzstd-dev liblz4-dev)
 
 # xfstests:
 PACKAGES+=(xfsprogs xfslibs-dev quota libcap2-bin)
@@ -93,6 +93,12 @@ PACKAGES+=(libssl-dev libgdbm-dev libgdbm-compat-dev)
 
 # nfs testing:
 PACKAGES+=(nfs-kernel-server)
+
+# dm testing:
+PACKAGES+=(cryptsetup)
+
+# weird block layer crap
+PACKAGES+=(multipath-tools sg3-utils srptools)
 
 # suspend testing:
 [[ $KERNEL_ARCH = x86 ]] && PACKAGES+=(uswsusp)
@@ -119,7 +125,8 @@ SYSTEMD_MASK=(dev-hvc0.device				\
     systemd-ask-password-wall.path			\
     systemd-update-utmp-runlevel.service		\
     systemd-update-utmp.service				\
-    time-sync.target)
+    time-sync.target					\
+    multipathd.service)
 
 export DEBIAN_FRONTEND=noninteractive
 export DEBCONF_NONINTERACTIVE_SEEN=true
