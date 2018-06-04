@@ -4,8 +4,10 @@ ktest_tmp=""
 
 ktest_exit()
 {
-    kill -9 $(jobs -rp)
-    wait $(jobs -rp) >& /dev/null
+    if [[ -n $(jobs -rp) ]]; then
+	kill -9 $(jobs -rp)
+	wait $(jobs -rp) >& /dev/null
+    fi
 
     [[ -n $ktest_tmp && -z $ktest_no_cleanup_tmpdir ]] && rm -rf "$ktest_tmp"
 }
