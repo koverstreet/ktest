@@ -152,12 +152,6 @@ ktest_usage_post()
 
 # subcommands:
 
-ktest_run_cleanup()
-{
-    kill -9 -- -$$ >/dev/null 2>&1 || true
-    cleanup_tmpdir
-}
-
 ktest_boot()
 {
     ktest_interactive=1
@@ -231,12 +225,12 @@ start_networking()
     local net="$ktest_tmp/net"
 
     [[ ! -p "$ktest_tmp/vde_input" ]] && mkfifo "$ktest_tmp/vde_input"
-    tail -f "$ktest_tmp/vde_input" |vde_switch -sock "$net" >/dev/null 2>&1 &
+    tail -f "$ktest_tmp/vde_input" |vde_switch -sock "$net" >& /dev/null &
 
     while [[ ! -e "$net" ]]; do
 	sleep 0.1
     done
-    slirpvde --sock "$net" --dhcp=10.0.2.2 --host 10.0.2.1/24 >/dev/null 2>&1 &
+    slirpvde --sock "$net" --dhcp=10.0.2.2 --host 10.0.2.1/24 >& /dev/null &
 }
 
 start_vm()
@@ -255,7 +249,6 @@ start_vm()
     local home=$HOME
 
     get_tmpdir
-    trap 'ktest_run_cleanup' EXIT
 
     mkdir -p "$ktest_out"
     rm -f "$ktest_out/vm"

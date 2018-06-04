@@ -1,5 +1,23 @@
 
 ktest_no_cleanup_tmpdir=""
+ktest_tmp=""
+
+ktest_exit()
+{
+    kill -9 $(jobs -rp)
+    wait $(jobs -rp) >& /dev/null
+
+    [[ -n $ktest_tmp && -z $ktest_no_cleanup_tmpdir ]] && rm -rf "$ktest_tmp"
+}
+
+trap ktest_exit EXIT
+
+get_tmpdir()
+{
+    if [[ -z $ktest_tmp ]]; then
+	ktest_tmp=$(mktemp --tmpdir -d $(basename "$0")-XXXXXXXXXX)
+    fi
+}
 
 checkdep()
 {
@@ -33,19 +51,6 @@ checkdep()
 			exit 1
 		fi
 	fi
-}
-
-cleanup_tmpdir()
-{
-    [[ -n $ktest_tmp && -z $ktest_no_cleanup_tmpdir ]] && rm -rf "$ktest_tmp"
-}
-
-get_tmpdir()
-{
-    if [[ -z ${ktest_tmp+x} ]]; then
-	ktest_tmp=$(mktemp --tmpdir -d $(basename "$0")-XXXXXXXXXX)
-	trap 'rm -rf "$ktest_tmp"' EXIT
-    fi
 }
 
 ktest_arch=$(uname -m)
