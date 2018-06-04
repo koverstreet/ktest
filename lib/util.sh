@@ -85,6 +85,7 @@ parse_arch()
 
 	    QEMU_PACKAGE=qemu-system-mips
 	    QEMU_BIN=qemu-system-mips
+	    CROSS_COMPILE=1
 	    ;;
 	mips64)
 	    DEBIAN_ARCH=mips
@@ -95,6 +96,7 @@ parse_arch()
 
 	    QEMU_PACKAGE=qemu-system-mips
 	    QEMU_BIN=qemu-system-mips64
+	    CROSS_COMPILE=1
 	    ;;
 	sparc)
 	    DEBIAN_ARCH=sparc
@@ -105,6 +107,7 @@ parse_arch()
 
 	    QEMU_PACKAGE=qemu-system-sparc
 	    QEMU_BIN=qemu-system-sparc
+	    CROSS_COMPILE=1
 	    ;;
 	sparc64)
 	    DEBIAN_ARCH=sparc
@@ -115,6 +118,7 @@ parse_arch()
 
 	    QEMU_PACKAGE=qemu-system-sparc
 	    QEMU_BIN=qemu-system-sparc64
+	    CROSS_COMPILE=1
 	    ;;
 	ppc|powerpc)
 	    DEBIAN_ARCH=powerpc
@@ -127,6 +131,7 @@ parse_arch()
 
 	    QEMU_PACKAGE=qemu-system-ppc
 	    QEMU_BIN=qemu-system-ppc
+	    CROSS_COMPILE=1
 	    ;;
 	ppc64)
 	    DEBIAN_ARCH=ppc64
@@ -139,15 +144,16 @@ parse_arch()
 
 	    QEMU_PACKAGE=qemu-system-ppc
 	    QEMU_BIN=qemu-system-ppc64
+	    CROSS_COMPILE=1
 	    ;;
 	*)
 	    echo "Unsupported architecture $1"
 	    exit 1
     esac
 
-    if [[ $ktest_arch != $(uname -m) ]]; then
-	CROSS_COMPILE=1
-    fi
+#    if [[ $ktest_arch != $(uname -m) ]]; then
+#	CROSS_COMPILE=1
+#    fi
 }
 
 #debian_arch()

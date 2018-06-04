@@ -170,8 +170,6 @@ new_config()
 
 	# Really undefine everything:
 	sed -i -e 's/\(CONFIG_.*\)=.*/# \1 is not set/' "$kconfig"
-
-	kernel_opt set		${BITS}BIT
     fi
 }
 
@@ -237,8 +235,6 @@ build_kernel()
 	for opt in "${ktest_kernel_config_require[@]}"; do
 	    [[ -n $opt ]] && kernel_opt check "$opt"
 	done
-
-	kernel_opt check ${BITS}BIT
     fi
 
     case $KERNEL_ARCH in

@@ -230,7 +230,7 @@ start_networking()
 {
     local net="$ktest_tmp/net"
 
-    mkfifo "$ktest_tmp/vde_input"
+    [[ ! -p "$ktest_tmp/vde_input" ]] && mkfifo "$ktest_tmp/vde_input"
     tail -f "$ktest_tmp/vde_input" |vde_switch -sock "$net" >/dev/null 2>&1 &
 
     while [[ ! -e "$net" ]]; do
@@ -313,11 +313,11 @@ start_vm()
     {
 	qemu_cmd+=(-drive if=none,format=raw,id=disk$disknr,"$1")
 	case $ktest_storage_bus in
-	    virtio-scsi-pci)
-		qemu_cmd+=(-device scsi-hd,bus=hba.0,drive=disk$disknr)
-		;;
 	    ahci|piix4-ide)
 		qemu_cmd+=(-device ide-hd,bus=hba.$disknr,drive=disk$disknr)
+		;;
+	    *)
+		qemu_cmd+=(-device scsi-hd,bus=hba.0,drive=disk$disknr)
 		;;
 	esac
 	disknr=$((disknr + 1))

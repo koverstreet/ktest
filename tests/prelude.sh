@@ -4,12 +4,23 @@ have_kvmguest=0
 have_virtio=0
 have_suspend=0
 
-case $KERNEL_ARCH in
+case $ktest_arch in
     x86)
 	require-kernel-config SMP
 	require-kernel-config MCORE2	# optimize for core2
-	require-kernel-config IA32_EMULATION
 	require-kernel-config IO_DELAY_0XED
+	require-kernel-config 64BIT=n
+
+	have_kvmguest=1
+	have_virtio=1
+	have_suspend=1
+	;;
+    x86_64)
+	require-kernel-config SMP
+	require-kernel-config MCORE2	# optimize for core2
+	require-kernel-config IO_DELAY_0XED
+	require-kernel-config IA32_EMULATION
+	require-kernel-config 64BIT
 
 	have_kvmguest=1
 	have_virtio=1
@@ -27,6 +38,7 @@ case $KERNEL_ARCH in
 	require-kernel-config CPU_MIPS${BITS}_R2
 	require-kernel-config CPU_BIG_ENDIAN=y
 	require-kernel-config CPU_LITTLE_ENDIAN=n
+	require-kernel-config 32BIT
 
 	have_virtio=1
 	ktest_storage_bus=piix4-ide
@@ -91,6 +103,8 @@ case $ktest_storage_bus in
 	require-kernel-config ATA_SFF
 	require-kernel-config ATA_PIIX
 	;;
+    lsi)
+	require-kernel-config SCSI_MPT3SAS
 esac
 
 # PCI:
@@ -139,6 +153,9 @@ if [[ $ktest_crashdump = 1 ]]; then
     require-kernel-config KEXEC
     require-kernel-config CRASH_DUMP
     require-kernel-config RELOCATABLE
+else
+    # breaks kgdb, as of 4.16:
+    require-kernel-config RELOCATABLE=n
 fi
 
 # KGDB:

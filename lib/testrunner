@@ -147,7 +147,14 @@ fi
 if [[ $(type -t run_test) != function ]]; then
     run_test()
     {
-	test_$1
+	local test=test_$1
+
+	if [[ $(type -t $test) != function ]]; then
+	    echo "test $1 does not exist"
+	    exit 1
+	fi
+
+	$test
     }
 fi
 
@@ -210,6 +217,11 @@ fi
 [[ -n $ktest_testargs ]] && tests="$ktest_testargs"
 
 tests=$(echo $tests)
+
+if [[ $tests = "none" ]]; then
+    echo "No tests to run"
+    exit 0
+fi
 
 if [[ $ktest_exit_on_success = 0 && $ktest_interactive = 0 ]]; then
     (
