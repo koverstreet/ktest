@@ -22,9 +22,9 @@ config-scratch-devs 4G
 
 config-timeout $(stress_timeout)
 
-hook_blktests()
+hook_make_blktests()
 {
-    (cd "$ktest_dir/tests/blktests/tests"; make)
+    make -C "$ktest_dir/tests/blktests"
 }
 
 list_tests()

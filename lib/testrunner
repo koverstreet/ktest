@@ -137,6 +137,10 @@ do_reboot()
     echo b > /proc/sysrq-trigger
 }
 
+for h in $(declare -F|sed -ne '/ hook_/ s/.*hook_// p'); do
+    run_quiet "running test hook $h" hook_$h
+done
+
 if [[ $(type -t list_tests) == function ]]; then
     tests=$(list_tests)
 else
