@@ -1,0 +1,41 @@
+#!/bin/bash
+
+# blktests wrapper:
+
+require-lib test-libs.sh
+
+require-kernel-config FAULT_INJECTION,FAULT_INJECTION_DEBUG_FS,FAIL_MAKE_REQUEST
+require-kernel-config MD,BLK_DEV_DM,DM_FLAKEY,DM_SNAPSHOT,DM_LOG_WRITES
+require-kernel-config BLK_DEV
+require-kernel-config BLK_DEV_NULL_BLK=m
+require-kernel-config BLK_DEV_LOOP
+require-kernel-config BLK_DEV_NBD
+
+require-kernel-config BLK_DEV_NVME
+require-kernel-config NVME_TARGET
+require-kernel-config NVME_TARGET_LOOP
+
+require-kernel-config CHR_DEV_SG
+require-kernel-config SCSI_DEBUG=m
+
+config-scratch-devs 4G
+
+config-timeout $(stress_timeout)
+
+hook_blktests()
+{
+    (cd "$ktest_dir/tests/blktests/tests"; make)
+}
+
+list_tests()
+{
+    (cd "$ktest_dir/tests/blktests/tests"; echo */???)
+}
+
+run_test()
+{
+    dmesg -n 4
+    cd "$ktest_dir/tests/blktests"
+    echo 'TEST_DEVS=(/dev/sdb)' > config
+    ./check "$@"
+}

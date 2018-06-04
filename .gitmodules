@@ -10,3 +10,6 @@
 [submodule "tests/bcachefs/linuxquota-code"]
 	path = tests/bcachefs/linuxquota-code
 	url = http://evilpiepirate.org/git/linuxquota.git
+[submodule "tests/blktests"]
+	path = tests/blktests
+	url = https://github.com/osandov/blktests.git
