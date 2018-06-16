@@ -4,6 +4,7 @@ require-lib tests/prelude.sh
 
 config-mem 2G
 config-scratch-devs 4G
+config-pmem-devs 4G
 config-timeout 600000
 
 main()

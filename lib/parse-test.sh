@@ -90,6 +90,11 @@ parse_test_deps()
 	ktest_scratch_devs+=("$1")
     }
 
+    config-pmem-devs()
+    {
+	ktest_pmem_devs+=("$1")
+    }
+
     config-image()
     {
 	ktest_root_image=$1

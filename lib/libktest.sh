@@ -271,7 +271,7 @@ start_vm()
 
     case $ktest_arch in
 	x86|x86_64)
-	    qemu_cmd+=(-cpu host -machine accel=kvm)
+	    qemu_cmd+=(-cpu host -machine accel=kvm,nvdimm)
 	    ;;
 	mips)
 	    qemu_cmd+=(-cpu 24Kf -machine malta)
@@ -283,7 +283,7 @@ start_vm()
     esac
 
     qemu_cmd+=(								\
-	-m		"$ktest_mem"					\
+	-m		"$ktest_mem,slots=8,maxmem=1T"			\
 	-smp		"$ktest_cpus"					\
 	-kernel		"$ktest_kernel_binary/vmlinuz"			\
 	-append		"$(join_by " " ${kernelargs[@]})"		\
@@ -316,6 +316,13 @@ start_vm()
 	disknr=$((disknr + 1))
     }
 
+    qemu_pmem()
+    {
+	qemu_cmd+=(-object memory-backend-file,id=mem$disknr,share,"$1",align=128M)
+	qemu_cmd+=(-device nvdimm,memdev=mem$disknr,id=nv$disknr,label-size=2M)
+	disknr=$((disknr + 1))
+    }
+
     qemu_disk file="$ktest_root_image",snapshot=on
 
     for size in "${ktest_scratch_devs[@]}"; do
@@ -323,6 +330,13 @@ start_vm()
 
 	fallocate -l "$size" "$file"
 	qemu_disk file="$file",cache=unsafe
+    done
+
+    for size in "${ktest_pmem_devs[@]}"; do
+	local file="$ktest_tmp/dev-$disknr"
+
+	fallocate -l "$size" "$file"
+	qemu_pmem mem-path="$file",size=$size
     done
 
     set|grep -vE '^[A-Z]' > "$ktest_tmp/env"
