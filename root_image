@@ -190,7 +190,7 @@ ZZ
     rm -f "$MNT/lib/udev/rules.d/*btrfs*"
     rm -f "$MNT/lib/udev/rules.d/*hdparm*"
 
-    sed -i s/$/-kvm/ "$MNT/etc/hostname"
+    echo $(hostname)-kvm >"$MNT/etc/hostname"
 }
 
 update_packages()
