@@ -172,7 +172,6 @@ require-kernel-config FTRACE_SYSCALLS
 #require-kernel-config ENABLE_DEFAULT_TRACERS
 
 # Debugging options
-require-kernel-config ENABLE_WARN_DEPRECATED
 require-kernel-config ENABLE_MUST_CHECK
 
 require-kernel-config MAGIC_SYSRQ
