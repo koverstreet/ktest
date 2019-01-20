@@ -197,10 +197,18 @@ if [[ $(type -t run_tests) != function ]]; then
 		echo "========= FAILED $i in $(($finish - $start))s"
 		tests_failed+=($i)
 
+		# Try to clean up after a failed test so we can run the rest of
+		# the tests - unless failfast is enabled, or there was only one
+		# test to run:
+
 		[[ $ktest_failfast = 1 ]] && break
+		[[ $# = 1 ]] && break
 
 		for mnt in $(awk '{print $2}' /proc/mounts|grep ^/mnt|sort -r); do
-		    umount $mnt >/dev/null 2>&1 || true
+		    while [[ -n $(fuser -k -M -m $mnt) ]]; do
+			sleep 1
+		    done
+		    umount $mnt
 		done
 	    fi
 	done
@@ -244,7 +252,8 @@ while [[ $ret = 0 ]]; do
     run_tests $tests
     ret=$?
     pkill -P $$ >/dev/null
-    [[ $ktest_loop = 1 ]] || break
+    [[ $ret != 0 ]]	    && break
+    [[ $ktest_loop = 1 ]]   || break
 done
 
 copy_to_host
