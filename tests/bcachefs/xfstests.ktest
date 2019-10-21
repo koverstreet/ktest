@@ -4,14 +4,24 @@ require-lib ../xfstests.sh
 require-lib bcachefs-test-libs.sh
 
 require-kernel-config BCACHEFS_POSIX_ACL
-require-kernel-config BCACHEFS_QUOTA
+require-kernel-config BCACHEFS_QUOTA=y
 require-kernel-config QUOTA
 
 require-make linuxquota-code
 
 run_tests()
 {
-    bcachefs_antagonist
+    #echo 1 > /sys/module/bcachefs/parameters/expensive_debug_checks
+    echo 1 > /sys/module/bcachefs/parameters/debug_check_iterators
+    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+    #echo 1 > /sys/module/bcachefs/parameters/test_alloc_startup
+    #echo 1 > /sys/module/bcachefs/parameters/test_restart_gc
+    #echo 1 > /sys/module/bcachefs/parameters/test_reconstruct_alloc
+    #echo "file alloc_background.c +p" > /sys/kernel/debug/dynamic_debug/control
+
+    #bcachefs_antagonist
+
+    #echo 1 > /sys/module/bcachefs/parameters/journal_seq_verify
 
     run_xfstests bcachefs "$@"
 }

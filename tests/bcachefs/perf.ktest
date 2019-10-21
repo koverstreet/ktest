@@ -5,6 +5,7 @@ require-lib ../prelude.sh
 require-make bcachefs-tools
 
 require-kernel-config BCACHEFS_FS
+require-kernel-config BCACHEFS_TESTS
 
 if [[ $KERNEL_ARCH = x86 ]]; then
     require-kernel-config CRYPTO_CRC32C_INTEL
@@ -21,12 +22,12 @@ t=4
 perf_mkfs()
 {
     bcachefs format				\
-	--error_action=panic			\
+	--errors=panic			\
 	--bucket=$btree_node_size		\
-	--btree_node=$btree_node_size		\
+	--btree_node_size=$btree_node_size		\
 	/dev/sdb >/dev/null
     mount /dev/sdb /mnt
-    ln -s /sys/fs/bcachefs/*/perf_test p
+    ln -sf /sys/fs/bcachefs/*/perf_test p
 }
 
 test_insert_overwrite()
@@ -65,7 +66,7 @@ test_perf_all()
     settle=0
 
     perf_mkfs
-    while true; do
+    #while true; do
 	echo starting benches
 
 	echo seq_insert		$n 1	> p
@@ -91,6 +92,30 @@ test_perf_all()
 	sleep $settle
 	echo rand_mixed		$n $t	> p
 	sleep $settle
-    done
+    #done
     umount /mnt
+}
+
+do_unit_tests()
+{
+    perf_mkfs
+
+    for i in $@; do
+	echo test_$i		1M 1	> p
+    done
+
+    umount /mnt
+}
+
+test_units()
+{
+    do_unit_tests iterate iterate_extents iterate_slots iterate_slots_extents delete delete_written
+}
+
+test_extents()
+{
+    do_unit_tests	extent_overwrite_front	\
+			extent_overwrite_back	\
+			extent_overwrite_middle	\
+			extent_overwrite_all
 }

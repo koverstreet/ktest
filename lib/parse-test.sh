@@ -5,6 +5,7 @@ parse_test_deps()
     ktest_mem=""
     ktest_timeout=""
     ktest_kernel_append=()
+    ktest_images=()
     ktest_scratch_devs=()
     ktest_make_install=()
     ktest_kernel_config_require=()
@@ -97,7 +98,7 @@ parse_test_deps()
 
     config-image()
     {
-	ktest_root_image=$1
+	ktest_images+=("$1")
     }
 
     config-cpus()

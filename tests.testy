@@ -1,4 +1,0 @@
-#0	.			tests/ktest
-
-#0	.		        tests/blkdev.ktest
-#0	.		        ../appliance-clustest/tests/dcpd.actest

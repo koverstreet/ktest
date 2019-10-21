@@ -12,6 +12,7 @@ config-timeout $(stress_timeout)
 run_basic_tiering_test()
 {
     run_basic_fio_test "$@"			\
+	--block_size=4k				\
 	--group=ssd.ssd1 /dev/sdb		\
 	--group=ssd.ssd2 /dev/sdc		\
 	--group=hdd.hdd1 /dev/sdd		\
@@ -26,6 +27,38 @@ test_tiering()
     run_basic_tiering_test
 }
 
+test_tiering_buffered()
+{
+    run_quiet "" bcachefs format		\
+	--block_size=4k				\
+	--group=ssd.ssd1 /dev/sdb		\
+	--group=ssd.ssd2 /dev/sdc		\
+	--group=hdd.hdd1 /dev/sdd		\
+	--group=hdd.hdd2 /dev/sde		\
+	--foreground_target=ssd			\
+	--promote_target=ssd			\
+	--background_target=hdd
+
+    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd:/dev/sde /mnt
+
+    local loops=$((($ktest_priority + 1) * 4))
+
+    fio --eta=always				\
+	--exitall_on_error=1			\
+	--ioengine=sync				\
+	--numjobs=1				\
+	--verify=crc32c				\
+	--verify_fatal=1			\
+	--buffer_compress_percentage=30		\
+	--filename=/mnt/fiotest		    	\
+	--filesize=3500M			\
+	--loops=$loops				\
+	--name=randrw				\
+	--rw=randrw				\
+	--bsrange=512-16k
+    umount /mnt
+}
+
 test_writethrough()
 {
     run_basic_fio_test "$@"			\
@@ -36,14 +69,37 @@ test_writethrough()
 	--background_target=hdd
 }
 
+test_promote()
+{
+    setup_tracing 'bcachefs:*'
+
+    run_quiet "" bcachefs format		\
+	--durability=0 --group=ssd /dev/sdb	\
+	--durability=1 --group=hdd /dev/sdd	\
+	--foreground_target=hdd			\
+	--promote_target=ssd			\
+	--background_target=hdd
+
+    mount -t bcachefs /dev/sdb:/dev/sdd /mnt
+
+    dd if=/dev/zero of=/mnt/foo bs=1M count=1024 oflag=direct
+
+    dd if=/mnt/foo of=/dev=null bs=1M count=1 iflag=direct
+
+    bcachefs fs usage -h /mnt
+    # should be some data on cache devices
+
+    umount /mnt
+}
+
 test_tiering_no_checksum()
 {
-    run_basic_tiering_test --data_checksum_type=none
+    run_basic_tiering_test --data_checksum=none
 }
 
 test_tiering_compression()
 {
-    run_basic_tiering_test --compression_type=lz4
+    run_basic_tiering_test --compression=lz4
 }
 
 test_tiering_crypto()
@@ -53,7 +109,7 @@ test_tiering_crypto()
 
 test_tiering_crypto_lz4()
 {
-    run_basic_tiering_test --encrypted --no_passphrase --compression_type=lz4
+    run_basic_tiering_test --encrypted --no_passphrase --compression=lz4
 }
 
 test_tiering_replication()
@@ -89,7 +145,7 @@ test_tiering_variable_buckets_replicas()
 test_device_add()
 {
     run_quiet "" bcachefs format			\
-	--error_action=panic				\
+	--errors=panic				\
 	--group=hdd /dev/sd[de]
 
     mount -t bcachefs /dev/sdd:/dev/sde /mnt
@@ -125,7 +181,7 @@ test_dm_log_writes()
 disabled_test_change_replicas()
 {
     run_quiet "" bcachefs format			\
-	--error_action=panic				\
+	--errors=panic				\
 	--group=ssd /dev/sd[bc]				\
 	--group=hdd /dev/sd[de]				\
 	--foreground_target=ssd				\

@@ -13,7 +13,7 @@ setup_tracing()
 {
     echo > /sys/kernel/debug/tracing/trace
     echo 1 > /sys/kernel/debug/tracing/buffer_size_kb
-    echo $1 > /sys/kernel/debug/tracing/set_event
+    echo $@ > /sys/kernel/debug/tracing/set_event
     echo 1 > /proc/sys/kernel/ftrace_dump_on_oops
     echo 1 > /sys/kernel/debug/tracing/options/overwrite
     echo 1 > /sys/kernel/debug/tracing/tracing_on
@@ -40,7 +40,7 @@ disable_memory_faults()
 
 enable_race_faults()
 {
-    set_faults "class race frequency 100"
+    set_faults "class race frequency 1000"
 }
 
 disable_race_faults()

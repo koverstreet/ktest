@@ -50,6 +50,8 @@ esac
 #require-kernel-config NO_HZ
 #require-kernel-config HZ_100
 
+require-kernel-config LOCALVERSION_AUTO
+
 require-kernel-config HIGH_RES_TIMERS
 
 require-kernel-config SYSVIPC
@@ -153,9 +155,6 @@ if [[ $ktest_crashdump = 1 ]]; then
     require-kernel-config KEXEC
     require-kernel-config CRASH_DUMP
     require-kernel-config RELOCATABLE
-else
-    # breaks kgdb, as of 4.16:
-    require-kernel-config RELOCATABLE=n
 fi
 
 # KGDB:
@@ -173,6 +172,7 @@ require-kernel-config FTRACE_SYSCALLS
 
 # Debugging options
 require-kernel-config ENABLE_MUST_CHECK
+require-kernel-config UNWINDER_FRAME_POINTER
 
 require-kernel-config MAGIC_SYSRQ
 require-kernel-config DEBUG_INFO
@@ -184,8 +184,8 @@ require-kernel-config PANIC_ON_OOPS
 #require-kernel-config DEBUG_SET_MODULE_RONX
 
 # More expensive
-require-kernel-config DYNAMIC_DEBUG
-require-kernel-config DEBUG_LIST
+#require-kernel-config DYNAMIC_DEBUG
+#require-kernel-config DEBUG_LIST
 
 # Expensive
 #require-kernel-config DEBUG_ATOMIC_SLEEP

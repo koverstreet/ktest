@@ -11,13 +11,43 @@ config-scratch-devs 4G
 config-timeout $(stress_timeout)
 require-make linuxquota-code
 
+test_usrquota_twodevices()
+{
+    bcachefs format				\
+	--errors=panic		\
+	/dev/sd[bc] >/dev/null
+
+    mount -t bcachefs -o usrquota,grpquota,prjquota /dev/sdb:/dev/sdc /mnt
+
+    repquota -s /mnt
+
+    echo foo:10	    >> /etc/projid
+    echo 10:/mnt    >> /etc/projects
+
+    setquota -u root 256M 512M 64 128 /mnt
+    #setquota -t 60 60 /mnt
+
+    echo "testing direct writes"
+    ! dd if=/dev/zero of=/mnt/foo bs=1M oflag=direct
+    repquota -s /mnt
+
+    rm /mnt/foo
+
+    echo "testing buffered writes"
+    ! dd if=/dev/zero of=/mnt/foo bs=1M
+    repquota -s /mnt
+    rm /mnt/foo
+
+    umount /mnt
+}
+
 test_usrquota()
 {
     if false; then
 	mkfs.xfs /dev/sdb
     else
 	bcachefs format				\
-	    --error_action=panic		\
+	    --errors=panic		\
 	    /dev/sdb >/dev/null
     fi
 
@@ -34,8 +64,6 @@ test_usrquota()
     echo "testing direct writes"
     ! dd if=/dev/zero of=/mnt/foo bs=1M oflag=direct
     repquota -s /mnt
-    exit 0
-
 
     rm /mnt/foo
 
@@ -43,6 +71,8 @@ test_usrquota()
     ! dd if=/dev/zero of=/mnt/foo bs=1M
     repquota -s /mnt
     rm /mnt/foo
+
+    umount /mnt
 }
 
 test_grpquota()
@@ -51,7 +81,7 @@ test_grpquota()
 	mkfs.xfs /dev/sdb
     else
 	bcachefs format				\
-	    --error_action=panic		\
+	    --errors=panic		\
 	    /dev/sdb >/dev/null
     fi
 
@@ -65,30 +95,91 @@ test_grpquota()
     echo "testing direct writes"
     ! dd if=/dev/zero of=/mnt/foo bs=1M oflag=direct
     repquota -g -s /mnt
+
+    umount /mnt
 }
 
 test_prjquota()
 {
-    if false; then
-	mkfs.xfs /dev/sdb
-    else
-	bcachefs format				\
-	    --error_action=panic		\
-	    /dev/sdb >/dev/null
-    fi
+    bcachefs format			\
+	--errors=panic		\
+	/dev/sdb >/dev/null
+
+    mount -o usrquota,grpquota,prjquota /dev/sdb /mnt
+
+    repquota -P -s /mnt
+    mkdir /mnt/q1
+    mkdir /mnt/q2
+    touch /mnt/q1/foo
+    touch /mnt/q1/foo
+
+    setproject -c -P q1 /mnt/q1
+    setproject -c -P q2 /mnt/q2
+
+    getfattr -R -d -m - /mnt/
+
+    #setquota -t 60 60 /mnt
+    setquota -P q1 256M 512M 64 128 /mnt
+
+    echo "testing direct writes"
+    ! dd if=/dev/zero of=/mnt/q1/foo bs=1M oflag=direct
+    repquota -P -s /mnt
+
+    mv /mnt/q1/foo /mnt/q2
+    repquota -P -s /mnt
+
+    umount /mnt
+}
+
+test_prjquota2()
+{
+    bcachefs format			\
+	--errors=panic		\
+	/dev/sd[bc] >/dev/null
+
+    mount -o usrquota,grpquota,prjquota /dev/sdb:/dev/sdc /mnt
+
+    repquota -P -s /mnt
+    mkdir /mnt/q1
+    mkdir /mnt/q2
+    touch /mnt/q1/foo
+    touch /mnt/q1/foo
+
+    setproject -c -P q1 /mnt/q1
+    setproject -c -P q2 /mnt/q2
+
+    getfattr -R -d -m - /mnt/
+
+    #setquota -t 60 60 /mnt
+    setquota -P q1 256M 512M 64 128 /mnt
+
+    echo "testing direct writes"
+    ! dd if=/dev/zero of=/mnt/q1/foo bs=1M oflag=direct
+    repquota -P -s /mnt
+
+    mv /mnt/q1/foo /mnt/q2
+    repquota -P -s /mnt
+
+    umount /mnt
+}
+
+test_xfs_prjquota()
+{
+    mkfs.xfs /dev/sdb
 
     mount -o usrquota,grpquota,prjquota /dev/sdb /mnt
 
     repquota -P -s /mnt
 
-    echo foo:10	    >> /etc/projid
-    echo 10:/mnt    >> /etc/projects
-    chattr -p 10 /mnt
+    touch /mnt/foo
+    setproject -c -P foo /mnt
 
-    setquota -P foo 256M 512M 64 128 /mnt
     #setquota -t 60 60 /mnt
+    setquota -P foo 256M 512M 64 128 /mnt
 
     echo "testing direct writes"
     ! dd if=/dev/zero of=/mnt/foo bs=1M oflag=direct
     repquota -P -s /mnt
+
+    umount /mnt
 }

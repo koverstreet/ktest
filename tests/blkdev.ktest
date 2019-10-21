@@ -2,12 +2,37 @@
 
 require-lib ./test-libs.sh
 
-config-scratch-devs 512M
+config-scratch-devs 4G
 
 config-timeout $(stress_timeout)
 
-main()
+run_fio()
 {
-    setup_blkdev
-    run_stress
+    filename=$1
+    shift
+    fio --eta=always				\
+	--randrepeat=0				\
+	--ioengine=libaio			\
+	--iodepth=64				\
+	--iodepth_batch=16			\
+	--direct=1				\
+	--numjobs=1				\
+	--verify=meta				\
+	--verify_fatal=1			\
+	--filename=$filename			\
+	--name=randrw				\
+	--rw=randrw				\
+	--bsrange=4k-1M				\
+	--loops=100				\
+	"$@"
+}
+
+test_block_simple()
+{
+    #run_fio /dev/sdb
+
+    mkfs.ext4 /dev/sdb
+    mount /dev/sdb /mnt
+    run_fio /mnt/foo --size=1G
+    umount /mnt
 }

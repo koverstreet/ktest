@@ -1,8 +1,13 @@
 #!/bin/bash
 
+require-kernel-config EXT4_FS
+require-kernel-config EXT4_FS_POSIX_ACL
+require-kernel-config EXT4_DEBUG
+require-kernel-config QUOTA
+
 require-lib xfstests.sh
 
-main()
+run_tests()
 {
-    run_xfstests ext4 "generic/???"
+    run_xfstests ext4 "$@"
 }

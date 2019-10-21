@@ -262,7 +262,7 @@ start_vm()
     kernelargs+=("ktest.dir=$ktest_dir")
     kernelargs+=("ktest.env=$ktest_tmp/env")
     [[ $ktest_kgdb = 1 ]]	&& kernelargs+=(kgdboc=ttyS0,115200)
-    [[ $ktest_verbose = 0 ]]	&& kernelargs+=(quiet systemd.show_status=0)
+    [[ $ktest_verbose = 0 ]]	&& kernelargs+=(quiet systemd.show_status=0 systemd.log-target=journal)
     [[ $ktest_crashdump = 1 ]]	&& kernelargs+=(crashkernel=128M)
 
     kernelargs+=("${ktest_kernel_append[@]}")
@@ -325,10 +325,15 @@ start_vm()
 
     qemu_disk file="$ktest_root_image",snapshot=on
 
+    for file in "${ktest_images[@]}"; do
+	qemu_disk file="$file",cache=unsafe
+    done
+
     for size in "${ktest_scratch_devs[@]}"; do
 	local file="$ktest_tmp/dev-$disknr"
 
-	fallocate -l "$size" "$file"
+	truncate -s "$size" "$file"
+
 	qemu_disk file="$file",cache=unsafe
     done
 
@@ -344,11 +349,15 @@ start_vm()
     set +o errexit
 
     if [[ $ktest_interactive = 1 ]]; then
-	"${qemu_cmd[@]}"
+	"${qemu_cmd[@]}"|
+	    tee "$ktest_out/out"
     elif [[ $ktest_exit_on_success = 1 ]]; then
-	"${qemu_cmd[@]}"|sed -u -e '/TEST SUCCESS/ { p; Q7 }'
+	"${qemu_cmd[@]}"|
+	    tee "$ktest_out/out"|
+	    sed -u -e '/TEST SUCCESS/ { p; Q7 }'
     else
 	timeout --foreground "$((60 + ktest_timeout))" "${qemu_cmd[@]}"|
+	    tee "$ktest_out/out"|
 	    $ktest_dir/lib/catch_test_success.awk
     fi
 

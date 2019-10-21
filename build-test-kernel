@@ -283,7 +283,6 @@ cmd_run()
 
     if [[ -n $COVERAGE ]]; then
 	ktest_kernel_config_require+=(GCOV_KERNEL)
-	ktest_kernel_config_require+=(GCOV_FORMAT_AUTODETECT)
     fi
 
     if [[ -n $BUILD ]]; then

@@ -6,9 +6,10 @@
 require-lib ../test-libs.sh
 require-make bcachefs-tools
 
-require-kernel-config BCACHEFS_FS,BCACHEFS_DEBUG
+require-kernel-config BCACHEFS_FS
+require-kernel-config BCACHEFS_DEBUG
 
-if [[ $KERNEL_ARCH = x86 ]]; then
+if [[ $ktest_arch = x86_64 ]]; then
     require-kernel-config CRYPTO_CRC32C_INTEL
     require-kernel-config CRYPTO_POLY1305_X86_64
     require-kernel-config CRYPTO_CHACHA20_X86_64
@@ -65,8 +66,8 @@ antagonist_expensive_debug_checks()
 antagonist_trigger_gc()
 {
     while true; do
-	sleep 2
-	echo 1 | tee /sys/fs/bcachefs/*/internal/trigger_gc > /dev/null 2>&1 || true
+	sleep 10
+	echo 1 | tee /sys/fs/bcachefs/*/internal/trigger_gc >& /dev/null || true
     done
 }
 
@@ -76,7 +77,7 @@ antagonist_switch_str_hash()
 
     while true; do
 	for i in crc32c crc64 siphash; do
-	    echo $i | tee */options/str_hash > /dev/null 2>&1 || true
+	    echo $i | tee */options/str_hash >& /dev/null || true
 	    sleep 2
 	done
     done
@@ -88,7 +89,7 @@ antagonist_switch_crc()
 
     while true; do
 	for i in crc32c crc64; do
-	    echo $i | tee */options/data_checksum */options/metadata_checksum > /dev/null 2>&1 || true
+	    echo $i | tee */options/data_checksum */options/metadata_checksum >& /dev/null || true
 	    sleep 2
 	done
     done
@@ -98,12 +99,14 @@ bcachefs_antagonist()
 {
     setup_tracing 'bcachefs:*'
     #echo 1 > /sys/module/bcachefs/parameters/expensive_debug_checks
-    #echo 1 > /sys/module/bcachefs/parameters/verify_btree_ondisk
+    #echo 1 > /sys/module/bcachefs/parameters/debug_check_iterators
     #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+    #echo 1 > /sys/module/bcachefs/parameters/test_alloc_startup
+    #echo 1 > /sys/module/bcachefs/parameters/verify_btree_ondisk
     #echo 1 > /sys/module/bcachefs/parameters/btree_gc_coalesce_disabled
     #echo 1 > /sys/module/bcachefs/parameters/key_merging_disabled
 
-    enable_race_faults
+    #enable_race_faults
 
     antagonist_expensive_debug_checks &
     antagonist_shrink &
@@ -115,13 +118,14 @@ bcachefs_antagonist()
 run_fio_base()
 {
     fio --eta=always				\
+	--exitall_on_error=1			\
 	--randrepeat=0				\
 	--ioengine=libaio			\
 	--iodepth=64				\
 	--iodepth_batch=16			\
 	--direct=1				\
 	--numjobs=1				\
-	--verify=meta				\
+	--verify=crc32c				\
 	--verify_fatal=1			\
 	--filename=/mnt/fiotest		    	\
 	"$@"
@@ -132,14 +136,15 @@ run_fio()
     local loops=$((($ktest_priority + 1) * 4))
 
     fio --eta=always				\
+	--exitall_on_error=1			\
 	--ioengine=libaio			\
 	--iodepth=64				\
 	--iodepth_batch=16			\
 	--direct=1				\
 	--numjobs=1				\
-	--verify=meta				\
+	--verify=crc32c				\
 	--verify_fatal=1			\
-	--buffer_compress_percentage=50		\
+	--buffer_compress_percentage=30		\
 	--filename=/mnt/fiotest		    	\
 	--filesize=3500M			\
 	--loops=$loops				\
@@ -165,37 +170,44 @@ run_basic_fio_test()
 
     bcachefs_antagonist
 
-    run_quiet "" bcachefs format --error_action=panic "$@"
+    run_quiet "" bcachefs format -f --errors=panic "$@"
 
-    mount -t bcachefs $(join_by : "${devs[@]}") /mnt
+    mount -t bcachefs -o fsck $(join_by : "${devs[@]}") /mnt
 
     #enable_memory_faults
     run_fio_randrw
+    #dd if=/dev/zero of=/mnt/foo bs=2M count=1024 oflag=direct
     #disable_memory_faults
 
     umount /mnt
 
     # test remount:
-    mount -t bcachefs $(join_by : "${devs[@]}") /mnt
+    mount -t bcachefs -o fsck $(join_by : "${devs[@]}") /mnt
     umount /mnt
+
+    #bcachefs fsck "${devs[@]}"
 }
 
-require-kernel-config DEBUG_FS,DYNAMIC_FAULT
+require-kernel-config DEBUG_FS
+#require-kernel-config DYNAMIC_FAULT
+
 run_fault_injection_test()
 {
     local class="class $1"
     local fn=$2
 
     local control=/sys/kernel/debug/dynamic_fault/control
-    local nr=$(grep $class $control|wc -l)
+    local nr=$(grep "class:$1" $control|wc -l)
 
     for ((i=0; i<nr; i++)); do
-	echo -n "TESTING FAULT "; grep $class $control|sed -n $((i+1))p
+	local fault="class $1 index $i"
+	#echo -n "TESTING FAULT "; grep $class $control|sed -n $((i+1))p
 
-	local fault="$class index $i"
+	echo "TESTING FAULT $fault"
+
 	set_faults "$fault enable"
 
-	$fn $fault
+	$fn "$fault"
 	set_faults "$fault disable"
     done
 }

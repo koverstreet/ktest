@@ -2,6 +2,7 @@
 
 require-lib bcachefs-test-libs.sh
 
+require-kernel-config MD
 require-kernel-config BLK_DEV_MD
 require-kernel-config MD_FAULTY
 
@@ -9,13 +10,56 @@ config-scratch-devs 4G
 config-scratch-devs 4G
 config-scratch-devs 4G
 config-scratch-devs 4G
+config-scratch-devs 4G
 
 config-timeout $(stress_timeout)
 
+test_foo()
+{
+    run_quiet "" bcachefs format /dev/sdb /dev/sdc
+    mount -t bcachefs -o ro /dev/sdb:/dev/sdc /mnt
+
+    bcachefs fsck /dev/sdb /dev/sdc
+}
+
+test_recovery()
+{
+    run_quiet "" bcachefs format		\
+	--discard				\
+	--bucket=16k				\
+	--block_size=4k				\
+	/dev/sd[bcd]
+
+    for i in `seq 0 20`; do
+	mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+
+	#run_fio_randrw
+	fio --eta=always			\
+	    --exitall_on_error=1		\
+	    --randrepeat=0			\
+	    --ioengine=libaio			\
+	    --iodepth=64			\
+	    --iodepth_batch=16			\
+	    --direct=1				\
+	    --numjobs=1				\
+	    --filename=/mnt/fiotest		\
+	    --filesize=3500M			\
+	    --name=randwrite			\
+	    --rw=randwrite			\
+	    --bsrange=4k-8k			\
+	    --runtime=2
+
+	$ktest_dir/tests/xfstests/src/godown -f /mnt
+
+	umount /mnt
+    done
+}
+
 disabled_test_assemble()
 {
-    run_quiet "" bcachefs format	\
-	--error_action=panic		\
+    run_quiet "" bcachefs format		\
+	--errors=panic				\
+	--discard				\
 	/dev/sd[bcd]
 
     bcachefs assemble /dev/sd[bcd]
@@ -26,8 +70,8 @@ disabled_test_assemble()
 
 disabled_test_assemble_incremental()
 {
-    run_quiet "" bcachefs format	\
-	--error_action=panic		\
+    run_quiet "" bcachefs format		\
+	--errors=panic				\
 	/dev/sd[bcd]
 
     bcachefs incremental /dev/sdb
@@ -40,8 +84,8 @@ disabled_test_assemble_incremental()
 
 test_multimount()
 {
-    bcachefs format			\
-	--error_action=panic		\
+    bcachefs format				\
+	--errors=panic				\
 	/dev/sdb
 
     mkdir -p /mnt/1 /mnt/2
@@ -54,23 +98,23 @@ test_multimount()
 
 test_twodevices()
 {
-    run_basic_fio_test			\
+    run_basic_fio_test				\
 	/dev/sdb /dev/sdc /dev/sdd
 }
 
 test_replicas()
 {
-    run_basic_fio_test			\
-	--replicas=2			\
-	/dev/sd[bcde]
+    run_basic_fio_test				\
+	--replicas=2				\
+	/dev/sd[bcd]
 }
 
 test_replicas_variable_buckets()
 {
-    run_basic_fio_test			\
-	--replicas=2			\
-	--bucket=32k	/dev/sdb	\
-	--bucket=64k	/dev/sdc	\
+    run_basic_fio_test				\
+	--replicas=2				\
+	--bucket=32k	/dev/sdb		\
+	--bucket=64k	/dev/sdc		\
 	--bucket=128k	/dev/sdd
 }
 
@@ -79,16 +123,16 @@ do_remove_test()
     offline=$1
     evacuate=$2
 
-    run_quiet "" bcachefs format	\
-	--error_action=panic		\
-	--replicas=2			\
+    run_quiet "" bcachefs format		\
+	--errors=panic				\
+	--replicas=2				\
 	/dev/sd[bcd]
 
     mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
 
-    #local fioout="$ktest_tmp/fioout"
-    #run_fio_randrw >"$fioout" 2>&1 &
-    #local fiopid=$!
+    local fioout="$ktest_tmp/fioout"
+    run_fio_randrw >"$fioout" 2>&1 &
+    local fiopid=$!
 
     sleep 1
 
@@ -116,10 +160,10 @@ do_remove_test()
     fi
     echo "done"
 
-    #if ! wait $fiopid; then
-#	cat "$fioout"
-#	return 1
-#    fi
+    if ! wait $fiopid; then
+	cat "$fioout"
+	return 1
+    fi
 
     umount /mnt
 
@@ -151,8 +195,8 @@ test_device_add()
 {
     setup_tracing 'bcachefs:*'
 
-    run_quiet "" bcachefs format	\
-	--error_action=panic		\
+    run_quiet "" bcachefs format		\
+	--errors=panic				\
 	/dev/sdb
 
     mount /dev/sdb /mnt
@@ -179,9 +223,9 @@ test_device_add()
 
 test_device_set_state()
 {
-    run_quiet "" bcachefs format	\
-	--error_action=panic		\
-	--replicas=2			\
+    run_quiet "" bcachefs format		\
+	--errors=panic				\
+	--replicas=2				\
 	/dev/sd[bcd]
 
     mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
@@ -207,9 +251,9 @@ test_device_set_state()
 
 test_device_readd()
 {
-    run_quiet "" bcachefs format	\
-	--error_action=panic		\
-	--replicas=2			\
+    run_quiet "" bcachefs format		\
+	--errors=panic				\
+	--replicas=2				\
 	/dev/sd[bc]
 
     mount -t bcachefs /dev/sdb:/dev/sdc /mnt
@@ -243,13 +287,13 @@ do_replicas_errors_test()
 {
     error_type=$1
 
-    bcachefs_antagonist
+    #bcachefs_antagonist
 
     mdadm -B /dev/md0 -lfaulty -n1 /dev/sdc
 
-    run_quiet "" bcachefs format	\
-	--error_action=panic		\
-	--replicas=2			\
+    run_quiet "" bcachefs format		\
+	--errors=panic				\
+	--replicas=2				\
 	/dev/md0 /dev/sdb
 
     mount -t bcachefs -o degraded /dev/sdb:/dev/md0 /mnt
@@ -273,27 +317,37 @@ test_replicas_read_errors()
 
 test_cmd_fs_usage()
 {
-    run_quiet "" bcachefs format	\
-	--error_action=panic		\
-	--replicas=2			\
-	--bucket=128k			\
-	/dev/sd[bc]
+    run_quiet "" bcachefs format		\
+	--errors=panic				\
+	--replicas=2				\
+	--bucket=128k				\
+	/dev/sd[bcd]
 
     echo -n "mounting... "
-    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
+    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
     echo done
+
+    echo "Before writing:"
+    bcachefs fs usage  /mnt
+    echo
+    df -h /mnt
+    echo
 
     run_fio_randrw --size=500M > /dev/null
 
-    bcachefs fs usage /mnt
+    echo
+    echo "After writing:"
     bcachefs fs usage -h /mnt
+    echo
+    df -h /mnt
+
     umount /mnt
 }
 
 test_rereplicate()
 {
-    run_quiet "" bcachefs format	\
-	--error_action=panic		\
+    run_quiet "" bcachefs format		\
+	--errors=panic				\
 	/dev/sd[bcd]
     mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
 
@@ -318,8 +372,8 @@ disabled_test_device_add_faults()
 {
     setup_tracing 'bcachefs:*'
 
-    run_quiet "" bcachefs format	\
-	--error_action=remount-ro	\
+    run_quiet "" bcachefs format		\
+	--errors=remount-ro			\
 	/dev/sdb
     mount /dev/sdb /mnt
 
@@ -339,19 +393,40 @@ test_striping()
 {
     setup_tracing 'bcachefs:*'
 
-    run_quiet "" bcachefs format	\
-	--error_action=panic		\
-	--replicas=2			\
-	/dev/sd[bc]
+    if false; then
+	run_quiet "" bcachefs format		\
+	    --errors=panic			\
+	    --replicas=2			\
+	    /dev/sd[bc]
 
-    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
+	mount -t bcachefs /dev/sdb:/dev/sdc /mnt
 
-    dd if=/dev/zero of=/mnt/test1 bs=1M count=1024 oflag=direct
-    bcachefs fs usage -h /mnt
+	dd if=/dev/zero of=/mnt/test0 bs=1M count=1024 oflag=direct
+	bcachefs fs usage -h /mnt
 
-    bcachefs device add /mnt /dev/sdd
+	bcachefs device add /mnt /dev/sdd
 
-    dd if=/dev/zero of=/mnt/test2 bs=1M count=1024 oflag=direct
+	dd if=/dev/zero of=/mnt/test1 bs=1M count=1024 oflag=direct
+    else
+	run_quiet "" bcachefs format		\
+	    --errors=panic			\
+	    --data_checksum=none		\
+	    --replicas=2			\
+	    --group cache			\
+	    --durability=1			\
+	    --bucket=8M /dev/sd[b]		\
+	    --group hdd				\
+	    --durability=2			\
+	    --bucket=8M /dev/sd[cd]		\
+	    --foreground_target=cache		\
+	    --background_target=hdd		\
+	    --promote_target=cache
+
+	mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+
+	dd if=/dev/zero of=/mnt/test0 bs=1M count=1024 oflag=direct
+    fi
+
     bcachefs fs usage -h /mnt
 
     umount /mnt
@@ -359,9 +434,9 @@ test_striping()
 
 disabled_change_replicas()
 {
-    run_quiet "" bcachefs format	\
-	--error_action=panic		\
-	--replicas=2			\
+    run_quiet "" bcachefs format		\
+	--errors=panic				\
+	--replicas=2				\
 	/dev/sd[bc]
 
     mount -t bcachefs /dev/sdb:/dev/sdc /mnt
@@ -390,9 +465,9 @@ disabled_change_replicas()
 
 disabled_change_replicas2()
 {
-    run_quiet "" bcachefs format	\
-	--error_action=panic		\
-	--replicas=2			\
+    run_quiet "" bcachefs format		\
+	--errors=panic				\
+	--replicas=2				\
 	/dev/sd[bc]
 
     mount -t bcachefs /dev/sdb:/dev/sdc /mnt
@@ -407,4 +482,121 @@ disabled_change_replicas2()
     done
 
     umount /mnt
+}
+
+test_ec()
+{
+    #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
+    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+
+    run_quiet "" bcachefs format -f		\
+	--errors=panic				\
+	--erasure_code				\
+	--replicas=2				\
+	/dev/sd[bcdef]
+    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
+
+    mount -t bcachefs $devs /mnt
+
+    #enable_memory_faults
+    run_fio_randrw
+    #disable_memory_faults
+
+    #bcachefs fs usage -h /mnt
+    umount /mnt
+
+    # test remount:
+    echo "Testing remount"
+    mount -t bcachefs -o fsck $devs /mnt
+    umount /mnt
+
+    #bcachefs fsck /dev/sd[bcdef]
+}
+
+test_ec_lz4()
+{
+    #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
+    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+
+    run_quiet "" bcachefs format -f		\
+	--errors=panic				\
+	--erasure_code				\
+	--compression=lz4			\
+	--replicas=2				\
+	/dev/sd[bcdef]
+    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
+
+    mount -t bcachefs $devs /mnt
+
+    #enable_memory_faults
+    run_fio_randrw
+    #dd if=/dev/zero of=/mnt/foo bs=1M count=10 oflag=direct
+    #disable_memory_faults
+
+    #bcachefs fs usage -h /mnt
+    umount /mnt
+
+    # test remount:
+    echo "Testing remount"
+    mount -t bcachefs -o fsck $devs /mnt
+    umount /mnt
+
+    #bcachefs fsck /dev/sd[bcdef]
+}
+
+test_ec_gc()
+{
+    #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
+    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+
+    run_quiet "" bcachefs format -f		\
+	--errors=continue			\
+	--replicas=2				\
+	/dev/sd[bcdef]
+    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
+
+    mount -t bcachefs -o erasure_code $devs /mnt
+
+    antagonist_trigger_gc &
+    run_fio_randrw
+
+    dd if=/dev/zero of=/mnt/foo bs=1M count=16 oflag=direct
+
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_gc
+    echo unmounting
+
+    #bcachefs fs usage -h /mnt
+    umount /mnt
+
+    # test remount:
+    mount -t bcachefs -o fix_errors,erasure_code $devs /mnt
+    umount /mnt
+
+    #bcachefs fsck /dev/sd[bcdef]
+}
+
+test_replicas_gc()
+{
+    echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
+    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+
+    run_quiet "" bcachefs format -f		\
+	--errors=panic				\
+	--replicas=2				\
+	/dev/sd[bcdef]
+    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
+
+    mount -t bcachefs $devs /mnt
+
+    antagonist_trigger_gc &
+    run_fio_randrw
+
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_gc
+    umount /mnt
+
+    # test remount:
+    mount -t bcachefs -o fix_errors,erasure_code $devs /mnt
+    umount /mnt
+
+    bcachefs fsck /dev/sd[bcdef]
 }

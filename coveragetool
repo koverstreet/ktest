@@ -8,7 +8,7 @@ if [ "$#" -eq 0 ]; then
     exit 1
 fi
 
-if ! which lcov; then
+if ! which lcov > /dev/null; then
     echo "lcov not installed"
     exit 0
 fi
@@ -19,6 +19,8 @@ shift
 info=$lcov_out/lcov.info
 html=$lcov_out/lcov.html
 tracefiles=""
+
+mkdir -p "$lcov_out"
 
 n=0
 
