@@ -82,9 +82,9 @@ PACKAGES=(kexec-tools less psmisc openssh-server	\
 PACKAGES+=(fio dbench bonnie++ fsmark)
 
 # bcachefs-tools build dependencies:
-PACKAGES+=(libblkid-dev uuid-dev libscrypt-dev)
-PACKAGES+=(libsodium-dev libkeyutils-dev liburcu-dev)
-PACKAGES+=(zlib1g-dev libattr1-dev libaio-dev libzstd-dev liblz4-dev)
+PACKAGES+=(libblkid-dev uuid-dev libscrypt-dev libsodium-dev)
+PACKAGES+=(libkeyutils-dev liburcu-dev zlib1g-dev libattr1-dev)
+PACKAGES+=(libaio-dev libzstd-dev liblz4-dev libfuse3-dev valgrind)
 
 # xfstests:
 PACKAGES+=(xfsprogs xfslibs-dev quota libcap2-bin)
