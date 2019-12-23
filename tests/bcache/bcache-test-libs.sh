@@ -1,3 +1,5 @@
+# Dec 2019: requires additional validation via https://github.com/koalaman/shellcheck
+
 #
 # Library with some functions for writing bcache tests using the
 # ktest framework.

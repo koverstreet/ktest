@@ -1,4 +1,4 @@
-
+# Dec 2019: requires additional validation via https://github.com/koalaman/shellcheck
 
 have_kvmguest=0
 have_virtio=0

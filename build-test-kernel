@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# Dec 2019: requires additional validation via https://github.com/koalaman/shellcheck
+
 set -o nounset
 set -o errexit
 set -o errtrace
@@ -7,58 +9,56 @@ set -o errtrace
 ktest_dir=$(dirname "$(readlink -f "$0")")
 KTEST=$ktest_dir/ktest
 
-. "$ktest_dir/lib/libktest.sh"
+source "$ktest_dir/lib/libktest.sh"
 
 checkdep gcc
 checkdep make
 
-ktest_kernel_source="."	# dir of kernel source
-			#       set with: -k <path>
-			#       defaults: current directory
-ktest_kernel_build=""	# kernel build dir
-			# defaults to
-			# $ktest_kernel_source/.build-test-kernel-$ktest_arch
-ktest_kernel_binary=""	# kernel output dir
-			# defaults to $ktest_kernel_build/kpkg
+ktest_kernel_source="." # dir of kernel source
+#       set with: -k <path>
+#       defaults: current directory
+ktest_kernel_build=""  # kernel build dir
+# defaults to
+# $ktest_kernel_source/.build-test-kernel-$ktest_arch
+ktest_kernel_binary="" # kernel output dir
+# defaults to $ktest_kernel_build/kpkg
 
-BUILD=1			# if set to 1, kernel will build
+BUILD=1 # if set to 1, kernel will build
 DEPS=1
-COVERAGE=""		# doing code coverage?
+COVERAGE="" # doing code coverage?
 MAKEARGS=()
 ktest_njobs=$(($(grep -c '^processor' /proc/cpuinfo) * 2))
-			# number of jobs to passed to make during kernel compile
-			#       sets with: -j
-			#       defaults to 2 * number of processor
+# number of jobs to passed to make during kernel compile
+#       sets with: -j
+#       defaults to 2 * number of processor
 
-
-usage()
-{
-    echo "build-test-kernel: Run generic virtual machine tests"
-    echo "Usage: build-test-kernel cmd [options]"
-    ktest_usage_cmds
-    echo "  oldconfig   Run make oldconfig"
-    echo "  config      Run make nconfig"
-    echo
-    echo "  options:"
-    ktest_usage_opts
-    echo
-    echo " options for build-test-kernel run:"
-    ktest_usage_run_opts
-    echo "      -k <dir>    kernel source dir"
-    echo "      -b <dir>    build directory for kernel (default: kernel_source/.build-test-kernel)"
-    echo "      -o <dir>    output directory for kernel binary (default: kernel_build/kpkg"
-    echo "      -K          don't rebuild kernel"
-    echo "      -D          don't modify kernel .config"
-    echo "      -c <dir>    enable coverage for this dir (only valid without -K)"
-    echo "      -j <num>    j option to make"
-    echo "      -K          don't rebuild kernel"
-    echo
-    ktest_usage_post
+usage() {
+	echo "build-test-kernel: Run generic virtual machine tests"
+	echo "Usage: build-test-kernel cmd [options]"
+	ktest_usage_cmds
+	echo "  oldconfig   Run make oldconfig"
+	echo "  config      Run make nconfig"
+	echo
+	echo "  options:"
+	ktest_usage_opts
+	echo
+	echo " options for build-test-kernel run:"
+	ktest_usage_run_opts
+	echo "      -k <dir>    kernel source dir"
+	echo "      -b <dir>    build directory for kernel (default: kernel_source/.build-test-kernel)"
+	echo "      -o <dir>    output directory for kernel binary (default: kernel_build/kpkg"
+	echo "      -K          don't rebuild kernel"
+	echo "      -D          don't modify kernel .config"
+	echo "      -c <dir>    enable coverage for this dir (only valid without -K)"
+	echo "      -j <num>    j option to make"
+	echo "      -K          don't rebuild kernel"
+	echo
+	ktest_usage_post
 }
 
-if [[ $# = 0 ]]; then
-    usage
-    exit 1
+if [[ $# == 0 ]]; then
+	usage
+	exit 1
 fi
 
 #parse command and shift for rest of arg parsing
@@ -66,56 +66,56 @@ CMD="$1"
 shift
 
 while getopts "k:b:o:KDc:j:h${ktest_args}" arg; do
-    case $arg in
+	case $arg in
 	k)
-	    ktest_kernel_source="$OPTARG"
-	    ;;
+		ktest_kernel_source="$OPTARG"
+		;;
 	b)
-	    ktest_kernel_build="$OPTARG"
-	    ;;
+		ktest_kernel_build="$OPTARG"
+		;;
 	o)
-	    ktest_kernel_binary="$OPTARG"
-	    ;;
+		ktest_kernel_binary="$OPTARG"
+		;;
 	K)
-	    BUILD=""
-	    ;;
+		BUILD=""
+		;;
 	D)
-	    DEPS=""
-	    ;;
+		DEPS=""
+		;;
 	c)
-	    if [[ ! -d $OPTARG ]]; then
-		echo "$OPTARG must be a directory"
-		exit 1
-	    fi
+		if [[ ! -d $OPTARG ]]; then
+			echo "$OPTARG must be a directory"
+			exit 1
+		fi
 
-	    checkdep lcov
+		checkdep lcov
 
-	    # Strip trailing / from directory name, substitute _ for /
-	    OPTARG=$(echo "${OPTARG%/}"|tr / _)
-	    MAKEARGS+=("GCOV_PROFILE_$OPTARG=y")
-	    COVERAGE=1
-	    ;;
+		# Strip trailing / from directory name, substitute _ for /
+		OPTARG=$(echo "${OPTARG%/}" | tr / _)
+		MAKEARGS+=("GCOV_PROFILE_$OPTARG=y")
+		COVERAGE=1
+		;;
 	j)
-	    ktest_njobs=$OPTARG
-	    ;;
+		ktest_njobs=$OPTARG
+		;;
 
 	h)
-	    usage
-	    exit 0
-	    ;;
-    esac
-    parse_ktest_arg $arg
+		usage
+		exit 0
+		;;
+	esac
+	parse_ktest_arg "$arg"
 done
-shift $(( OPTIND - 1 ))
+shift $((OPTIND - 1))
 
 # default parameters
-[[ -z $ktest_kernel_source ]]	&& ktest_kernel_source="."
-[[ -z $ktest_kernel_build ]]	&& ktest_kernel_build="$ktest_kernel_source/.build_test_kernel-$ktest_arch"
-[[ -z $ktest_kernel_binary ]]	&& ktest_kernel_binary="$ktest_kernel_build/kpgk"
+[[ -z $ktest_kernel_source ]] && ktest_kernel_source="."
+[[ -z $ktest_kernel_build ]] && ktest_kernel_build="$ktest_kernel_source/.build_test_kernel-$ktest_arch"
+[[ -z $ktest_kernel_binary ]] && ktest_kernel_binary="$ktest_kernel_build/kpgk"
 
 if [[ ! -d $ktest_kernel_source ]]; then
-    echo "kernel source directory $ktest_kernel_source does not exist"
-    exit 1
+	echo "kernel source directory $ktest_kernel_source does not exist"
+	exit 1
 fi
 
 ktest_kernel_source=$(readlink -e "$ktest_kernel_source")
@@ -128,199 +128,189 @@ ktest_kernel_binary=$(readlink -f "$ktest_kernel_binary")
 parse_args_post
 
 if [[ -n $CROSS_COMPILE ]]; then
-    checkdep "$ARCH_TRIPLE-gcc" "gcc-$ARCH_TRIPLE"
+	checkdep "$ARCH_TRIPLE-gcc" "gcc-$ARCH_TRIPLE"
 fi
 
-run_ktest()
-{
-    arg=$1
-    shift
+run_ktest() {
+	arg=$1
+	shift
 
-    "$KTEST" "$arg" $KTESTARGS -k "$ktest_kernel_binary" "$@"
+	"$KTEST" "$arg" "$KTESTARGS" -k "$ktest_kernel_binary" "$@"
 }
 
-do_make()
-{
-    if [[ -n $CROSS_COMPILE ]]; then
-	export ARCH="$KERNEL_ARCH"
-	export CROSS_COMPILE="$ARCH_TRIPLE-"
-    fi
-
-    # work around a bug in make - maybe not needed anymore?
-#    if [[ $# = 0 || $1 != nconfig ]]; then
-#	MAKEARGS+=("--output-sync=target")
-#    fi
-
-    make --jobs="$ktest_njobs"			\
-	--directory="$ktest_kernel_source"    	\
-	O="$ktest_kernel_build"			\
-	INSTALL_MOD_PATH="$ktest_kernel_binary"	\
-	SKIP_STACK_VALIDATION=1			\
-	"${MAKEARGS[@]}"			\
-	"$@"
-}
-
-new_config()
-{
-    local kconfig="$ktest_kernel_build/.config"
-    local config_tool="$ktest_kernel_source/scripts/config"
-
-    if [[ ! -f $kconfig ]]; then
-	do_make allnoconfig
-
-	# Really undefine everything:
-	sed -i -e 's/\(CONFIG_.*\)=.*/# \1 is not set/' "$kconfig"
-    fi
-}
-
-kernel_opt()
-{
-    local cmd=$1
-    local opt=$2
-    local kconfig="$ktest_kernel_build/.config"
-    local config_tool="$ktest_kernel_source/scripts/config"
-
-    if [[ $opt =~ = ]]; then
-	local val=${opt: -1}
-	opt="${opt%=?}"
-    else
-	local val=y
-    fi
-
-    case $cmd in
-	set)
-	    "$config_tool" --file "$kconfig" --set-val "$opt" "$val"
-	    ;;
-	check)
-	    local c=$("$config_tool" --file "$kconfig" -s "$opt")
-
-	    if [[ $c != $val ]]; then
-		echo "Kernel config option $opt is $c; should be $val"
-		exit 1
-	    fi
-	    ;;
-    esac
-}
-
-build_kernel()
-{
-    local magic=$ktest_kernel_binary/ktest-kernel-binary-dir
-
-    if [[ -e $ktest_kernel_binary ]] && [[ ! -d $ktest_kernel_binary ]]; then
-	echo "$ktest_kernel_binary already exists and is not a directory"
-	exit 1
-    fi
-
-    if [[ -d $ktest_kernel_binary ]] && [[ -n $(ls -A $ktest_kernel_binary) ]]; then
-	if [[ ! -f $magic ]]; then
-	    echo "$ktest_kernel_binary already exists and has non ktest kernel contents"
-	    exit 1
+do_make() {
+	if [[ -n $CROSS_COMPILE ]]; then
+		export ARCH="$KERNEL_ARCH"
+		export CROSS_COMPILE="$ARCH_TRIPLE-"
 	fi
 
-	rm -rf "$ktest_kernel_binary"
-    fi
+	# work around a bug in make - maybe not needed anymore?
+	#    if [[ $# = 0 || $1 != nconfig ]]; then
+	#	MAKEARGS+=("--output-sync=target")
+	#    fi
 
-    mkdir -p "$ktest_kernel_binary"
-    touch "$magic"
+	make --jobs="$ktest_njobs" \
+		--directory="$ktest_kernel_source" \
+		O="$ktest_kernel_build" \
+		INSTALL_MOD_PATH="$ktest_kernel_binary" \
+		SKIP_STACK_VALIDATION=1 \
+		"${MAKEARGS[@]}" \
+		"$@"
+}
 
-    if [[ -n $DEPS ]]; then
-	new_config
+new_config() {
+	local kconfig="$ktest_kernel_build/.config"
+	local config_tool="$ktest_kernel_source/scripts/config"
 
-	for opt in "${ktest_kernel_config_require[@]}"; do
-	    [[ -n $opt ]] && kernel_opt set "$opt"
-	done
+	if [[ ! -f $kconfig ]]; then
+		do_make allnoconfig
 
-	do_make olddefconfig
+		# Really undefine everything:
+		sed -i -e 's/\(CONFIG_.*\)=.*/# \1 is not set/' "$kconfig"
+	fi
+}
 
-	for opt in "${ktest_kernel_config_require[@]}"; do
-	    [[ -n $opt ]] && kernel_opt check "$opt"
-	done
-    fi
+kernel_opt() {
+	local cmd=$1
+	local opt=$2
+	local kconfig="$ktest_kernel_build/.config"
+	local config_tool="$ktest_kernel_source/scripts/config"
 
-    case $KERNEL_ARCH in
+	if [[ $opt =~ = ]]; then
+		local val=${opt: -1}
+		opt="${opt%=?}"
+	else
+		local val=y
+	fi
+
+	case $cmd in
+	set)
+		"$config_tool" --file "$kconfig" --set-val "$opt" "$val"
+		;;
+	check)
+		local c=$("$config_tool" --file "$kconfig" -s "$opt")
+
+		if [[ $c != "$val" ]]; then
+			echo "Kernel config option $opt is $c; should be $val"
+			exit 1
+		fi
+		;;
+	esac
+}
+
+build_kernel() {
+	local magic=$ktest_kernel_binary/ktest-kernel-binary-dir
+
+	if [[ -e $ktest_kernel_binary ]] && [[ ! -d $ktest_kernel_binary ]]; then
+		echo "$ktest_kernel_binary already exists and is not a directory"
+		exit 1
+	fi
+
+	if [[ -d $ktest_kernel_binary ]] && [[ -n $(ls -A "$ktest_kernel_binary") ]]; then
+		if [[ ! -f $magic ]]; then
+			echo "$ktest_kernel_binary already exists and has non ktest kernel contents"
+			exit 1
+		fi
+
+		rm -rf "$ktest_kernel_binary"
+	fi
+
+	mkdir -p "$ktest_kernel_binary"
+	touch "$magic"
+
+	if [[ -n $DEPS ]]; then
+		new_config
+
+		for opt in "${ktest_kernel_config_require[@]}"; do
+			[[ -n $opt ]] && kernel_opt set "$opt"
+		done
+
+		do_make olddefconfig
+
+		for opt in "${ktest_kernel_config_require[@]}"; do
+			[[ -n $opt ]] && kernel_opt check "$opt"
+		done
+	fi
+
+	case $KERNEL_ARCH in
 	mips)
-	    do_make vmlinuz
-	    ;;
+		do_make vmlinuz
+		;;
 	*)
-	    do_make
-	    ;;
-    esac
+		do_make
+		;;
+	esac
 
-    local BOOT=$ktest_kernel_build/arch/$KERNEL_ARCH/boot
+	local BOOT=$ktest_kernel_build/arch/$KERNEL_ARCH/boot
 
-    if   [[ -f "$BOOT/bzImage" ]]; then
-	install -m0644 "$BOOT/bzImage"		"$ktest_kernel_binary/vmlinuz"
-    elif [[ -f "$BOOT/vmlinux.strip" ]]; then
-	install -m0644 "$BOOT/vmlinux.strip"	"$ktest_kernel_binary/vmlinuz"
-    else
-	install -m0644 "$ktest_kernel_build/vmlinux"	"$ktest_kernel_binary/vmlinuz"
-    fi
+	if [[ -f "$BOOT/bzImage" ]]; then
+		install -m0644 "$BOOT/bzImage" "$ktest_kernel_binary/vmlinuz"
+	elif [[ -f "$BOOT/vmlinux.strip" ]]; then
+		install -m0644 "$BOOT/vmlinux.strip" "$ktest_kernel_binary/vmlinuz"
+	else
+		install -m0644 "$ktest_kernel_build/vmlinux" "$ktest_kernel_binary/vmlinuz"
+	fi
 
-    install -m0644 "$ktest_kernel_build/vmlinux" "$ktest_kernel_binary/vmlinux"
-    install -m0644 "$ktest_kernel_build/.config" "$ktest_kernel_binary/config"
+	install -m0644 "$ktest_kernel_build/vmlinux" "$ktest_kernel_binary/vmlinux"
+	install -m0644 "$ktest_kernel_build/.config" "$ktest_kernel_binary/config"
 
-    # if there weren't actually any modules selected, make modules_install gets
-    # confused:
-    touch "$ktest_kernel_build/modules.order"
-    touch "$ktest_kernel_build/modules.builtin"
+	# if there weren't actually any modules selected, make modules_install gets
+	# confused:
+	touch "$ktest_kernel_build/modules.order"
+	touch "$ktest_kernel_build/modules.builtin"
 
-    do_make modules_install
+	do_make modules_install
 }
 
-cmd_run()
-{
-    if [[ $# = 0 ]]; then
-	echo "build-test-kernel: missing test"
+cmd_run() {
+	if [[ $# == 0 ]]; then
+		echo "build-test-kernel: missing test"
+		usage
+		exit 1
+	fi
+
+	ktest_test=$1
+	shift
+	ktest_testargs=("$@")
+
+	parse_test_deps "$ktest_test"
+
+	if [[ -n $COVERAGE ]]; then
+		ktest_kernel_config_require+=(GCOV_KERNEL)
+	fi
+
+	if [[ -n $BUILD ]]; then
+		run_quiet "building kernel" build_kernel
+	fi
+
+	start_vm
+}
+
+cmd_boot() {
+	cmd_run "$ktest_dir/boot.ktest"
+}
+
+cmd_oldconfig() {
+	new_config
+	do_make oldconfig
+}
+
+cmd_config() {
+	new_config
+	do_make nconfig
+}
+
+cmd_help() {
 	usage
-	exit 1
-    fi
-
-    ktest_test=$1
-    shift
-    ktest_testargs="$@"
-
-    parse_test_deps "$ktest_test"
-
-    if [[ -n $COVERAGE ]]; then
-	ktest_kernel_config_require+=(GCOV_KERNEL)
-    fi
-
-    if [[ -n $BUILD ]]; then
-	run_quiet "building kernel" build_kernel
-    fi
-
-    start_vm
-}
-
-cmd_boot()
-{
-    cmd_run "$ktest_dir/boot.ktest"
-}
-
-cmd_oldconfig()
-{
-    new_config
-    do_make oldconfig
-}
-
-cmd_config()
-{
-    new_config
-    do_make nconfig
-}
-
-cmd_help()
-{
-    usage
 }
 
 if [[ $(type -t "cmd_$CMD") == function ]]; then
-    CMD="cmd_$CMD"
+	CMD="cmd_$CMD"
 elif [[ $(type -t "ktest_$CMD") == function ]]; then
-    CMD="ktest_$CMD"
+	CMD="ktest_$CMD"
 else
-    usage
-    exit 1
+	usage
+	exit 1
 fi
 
 $CMD "$@"
