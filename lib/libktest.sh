@@ -1,3 +1,4 @@
+# Dec 2019: requires additional validation via https://github.com/koalaman/shellcheck
 
 . "$ktest_dir/lib/util.sh"
 . "$ktest_dir/lib/parse-test.sh"

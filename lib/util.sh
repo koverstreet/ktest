@@ -1,3 +1,4 @@
+# Dec 2019: requires additional validation via https://github.com/koalaman/shellcheck
 
 ktest_no_cleanup_tmpdir=""
 ktest_tmp=""
