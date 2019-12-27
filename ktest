@@ -1,7 +1,5 @@
 #!/bin/bash
 
-# Dec 2019: requires additional validation via https://github.com/koalaman/shellcheck
-
 set -o nounset
 set -o errexit
 set -o errtrace
@@ -13,13 +11,14 @@ export PS4='+${LINENO}+ '
 
 ktest_dir=$(dirname "$(readlink -f "$0")")
 
-ktest_kernel_binary="" # dir that has the kernel to run
-#       set with: -k <path>
+ktest_kernel_binary=""	# dir that has the kernel to run
+                        #       set with: -k <path>
 
-source "$ktest_dir/lib/util.sh" || exit 1
-source "$ktest_dir/lib/libktest.sh" || exit 1
+. "$ktest_dir/lib/util.sh"
+. "$ktest_dir/lib/libktest.sh"
 
-usage() {
+usage()
+{
     echo "ktest: Run generic virtual machine tests"
     echo "Usage: ktest cmd [options]"
     ktest_usage_cmds
@@ -34,20 +33,21 @@ usage() {
     ktest_usage_post
 }
 
-if [[ $# == 0 ]]; then
+if [[ $# = 0 ]]; then
     usage
     exit 1
 fi
 
-cmd_run() {
-    if [[ $# == 0 ]]; then
-        echo "ktest: missing test"
-        exit 1
+cmd_run()
+{
+    if [[ $# = 0 ]]; then
+	echo "ktest: missing test"
+	exit 1
     fi
 
     ktest_test=$1
     shift
-    ktest_testargs=("$@")
+    ktest_testargs="$@"
 
     parse_test_deps "$ktest_test"
 
@@ -70,15 +70,15 @@ fi
 
 while getopts "k:h${ktest_args}" arg; do
     case $arg in
-    k)
-        ktest_kernel_binary=$OPTARG
-        ;;
-    h)
-        usage
-        exit 0
-        ;;
+	k)
+	    ktest_kernel_binary=$OPTARG
+	    ;;
+	h)
+	    usage
+	    exit 0
+	    ;;
     esac
-    parse_ktest_arg "$arg"
+    parse_ktest_arg $arg
 done
 shift $((OPTIND - 1))
 

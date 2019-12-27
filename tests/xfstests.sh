@@ -1,5 +1,3 @@
-# Dec 2019: requires additional validation via https://github.com/koalaman/shellcheck
-
 # xfstests wrapper:
 
 require-lib test-libs.sh

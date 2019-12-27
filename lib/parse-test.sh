@@ -1,4 +1,3 @@
-# Dec 2019: requires additional validation via https://github.com/koalaman/shellcheck
 
 parse_test_deps()
 {

@@ -1,12 +1,15 @@
+[submodule "debootstrap"]
+	path = debootstrap
+	url = https://anonscm.debian.org/git/d-i/debootstrap.git
 [submodule "tests/bcachefs/bcachefs-tools"]
-        path = tests/bcachefs/bcachefs-tools
-        url = https://github.com/koverstreet/bcachefs-tools.git
+	path = tests/bcachefs/bcachefs-tools
+	url = http://evilpiepirate.org/git/bcachefs-tools.git
 [submodule "tests/xfstests"]
-        path = tests/xfstests
-        url = https://github.com/kdave/xfstests.git
+	path = tests/xfstests
+	url = http://evilpiepirate.org/git/xfstests.git
 [submodule "tests/bcachefs/linuxquota-code"]
-        path = tests/bcachefs/linuxquota-code
-        url = https://github.com/leeminghao/linux-quota.git
+	path = tests/bcachefs/linuxquota-code
+	url = http://evilpiepirate.org/git/linuxquota.git
 [submodule "tests/blktests"]
-        path = tests/blktests
-        url = https://github.com/osandov/blktests.git
+	path = tests/blktests
+	url = https://github.com/osandov/blktests.git
