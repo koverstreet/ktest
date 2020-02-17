@@ -174,6 +174,7 @@ require-kernel-config FTRACE_SYSCALLS
 require-kernel-config ENABLE_MUST_CHECK
 require-kernel-config UNWINDER_FRAME_POINTER
 
+require-kernel-config DEBUG_FS
 require-kernel-config MAGIC_SYSRQ
 require-kernel-config DEBUG_INFO
 require-kernel-config DEBUG_INFO_DWARF4
