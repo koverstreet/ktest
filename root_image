@@ -195,6 +195,7 @@ ZZ
 
 update_packages()
 {
+    _chroot "$MNT" mount -t proc none /proc
     _chroot "$MNT" apt update
     _chroot "$MNT" apt upgrade -y
     _chroot "$MNT" apt install -y "${PACKAGES[@]}"
@@ -258,10 +259,9 @@ cmd_create()
     DEBOOTSTRAP_DIR=$ktest_dir/debootstrap $debootstrap	\
 	--no-check-gpg					\
 	--arch="$DEBIAN_ARCH"				\
-	--include=$(join_by , "${PACKAGES[@]}")		\
 	--exclude=$(join_by , "${EXCLUDE[@]}")		\
 	--foreign					\
-	sid "$MNT" "$MIRROR"
+	buster "$MNT" "$MIRROR"
 
     update_files
 
