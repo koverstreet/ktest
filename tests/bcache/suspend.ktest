@@ -22,7 +22,7 @@ require-kernel-append	no_console_suspend
 
 test_main()
 {
-    apt update; apt install --no-install-recommends -y uswsusp
+    apt-get -qq update; apt-get -qq install --no-install-recommends uswsusp
 
     #setup_tracing 'bcache:*'
 

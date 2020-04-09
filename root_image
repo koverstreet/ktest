@@ -207,9 +207,9 @@ ZZ
 update_packages()
 {
     _chroot "$MNT" mount -t proc none /proc
-    _chroot "$MNT" apt update
-    _chroot "$MNT" apt upgrade -y
-    _chroot "$MNT" apt install -y "${PACKAGES[@]}"
+    _chroot "$MNT" apt-get -qq update
+    _chroot "$MNT" apt-get -qq upgrade
+    _chroot "$MNT" apt-get -qq install "${PACKAGES[@]}"
     rm -f "$MNT/var/cache/apt/archives/*.deb"
 }
 
