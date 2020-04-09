@@ -47,7 +47,7 @@ checkdep()
 		if which apt-get > /dev/null 2>&1 && \
 			which sudo > /dev/null 2>&1; then
 			echo ", installing $package:"
-			sudo apt-get -qq install "$package"
+			sudo apt-get -qq install --no-install-recommends "$package"
 		else
 			echo ", please install"
 			exit 1

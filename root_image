@@ -209,7 +209,7 @@ update_packages()
     _chroot "$MNT" mount -t proc none /proc
     _chroot "$MNT" apt-get -qq update
     _chroot "$MNT" apt-get -qq upgrade
-    _chroot "$MNT" apt-get -qq install "${PACKAGES[@]}"
+    _chroot "$MNT" apt-get -qq install --no-install-recommends "${PACKAGES[@]}"
     rm -f "$MNT/var/cache/apt/archives/*.deb"
 }
 
