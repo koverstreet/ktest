@@ -1,6 +1,6 @@
 [submodule "debootstrap"]
 	path = debootstrap
-	url = https://anonscm.debian.org/git/d-i/debootstrap.git
+	url = https://salsa.debian.org/installer-team/debootstrap.git/
 [submodule "tests/bcachefs/bcachefs-tools"]
 	path = tests/bcachefs/bcachefs-tools
 	url = https://evilpiepirate.org/git/bcachefs-tools.git
