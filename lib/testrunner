@@ -88,6 +88,13 @@ fi
 j=$(($(grep -c '^processor' /proc/cpuinfo) * 2))
 
 for i in "${ktest_make_install[@]}"; do
+    if [ "$(basename $i)" = "linuxquota-code" ]; then
+	pushd "/host/$i"
+	./autogen.sh
+	./configure
+	popd
+    fi
+
     run_quiet "building $(basename $i)" make -j $j -C "/host/$i" install
 done
 
