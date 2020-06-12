@@ -25,6 +25,7 @@ ktest_loop=0
 ktest_verbose=0		# if false, append quiet to kernel commad line
 ktest_crashdump=0
 ktest_kgdb=0
+ktest_ssh_port=0
 
 ktest_storage_bus=virtio-scsi-pci
 
@@ -45,7 +46,7 @@ checkdep /usr/include/lwipv6.h	liblwipv6-dev
 
 # args:
 
-ktest_args="i:s:d:a:p:ISFLvx"
+ktest_args="i:s:d:a:p:ISFLvxf:"
 parse_ktest_arg()
 {
     local arg=$1
@@ -85,6 +86,8 @@ parse_ktest_arg()
 	x)
 	    set -x
 	    ;;
+  f)
+      ktest_ssh_port=$OPTARG
     esac
 }
 
@@ -132,6 +135,7 @@ ktest_usage_run_opts()
     echo "      -F          failfast - stop after first test failure"
     echo "      -L          run all tests in infinite loop until failure"
     echo "      -v          verbose mode"
+    echo "      -f <port>   use qemu port forwarding on localhost:port for SSH. (default is to use vde)"
 }
 
 ktest_usage_cmds()
@@ -178,6 +182,21 @@ ktest_ssh()
 	-o ControlPersist=yes						\
 	-o ProxyCommand="$ktest_dir/lib/lwip-connect $sock $ip 22"	\
 	root@127.0.0.1 "$@"
+}
+
+ktest_ssh_with_forwarding()
+{
+    exec ssh -t -F /dev/null						\
+	-o CheckHostIP=no						\
+	-o StrictHostKeyChecking=no					\
+	-o UserKnownHostsFile=/dev/null					\
+	-o NoHostAuthenticationForLocalhost=yes				\
+	-o ServerAliveInterval=2					\
+	-o ControlMaster=auto						\
+	-o ControlPath="$ktest_vmdir/controlmaster"			\
+	-o ControlPersist=yes						\
+  -p $ktest_ssh_port \
+	root@127.0.0.1   "$@"
 }
 
 ktest_gdb()
@@ -254,7 +273,7 @@ start_vm()
     rm -f "$ktest_out/vm"
     ln -s "$ktest_tmp" "$ktest_out/vm"
 
-    start_networking
+    [[ $ktest_ssh_port = 0 ]] && start_networking
 
     local kernelargs=()
     kernelargs+=(console=hvc0)
@@ -294,11 +313,21 @@ start_vm()
 	-monitor	"unix:$ktest_tmp/vm-mon,server,nowait"		\
 	-gdb		"unix:$ktest_tmp/vm-gdb,server,nowait"		\
 	-device		virtio-rng-pci					\
-	-net		nic,model=virtio,macaddr=de:ad:be:ef:00:00	\
-	-net		vde,sock="$ktest_tmp/net"			\
 	-virtfs		local,path=/,mount_tag=host,security_model=none	\
 	-device		$ktest_storage_bus,id=hba			\
     )
+
+    if [ $ktest_ssh_port = 0 ]
+    then
+      qemu_cmd+=( \
+	      -net		nic,model=virtio,macaddr=de:ad:be:ef:00:00	\
+	      -net		vde,sock="$ktest_tmp/net"			\
+      )
+    else
+      qemu_cmd+=( \
+        -nic    user,model=virtio,hostfwd=tcp:127.0.0.1:$ktest_ssh_port-:22	\
+      )
+    fi
 
     local disknr=0
 
