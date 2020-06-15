@@ -21,7 +21,7 @@ checkdep fallocate util-linux
 checkdep mkfs.ext4 e2fsprogs
 
 IMAGE_SIZE="10G"
-MIRROR=http://ftp.us.debian.org/debian/
+MIRROR=https://deb.debian.org/debian/
 
 usage()
 {
