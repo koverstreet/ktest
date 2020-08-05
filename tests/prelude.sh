@@ -160,6 +160,9 @@ fi
 # KGDB:
 require-kernel-config KGDB
 require-kernel-config KGDB_SERIAL_CONSOLE
+require-kernel-config VMAP_STACK=n
+require-kernel-config RANDOMIZE_BASE=n
+require-kernel-config RANDOMIZE_MEMORY=n
 
 # Profiling:
 require-kernel-config PROFILING
@@ -174,19 +177,26 @@ require-kernel-config FTRACE_SYSCALLS
 require-kernel-config ENABLE_MUST_CHECK
 require-kernel-config UNWINDER_FRAME_POINTER
 
+require-kernel-config PANIC_ON_OOPS
+require-kernel-config SOFTLOCKUP_DETECTOR
+require-kernel-config HARDLOCKUP_DETECTOR
+require-kernel-config DETECT_HUNG_TASK
+#require-kernel-config DEFAULT_HUNG_TASK_TIMEOUT=30
+require-kernel-config WQ_WATCHDOG
+
 require-kernel-config DEBUG_FS
 require-kernel-config MAGIC_SYSRQ
 require-kernel-config DEBUG_INFO
 require-kernel-config DEBUG_INFO_DWARF4
 require-kernel-config GDB_SCRIPTS
 require-kernel-config DEBUG_KERNEL
-require-kernel-config PANIC_ON_OOPS
 #require-kernel-config DEBUG_RODATA
 #require-kernel-config DEBUG_SET_MODULE_RONX
 
+require-kernel-config DEBUG_LIST
+
 # More expensive
 #require-kernel-config DYNAMIC_DEBUG
-#require-kernel-config DEBUG_LIST
 
 # Expensive
 #require-kernel-config DEBUG_ATOMIC_SLEEP

@@ -280,7 +280,7 @@ start_vm()
     kernelargs+=(root=/dev/sda rw log_buf_len=8M)
     kernelargs+=("ktest.dir=$ktest_dir")
     kernelargs+=("ktest.env=$ktest_tmp/env")
-    [[ $ktest_kgdb = 1 ]]	&& kernelargs+=(kgdboc=ttyS0,115200)
+    [[ $ktest_kgdb = 1 ]]	&& kernelargs+=(kgdboc=ttyS0,115200 nokaslr)
     [[ $ktest_verbose = 0 ]]	&& kernelargs+=(quiet systemd.show_status=0 systemd.log-target=journal)
     [[ $ktest_crashdump = 1 ]]	&& kernelargs+=(crashkernel=128M)
 

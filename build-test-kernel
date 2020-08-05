@@ -194,6 +194,8 @@ kernel_opt()
 	check)
 	    local c=$("$config_tool" --file "$kconfig" -s "$opt")
 
+	    [[ $c = undef ]] && c=n
+
 	    if [[ $c != $val ]]; then
 		echo "Kernel config option $opt is $c; should be $val"
 		exit 1
