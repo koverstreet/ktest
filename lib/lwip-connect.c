@@ -75,7 +75,7 @@ int main(int argc, char **argv)
 	while (1) {
 		char buf[4096];
 		fd_set fds;
-		int n;
+		int r, w, wrote;
 
 		FD_ZERO(&fds);
 		FD_SET(STDIN_FILENO, &fds);
@@ -83,18 +83,33 @@ int main(int argc, char **argv)
 
 		lwip_select(fd + 1, &fds, NULL, &fds, NULL);
 
-		while ((n = lwip_read(fd, buf, sizeof(buf))) > 0)
-			write(STDOUT_FILENO, buf, n);
-		if (!n)
+		while ((r = lwip_read(fd, buf, sizeof(buf))) > 0) {
+			wrote = 0;
+
+			while (wrote < r) {
+				w = write(STDOUT_FILENO, buf + wrote, r - wrote);
+				if (w < 0)
+					die("error writing to stdout");
+				wrote += w;
+			}
+		}
+		if (!r)
 			exit(EXIT_SUCCESS);
-		if (n < 0 && errno != EAGAIN)
+		if (r < 0 && errno != EAGAIN)
 			die("error reading from socket");
 
-		while ((n = read(STDIN_FILENO, buf, sizeof(buf))) > 0)
-			lwip_write(fd, buf, n);
-		if (!n)
+		while ((r = read(STDIN_FILENO, buf, sizeof(buf))) > 0) {
+			wrote = 0;
+			while (wrote < r) {
+				w = lwip_write(fd, buf + wrote, r - wrote);
+				if (w < 0)
+					die("error writing to socket");
+				wrote += w;
+			}
+		}
+		if (!r)
 			exit(EXIT_SUCCESS);
-		if (n < 0 && errno != EAGAIN)
+		if (r < 0 && errno != EAGAIN)
 			die("error reading from stdin");
 	}
 }
