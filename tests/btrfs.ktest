@@ -1,0 +1,16 @@
+#!/bin/bash
+
+require-lib test-libs.sh
+
+require-kernel-config BTRFS_FS
+require-kernel-config QUOTA
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-timeout $(stress_timeout)
+
+test_multi_devs()
+{
+    mkfs.btrfs /dev/sdb /dev/sdc
+
+}

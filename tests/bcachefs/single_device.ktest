@@ -3,14 +3,58 @@
 require-lib bcachefs-test-libs.sh
 
 config-scratch-devs 4G
+config-scratch-devs 4G
 
 config-timeout $(stress_timeout)
 
-test_foo()
+test_journal_resize()
+{
+    run_quiet "" bcachefs format -f /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    run_fio_randrw --filesize=2G &
+
+    sleep 4
+    bcachefs device resize-journal /dev/sdb 1G
+
+    wait
+    umount /mnt
+}
+
+test_reflink_inline_data()
+{
+    run_quiet "" bcachefs format -f /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    dd if=/dev/urandom of=/root/foo bs=256 count=1
+    cp		    /root/foo /mnt/foo1
+    cp		    /mnt/foo1 /mnt/foo2
+    cp --reflink    /mnt/foo2 /mnt/foo3
+    md5sum /root/foo /mnt/foo*
+
+    umount /mnt
+}
+
+test_split_compressed()
+{
+    run_quiet "" bcachefs format --compression=zstd /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    # Test that splitting of compressed extents is working correctly:
+    dd if=/dev/zero of=/mnt/foo bs=128k	    count=1 oflag=direct
+    dd if=/dev/urandom of=/mnt/foo bs=4k    count=1 seek=1 oflag=direct conv=notrunc
+    umount /mnt
+}
+
+test_remount_loop()
 {
     run_quiet "" bcachefs format /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
-    dd if=/dev/urandom of=/mnt/foo bs=4k count=2 oflag=direct
+
+    while true; do
+	mount -t bcachefs -o fsck /dev/sdb /mnt
+	run_fio_randrw
+	umount /mnt
+    done
 }
 
 test_fcollapse()
@@ -35,15 +79,6 @@ test_finsert()
     cat /sys/kernel/debug/bcachefs/*/extents
 
     xfs_io -c "finsert 1024 1024" /mnt/foo
-}
-
-test_fiemap()
-{
-    run_quiet "" bcachefs format --data_checksum=none /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
-
-    dd if=/dev/zero of=/mnt/foo bs=1M count=1024 oflag=direct
-    perf_5.2 stat -- xfs_io -c fiemap /mnt/foo
 }
 
 test_key_merge()
@@ -99,21 +134,22 @@ test_reflink()
 
 test_reconstruct_alloc()
 {
-    run_quiet "" bcachefs format /dev/sdb
+    run_quiet "" bcachefs format --btree_node_size=16k /dev/sdb
 
     mount -t bcachefs -o reconstruct_alloc,fix_errors,fsck /dev/sdb /mnt
 
-    touch /mnt/a /mnt/b /mnt/c
     umount /mnt
-
-    mount -o ro -t bcachefs /dev/sdb /mnt
-
     bcachefs fsck -n /dev/sdb
 
-    mount -o remount,rw /mnt
+    mount -t bcachefs /dev/sdb /mnt
+    run_fio_randrw
     umount /mnt
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs -o reconstruct_alloc,fix_errors,fsck /dev/sdb /mnt
+    umount /mnt
+
+    bcachefs fsck -n /dev/sdb
+    mount -t bcachefs -o fsck /dev/sdb /mnt
     umount /mnt
 }
 
@@ -247,11 +283,22 @@ test_crc64()
 	/dev/sdb
 }
 
+test_crypto_locked_mnt()
+{
+    echo foo|bcachefs format --encrypted /dev/sdb
+    mount -t bcachefs -o verbose /dev/sdb /mnt
+    umount /mnt
+    bcachefs fsck				\
+	/dev/sdb
+}
+
 test_crypto()
 {
     run_basic_fio_test				\
 	--encrypted --no_passphrase		\
 	/dev/sdb
+    mount -t bcachefs -o fsck /dev/sdb /mnt
+    umount /mnt
     bcachefs fsck				\
 	/dev/sdb
 }
@@ -277,15 +324,7 @@ run_copygc_torture()
     mount /dev/sdb /mnt
     #enable_memory_faults
 
-    ioengine=sync
-    fio						\
-	--filename=/mnt/fiotest			\
-	--ioengine=$ioengine			\
-	--name=write				\
-	--rw=write				\
-	--bs=16M				\
-	--fill_fs=1
-    echo 3 > /proc/sys/vm/drop_caches
+    fill_device /mnt/fiotest
 
     for i in $(seq 1 $loops); do
 	run_fio_base				\
@@ -318,18 +357,17 @@ run_copygc_torture()
 test_copygc_torture()
 {
     #run_copygc_torture --bucket=256k --btree_node_size=8k
-    run_copygc_torture --bucket=4k --btree_node_size=4k
+    run_copygc_torture --bucket=32k --btree_node_size=32k
 }
 
 test_copygc_torture_no_checksum()
 {
-    #run_copygc_torture --bucket=256k --btree_node_size=8k --data_checksum=none
-    run_copygc_torture --bucket=4k --btree_node_size=4k --data_checksum=none
+    run_copygc_torture --bucket=256k --btree_node_size=16k --data_checksum=none
 }
 
-disabled_test_copygc_torture_lz4()
+test_copygc_torture_lz4()
 {
-    run_copygc_torture --bucket=256k --btree_node_size=8k --compression=lz4
+    run_copygc_torture --bucket=256k --btree_node_size=16k --compression=lz4
 }
 
 test_small_buckets()
@@ -889,7 +927,7 @@ test_many_files()
     umount /mnt
 }
 
-test_invalid_keys()
+disabled_test_invalid_keys()
 {
     echo 1 > /sys/module/bcachefs/parameters/inject_invalid_keys
 
@@ -1055,17 +1093,15 @@ test_setattr()
 
 test_mount_twice()
 {
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	/dev/sdb
+    mkdir -p /mnt/1 /mnt/2
+    #run_quiet "" bcachefs format -f /dev/sdb
+    mkfs.ext2 /dev/sdb
+    mount /dev/sdb /mnt/1
+    mount /dev/sdb /mnt/2
+    exit
 
-    mkdir /mnt2
-
-    mount -t bcachefs /dev/sdb /mnt
-    mount -t bcachefs /dev/sdb /mnt2
-
-    umount /mnt
-    umount /mnt2
+    umount /mnt/1
+    umount /mnt/2
 }
 
 test_dump()

@@ -17,7 +17,7 @@ test_usrquota_twodevices()
 	--errors=panic		\
 	/dev/sd[bc] >/dev/null
 
-    mount -t bcachefs -o usrquota,grpquota,prjquota /dev/sdb:/dev/sdc /mnt
+    mount -t bcachefs -o usrquota,grpquota,prjquota /dev/sdc:/dev/sdb /mnt
 
     repquota -s /mnt
 
@@ -82,10 +82,10 @@ test_grpquota()
     else
 	bcachefs format				\
 	    --errors=panic		\
-	    /dev/sdb >/dev/null
+	    /dev/sdb /dev/sdc >/dev/null
     fi
 
-    mount -o usrquota,grpquota,prjquota /dev/sdb /mnt
+    mount -t bcachefs -o usrquota,grpquota,prjquota /dev/sdb:/dev/sdc /mnt
 
     setquota -g root 256M 512M 64 128 /mnt
     #setquota -t 60 60 /mnt
@@ -101,13 +101,14 @@ test_grpquota()
 
 test_prjquota()
 {
-    bcachefs format			\
-	--errors=panic		\
-	/dev/sdb >/dev/null
+#    bcachefs format		\
+#	--errors=panic		\
+#	/dev/sdb >/dev/null
+    mkfs.xfs /dev/sdb
 
     mount -o usrquota,grpquota,prjquota /dev/sdb /mnt
 
-    repquota -P -s /mnt
+    repquota -vP  /mnt
     mkdir /mnt/q1
     mkdir /mnt/q2
     touch /mnt/q1/foo
@@ -125,21 +126,23 @@ test_prjquota()
     ! dd if=/dev/zero of=/mnt/q1/foo bs=1M oflag=direct
     repquota -P -s /mnt
 
-    mv /mnt/q1/foo /mnt/q2
+    chattr -p 0 /mnt/q1/foo
+
+    #mv /mnt/q1/foo /mnt/q2
     repquota -P -s /mnt
 
-    umount /mnt
+#    umount /mnt
 }
 
-test_prjquota2()
+test_prjquota_multidevices()
 {
     bcachefs format			\
 	--errors=panic		\
 	/dev/sd[bc] >/dev/null
 
-    mount -o usrquota,grpquota,prjquota /dev/sdb:/dev/sdc /mnt
+    mount -t bcachefs -o usrquota,grpquota,prjquota /dev/sdb:/dev/sdc /mnt
 
-    repquota -P -s /mnt
+    repquota -vP  /mnt
     mkdir /mnt/q1
     mkdir /mnt/q2
     touch /mnt/q1/foo

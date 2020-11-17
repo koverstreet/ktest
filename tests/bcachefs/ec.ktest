@@ -1,0 +1,244 @@
+#!/bin/bash
+
+require-lib bcachefs-test-libs.sh
+
+require-kernel-config MD
+require-kernel-config BLK_DEV_MD
+require-kernel-config MD_FAULTY
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+
+config-timeout $(stress_timeout)
+
+test_ec_small()
+{
+    #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
+    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+
+    run_quiet "" bcachefs format -f		\
+	--errors=panic				\
+	--erasure_code				\
+	--replicas=2				\
+	/dev/sd[bcdef]
+    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
+
+    mount -t bcachefs $devs /mnt
+
+    #enable_memory_faults
+    dd if=/dev/zero of=/mnt/foo bs=8M count=2 oflag=sync
+    #disable_memory_faults
+
+    mount -o remount,ro /mnt
+    bcachefs fs usage /mnt
+    df -h /mnt
+    umount /mnt
+
+    bcachefs fsck -n /dev/sd[bcdef]
+
+    # test remount:
+    echo "Testing remount"
+    mount -t bcachefs -o fsck $devs /mnt
+    umount /mnt
+
+    #bcachefs fsck /dev/sd[bcdef]
+}
+
+test_ec_umount()
+{
+    run_quiet "" bcachefs format -f		\
+	--errors=panic				\
+	--erasure_code				\
+	--replicas=2				\
+	/dev/sd[bcdef]
+    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
+
+    for i in $(seq 1 100); do
+	mount -t bcachefs $devs /mnt
+	dd if=/dev/zero of=/mnt/foo bs=8M count=128
+	sync
+	umount /mnt
+    done
+}
+
+test_ec()
+{
+    #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
+    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+
+    run_quiet "" bcachefs format -f		\
+	--errors=panic				\
+	--erasure_code				\
+	--replicas=2				\
+	/dev/sd[bcdef]
+    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
+
+    mount -t bcachefs $devs /mnt
+
+    #enable_memory_faults
+    run_fio_randrw
+    #disable_memory_faults
+
+    #bcachefs fs usage -h /mnt
+    umount /mnt
+
+    # test remount:
+    echo "Testing remount"
+    mount -t bcachefs -o fsck $devs /mnt
+    umount /mnt
+
+    #bcachefs fsck /dev/sd[bcdef]
+}
+
+test_ec_lz4()
+{
+    #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
+    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+
+    run_quiet "" bcachefs format -f		\
+	--errors=panic				\
+	--erasure_code				\
+	--compression=lz4			\
+	--replicas=2				\
+	/dev/sd[bcdef]
+    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
+
+    mount -t bcachefs $devs /mnt
+
+    #enable_memory_faults
+    run_fio_randrw
+    #dd if=/dev/zero of=/mnt/foo bs=1M count=10 oflag=direct
+    #disable_memory_faults
+
+    #bcachefs fs usage -h /mnt
+    umount /mnt
+
+    # test remount:
+    echo "Testing remount"
+    mount -t bcachefs -o fsck $devs /mnt
+    umount /mnt
+
+    #bcachefs fsck /dev/sd[bcdef]
+}
+
+test_ec_gc()
+{
+    #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
+    echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+    #echo 1 > /sys/module/bcachefs/parameters/expensive_debug_checks
+    #echo 1 > /sys/module/bcachefs/parameters/debug_check_iterators
+
+    run_quiet "" bcachefs format -f		\
+	--errors=continue			\
+	--replicas=2				\
+	/dev/sd[bcdef]
+    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
+
+    mount -t bcachefs -o erasure_code $devs /mnt
+
+    fill_device /mnt/fiotest
+
+    local loops=$((($ktest_priority + 1) * 4))
+    for i in $(seq 1 $loops); do
+	run_fio_base				\
+	    --buffer_compress_percentage=50	\
+						\
+	    --name=randwrite			\
+	    --stonewall				\
+	    --rw=randwrite			\
+	    --loops=$loops			\
+	    --bsrange=4k-4k
+
+	cur_size=$(stat -c '%s' /mnt/fiotest)
+	new_size=$(($cur_size - 1048576))
+	echo "truncating to $new_size"
+
+	truncate --size=$new_size /mnt/fiotest
+    done
+
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_gc
+    echo unmounting
+    exit
+
+    #bcachefs fs usage -h /mnt
+    umount /mnt
+
+    # test remount:
+    mount -t bcachefs -o fix_errors,erasure_code $devs /mnt
+    umount /mnt
+
+    #bcachefs fsck /dev/sd[bcdef]
+}
+
+do_remove_test()
+{
+    offline=$1
+    evacuate=$2
+
+    run_quiet "" bcachefs format		\
+	--errors=panic				\
+	--erasure_code				\
+	--replicas=2				\
+	/dev/sd[bcdef]
+
+    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf /mnt
+
+    local fioout="$ktest_tmp/fioout"
+    run_fio_randrw >"$fioout" 2>&1 &
+    local fiopid=$!
+
+    sleep 1
+
+    if [[ $offline = 1 ]]; then
+	echo -n "offlining /dev/sdb... "
+	bcachefs device offline --force	/dev/sdb
+	echo "done"
+    fi
+
+    if [[ $evacuate = 1 ]]; then
+	echo -n "evacuating /dev/sdb... "
+	bcachefs device evacuate	/dev/sdb
+	echo "done"
+    fi
+
+    echo -n "removing /dev/sdb... "
+    if [[ $evacuate = 1 ]]; then
+	bcachefs device remove		/dev/sdb
+    else
+	bcachefs device remove --force	/dev/sdb
+    fi
+    echo "done"
+
+    if ! wait $fiopid; then
+	cat "$fioout"
+	return 1
+    fi
+
+    umount /mnt
+
+    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf /mnt
+    umount /mnt
+}
+
+test_device_remove_offline()
+{
+    do_remove_test 1 0
+}
+
+test_device_remove_online()
+{
+    do_remove_test 0 0
+}
+
+test_device_evacuate_offline()
+{
+    do_remove_test 1 1
+}
+
+test_device_evacuate_online()
+{
+    do_remove_test 0 1
+}

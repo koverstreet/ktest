@@ -1,0 +1,66 @@
+#!/bin/bash
+
+require-lib ./test-libs.sh
+
+require-kernel-config MD
+require-kernel-config BLK_DEV_MD
+require-kernel-config MD_LINEAR
+require-kernel-config MD_RAID0
+require-kernel-config MD_RAID1
+require-kernel-config MD_RAID10
+require-kernel-config MD_RAID456
+require-kernel-config MD_MULTIPATH
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+
+config-timeout $(stress_timeout)
+
+run_fio()
+{
+    filename=$1
+    shift
+    fio --eta=always				\
+	--randrepeat=0				\
+	--ioengine=libaio			\
+	--iodepth=64				\
+	--iodepth_batch=16			\
+	--direct=1				\
+	--numjobs=1				\
+	--verify=meta				\
+	--verify_fatal=1			\
+	--filename=$filename			\
+	--name=randrw				\
+	--rw=randrw				\
+	--bsrange=4k-1M				\
+	--size=1G				\
+	"$@"
+}
+
+run_mdtest()
+{
+    wipefs -a /dev/sd[bcde]
+    mdadm --create --force -n4 -l$1 /dev/md0 /dev/sd[bcde]
+
+    run_fio /dev/md0
+
+    mdadm --stop /dev/md0
+}
+
+
+test_raid0()
+{
+    run_mdtest 0
+}
+
+test_raid10()
+{
+    run_mdtest 10
+}
+
+test_raid5()
+{
+    run_mdtest 5
+}

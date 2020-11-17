@@ -1,0 +1,55 @@
+#!/bin/bash
+
+require-lib ../prelude.sh
+
+require-make bcachefs-tools
+
+require-kernel-config BCACHEFS_FS
+require-kernel-config BCACHEFS_DEBUG
+require-kernel-config BCACHEFS_TESTS
+
+if [[ $KERNEL_ARCH = x86 ]]; then
+    require-kernel-config CRYPTO_CRC32C_INTEL
+fi
+
+config-mem	    8G
+config-scratch-devs 8G
+config-timeout	    600
+
+btree_node_size=8k
+
+run_test()
+{
+    echo 1 > /sys/module/bcachefs/parameters/expensive_debug_checks
+    echo 1 > /sys/module/bcachefs/parameters/key_merging_disabled
+
+    bcachefs format				\
+	--errors=panic				\
+	/dev/sdb >/dev/null
+	#--bucket=$btree_node_size		\
+	#--btree_node_size=$btree_node_size	\
+    mount /dev/sdb /mnt
+    ln -sf /sys/fs/bcachefs/*/perf_test p
+
+    for i in $@; do
+	echo test_$i		100k 1	> p
+    done
+
+    umount /mnt
+}
+
+list_tests()
+{
+    echo iterate
+    echo iterate_extents
+    echo iterate_slots
+    echo iterate_slots_extents
+    echo peek_end
+    echo peek_end_extents
+    echo delete
+    echo delete_written
+    echo extent_overwrite_front
+    echo extent_overwrite_back
+    echo extent_overwrite_middle
+    echo extent_overwrite_all
+}

@@ -1,0 +1,23 @@
+#!/bin/bash
+
+require-lib test-libs.sh
+
+config-scratch-devs 1G
+
+config-timeout 7200
+
+test_buffered_reads()
+{
+    blockdev --setra 0 /dev/sdb
+    fio --eta=always				\
+	--exitall_on_error=1			\
+	--randrepeat=0				\
+	--ioengine=libaio			\
+	--iodepth=64				\
+	--iodepth_batch=16			\
+	--numjobs=1				\
+	--size=1G				\
+	--filename=/mnt/sdb			\
+	--name=randread				\
+	--rw=randread
+}

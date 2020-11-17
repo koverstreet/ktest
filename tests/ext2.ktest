@@ -1,0 +1,12 @@
+#!/bin/bash
+
+require-kernel-config EXT2_FS
+require-kernel-config EXT2_FS_XATTR
+require-kernel-config EXT2_FS_POSIX_ACL
+
+require-lib xfstests.sh
+
+run_tests()
+{
+    run_xfstests ext2 "$@"
+}

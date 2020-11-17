@@ -41,7 +41,7 @@ antagonist_shrink()
 {
     while true; do
 	for file in $(find /sys/fs/bcachefs -name prune_cache); do
-	    echo 100000 > $file > /dev/null 2>&1 || true
+	    echo 1000000 > $file > /dev/null 2>&1 || true
 
 	done
 	sleep 0.5
@@ -113,6 +113,20 @@ bcachefs_antagonist()
     antagonist_sync &
     antagonist_trigger_gc &
     antagonist_switch_str_hash &
+}
+
+fill_device()
+{
+    local filename=$1
+
+    fio						\
+	--filename=$filename			\
+	--ioengine=sync				\
+	--name=write				\
+	--rw=write				\
+	--bs=16M				\
+	--fill_fs=1
+    echo 3 > /proc/sys/vm/drop_caches
 }
 
 run_fio_base()

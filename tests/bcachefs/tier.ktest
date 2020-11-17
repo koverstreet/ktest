@@ -9,10 +9,29 @@ config-scratch-devs 4G
 
 config-timeout $(stress_timeout)
 
+test_labels()
+{
+    run_quiet "" bcachefs format /dev/sd[bcde]
+
+    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd:/dev/sde /mnt
+
+    cd /sys/fs/bcachefs/*
+    echo zstd	> options/background_compression
+    echo lz4	> options/compression
+    echo ssd	| tee dev-[01]/label
+    echo hdd	| tee dev-[23]/label
+    echo ssd	> options/foreground_target
+    echo ssd	> options/promote_target
+    echo hdd	> options/background_target
+
+    run_fio_randrw
+}
+
 run_basic_tiering_test()
 {
     run_basic_fio_test "$@"			\
 	--block_size=4k				\
+	--bucket=8M				\
 	--group=ssd.ssd1 /dev/sdb		\
 	--group=ssd.ssd2 /dev/sdc		\
 	--group=hdd.hdd1 /dev/sdd		\
@@ -20,6 +39,27 @@ run_basic_tiering_test()
 	--foreground_target=ssd			\
 	--promote_target=ssd			\
 	--background_target=hdd
+}
+
+test_tiering_torture()
+{
+    run_quiet "" bcachefs format		\
+	--block_size=4k				\
+	--bucket=8M				\
+	--group=ssd.ssd1 /dev/sdb		\
+	--group=ssd.ssd2 /dev/sdc		\
+	--group=hdd.hdd1 /dev/sdd		\
+	--group=hdd.hdd2 /dev/sde		\
+	--foreground_target=ssd			\
+	--promote_target=ssd			\
+	--background_target=hdd
+
+    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd:/dev/sde /mnt
+    run_fio_randrw
+    mv /mnt/fiotest /mnt/fiotest_old
+    run_fio_randrw --loops=50
+
+    mount -o remount,ro /mnt
 }
 
 test_tiering()
@@ -144,17 +184,16 @@ test_tiering_variable_buckets_replicas()
 
 test_device_add()
 {
-    run_quiet "" bcachefs format			\
+    run_quiet "" bcachefs format		\
 	--errors=panic				\
+	--group=ssd /dev/sdb			\
 	--group=hdd /dev/sd[de]
 
-    mount -t bcachefs /dev/sdd:/dev/sde /mnt
+    mount -t bcachefs /dev/sdb:/dev/sdd:/dev/sde /mnt
 
     run_fio_randrw|tail -n200 &
-    bcachefs device add /mnt /dev/sdc
 
-    wait
-    umount /mnt
+    bcachefs device add --group=hdd /mnt /dev/sdc
 }
 
 test_mount_umount_torture()

@@ -14,12 +14,18 @@ config-scratch-devs 4G
 
 config-timeout $(stress_timeout)
 
+test_mount()
+{
+    run_quiet "" bcachefs format /dev/sd[bcdef]
+}
+
 test_foo()
 {
-    run_quiet "" bcachefs format /dev/sdb /dev/sdc
-    mount -t bcachefs -o ro /dev/sdb:/dev/sdc /mnt
-
-    bcachefs fsck /dev/sdb /dev/sdc
+    run_quiet "" bcachefs format --data_checksum=none --bucket=8M /dev/sdb
+    mount /dev/sdb /mnt
+    bcachefs device add /mnt /dev/sdd 
+    bcachefs device add /mnt /dev/sde
+    dd if=/dev/zero of=/mnt/foo bs=8M count=1024 oflag=direct
 }
 
 test_recovery()
@@ -102,6 +108,14 @@ test_twodevices()
 	/dev/sdb /dev/sdc /dev/sdd
 }
 
+test_largebuckets()
+{
+    run_quiet "" bcachefs format -f --bucket=8M /dev/sd[bcd]
+
+    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+    dd if=/dev/zero of=/mnt/foo bs=16M count=1024 oflag=direct
+}
+
 test_replicas()
 {
     run_basic_fio_test				\
@@ -116,6 +130,56 @@ test_replicas_variable_buckets()
 	--bucket=32k	/dev/sdb		\
 	--bucket=64k	/dev/sdc		\
 	--bucket=128k	/dev/sdd
+}
+
+test_copygc_torture()
+{
+    loops=$((($ktest_priority + 1) * 4))
+
+    bcachefs_antagonist
+
+    run_quiet "" bcachefs format -f		\
+	--errors=panic				\
+	"$@" /dev/sd[bcd]
+
+    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+    #enable_memory_faults
+
+    fio						\
+	--filename=/mnt/fiotest			\
+	--ioengine=sync				\
+	--name=write				\
+	--rw=write				\
+	--bs=16M				\
+	--fill_fs=1
+    echo 3 > /proc/sys/vm/drop_caches
+
+    for i in $(seq 1 $loops); do
+	run_fio_base				\
+	    --buffer_compress_percentage=50	\
+						\
+	    --name=randwrite			\
+	    --stonewall				\
+	    --rw=randwrite			\
+	    --loops=$loops			\
+	    --bsrange=4k-4k
+
+	cur_size=$(stat -c '%s' /mnt/fiotest)
+	new_size=$(($cur_size - 1048576))
+	echo "truncating to $new_size"
+
+	truncate --size=$new_size /mnt/fiotest
+    done
+
+    rm /mnt/fiotest
+
+    expect_sysfs cache dirty_buckets	0
+    expect_sysfs cache dirty_data	0
+    expect_sysfs cache cached_buckets	0
+    expect_sysfs cache cached_data	0
+
+    #disable_memory_faults
+    umount /mnt
 }
 
 do_remove_test()
@@ -143,10 +207,6 @@ do_remove_test()
     fi
 
     if [[ $evacuate = 1 ]]; then
-	if [[ $offline = 0 ]]; then
-	    bcachefs device set-state --force	/dev/sdb failed
-	fi
-
 	echo -n "evacuating /dev/sdb... "
 	bcachefs device evacuate	/dev/sdb
 	echo "done"
@@ -167,7 +227,7 @@ do_remove_test()
 
     umount /mnt
 
-    mount -t bcachefs /dev/sdc:/dev/sdd /mnt
+    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
     umount /mnt
 }
 
@@ -196,6 +256,7 @@ test_device_add()
     setup_tracing 'bcachefs:*'
 
     run_quiet "" bcachefs format		\
+	--block_size=4k				\
 	--errors=panic				\
 	/dev/sdb
 
@@ -247,6 +308,65 @@ test_device_set_state()
     fi
 
     umount /mnt
+}
+
+test_device_ro()
+{
+    run_quiet "" bcachefs format		\
+	--btree_node_size=128k			\
+	--errors=panic				\
+	/dev/sd[bcd]
+
+    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+
+    local fioout="$ktest_tmp/fioout"
+    run_fio_randrw >"$fioout" 2>&1 &
+    local fiopid=$!
+
+    sleep 4
+
+    bcachefs device remove /dev/sdc || true
+    #bcachefs device set-state /dev/sdc readonly
+
+    if ! wait $fiopid; then
+	cat "$fioout"
+	return 1
+    fi
+
+    umount /mnt
+
+    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+    umount /mnt
+}
+
+test_device_set_state_offline()
+{
+    run_quiet "" bcachefs format		\
+	--errors=panic				\
+	--replicas=2				\
+	/dev/sd[bcd]
+
+    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+
+    local fioout="$ktest_tmp/fioout"
+    run_fio_randrw >"$fioout" 2>&1 &
+    local fiopid=$!
+
+    sleep 1
+
+    bcachefs device set-state --force	    /dev/sdc readonly
+
+    if ! wait $fiopid; then
+	cat "$fioout"
+	return 1
+    fi
+
+    umount /mnt
+
+    bcachefs device set-state --offline	    /dev/sdc readwrite
+
+    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+    cat /sys/block/sdc/bcachefs/state
 }
 
 test_device_readd()
@@ -482,97 +602,6 @@ disabled_change_replicas2()
     done
 
     umount /mnt
-}
-
-test_ec()
-{
-    #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
-    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
-
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	--erasure_code				\
-	--replicas=2				\
-	/dev/sd[bcdef]
-    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
-
-    mount -t bcachefs $devs /mnt
-
-    #enable_memory_faults
-    run_fio_randrw
-    #disable_memory_faults
-
-    #bcachefs fs usage -h /mnt
-    umount /mnt
-
-    # test remount:
-    echo "Testing remount"
-    mount -t bcachefs -o fsck $devs /mnt
-    umount /mnt
-
-    #bcachefs fsck /dev/sd[bcdef]
-}
-
-test_ec_lz4()
-{
-    #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
-    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
-
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	--erasure_code				\
-	--compression=lz4			\
-	--replicas=2				\
-	/dev/sd[bcdef]
-    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
-
-    mount -t bcachefs $devs /mnt
-
-    #enable_memory_faults
-    run_fio_randrw
-    #dd if=/dev/zero of=/mnt/foo bs=1M count=10 oflag=direct
-    #disable_memory_faults
-
-    #bcachefs fs usage -h /mnt
-    umount /mnt
-
-    # test remount:
-    echo "Testing remount"
-    mount -t bcachefs -o fsck $devs /mnt
-    umount /mnt
-
-    #bcachefs fsck /dev/sd[bcdef]
-}
-
-test_ec_gc()
-{
-    #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
-    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
-
-    run_quiet "" bcachefs format -f		\
-	--errors=continue			\
-	--replicas=2				\
-	/dev/sd[bcdef]
-    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
-
-    mount -t bcachefs -o erasure_code $devs /mnt
-
-    antagonist_trigger_gc &
-    run_fio_randrw
-
-    dd if=/dev/zero of=/mnt/foo bs=1M count=16 oflag=direct
-
-    echo 1 > /sys/fs/bcachefs/*/internal/trigger_gc
-    echo unmounting
-
-    #bcachefs fs usage -h /mnt
-    umount /mnt
-
-    # test remount:
-    mount -t bcachefs -o fix_errors,erasure_code $devs /mnt
-    umount /mnt
-
-    #bcachefs fsck /dev/sd[bcdef]
 }
 
 test_replicas_gc()

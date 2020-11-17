@@ -22,10 +22,10 @@ t=4
 perf_mkfs()
 {
     bcachefs format				\
-	--errors=panic			\
-	--bucket=$btree_node_size		\
-	--btree_node_size=$btree_node_size		\
+	--errors=panic				\
 	/dev/sdb >/dev/null
+	#--bucket=$btree_node_size		\
+	#--btree_node_size=$btree_node_size	\
     mount /dev/sdb /mnt
     ln -sf /sys/fs/bcachefs/*/perf_test p
 }
@@ -37,6 +37,8 @@ test_insert_overwrite()
     echo seq_insert		$n 1	> p
     echo seq_insert		$n 1	> p
     echo seq_overwrite		$n 1	> p
+
+    umount /mnt
 }
 
 test_perf_profile()
@@ -49,6 +51,8 @@ test_perf_profile()
     perf_4.14 stat -- echo seq_lookup $n 1	> p
 
     #perf_4.14 record -g -o seq_delete -- echo seq_delete $n 1	> p
+
+    umount /mnt
 }
 
 test_merge_torture()

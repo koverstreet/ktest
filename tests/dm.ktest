@@ -1,0 +1,146 @@
+#!/bin/bash
+
+require-lib test-libs.sh
+config-timeout $(stress_timeout)
+
+require-kernel-config DM_CRYPT
+
+lOOPS=1
+if [ "$1" == "--intensive" ]; then
+	lOOPS=20
+fi
+
+
+cRYPT_MODE_CBC="--cipher=aes-cbc-essiv:sha256 --hash=sha256"
+cRYPT_MODE_XTS="--cipher=aes-xts-plain64:sha512 --hash=sha512"
+tEST_DATA_SIZE="32M"
+
+# Size of crypt device should be at least tEST_DATA_SIZE+LUKS headers
+cRYTP_DEV_SIZE="34M"
+
+s5p_sss_cryptsetup_cleanup() {
+	print_msg "Exit trap, cleaning up..."
+	s5p_sss_cryptsetup_unprepare $dev
+	trap - EXIT
+}
+
+# s5p_sss_cryptsetup_prepare <dev_name> <mode (as cryptsetup argument list)> [luksformat]
+s5p_sss_cryptsetup_prepare() {
+	local name="s5p-sss cryptsetup"
+	local dev="$1"
+	local mode="$2"
+	local luks="$3"
+
+	local status="$(cryptsetup status $dev | head -n 1)"
+	if [ "$status" != "/dev/mapper/testcrypt is inactive." ]; then
+		echo "ERROR: Crypt device $dev is being used"
+		return 1
+	fi
+
+	test -f /tmp/${dev} && { echo "ERROR: /tmp/${dev} already exists"; return 1 ; }
+	test -f /tmp/${dev}-keyfile && { echo "ERROR: /tmp/${dev}-keyfile already exists"; return 1 ; }
+
+	dd if=/dev/zero of=/tmp/${dev} bs=${cRYTP_DEV_SIZE} count=0 seek=1 status=none
+
+	if [ "$luks" != "" ]; then
+		dd if=/dev/urandom of=/tmp/${dev}-keyfile bs=1 count=32
+		cryptsetup -v -q $mode \
+			--key-file=/tmp/${dev}-keyfile --master-key-file=/tmp/${dev}-keyfile \
+			--keyfile-size=32 --key-size=256 \
+			luksFormat /tmp/${dev}
+		local status=`file /tmp/${dev} | grep -c "/tmp/${dev}: LUKS encrypted file, ver 1"`
+		if [ "$status" != "1" ]; then
+			echo "ERROR: Crypt device $dev not detected as LUKS"
+			return 1
+		fi
+		cryptsetup -v -q $mode \
+			--key-file=/tmp/${dev}-keyfile --master-key-file=/tmp/${dev}-keyfile \
+			--keyfile-size=32 --key-size=256 --type luks \
+			open /tmp/${dev} $dev
+	else
+		cryptsetup -v -q $mode \
+			--key-file=/dev/urandom --master-key-file=/dev/urandom \
+			--keyfile-size=32 --key-size=256 --type plain \
+			open /tmp/${dev} $dev
+	fi
+	cryptsetup status $dev
+	local detected_type="$(cryptsetup status $dev | grep 'type:')"
+	local expected_type="  type:    PLAIN"
+	if [ "$luks" != "" ]; then
+		local expected_type="  type:    LUKS1"
+	fi
+	if [ "$detected_type" != "$expected_type" ]; then
+		# FIXME: cleanup in trap hook?
+		s5p_sss_cryptsetup_unprepare $dev
+		echo "ERROR: Wrong type of crypt device (\"$detected_type\" != \"$expected_type\")"
+		return 1
+	fi
+
+	return 0
+}
+
+s5p_sss_cryptsetup_unprepare() {
+	local name="s5p-sss cryptsetup"
+	local dev="$1"
+
+	# Need to echo so shell will not exit if cleanup command fails
+	cryptsetup close $dev || echo "Closing $dev failed"
+
+	rm -f /tmp/${dev} /tmp/${dev}-keyfile
+}
+
+s5p_sss_cryptsetup_run() {
+	local name="s5p-sss cryptsetup"
+	local dev="$1"
+
+	for i in `seq 0 50`; do
+		echo "1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890" \
+			| dd of=/dev/mapper/${dev} bs=1 seek=$(($i * 160)) status=none
+	done
+	sync && sync && sync
+
+	dd if=/dev/mapper/${dev} of=/dev/null bs=${tEST_DATA_SIZE} count=1
+	sync && sync && sync
+
+	dd if=/dev/zero of=/dev/mapper/${dev} bs=${tEST_DATA_SIZE} count=1
+	sync && sync && sync
+
+	dd if=/dev/mapper/${dev} of=/dev/null bs=${tEST_DATA_SIZE} count=1
+	sync && sync && sync
+}
+
+test_s5p_sss_cryptsetup() {
+	local name="s5p-sss cryptsetup"
+	local dev="testcrypt"
+	echo "Testing..."
+
+	s5p_sss_cryptsetup_prepare $dev "$cRYPT_MODE_CBC" ""
+	for i in `seq 1 $lOOPS`; do
+		test $lOOPS -gt 1 && echo "Test ${i}/${lOOPS}"
+		s5p_sss_cryptsetup_run $dev
+	done
+	s5p_sss_cryptsetup_unprepare $dev
+
+	s5p_sss_cryptsetup_prepare $dev "$cRYPT_MODE_XTS" ""
+	for i in `seq 1 $lOOPS`; do
+		test $lOOPS -gt 1 && echo "Test ${i}/${lOOPS}"
+		s5p_sss_cryptsetup_run $dev
+	done
+	s5p_sss_cryptsetup_unprepare $dev
+
+	s5p_sss_cryptsetup_prepare $dev "$cRYPT_MODE_CBC" yes
+	for i in `seq 1 $lOOPS`; do
+		test $lOOPS -gt 1 && echo "Test ${i}/${lOOPS}"
+		s5p_sss_cryptsetup_run $dev
+	done
+	s5p_sss_cryptsetup_unprepare $dev
+
+	s5p_sss_cryptsetup_prepare $dev "$cRYPT_MODE_XTS" yes
+	for i in `seq 1 $lOOPS`; do
+		test $lOOPS -gt 1 && echo "Test ${i}/${lOOPS}"
+		s5p_sss_cryptsetup_run $dev
+	done
+	s5p_sss_cryptsetup_unprepare $dev
+
+	echo "OK"
+}
