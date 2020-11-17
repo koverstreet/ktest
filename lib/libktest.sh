@@ -156,6 +156,23 @@ ktest_usage_post()
 
 # subcommands:
 
+ktest_run()
+{
+    if [[ $# = 0 ]]; then
+	echo "$0: missing test"
+	usage
+	exit 1
+    fi
+
+    ktest_test=$1
+    shift
+    ktest_testargs="$@"
+
+    parse_test_deps "$ktest_test"
+
+    start_vm
+}
+
 ktest_boot()
 {
     ktest_interactive=1
