@@ -86,8 +86,9 @@ parse_ktest_arg()
 	x)
 	    set -x
 	    ;;
-  f)
-      ktest_ssh_port=$OPTARG
+	f)
+	    ktest_ssh_port=$OPTARG
+	    ;;
     esac
 }
 
@@ -183,37 +184,29 @@ ktest_boot()
 
 ktest_ssh()
 {
-    sock=$ktest_vmdir/net
-    ip="10.0.2.2"
+    local ssh_cmd=(ssh -t -F /dev/null					\
+	    -o CheckHostIP=no						\
+	    -o StrictHostKeyChecking=no					\
+	    -o UserKnownHostsFile=/dev/null				\
+	    -o NoHostAuthenticationForLocalhost=yes			\
+	    -o ServerAliveInterval=2					\
+	    -o ControlMaster=auto					\
+	    -o ControlPath="$ktest_vmdir/controlmaster"			\
+	    -o ControlPersist=yes					\
+	)
 
-    (cd "$ktest_dir/lib"; make lwip-connect) > /dev/null
+    if [[ $ktest_ssh_port = 0 ]]; then
+	sock=$ktest_vmdir/net
+	ip="10.0.2.2"
 
-    exec ssh -t -F /dev/null						\
-	-o CheckHostIP=no						\
-	-o StrictHostKeyChecking=no					\
-	-o UserKnownHostsFile=/dev/null					\
-	-o NoHostAuthenticationForLocalhost=yes				\
-	-o ServerAliveInterval=2					\
-	-o ControlMaster=auto						\
-	-o ControlPath="$ktest_vmdir/controlmaster"			\
-	-o ControlPersist=yes						\
-	-o ProxyCommand="$ktest_dir/lib/lwip-connect $sock $ip 22"	\
-	root@127.0.0.1 "$@"
-}
+	(cd "$ktest_dir/lib"; make lwip-connect) > /dev/null
 
-ktest_ssh_with_forwarding()
-{
-    exec ssh -t -F /dev/null						\
-	-o CheckHostIP=no						\
-	-o StrictHostKeyChecking=no					\
-	-o UserKnownHostsFile=/dev/null					\
-	-o NoHostAuthenticationForLocalhost=yes				\
-	-o ServerAliveInterval=2					\
-	-o ControlMaster=auto						\
-	-o ControlPath="$ktest_vmdir/controlmaster"			\
-	-o ControlPersist=yes						\
-  -p $ktest_ssh_port \
-	root@127.0.0.1   "$@"
+	ssh_cmd+=(-o ProxyCommand="$ktest_dir/lib/lwip-connect $sock $ip 22")
+    else
+	ssh_cmd+=(-p $ktest_ssh_port)
+    fi
+
+    exec "${ssh_cmd[@]}" root@127.0.0.1   "$@"
 }
 
 ktest_gdb()
