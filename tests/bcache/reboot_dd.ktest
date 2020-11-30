@@ -8,8 +8,9 @@ config-block-size 4k
 config-volume 1600M
 config-cpus 1
 config-timeout 600
+config-scratch-devs 2G
 
-main()
+test_main()
 {
     setup_tracing 'bcache:*'
 

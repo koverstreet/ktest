@@ -8,11 +8,11 @@ config-tier 256M,256M,256M,256M,256M,256M,256M,256M,256M,256M
 config-bucket-size 64k
 config-block-size 4k
 config-volume 1900M
-config-bcache-sysfs btree_flush_delay 0
+#config-bcache-sysfs btree_flush_delay 0
 
 config-timeout $(stress_timeout)
 
-main()
+test_main()
 {
     setup_tracing 'bcache:*'
 
@@ -30,8 +30,6 @@ main()
 	done
     ) &
 
-    test_bcache_stres
-    stop_volumes
-    run_bcachefs_stress
+    run_bcache_stress
     stop_bcache
 }

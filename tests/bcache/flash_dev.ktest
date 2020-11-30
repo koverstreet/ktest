@@ -14,7 +14,7 @@ config-volume 1800M
 
 config-timeout $(stress_timeout)
 
-main()
+test_main()
 {
     echo 1 > /sys/module/bcache/parameters/debug_check_bkeys
     setup_tracing 'bcache:*'
@@ -26,7 +26,5 @@ main()
     run_bcache_stress
     #run_fio
 
-    stop_volumes
-    run_bcachefs_stress
     stop_bcache
 }

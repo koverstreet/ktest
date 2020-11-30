@@ -10,7 +10,7 @@ config-volume 1400M
 
 config-timeout $(stress_timeout)
 
-main()
+test_main()
 {
     setup_tracing 'bcache:*'
 

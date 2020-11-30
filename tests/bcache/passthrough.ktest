@@ -8,7 +8,7 @@ config-block-size 4k
 
 config-timeout $(stress_timeout)
 
-main()
+test_main()
 {
     setup_tracing 'bcache:*'
 

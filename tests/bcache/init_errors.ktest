@@ -9,7 +9,7 @@ config-block-size 4k
 config-timeout 300
 config-volume 1600M
 
-test_faults()
+run_test_faults()
 {
     control=/sys/kernel/debug/dynamic_fault/control
     grep $1 $control
@@ -39,14 +39,14 @@ test_faults()
     done
 }
 
-main()
+test_main()
 {
     setup_tracing 'bcache:*'
 
     if [ $NR_REBOOTS = 0 ]; then
 	setup_bcache
 
-	echo readonly > /sys/fs/bcache/*/errors
+	echo readonly > /sys/fs/bcache/*/errors | true
 
 	setup_fs ext4
 
@@ -58,7 +58,7 @@ main()
 	sleep 10
 	do_reboot
     else
-	test_faults "bcache:cache_set_init"
-	test_faults "bcache:meta:read"
+	run_test_faults "bcache:cache_set_init"
+	run_test_faults "bcache:meta:read"
     fi
 }
