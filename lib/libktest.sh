@@ -383,7 +383,15 @@ start_vm()
 	qemu_pmem mem-path="$file",size=$size
     done
 
-    set|grep -vE '^[A-Z]' > "$ktest_tmp/env"
+    set > "$ktest_tmp/env_tmp"
+    readonly_variables="$(readonly | cut -d= -f1 | cut -d' ' -f3)"
+    for variable in ${readonly_variables}
+    do
+        grep -v "${variable}" "$ktest_tmp/env_tmp" > "$ktest_tmp/env"
+        cp "$ktest_tmp/env" "$ktest_tmp/env_tmp"
+    done
+    sed -i "s/^ ;$//g" "$ktest_tmp/env"
+    rm -rf "$ktest_tmp/env_tmp"
 
     set +o errexit
 

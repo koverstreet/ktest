@@ -14,7 +14,9 @@ KERNEL_ARCH=""
 ktest_dir="/host/$ktest_dir"
 ktest_tmp="/host/$ktest_tmp"
 
-ln -s $ktest_dir /ktest
+if [ ! -e "/ktest" ]; then
+    ln -s $ktest_dir /ktest
+fi
 
 . "$ktest_dir/lib/util.sh"
 . "$ktest_dir/lib/parse-test.sh"
@@ -35,7 +37,9 @@ ulimit -c unlimited
 # Log file system visible to host
 
 LOGDIR=/ktest-out
-ln -s "/host/$ktest_out" $LOGDIR
+if [ ! -e "$LOGDIR" ]; then
+    ln -s "/host/$ktest_out" $LOGDIR
+fi
 
 # Core dump settings
 echo 1 > /proc/sys/fs/suid_dumpable

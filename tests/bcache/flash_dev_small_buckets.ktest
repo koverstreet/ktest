@@ -9,14 +9,12 @@ config-volume 600M
 
 config-timeout $(($(stress_timeout) * 2))
 
-main()
+test_main()
 {
     setup_tracing 'bcache:*'
 
     setup_bcache
     run_antagonist
     run_bcache_stress
-    stop_volumes
-    run_bcachefs_stress
     stop_bcache
 }

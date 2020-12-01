@@ -12,12 +12,12 @@ config-writearound
 
 config-timeout $(stress_timeout)
 
-main()
+test_main()
 {
     setup_tracing 'bcache:*'
 
     setup_bcache
     run_antagonist
-    test_bcache_stres
+    run_bcache_stress
     stop_bcache
 }

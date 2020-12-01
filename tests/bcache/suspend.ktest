@@ -20,10 +20,8 @@ require-kernel-config	PM,SUSPEND,PM_SLEEP,PM_DEBUG
 
 require-kernel-append	no_console_suspend
 
-main()
+test_main()
 {
-    umount $LOGDIR
-
     apt update; apt install --no-install-recommends -y uswsusp
 
     #setup_tracing 'bcache:*'
@@ -49,6 +47,6 @@ main()
 
 	run_antagonist
 
-	run_stress
+	run_bcache_stress
     fi
 }

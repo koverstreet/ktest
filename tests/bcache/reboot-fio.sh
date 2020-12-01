@@ -36,7 +36,7 @@ fio_pass()
     )
 }
 
-main()
+test_main()
 {
     setup_tracing 'bcache:*'
 
@@ -76,9 +76,6 @@ main()
 
 	# Unclean vs unclean shutdown
 	case $(((NR_REBOOTS / 4) % 2)) in
-	    0)
-		echo > /sys/fs/bcache/*/journal_flush
-		;;
 	    1)
 		stop_bcache
 		;;

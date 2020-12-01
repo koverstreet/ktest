@@ -8,7 +8,9 @@ require-lib bcache-test-libs.sh
 
 require-kernel-config 64BIT=n
 
-main()
+config-timeout 120
+
+test_main()
 {
     true
 }

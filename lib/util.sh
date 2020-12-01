@@ -1,6 +1,6 @@
 
 ktest_no_cleanup_tmpdir=""
-ktest_tmp=""
+ktest_tmp=${ktest_tmp:-""}
 
 ktest_exit()
 {

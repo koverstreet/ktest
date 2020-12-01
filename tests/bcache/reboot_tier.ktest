@@ -10,7 +10,7 @@ config-volume 1600M
 config-cpus 1
 config-timeout 600
 
-main()
+test_main()
 {
     setup_tracing 'bcache:*'
 

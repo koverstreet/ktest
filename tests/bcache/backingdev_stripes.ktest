@@ -5,7 +5,11 @@ require-lib bcache-test-libs.sh
 require-kernel-config BLK_DEV_MD,MD_RAID456
 
 config-cache 512M
-config-scratch-devs 256M,256M,256M,256M,256M
+config-scratch-devs 256M
+config-scratch-devs 256M
+config-scratch-devs 256M
+config-scratch-devs 256M
+config-scratch-devs 256M
 
 config-bucket-size 64k
 config-block-size 4k
@@ -14,7 +18,7 @@ config-writeback
 
 config-timeout $(stress_timeout)
 
-main()
+test_main()
 {
     setup_tracing 'bcache:*'
 
