@@ -20,7 +20,7 @@ fi
 checkdep fallocate util-linux
 checkdep mkfs.ext4 e2fsprogs
 
-IMAGE_SIZE="4G"
+IMAGE_SIZE="10G"
 MIRROR=http://ftp.us.debian.org/debian/
 
 usage()
@@ -98,6 +98,8 @@ PACKAGES+=(libssl-dev libgdbm-dev libgdbm-compat-dev)
 
 # nfs testing:
 PACKAGES+=(nfs-kernel-server)
+
+PACKAGES+=(nbd-client)
 
 # dm testing:
 PACKAGES+=(cryptsetup)

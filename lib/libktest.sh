@@ -286,6 +286,7 @@ start_vm()
     [[ $ktest_ssh_port = 0 ]] && start_networking
 
     local kernelargs=()
+    kernelargs+=(mitigations=off)
     kernelargs+=(console=hvc0)
     kernelargs+=(root=/dev/sda rw log_buf_len=8M)
     kernelargs+=("ktest.dir=$ktest_dir")
@@ -383,7 +384,7 @@ start_vm()
 	qemu_pmem mem-path="$file",size=$size
     done
 
-    set > "$ktest_tmp/env_tmp"
+    set |grep -v "^PATH=" > "$ktest_tmp/env_tmp"
     readonly_variables="$(readonly | cut -d= -f1 | cut -d' ' -f3)"
     for variable in ${readonly_variables}
     do
