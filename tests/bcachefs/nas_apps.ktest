@@ -1,0 +1,117 @@
+#!/bin/bash
+
+require-lib bcachefs-test-libs.sh
+
+require-kernel-config MD
+require-kernel-config BLK_DEV_MD
+require-kernel-config MD_FAULTY
+require-kernel-config NET
+require-kernel-config BLK_DEV_NBD
+require-kernel-config TCM_IBLOCK
+require-kernel-config TCM_FILEIO
+require-kernel-config TCM_PSCSI
+require-kernel-config LOOPBACK_TARGET
+require-kernel-config ISCSI_TARGET
+require-kernel-config ISCSI_TCP
+require-kernel-config SCSI_ISCSI_ATTRS
+require-kernel-config SCSI_LOWLEVEL
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+
+config-timeout $(stress_timeout)
+
+test_iscsi()
+{
+    #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
+    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+
+    run_quiet "" bcachefs format -f		\
+	--errors=panic				\
+	--erasure_code				\
+	--replicas=3				\
+	/dev/sd[bcdefghijk]
+    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf:/dev/sdg:/dev/sdh:/dev/sdi:/dev/sdj:/dev/sdk
+
+    mount -t bcachefs $devs /mnt
+
+    local initiatorname=$(grep InitiatorName= /etc/iscsi/initiatorname.iscsi | cut -f2- -d=)
+
+    run_quiet "" targetcli /backstores/fileio create disk01 /mnt/foo 10G
+    run_quiet "" targetcli /iscsi create iqn.2018-05.world.srv:dlp.target01
+    run_quiet "" targetcli /iscsi/iqn.2018-05.world.srv:dlp.target01/tpg1/luns create /backstores/fileio/disk01
+    run_quiet "" targetcli /iscsi/iqn.2018-05.world.srv:dlp.target01/tpg1/acls create $initiatorname
+    run_quiet "" targetcli /iscsi/iqn.2018-05.world.srv:dlp.target01/tpg1 set attribute authentication=0
+
+    run_quiet "" iscsiadm -m discovery -t sendtargets -p 127.0.0.1
+    run_quiet "" iscsiadm -m node --login
+
+    run_fio_randrw --filename=/dev/sdl
+
+    umount /mnt
+}
+
+
+test_minio()
+{
+    #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
+    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+
+    run_quiet "" bcachefs format -f		\
+	--errors=panic				\
+	--erasure_code				\
+	--replicas=3				\
+	/dev/sd[bcdefghijk]
+    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf:/dev/sdg:/dev/sdh:/dev/sdi:/dev/sdj:/dev/sdk
+
+    mount -t bcachefs $devs /mnt
+    mkdir -p /mnt/data
+
+    run_quiet "" MINIO_ACCESS_KEY=minio MINIO_SECRET_KEY=minio123 minio server /mnt/data &
+    local miniopid=$!
+    sleep 5
+    run_quiet "" warp mixed --host=127.0.0.1:9000 --access-key=minio --secret-key=minio123
+    kill $miniopid
+
+    umount /mnt
+}
+
+
+test_nbd()
+{
+    #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
+    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+
+    run_quiet "" bcachefs format -f		\
+	--errors=panic				\
+	--erasure_code				\
+	--replicas=3				\
+	/dev/sd[bcdefghijk]
+    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf:/dev/sdg:/dev/sdh:/dev/sdi:/dev/sdj:/dev/sdk
+
+    mount -t bcachefs $devs /mnt
+
+    #enable_memory_faults
+    dd if=/dev/zero of=/mnt/foo bs=1M count=8192 oflag=sync
+    chmod 777 /mnt/foo
+    #disable_memory_faults
+
+    modprobe nbd
+    nbd-server 1037 /mnt/foo
+    nbd-client 127.0.0.1 1037 /dev/nbd0
+
+    run_fio_randrw --filename=/dev/nbd0
+
+    nbd-client -d /dev/nbd0
+    killall -9 nbd-server
+    umount /mnt
+}
+
