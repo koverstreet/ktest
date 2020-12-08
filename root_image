@@ -99,7 +99,11 @@ PACKAGES+=(libssl-dev libgdbm-dev libgdbm-compat-dev)
 # nfs testing:
 PACKAGES+=(nfs-kernel-server)
 
-PACKAGES+=(nbd-client)
+# nbd testing
+PACKAGES+=(nbd-client nbd-server)
+
+# iscsi testing
+PACKAGES+=(targetcli-fb open-iscsi)
 
 # dm testing:
 PACKAGES+=(cryptsetup)
@@ -209,6 +213,21 @@ update_packages()
     rm -f "$MNT/var/cache/apt/archives/*.deb"
 }
 
+update_oob_packages()
+{
+    # MINIO and WARP
+    mkdir -p "$MNT/tmp/minio"
+    if [[ $DEBIAN_ARCH = amd64 ]]
+    then
+        wget -O "$MNT/usr/local/bin/minio" https://dl.min.io/server/minio/release/linux-amd64/minio
+	wget -O "$MNT/tmp/minio/warp.deb" https://github.com/minio/warp/releases/download/v0.3.27/warp_0.3.27_Linux_x86_64.deb
+        _chroot "$MNT" dpkg -i /tmp/minio/warp.deb
+        chmod +x "$MNT/usr/local/bin/minio"
+    fi
+
+    rm -rf /tmp/minio
+}
+
 trim_image()
 {
     e2fsck -f "$ktest_image"
@@ -242,6 +261,7 @@ cmd_update()
 
     update_files
     update_packages
+    update_oob_packages
 
     umount_image
     trim_image
@@ -276,6 +296,7 @@ cmd_create()
     _chroot "$MNT" dpkg --configure -a
 
     update_packages
+    update_oob_packages
 
     umount_image
     trim_image
