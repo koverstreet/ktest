@@ -56,6 +56,9 @@ test_iscsi()
 
     run_fio_randrw --filename=/dev/sdl
 
+    run_quiet "" targetcli /iscsi delete iqn.2018-05.world.srv:dlp.target01
+    run_quiet "" targetcli /backstores/fileio delete disk01
+
     umount /mnt
 }
 
@@ -75,10 +78,10 @@ test_minio()
     mount -t bcachefs $devs /mnt
     mkdir -p /mnt/data
 
-    run_quiet "" MINIO_ACCESS_KEY=minio MINIO_SECRET_KEY=minio123 minio server /mnt/data &
+    env MINIO_ACCESS_KEY=minio MINIO_SECRET_KEY=minio123 minio server /mnt/data &
     local miniopid=$!
     sleep 5
-    run_quiet "" warp mixed --host=127.0.0.1:9000 --access-key=minio --secret-key=minio123
+    warp mixed --host=127.0.0.1:9000 --access-key=minio --secret-key=minio123
     kill $miniopid
 
     umount /mnt
