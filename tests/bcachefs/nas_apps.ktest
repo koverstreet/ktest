@@ -7,6 +7,7 @@ require-kernel-config BLK_DEV_MD
 require-kernel-config MD_FAULTY
 require-kernel-config NET
 require-kernel-config BLK_DEV_NBD
+require-kernel-config TARGET_CORE
 require-kernel-config TCM_IBLOCK
 require-kernel-config TCM_FILEIO
 require-kernel-config TCM_PSCSI
@@ -16,20 +17,20 @@ require-kernel-config ISCSI_TCP
 require-kernel-config SCSI_ISCSI_ATTRS
 require-kernel-config SCSI_LOWLEVEL
 
-config-scratch-devs 4G
-config-scratch-devs 4G
-config-scratch-devs 4G
-config-scratch-devs 4G
-config-scratch-devs 4G
-config-scratch-devs 4G
-config-scratch-devs 4G
-config-scratch-devs 4G
-config-scratch-devs 4G
-config-scratch-devs 4G
+config-scratch-devs 16G
+config-scratch-devs 16G
+config-scratch-devs 16G
+config-scratch-devs 16G
+config-scratch-devs 16G
+config-scratch-devs 16G
+config-scratch-devs 16G
+config-scratch-devs 16G
+config-scratch-devs 16G
+config-scratch-devs 16G
 
 config-timeout $(stress_timeout)
 
-test_iscsi()
+array_setup()
 {
     #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
     #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
@@ -40,8 +41,19 @@ test_iscsi()
 	--replicas=3				\
 	/dev/sd[bcdefghijk]
     devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf:/dev/sdg:/dev/sdh:/dev/sdi:/dev/sdj:/dev/sdk
-
     mount -t bcachefs $devs /mnt
+}
+
+array_teardown()
+{
+    sync
+    sleep 5
+    umount /mnt
+}
+
+test_iscsi()
+{
+    array_setup
 
     local initiatorname=$(grep InitiatorName= /etc/iscsi/initiatorname.iscsi | cut -f2- -d=)
 
@@ -56,51 +68,32 @@ test_iscsi()
 
     run_fio_randrw --filename=/dev/sdl
 
+    run_quiet "" iscsiadm -m node --logout
     run_quiet "" targetcli /iscsi delete iqn.2018-05.world.srv:dlp.target01
     run_quiet "" targetcli /backstores/fileio delete disk01
 
-    umount /mnt
+    array_teardown
 }
 
 
 test_minio()
 {
-    #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
-    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
-
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	--erasure_code				\
-	--replicas=3				\
-	/dev/sd[bcdefghijk]
-    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf:/dev/sdg:/dev/sdh:/dev/sdi:/dev/sdj:/dev/sdk
-
-    mount -t bcachefs $devs /mnt
+    array_setup
     mkdir -p /mnt/data
 
     env MINIO_ACCESS_KEY=minio MINIO_SECRET_KEY=minio123 minio server /mnt/data &
-    local miniopid=$!
     sleep 5
     warp mixed --host=127.0.0.1:9000 --access-key=minio --secret-key=minio123
-    kill $miniopid
 
-    umount /mnt
+    killall -9 minio
+
+    array_teardown
 }
 
 
 test_nbd()
 {
-    #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
-    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
-
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	--erasure_code				\
-	--replicas=3				\
-	/dev/sd[bcdefghijk]
-    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf:/dev/sdg:/dev/sdh:/dev/sdi:/dev/sdj:/dev/sdk
-
-    mount -t bcachefs $devs /mnt
+    array_setup
 
     #enable_memory_faults
     dd if=/dev/zero of=/mnt/foo bs=1M count=8192 oflag=sync
@@ -115,6 +108,7 @@ test_nbd()
 
     nbd-client -d /dev/nbd0
     killall -9 nbd-server
-    umount /mnt
+
+    array_teardown
 }
 
