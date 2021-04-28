@@ -3,7 +3,6 @@
 set -o nounset
 set -o errexit
 set -o errtrace
-shopt -s lastpipe
 
 # check for typical shell script errors
 

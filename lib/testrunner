@@ -11,6 +11,7 @@ export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]
 KERNEL_ARCH=""
 
 . /host/$ktest_env
+
 ktest_dir="/host/$ktest_dir"
 ktest_tmp="/host/$ktest_tmp"
 
@@ -20,6 +21,8 @@ fi
 
 . "$ktest_dir/lib/util.sh"
 . "$ktest_dir/lib/parse-test.sh"
+
+ktest_no_cleanup_tmpdir=1
 
 ln -sf "/host/$ktest_kernel_binary/lib/modules" /lib/modules
 depmod -a
