@@ -36,22 +36,22 @@ usage()
     echo "build-test-kernel: Run generic virtual machine tests"
     echo "Usage: build-test-kernel cmd [options]"
     ktest_usage_cmds
-    echo "  oldconfig   Run make oldconfig"
-    echo "  config      Run make nconfig"
+    echo "  oldconfig           Run make oldconfig"
+    echo "  config              Run make nconfig"
     echo
     echo "  options:"
     ktest_usage_opts
     echo
     echo " options for build-test-kernel run:"
     ktest_usage_run_opts
-    echo "      -k <dir>    kernel source dir"
-    echo "      -b <dir>    build directory for kernel (default: kernel_source/.build-test-kernel)"
-    echo "      -o <dir>    output directory for kernel binary (default: kernel_build/kpkg"
-    echo "      -K          don't rebuild kernel"
-    echo "      -D          don't modify kernel .config"
-    echo "      -c <dir>    enable coverage for this dir (only valid without -K)"
-    echo "      -j <num>    j option to make"
-    echo "      -K          don't rebuild kernel"
+    echo "      -k <dir>        kernel source dir"
+    echo "      -b <dir>        build directory for kernel (default: kernel_source/.build-test-kernel)"
+    echo "      -o <dir>        output directory for kernel binary (default: kernel_build/kpkg"
+    echo "      -K              don't rebuild kernel"
+    echo "      -D              don't modify kernel .config"
+    echo "      -c <dir>        enable coverage for this dir (only valid without -K)"
+    echo "      -j <num>        j option to make"
+    echo "      -K              don't rebuild kernel"
     echo
     ktest_usage_post
 }

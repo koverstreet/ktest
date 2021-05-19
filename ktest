@@ -26,7 +26,7 @@ usage()
     ktest_usage_opts
     echo
     echo " options for ktest run:"
-    echo "      -k <dir>    kernel to run"
+    echo "      -k <dir>        kernel to run"
     ktest_usage_run_opts
     echo
     ktest_usage_post

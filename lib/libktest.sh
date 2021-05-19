@@ -26,6 +26,7 @@ ktest_verbose=0		# if false, append quiet to kernel commad line
 ktest_crashdump=0
 ktest_kgdb=0
 ktest_ssh_port=0
+ktest_networking=user
 
 ktest_storage_bus=virtio-scsi-pci
 
@@ -46,7 +47,7 @@ checkdep /usr/include/lwipv6.h	liblwipv6-dev
 
 # args:
 
-ktest_args="i:s:d:a:p:ISFLvxf:"
+ktest_args="i:s:d:a:p:ISFLvxn:"
 parse_ktest_arg()
 {
     local arg=$1
@@ -86,8 +87,8 @@ parse_ktest_arg()
 	x)
 	    set -x
 	    ;;
-	f)
-	    ktest_ssh_port=$OPTARG
+	n)
+	    ktest_networking=$OPTARG
 	    ;;
     esac
 }
@@ -120,34 +121,34 @@ parse_args_post()
 
 ktest_usage_opts()
 {
-    echo "      -x          bash debug statements"
-    echo "      -h          display this help and exit"
+    echo "      -x              bash debug statements"
+    echo "      -h              display this help and exit"
 }
 
 ktest_usage_run_opts()
 {
-    echo "      -p <num>    hint for test duration (higher is longer, default is 0)"
-    echo "      -a <arch>   architecture"
-    echo "      -i <image>  ktest root image"
-    echo "      -s <dir>    directory for scratch drives"
-    echo "      -o <dir>    test output directory; defaults to ktest-out"
-    echo "      -I          interactive mode - don't shut down VM automatically"
-    echo "      -S          exit on test success"
-    echo "      -F          failfast - stop after first test failure"
-    echo "      -L          run all tests in infinite loop until failure"
-    echo "      -v          verbose mode"
-    echo "      -f <port>   use qemu port forwarding on localhost:port for SSH. (default is to use vde)"
+    echo "      -p <num>        hint for test duration (higher is longer, default is 0)"
+    echo "      -a <arch>       architecture"
+    echo "      -i <image>      ktest root image"
+    echo "      -s <dir>        directory for scratch drives"
+    echo "      -o <dir>        test output directory; defaults to ktest-out"
+    echo "      -I              interactive mode - don't shut down VM automatically"
+    echo "      -S              exit on test success"
+    echo "      -F              failfast - stop after first test failure"
+    echo "      -L              run all tests in infinite loop until failure"
+    echo "      -v              verbose mode"
+    echo "      -n (user|vde)   Networking type to use"
 }
 
 ktest_usage_cmds()
 {
-    echo "  boot            Boot a VM without running anything"
-    echo "  run <test>      Run a kernel test"
-    echo "  ssh             Login as root"
-    echo "  gdb             Connect to qemu's gdb interface"
-    echo "  kgdb            Connect to kgdb"
-    echo "  mon             Connect to qemu monitor"
-    echo "  sysrq <key>     Send magic sysrq key via monitor"
+    echo "  boot                Boot a VM without running anything"
+    echo "  run <test>          Run a kernel test"
+    echo "  ssh                 Login as root"
+    echo "  gdb                 Connect to qemu's gdb interface"
+    echo "  kgdb                Connect to kgdb"
+    echo "  mon                 Connect to qemu monitor"
+    echo "  sysrq <key>         Send magic sysrq key via monitor"
 }
 
 ktest_usage_post()
@@ -190,23 +191,25 @@ ktest_ssh()
 	    -o UserKnownHostsFile=/dev/null				\
 	    -o NoHostAuthenticationForLocalhost=yes			\
 	    -o ServerAliveInterval=2					\
-	    -o ControlMaster=auto					\
-	    -o ControlPath="$ktest_vmdir/controlmaster"			\
-	    -o ControlPersist=yes					\
+	    -o ControlMaster=no					\
 	)
 
-    if [[ $ktest_ssh_port = 0 ]]; then
+    if [[ -f $ktest_vmdir/ssh_port ]]; then
+	ktest_ssh_port=$(<$ktest_vmdir/ssh_port)
+	ssh_cmd+=(-p $ktest_ssh_port)
+    elif [[ -d $ktest_vmdir/net ]]; then
 	sock=$ktest_vmdir/net
 	ip="10.0.2.2"
 
-	(cd "$ktest_dir/lib"; make lwip-connect) > /dev/null
+	make -C "$ktest_dir/lib" lwip-connect
 
 	ssh_cmd+=(-o ProxyCommand="$ktest_dir/lib/lwip-connect $sock $ip 22")
     else
-	ssh_cmd+=(-p $ktest_ssh_port)
+	echo "No networking found"
+	exit 1
     fi
 
-    exec "${ssh_cmd[@]}" root@127.0.0.1   "$@"
+    exec "${ssh_cmd[@]}" root@localhost "$@"
 }
 
 ktest_gdb()
@@ -242,24 +245,17 @@ ktest_mon()
     #exec minicom -D "unix#$ktest_vmdir/vm-0-mon"
 }
 
+ktest_con()
+{
+    exec socat UNIX-CONNECT:"$ktest_vmdir/vm-con" STDIO
+    exec nc "$ktest_vmdir/vm-0-con"
+}
+
 ktest_sysrq()
 {
     local key=$1
 
     echo sendkey alt-sysrq-$key | socat - "UNIX-CONNECT:$ktest_vmdir/vm-mon"
-}
-
-start_networking()
-{
-    local net="$ktest_tmp/net"
-
-    [[ ! -p "$ktest_tmp/vde_input" ]] && mkfifo "$ktest_tmp/vde_input"
-    tail -f "$ktest_tmp/vde_input" |vde_switch -sock "$net" >& /dev/null &
-
-    while [[ ! -e "$net" ]]; do
-	sleep 0.1
-    done
-    slirpvde --sock "$net" --dhcp=10.0.2.2 --host 10.0.2.1/24 >& /dev/null &
 }
 
 start_vm()
@@ -297,8 +293,6 @@ start_vm()
     mkdir -p "$ktest_out"
     rm -f "$ktest_out/vm"
     ln -s "$ktest_tmp" "$ktest_out/vm"
-
-    [[ $ktest_ssh_port = 0 ]] && start_networking
 
     local kernelargs=()
     kernelargs+=(mitigations=off)
@@ -342,17 +336,34 @@ start_vm()
 	-device		$ktest_storage_bus,id=hba			\
     )
 
-    if [ $ktest_ssh_port = 0 ]
-    then
-      qemu_cmd+=( \
-	      -net		nic,model=virtio,macaddr=de:ad:be:ef:00:00	\
-	      -net		vde,sock="$ktest_tmp/net"			\
-      )
-    else
-      qemu_cmd+=( \
-        -nic    user,model=virtio,hostfwd=tcp:127.0.0.1:$ktest_ssh_port-:22	\
-      )
-    fi
+    case $ktest_networking in
+	user)
+	    ktest_ssh_port=$(get_unused_port)
+	    echo $ktest_ssh_port > "$ktest_tmp/ssh_port"
+
+	    qemu_cmd+=( \
+		-nic    user,model=virtio,hostfwd=tcp:127.0.0.1:$ktest_ssh_port-:22	\
+	    )
+	    ;;
+	vde)
+	    local net="$ktest_tmp/net"
+
+	    [[ ! -p "$ktest_tmp/vde_input" ]] && mkfifo "$ktest_tmp/vde_input"
+	    tail -f "$ktest_tmp/vde_input" |vde_switch -sock "$net" >& /dev/null &
+
+	    while [[ ! -e "$net" ]]; do
+		sleep 0.1
+	    done
+	    slirpvde --sock "$net" --dhcp=10.0.2.2 --host 10.0.2.1/24 >& /dev/null &
+	    qemu_cmd+=( \
+		-net		nic,model=virtio,macaddr=de:ad:be:ef:00:00	\
+		-net		vde,sock="$ktest_tmp/net"			\
+	    )
+	    ;;
+	*)
+	    echo "Invalid networking type $ktest_networking"
+	    exit 1
+    esac
 
     local disknr=0
 
