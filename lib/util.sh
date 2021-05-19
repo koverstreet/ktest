@@ -4,8 +4,9 @@ ktest_tmp=${ktest_tmp:-""}
 
 ktest_exit()
 {
-    if [[ -n $(jobs -rp) ]]; then
-	kill -9 $(jobs -rp)
+    local children=$(jobs -rp)
+    if [[ -n $children ]]; then
+	kill -9 $children >& /dev/null
 	wait $(jobs -rp) >& /dev/null
     fi
 

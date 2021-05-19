@@ -174,7 +174,6 @@ require-kernel-config FTRACE_SYSCALLS
 #require-kernel-config ENABLE_DEFAULT_TRACERS
 
 # Debugging options
-require-kernel-config ENABLE_MUST_CHECK
 require-kernel-config UNWINDER_FRAME_POINTER
 
 require-kernel-config PANIC_ON_OOPS

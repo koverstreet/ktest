@@ -1,4 +1,4 @@
 LDLIBS=-llwipv6
-CFLAGS=-g -O2
+CFLAGS=-Wall -g -O2
 
-all: lwip-connect
+all: lwip-connect qemu-wrapper

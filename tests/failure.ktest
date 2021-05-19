@@ -3,7 +3,7 @@
 config-mem 512M
 config-timeout 60
 
-main()
+test_failure()
 {
     false
 }

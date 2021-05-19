@@ -3,7 +3,8 @@
 config-mem 512M
 config-timeout 10
 
-main()
+test_timeout()
 {
-    sleep 60
+    sleep 120
+    false
 }

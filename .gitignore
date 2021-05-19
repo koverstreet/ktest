@@ -1,5 +1,7 @@
 .*
+*.o
 cscope*
 tags
 *.tags
 lwip-connect
+qemu-wrapper

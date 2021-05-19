@@ -264,6 +264,21 @@ start_networking()
 
 start_vm()
 {
+    make -C "$ktest_dir/lib" qemu-wrapper
+
+    local qemu_cmd=("$ktest_dir/lib/qemu-wrapper")
+
+    if [[ $ktest_interactive = 1 ]]; then
+	true
+    elif [[ $ktest_exit_on_success = 1 ]]; then
+	qemu_cmd+=(-S)
+    else
+	# Inside the VM, we set a timer and on timeout trigger a crash dump. The
+	# timeout here is a backup:
+	qemu_cmd+=(-S -F -T $((60 + ktest_timeout)))
+    fi
+    qemu_cmd+=(--)
+
     if [[ -z $ktest_kernel_binary ]]; then
 	echo "Required parameter -k missing: kernel"
 	exit 1
@@ -297,8 +312,7 @@ start_vm()
 
     kernelargs+=("${ktest_kernel_append[@]}")
 
-    local qemu_cmd=("$QEMU_BIN" -nodefaults -nographic)
-
+    qemu_cmd+=("$QEMU_BIN" -nodefaults -nographic)
     case $ktest_arch in
 	x86|x86_64)
 	    qemu_cmd+=(-cpu host -machine accel=kvm,nvdimm)
@@ -395,28 +409,9 @@ start_vm()
     rm -rf "$ktest_tmp/env_tmp"
 
     set +o errexit
+    set -o pipefail
+    shopt -s lastpipe
 
-    if [[ $ktest_interactive = 1 ]]; then
-	"${qemu_cmd[@]}"|
-	    tee "$ktest_out/out"
-    elif [[ $ktest_exit_on_success = 1 ]]; then
-	"${qemu_cmd[@]}"|
-	    tee "$ktest_out/out"|
-	    sed -u -e '/TEST SUCCESS/ { p; Q7 }'
-    else
-	timeout --foreground "$((60 + ktest_timeout))" "${qemu_cmd[@]}"|
-	    tee "$ktest_out/out"|
-	    $ktest_dir/lib/catch_test_success.awk
-    fi
-
-    ret=$?
-
-    if [[ $ret = 124 ]]; then
-	echo 'TEST TIMEOUT'
-	exit 1
-    fi
-
-    # don't want sed exiting normally (saw neither TEST SUCCESS nor TEST FAILED)
-    # to be consider success:
-    [[ $ret = 7 ]]
+    "${qemu_cmd[@]}"|tee "$ktest_out/out"
+    exit $?
 }

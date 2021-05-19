@@ -155,6 +155,9 @@ for h in $(declare -F|sed -ne '/ hook_/ s/.*hook_// p'); do
     run_quiet "running test hook $h" hook_$h
 done
 
+echo -n "Kernel version: "
+uname -r
+
 if [[ $(type -t list_tests) == function ]]; then
     tests=$(list_tests)
 else
@@ -237,6 +240,7 @@ fi
 
 if [[ -z $tests ]]; then
     echo "No tests found"
+    echo "TEST FAILED"
     exit 1
 fi
 
@@ -246,6 +250,7 @@ tests=$(echo $tests)
 
 if [[ $tests = "none" ]]; then
     echo "No tests to run"
+    echo "TEST FAILED"
     exit 0
 fi
 
