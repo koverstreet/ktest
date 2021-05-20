@@ -18,8 +18,8 @@ config-timeout 7200
 
 hook_make_xfstests()
 {
-    useradd -m fsgqa
-    useradd -g fsgqa 123456-fsgqa
+    useradd -m fsgqa || true
+    useradd -g fsgqa 123456-fsgqa || true
 
     mkdir -p /mnt/test /mnt/scratch
 
@@ -35,27 +35,23 @@ list_tests()
 
 run_xfstests()
 {
-    TEST_DEV=/dev/sdb
-    TEST_DIR=/mnt/test
-    SCRATCH_DEV=/dev/sdc
-    SCRATCH_MNT=/mnt/scratch
-    LOGWRITES_DEV=/dev/sdd
-    FSTYP="$1"
+    export FSTYP="$1"
     shift
 
-    rm /ktest/tests/xfstests/local.config
-    echo "TEST_DEV=$TEST_DEV"		>> /ktest/tests/xfstests/local.config
-    echo TEST_DIR=$TEST_DIR		>> /ktest/tests/xfstests/local.config
-    echo SCRATCH_DEV=$SCRATCH_DEV	>> /ktest/tests/xfstests/local.config
-    echo SCRATCH_MNT=$SCRATCH_MNT	>> /ktest/tests/xfstests/local.config
-    echo LOGWRITES_DEV=$LOGWRITES_DEV	>> /ktest/tests/xfstests/local.config
-    echo FSTYP=$FSTYP			>> /ktest/tests/xfstests/local.config
-    echo LOGGER_PROG=true		>> /ktest/tests/xfstests/local.config
+    cat << EOF > /ktest/tests/xfstests/local.config
+TEST_DEV=/dev/sdb
+TEST_DIR=/mnt/test
+SCRATCH_DEV=/dev/sdc
+SCRATCH_MNT=/mnt/scratch
+LOGWRITES_DEV=/dev/sdd
+RESULT_BASE=/ktest-out/xfstests-results
+LOGGER_PROG=true
+EOF
 
-    wipefs -af $TEST_DEV
-    mkfs.$FSTYP -q $TEST_DEV
+    wipefs -af /dev/sdb
+    mkfs.$FSTYP -q /dev/sdb
 
-    mount $TEST_DEV $TEST_DIR
+    mount /dev/sdb /mnt/test
 
     cd "$ktest_dir/tests/xfstests"
 
