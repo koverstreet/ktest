@@ -164,50 +164,6 @@ parse_arch()
 #    fi
 }
 
-#debian_arch()
-#{
-#    local -A map=([x86]=i386 [x86_64]=amd64)
-#
-#    if [[ ${map[$1]+_} ]]; then
-#	echo ${map[$1]}
-#    else
-#	echo $1
-#    fi
-#}
-#
-#kernel_arch()
-#{
-#    local -A map=([x86_64]=x86)
-#
-#    if [[ ${map[$1]+_} ]]; then
-#	echo ${map[$1]}
-#    else
-#	echo $1
-#    fi
-#}
-#
-#qemu_arch()
-#{
-#    local -A map=([x86_64]=x86 [powerpc]=ppc)
-#
-#    if [[ ${map[$1]+_} ]]; then
-#	echo ${map[$1]}
-#    else
-#	echo $1
-#    fi
-#}
-#
-#arch_to_triple()
-#{
-#    local -A map=([x86]=x86_64 [sparc]=sparc64)
-#
-#    if [[ ${map[$1]+_} ]]; then
-#	echo ${map[$1]}-linux-gnu
-#    else
-#	echo $1-linux-gnu
-#    fi
-#}
-
 join_by()
 {
     local IFS="$1"

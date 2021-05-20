@@ -2,6 +2,9 @@
 
 # blktests wrapper:
 
+require-git https://github.com/osandov/blktests.git
+require-make blktests
+
 require-lib test-libs.sh
 
 require-kernel-config FAULT_INJECTION,FAULT_INJECTION_DEBUG_FS,FAIL_MAKE_REQUEST
@@ -21,11 +24,6 @@ require-kernel-config SCSI_DEBUG=m
 config-scratch-devs 4G
 
 config-timeout $(stress_timeout)
-
-hook_make_blktests()
-{
-    make -C "$ktest_dir/tests/blktests"
-}
 
 list_tests()
 {

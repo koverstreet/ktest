@@ -23,6 +23,21 @@ parse_test_deps()
 	popd				> /dev/null
     }
 
+    require-git()
+    {
+	local req="$1"
+	local dir=$(basename $req)
+	dir=${dir%%.git}
+
+	if [[ $# -ge 2 ]]; then
+	    dir=$2
+	fi
+
+	if [[ ! -d $dir ]]; then
+	    git clone $req $dir
+	fi
+    }
+
     do-build-deb()
     {
 	local path=$(readlink -e "$1")
@@ -60,6 +75,11 @@ parse_test_deps()
 
     require-make()
     {
+	if [[ ! -d "$1" ]]; then
+	    echo "require-make: $1 not found"
+	    exit 1
+	fi
+
 	local req=$(readlink -e "$1")
 
 	ktest_make_install+=("$req")

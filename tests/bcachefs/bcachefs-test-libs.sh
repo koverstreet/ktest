@@ -4,6 +4,7 @@
 #
 
 require-lib ../test-libs.sh
+require-git http://evilpiepirate.org/git/bcachefs-tools.git
 require-make bcachefs-tools
 
 require-kernel-config BCACHEFS_FS

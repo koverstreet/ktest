@@ -91,14 +91,16 @@ fi
 j=$(($(grep -c '^processor' /proc/cpuinfo) * 2))
 
 for i in "${ktest_make_install[@]}"; do
-    if [ "$(basename $i)" = "linuxquota-code" ]; then
-	pushd "/host/$i"
-	./autogen.sh
-	./configure
-	popd
+    pushd "/host/$i" > /dev/null
+    if [[ -f autogen.sh && ! -f configure ]]; then
+	run_quiet "autogen $(basename $i)" ./autogen.sh
     fi
-
-    run_quiet "building $(basename $i)" make -j $j -C "/host/$i" install
+    if [[ -f configure && ! -f Makefile ]]; then
+	run_quiet "configure $(basename $i)" ./configure
+    fi
+    run_quiet "building $(basename $i)" make -j $j
+    run_quiet "installing $(basename $i)" make -j $j install
+    popd > /dev/null
 done
 
 get_stratch_devs()

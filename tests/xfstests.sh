@@ -2,6 +2,9 @@
 
 require-lib test-libs.sh
 
+require-git https://git.kernel.org/pub/scm/fs/xfs/xfstests-dev.git xfstests
+require-make xfstests
+
 require-kernel-config FAULT_INJECTION,FAULT_INJECTION_DEBUG_FS,FAIL_MAKE_REQUEST
 require-kernel-config MD,BLK_DEV_DM,DM_FLAKEY,DM_SNAPSHOT,DM_LOG_WRITES
 require-kernel-config DM_THIN_PROVISIONING
@@ -15,18 +18,6 @@ config-scratch-devs 14G
 config-scratch-devs 14G
 
 config-timeout 7200
-
-hook_make_xfstests()
-{
-    useradd -m fsgqa || true
-    useradd -g fsgqa 123456-fsgqa || true
-
-    mkdir -p /mnt/test /mnt/scratch
-
-    rm -f /ktest/tests/xfstests/results/generic/*
-
-    make -C /ktest/tests/xfstests
-}
 
 list_tests()
 {
@@ -47,6 +38,11 @@ LOGWRITES_DEV=/dev/sdd
 RESULT_BASE=/ktest-out/xfstests-results
 LOGGER_PROG=true
 EOF
+
+    useradd -m fsgqa || true
+    useradd -g fsgqa 123456-fsgqa || true
+
+    mkdir -p /mnt/test /mnt/scratch
 
     wipefs -af /dev/sdb
     mkfs.$FSTYP -q /dev/sdb

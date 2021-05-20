@@ -1,15 +1,3 @@
 [submodule "debootstrap"]
 	path = debootstrap
 	url = https://salsa.debian.org/installer-team/debootstrap.git/
-[submodule "tests/bcachefs/bcachefs-tools"]
-	path = tests/bcachefs/bcachefs-tools
-	url = https://evilpiepirate.org/git/bcachefs-tools.git
-[submodule "tests/bcachefs/linuxquota-code"]
-	path = tests/bcachefs/linuxquota-code
-	url = https://evilpiepirate.org/git/linuxquota.git
-[submodule "tests/blktests"]
-	path = tests/blktests
-	url = https://github.com/osandov/blktests.git
-[submodule "tests/xfstests"]
-	path = tests/xfstests
-	url = https://evilpiepirate.org/git/xfstests.git

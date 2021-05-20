@@ -1,15 +1,20 @@
 #!/bin/bash
 
-require-lib ../xfstests.sh
 require-lib bcachefs-test-libs.sh
+
+require-git http://evilpiepirate.org/git/linuxquota.git
+require-make linuxquota
+
+require-git http://evilpiepirate.org/git/xfstests.git ../xfstests
+
+require-lib ../xfstests.sh
 
 require-kernel-config BCACHEFS_POSIX_ACL
 require-kernel-config BCACHEFS_QUOTA=y
 require-kernel-config QUOTA
 
-require-make linuxquota-code
-
-config-mem 2G
+config-mem 4G
+config-cpus 24
 
 run_tests()
 {
