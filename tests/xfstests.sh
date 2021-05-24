@@ -42,10 +42,17 @@ EOF
     useradd -m fsgqa || true
     useradd -g fsgqa 123456-fsgqa || true
 
+    rm -rf /ktest-out/xfstests-results
+
     mkdir -p /mnt/test /mnt/scratch
 
     wipefs -af /dev/sdb
-    mkfs.$FSTYP -q /dev/sdb
+
+    if [ -z ${MKFS_OPTIONS+x} ]; then
+	MKFS_OPTIONS=""
+    fi
+
+    mkfs.$FSTYP $MKFS_OPTIONS -q /dev/sdb
 
     mount /dev/sdb /mnt/test
 

@@ -33,6 +33,7 @@ run_tests()
 
     #bcachefs_antagonist
 
+    export MKFS_OPTIONS=--errors=panic
     #echo 1 > /sys/module/bcachefs/parameters/journal_seq_verify
 
     run_xfstests bcachefs "$@"
