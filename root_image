@@ -155,7 +155,7 @@ update_files()
     install -m0644 "$ktest_dir/lib/fstab" "$MNT/etc/fstab"
     install -m0755 "$ktest_dir/lib/rc.local" "$MNT/etc/rc.local"
     install -m0755 "$ktest_dir/lib/rc-local.service" "$MNT/lib/systemd/system/rc-local.service"
-    rm "$MNT/lib/systemd/system/rc-local.service.d/debian.conf"
+    rm -f "$MNT/lib/systemd/system/rc-local.service.d/debian.conf"
 
     touch "$MNT/etc/resolv.conf"
     chmod 644 "$MNT/etc/resolv.conf"
@@ -202,6 +202,10 @@ ZZ
     rm -f "$MNT/lib/udev/rules.d/*hdparm*"
 
     echo $(hostname)-kvm >"$MNT/etc/hostname"
+
+    # Use most recent version of perf installed, instead of failing if it
+    # doesn't match the kernel version:
+    install -m0755 "$ktest_dir/lib/perf" "$MNT/usr/local/bin/perf"
 }
 
 update_packages()

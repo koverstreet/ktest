@@ -1,0 +1,3 @@
+#!/bin/bash
+
+exec $(ls /usr/bin/perf_*|sort -Vr|head -n1) "$@"
