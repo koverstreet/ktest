@@ -1,7 +1,7 @@
 
 parse_test_deps()
 {
-    ktest_cpus="6"
+    ktest_cpus=$(grep -c '^processor' /proc/cpuinfo)
     ktest_mem=""
     ktest_timeout=""
     ktest_kernel_append=()

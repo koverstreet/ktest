@@ -3,7 +3,6 @@
 require-lib test-libs.sh
 
 require-git https://git.kernel.org/pub/scm/fs/xfs/xfstests-dev.git xfstests
-require-make xfstests
 
 require-kernel-config FAULT_INJECTION,FAULT_INJECTION_DEBUG_FS,FAIL_MAKE_REQUEST
 require-kernel-config MD,BLK_DEV_DM,DM_FLAKEY,DM_SNAPSHOT,DM_LOG_WRITES
@@ -21,7 +20,7 @@ config-timeout 7200
 
 list_tests()
 {
-    (cd "/ktest/tests/xfstests/tests"; echo generic/???)
+    (cd "$ktest_dir/tests/xfstests/tests"; echo generic/???)
 }
 
 run_xfstests()
@@ -35,20 +34,20 @@ TEST_DIR=/mnt/test
 SCRATCH_DEV=/dev/sdc
 SCRATCH_MNT=/mnt/scratch
 LOGWRITES_DEV=/dev/sdd
-RESULT_BASE=/ktest-out/xfstests-results
+RESULT_BASE=/ktest-out/xfstests
 LOGGER_PROG=true
 EOF
 
     useradd -m fsgqa || true
     useradd -g fsgqa 123456-fsgqa || true
 
-    rm -rf /ktest-out/xfstests-results
+    rm -rf /ktest-out/xfstests
 
     mkdir -p /mnt/test /mnt/scratch
 
     wipefs -af /dev/sdb
 
-    if [ -z ${MKFS_OPTIONS+x} ]; then
+    if [[ -z ${MKFS_OPTIONS+x} ]]; then
 	MKFS_OPTIONS=""
     fi
 
@@ -57,6 +56,8 @@ EOF
     mount /dev/sdb /mnt/test
 
     cd "$ktest_dir/tests/xfstests"
+
+    run_quiet "building $(basename $i)" make -j $ktest_cpus
 
     ./check "$@"
 }

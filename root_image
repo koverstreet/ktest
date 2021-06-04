@@ -76,7 +76,7 @@ PACKAGES=(kexec-tools less psmisc openssh-server	\
     autoconf automake autopoint bison			\
     pkg-config libtool-bin				\
     gdb strace ltrace linux-perf blktrace sysstat	\
-    hdparm btrfs-progs mdadm lvm2 aoetools vblade	\
+    hdparm btrfs-progs mdadm lvm2			\
     bc attr gawk acl rsync git)
 
 # stress testing:
@@ -102,9 +102,6 @@ PACKAGES+=(nfs-kernel-server)
 # nbd testing
 PACKAGES+=(nbd-client nbd-server)
 
-# iscsi testing
-PACKAGES+=(targetcli-fb open-iscsi)
-
 # dm testing:
 PACKAGES+=(cryptsetup)
 
@@ -123,6 +120,7 @@ SYSTEMD_MASK=(dev-hvc0.device				\
     getty-static.service				\
     avahi-daemon.service				\
     crond.service					\
+    exim4.service					\
     kdump.service					\
     hdparm.service					\
     cdrom.mount						\
@@ -153,9 +151,10 @@ _chroot()
 update_files()
 {
     install -m0644 "$ktest_dir/lib/fstab" "$MNT/etc/fstab"
-    install -m0755 "$ktest_dir/lib/rc.local" "$MNT/etc/rc.local"
-    install -m0755 "$ktest_dir/lib/rc-local.service" "$MNT/lib/systemd/system/rc-local.service"
-    rm -f "$MNT/lib/systemd/system/rc-local.service.d/debian.conf"
+    install -m0755 "$ktest_dir/lib/testrunner.wrapper" "$MNT/sbin/testrunner.wrapper"
+    install -m0644 "$ktest_dir/lib/testrunner.service" "$MNT/lib/systemd/system/testrunner.service"
+
+    ln -sf /lib/systemd/system/testrunner.service "$MNT/etc/systemd/system/multi-user.target.wants"
 
     touch "$MNT/etc/resolv.conf"
     chmod 644 "$MNT/etc/resolv.conf"
@@ -205,6 +204,7 @@ ZZ
 
     # Use most recent version of perf installed, instead of failing if it
     # doesn't match the kernel version:
+    mkdir -p "$MNT/usr/local/bin"
     install -m0755 "$ktest_dir/lib/perf" "$MNT/usr/local/bin/perf"
 }
 

@@ -88,8 +88,6 @@ if compgen -G "$ktest_tmp/*.deb" > /dev/null; then
     fi
 fi
 
-j=$(($(grep -c '^processor' /proc/cpuinfo) * 2))
-
 for i in "${ktest_make_install[@]}"; do
     pushd "/host/$i" > /dev/null
     if [[ -f autogen.sh && ! -f configure ]]; then
@@ -98,8 +96,8 @@ for i in "${ktest_make_install[@]}"; do
     if [[ -f configure && ! -f Makefile ]]; then
 	run_quiet "configure $(basename $i)" ./configure
     fi
-    run_quiet "building $(basename $i)" make -j $j
-    run_quiet "installing $(basename $i)" make -j $j install
+    run_quiet "building $(basename $i)" make -j $ktest_cpus
+    run_quiet "installing $(basename $i)" make -j $ktest_cpus install
     popd > /dev/null
 done
 

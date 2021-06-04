@@ -1,0 +1,12 @@
+[Unit]
+Description=ktest testrunner
+ConditionFileIsExecutable=/sbin/testrunner.wrapper
+After=multi-user.target
+
+[Service]
+Type=forking
+ExecStart=/sbin/testrunner.wrapper
+TimeoutSec=0
+RemainAfterExit=yes
+GuessMainPID=no
+IgnoreSIGPIPE=no
