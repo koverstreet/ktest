@@ -263,9 +263,9 @@ cmd_update()
 
     mount "$ktest_image" "$MNT"
 
-    update_files
     update_packages
     update_oob_packages
+    update_files
 
     umount_image
     trim_image
@@ -294,13 +294,12 @@ cmd_create()
 	--foreign					\
 	buster "$MNT" "$MIRROR"
 
-    update_files
-
     _chroot "$MNT" /debootstrap/debootstrap --second-stage
     _chroot "$MNT" dpkg --configure -a
 
     update_packages
     update_oob_packages
+    update_files
 
     umount_image
     trim_image
