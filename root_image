@@ -154,7 +154,7 @@ update_files()
     install -m0755 "$ktest_dir/lib/testrunner.wrapper" "$MNT/sbin/testrunner.wrapper"
     install -m0644 "$ktest_dir/lib/testrunner.service" "$MNT/lib/systemd/system/testrunner.service"
 
-    ln -sf /lib/systemd/system/testrunner.service "$MNT/etc/systemd/system/multi-user.target.wants"
+    ln -sf /lib/systemd/system/testrunner.service "$MNT/etc/systemd/system/multi-user.target.wants/testrunner.service"
 
     touch "$MNT/etc/resolv.conf"
     chmod 644 "$MNT/etc/resolv.conf"
