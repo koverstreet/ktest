@@ -309,7 +309,7 @@ start_vm()
     qemu_cmd+=("$QEMU_BIN" -nodefaults -nographic)
     case $ktest_arch in
 	x86|x86_64)
-	    qemu_cmd+=(-cpu host -machine accel=kvm,nvdimm)
+	    qemu_cmd+=(-cpu host -machine type=q35,accel=kvm,nvdimm)
 	    ;;
 	mips)
 	    qemu_cmd+=(-cpu 24Kf -machine malta)
