@@ -270,7 +270,7 @@ ret=0
 while [[ $ret = 0 ]]; do
     run_tests $tests
     ret=$?
-    pkill -P $$ >/dev/null
+    pkill -P $$ >/dev/null || true
     [[ $ret != 0 ]]	    && break
     [[ $ktest_loop = 1 ]]   || break
 done
