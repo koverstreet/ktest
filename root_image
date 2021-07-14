@@ -77,7 +77,7 @@ PACKAGES=(kexec-tools less psmisc openssh-server	\
     pkg-config libtool-bin				\
     gdb strace ltrace linux-perf blktrace sysstat	\
     hdparm btrfs-progs mdadm lvm2			\
-    bc attr gawk acl rsync git)
+    bc attr gawk acl rsync git python3-docutils)
 
 # stress testing:
 PACKAGES+=(fio dbench bonnie++ fsmark)

@@ -12,7 +12,7 @@ noninteractive mode) or when killed via ctrl-C.
 Tests themselves are bash scripts that declare their dependencies (kernel config
 options, scratch devices, timeouts, etc).
 
-REQUIREMENTS:
+DEPENDENCIES:
 =============
 
  * standand build tools (gcc, make)
@@ -20,7 +20,7 @@ REQUIREMENTS:
  * minicom
  * socat
  * vde2 (for vde_swich and slirpvde, used for user mode networking)
- * liblwipv6 (also for user mode networking)
+ * liblwipv6 (optional dependency for user mode networking)
 
 You'll need an ssh key in $HOME/.ssh for build-test-kernel ssh to work; it adds
 your public key to the vm's authorized_keys.
@@ -33,22 +33,29 @@ GETTING STARTED:
 You'll need to build a root filesystem image for the virtual machines. As root,
 run:
 
-  root_image create
+```
+root_image create
+```
 
 This creates a root image and sticks it in /var/lib/ktest.
 
 Then, to build a kernel and run some tests, from your linux kernel source tree
 run
 
-  build-test-kernel run -I ~/ktest/tests/bcachefs/single_device.ktest
+```
+build-test-kernel run -I ~/ktest/tests/bcachefs/single_device.ktest
+```
 
 While virtual machine is running, you can interact with it by running various
 other build-test-kernel subcommands from same directory, e.g.:
 
-  build-test-kernel ssh
-  build-test-kernel kgdb
+```
+build-test-kernel ssh
+build-test-kernel kgdb
+```
 
 TOOLS:
+------
 
 Symlink the ones you're using somewhere into your path - there's no install
 procedure, they just expect to be run out of the git repository.
@@ -59,8 +66,12 @@ procedure, they just expect to be run out of the git repository.
    It expects to be run from a Linux kernel source tree - it builds it, and runs
    the specified test.
 
-   Normal usage:
-   $ build-test-kernel run -I ~/ktest/tests/bcache/xfstests.ktest
+
+Normal usage:
+
+```
+$ build-test-kernel run -I ~/ktest/tests/bcache/xfstests.ktest
+```
 
    run builds a kernel and runs the specified test; there are other subcommands
    for interacting with a running test VM (sshing in, using kgdb, etc.).

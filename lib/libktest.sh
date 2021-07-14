@@ -34,7 +34,6 @@ checkdep minicom
 checkdep socat
 checkdep qemu-system-x86_64	qemu-system-x86
 checkdep vde_switch		vde2
-checkdep /usr/include/lwipv6.h	liblwipv6-dev
 
 # config files:
 [[ -f $ktest_dir/ktestrc ]]	&& . "$ktest_dir/ktestrc"
@@ -201,6 +200,7 @@ ktest_ssh()
 	sock=$ktest_vmdir/net
 	ip="10.0.2.2"
 
+	checkdep /usr/include/lwipv6.h liblwipv6-dev
 	make -C "$ktest_dir/lib" lwip-connect
 
 	ssh_cmd+=(-o ProxyCommand="$ktest_dir/lib/lwip-connect $sock $ip 22")
