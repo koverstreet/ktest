@@ -1,0 +1,57 @@
+#!/bin/bash
+
+#tester script to verify checksum correctness of bcachefs filesystem.
+#this script requires a bcachefs-tools installation, and a sufficient (1GB) amount of RAM to create a loopback filesystem
+
+#create neccessary infrastructure in tmpfs
+mkdir /tmp/bcachefs_checksum_test
+mount -t tmpfs none /tmp/bcachefs_checksum_test
+mkdir /tmp/bcachefs_checksum_test/mounted
+dd if=/dev/zero of=/tmp/bcachefs_checksum_test/zerofile.bin bs=4096 count=65536
+dd if=/dev/urandom of=/tmp/bcachefs_checksum_test/randfile.bin bs=4096 count=65536
+fallocate -l 1GiB /tmp/bcachefs_checksum_test/loopdir.bin
+uuid="$(bcachefs format /tmp/bcachefs_checksum_test/loopdir.bin | grep External\ UUID | rev | cut -d$'\t' -f1 | rev)"
+
+#mount the fake block device to a fake bcachefs folder
+mount -t bcachefs -o loop /tmp/bcachefs_checksum_test/loopdir.bin /tmp/bcachefs_checksum_test/mounted
+
+#get the list of available checksums
+list=$(cat /sys/fs/bcachefs/${uuid}/options/data_checksum)
+list="${list//\]/}"
+list="${list//\[/}"
+list=($list);
+
+umount /tmp/bcachefs_checksum_test/mounted
+
+#try to make a file on the bcachefs filesystem for each checksum + verify
+error=0
+
+for i in "${list[@]}"; do
+	j=0;
+	mount -t bcachefs -o loop /tmp/bcachefs_checksum_test/loopdir.bin /tmp/bcachefs_checksum_test/mounted
+	echo $i > /sys/fs/bcachefs/${uuid}/options/data_checksum
+	umount /tmp/bcachefs_checksum_test/mounted
+	mount -t bcachefs -o loop /tmp/bcachefs_checksum_test/loopdir.bin /tmp/bcachefs_checksum_test/mounted
+	cp /tmp/bcachefs_checksum_test/zerofile.bin /tmp/bcachefs_checksum_test/mounted/
+	cp /tmp/bcachefs_checksum_test/randfile.bin /tmp/bcachefs_checksum_test/mounted/
+	umount /tmp/bcachefs_checksum_test/mounted
+	mount -t bcachefs -o loop /tmp/bcachefs_checksum_test/loopdir.bin /tmp/bcachefs_checksum_test/mounted
+	cmp /tmp/bcachefs_checksum_test/zerofile.bin /tmp/bcachefs_checksum_test/mounted/zerofile.bin
+	j=$?
+	error=$(($error+$j))
+	[ "$j" == "0" ] || echo "$i checksum zero file test failed"
+	cmp /tmp/bcachefs_checksum_test/randfile.bin /tmp/bcachefs_checksum_test/mounted/randfile.bin
+	j=$?
+	error=$(($error+$j))
+	[ "$j" == "0" ] || echo "$i checksum random file test failed"
+
+	rm -rf /tmp/bcachefs_checksum_test/mounted/*
+	umount /tmp/bcachefs_checksum_test/mounted
+done
+
+umount /tmp/bcachefs_checksum_test;
+rm -rf /tmp/bcachefs_checksum_test;
+
+echo "$error tests failed"
+
+exit $error
