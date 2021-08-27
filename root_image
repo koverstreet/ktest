@@ -95,6 +95,7 @@ PACKAGES+=(libudev-dev libldap2-dev)
 PACKAGES+=(xfsprogs xfslibs-dev quota libcap2-bin)
 PACKAGES+=(libattr1-dev libaio-dev libgdbm-dev libacl1-dev gettext)
 PACKAGES+=(libssl-dev libgdbm-dev libgdbm-compat-dev)
+PACKAGES+=(duperemove)
 
 # nfs testing:
 PACKAGES+=(nfs-kernel-server)
