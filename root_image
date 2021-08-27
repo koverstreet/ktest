@@ -211,6 +211,7 @@ ZZ
 
 update_packages()
 {
+    cp /etc/resolv.conf "$MNT/etc/resolv.conf"
     _chroot "$MNT" mount -t proc none /proc
     _chroot "$MNT" apt-get -qq update
     _chroot "$MNT" apt-get -qq upgrade
