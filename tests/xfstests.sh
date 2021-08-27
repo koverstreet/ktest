@@ -42,6 +42,7 @@ LOGGER_PROG=true
 EOF
 
     useradd -m fsgqa || true
+    useradd fsgqa2 || true
     useradd 123456-fsgqa || true
 
     rm -rf /ktest-out/xfstests
