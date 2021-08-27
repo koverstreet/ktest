@@ -16,6 +16,9 @@ config-scratch-devs 14G
 config-scratch-devs 14G
 config-scratch-devs 14G
 
+# swap
+config-scratch-devs 2G
+
 config-timeout 7200
 
 list_tests()
@@ -58,6 +61,9 @@ EOF
     cd "$ktest_dir/tests/xfstests"
 
     run_quiet "building $(basename $i)" make -j $ktest_cpus
+
+    mkswap /dev/sde
+    swapon /dev/sde
 
     ./check "$@"
 }
