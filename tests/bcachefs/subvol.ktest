@@ -1,0 +1,80 @@
+#!/bin/bash
+
+require-lib bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+
+config-timeout $(stress_timeout)
+
+test_subvol_create()
+{
+    run_quiet "" bcachefs format -f /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+    bcachefs subvolume create /mnt/subvolume_1
+
+    umount /mnt
+}
+
+test_subvol_delete()
+{
+    run_quiet "" bcachefs format -f /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+    bcachefs subvolume create /mnt/subvolume_1
+    rm -rf /mnt/subvolume_1
+
+    umount /mnt
+}
+
+
+test_subvol_snapshot_create()
+{
+    run_quiet "" bcachefs format -f /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+    bcachefs subvolume create /mnt/subvolume_1
+    bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
+
+    umount /mnt
+}
+
+test_subvol_snapshot_delete()
+{
+    run_quiet "" bcachefs format -f /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+    bcachefs subvolume create /mnt/subvolume_1
+    bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
+    bcachefs subvolume delete /mnt/snapshot_1
+
+    umount /mnt
+}
+
+# Fails
+test_subvol_snapshot_reuse_snapshot_name()
+{
+    run_quiet "" bcachefs format -f /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+    bcachefs subvolume create /mnt/subvolume_1
+    bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
+    bcachefs subvolume delete /mnt/snapshot_1
+
+    # Next line fails
+    bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
+
+    umount /mnt
+}
+
+# Fails
+test_subvol_delete_snapshot_of_deleted_subvol()
+{
+    run_quiet "" bcachefs format -f /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+    bcachefs subvolume create /mnt/subvolume_1
+    bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
+    rm -rf /mnt/subvolume_1
+
+    # Next line fails
+    bcachefs subvolume delete /mnt/snapshot_1
+
+    umount /mnt
+}
+
