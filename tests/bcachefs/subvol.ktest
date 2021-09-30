@@ -7,18 +7,177 @@ config-scratch-devs 4G
 
 config-timeout $(stress_timeout)
 
+test_snapshots_simple()
+{
+    NR_SNAPS=20
+
+    bcachefs_antagonist
+
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    pushd /mnt
+    for i in `seq 0 $NR_SNAPS`; do
+	dd if=/dev/zero of=/mnt/foo bs=1M count=1 oflag=direct
+	bcachefs subvolume snapshot snap-$i
+    done
+    popd
+    exit
+
+    for i in `seq 0 $NR_SNAPS|sort -r`; do
+	umount /mnt
+	sleep 0.2
+	bcachefs fsck -n /dev/sdb
+	mount /dev/sdb /mnt
+
+	echo "deleting snap-$i"
+	bcachefs subvolume delete /mnt/snap-$i
+	df -h /mnt
+    done
+
+    umount /mnt
+    sleep 0.2
+    mount -t bcachefs -o fsck /dev/sdb /mnt
+    umount /mnt
+}
+
+test_snapshots_dbench()
+{
+    NR_SNAPS=10
+
+    bcachefs_antagonist
+
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    (
+	cd /mnt
+
+	for i in `seq 0 $NR_SNAPS`; do
+	    sleep 1
+	    bcachefs subvolume snapshot snap-$i
+	done
+    ) &
+
+    dbench -S -t $NR_SNAPS 1 -D /mnt/
+    wait
+    df -h /mnt
+
+    for i in `seq 0 $NR_SNAPS|sort -r`; do
+	umount /mnt
+	sleep 0.2
+	#bcachefs fsck -n /dev/sdb
+	mount -t bcachefs -o fsck /dev/sdb /mnt
+
+	echo "deleting snap-$i"
+	bcachefs subvolume delete /mnt/snap-$i
+	df -h /mnt
+    done
+
+    umount /mnt
+    sleep 0.2
+    bcachefs fsck -n /dev/sdb
+    mount /dev/sdb /mnt
+    df -h /mnt
+    umount /mnt
+}
+
+test_snapshots_fio()
+{
+    bcachefs_antagonist
+
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    fallocate -l500M /mnt/fiotest
+
+    (
+	cd /mnt
+
+	for i in `seq 0 10`; do
+	    sleep 2
+	    bcachefs subvolume snapshot snap-$i
+	done
+    ) &
+
+    fio --eta=always				\
+	--eta-interval=1s			\
+	--exitall_on_error=1			\
+	--randrepeat=0				\
+	--ioengine=libaio			\
+	--iodepth=64				\
+	--iodepth_batch=16			\
+	--direct=1				\
+	--numjobs=1				\
+	--verify=crc32c				\
+	--verify_fatal=1			\
+	--verify_async=1			\
+	--filename=/mnt/fiotest		    	\
+	--filesize=1G				\
+	--io_size=12G				\
+	--fallocate=none			\
+	--name=randwrite			\
+	--rw=randwrite				\
+	--bsrange=4k-32k || true
+    wait
+    df -h /mnt
+
+    for i in `seq 0 10`; do
+	fio --eta=always			\
+	    --eta-interval=1s			\
+	    --exitall_on_error=1		\
+	    --randrepeat=0			\
+	    --ioengine=libaio			\
+	    --iodepth=64			\
+	    --iodepth_batch=16			\
+	    --direct=1				\
+	    --numjobs=1				\
+	    --verify=crc32c			\
+	    --verify_only=1			\
+	    --filename=/mnt/snap-$i/fiotest	\
+	    --filesize=1G			\
+	    --io_size=12G			\
+	    --fallocate=none			\
+	    --name=randwrite			\
+	    --rw=randwrite			\
+	    --bsrange=4k-32k || true
+    done
+
+    for i in `seq 0 10|sort -r`; do
+	umount /mnt
+	sleep 0.1
+	mount -t bcachefs -o fsck /dev/sdb /mnt
+
+	echo "deleting snap-$i"
+	cd /mnt
+	bcachefs subvolume delete snap-$i
+	df -h /mnt
+	cd /
+    done
+
+    umount /mnt
+
+    sleep 0.1
+    mount -t bcachefs -o fsck /dev/sdb /mnt
+    df -h /mnt
+    umount /mnt
+}
+
 test_subvol_create()
 {
-    run_quiet "" bcachefs format -f /dev/sdb
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
     bcachefs subvolume create /mnt/subvolume_1
+
+    touch /mnt/foo
+    mv /mnt/foo /mnt/subvolume_1
 
     umount /mnt
 }
 
 test_subvol_delete()
 {
-    run_quiet "" bcachefs format -f /dev/sdb
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
     bcachefs subvolume create /mnt/subvolume_1
     rm -rf /mnt/subvolume_1
@@ -26,10 +185,9 @@ test_subvol_delete()
     umount /mnt
 }
 
-
 test_subvol_snapshot_create()
 {
-    run_quiet "" bcachefs format -f /dev/sdb
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
@@ -39,7 +197,7 @@ test_subvol_snapshot_create()
 
 test_subvol_snapshot_delete()
 {
-    run_quiet "" bcachefs format -f /dev/sdb
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
@@ -51,7 +209,7 @@ test_subvol_snapshot_delete()
 # Fails
 test_subvol_snapshot_reuse_snapshot_name()
 {
-    run_quiet "" bcachefs format -f /dev/sdb
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
@@ -66,7 +224,7 @@ test_subvol_snapshot_reuse_snapshot_name()
 # Fails
 test_subvol_delete_snapshot_of_deleted_subvol()
 {
-    run_quiet "" bcachefs format -f /dev/sdb
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
