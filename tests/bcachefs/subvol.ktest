@@ -22,7 +22,6 @@ test_snapshots_simple()
 	bcachefs subvolume snapshot snap-$i
     done
     popd
-    exit
 
     for i in `seq 0 $NR_SNAPS|sort -r`; do
 	umount /mnt
@@ -43,9 +42,10 @@ test_snapshots_simple()
 
 test_snapshots_dbench()
 {
-    NR_SNAPS=10
+    # so wait doesn't hang
+    [[ $(jobs -p) != "" ]] && kill $(jobs -p)
 
-    bcachefs_antagonist
+    NR_SNAPS=10
 
     run_quiet "" bcachefs format -f --errors=panic /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
@@ -84,7 +84,8 @@ test_snapshots_dbench()
 
 test_snapshots_fio()
 {
-    bcachefs_antagonist
+    # so wait doesn't hang
+    [[ $(jobs -p) != "" ]] && kill $(jobs -p)
 
     run_quiet "" bcachefs format -f --errors=panic /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
@@ -235,4 +236,3 @@ test_subvol_delete_snapshot_of_deleted_subvol()
 
     umount /mnt
 }
-
