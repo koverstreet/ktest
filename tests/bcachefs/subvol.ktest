@@ -236,3 +236,15 @@ test_subvol_delete_snapshot_of_deleted_subvol()
 
     umount /mnt
 }
+
+# Fails
+test_subvol_snapshot_delete_repeat()
+{
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+    for i in $(seq 1 64); do
+        bcachefs subvolume snapshot /mnt/$i
+        bcachefs subvolume delete /mnt/$i
+    done
+    umount /mnt
+}
