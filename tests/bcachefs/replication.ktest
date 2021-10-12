@@ -629,3 +629,17 @@ test_replicas_gc()
 
     bcachefs fsck /dev/sd[bcdef]
 }
+
+# Fails
+test_replace_replica()
+{
+    bcachefs format --errors=panic --replicas=2 /dev/sd[bc]
+    mount -t bcachefs -o degraded /dev/sdb /mnt
+
+    bcachefs device add -f /mnt /dev/sdd
+    bcachefs data rereplicate /mnt
+    umount /mnt
+
+    mount -t bcachefs -o degraded /dev/sdd /mnt
+    umount /mnt
+}
