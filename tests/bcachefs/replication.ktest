@@ -630,16 +630,40 @@ test_replicas_gc()
     bcachefs fsck /dev/sd[bcdef]
 }
 
-# Fails
 test_replace_replica()
 {
     bcachefs format --errors=panic --replicas=2 /dev/sd[bc]
     mount -t bcachefs -o degraded /dev/sdb /mnt
 
     bcachefs device add -f /mnt /dev/sdd
+
+    bcachefs device set-state --force failed /dev/sdc
+
     bcachefs data rereplicate /mnt
+
     umount /mnt
 
     mount -t bcachefs -o degraded /dev/sdd /mnt
+    umount /mnt
+}
+
+test_key_type_error()
+{
+    bcachefs format --errors=panic --replicas=2 /dev/sd[bc]
+
+    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
+    bcachefs setattr --data_replicas=1 /mnt
+    bcachefs setattr --foreground_target=/dev/sdc /mnt
+
+    dd if=/dev/zero of=/mnt/foo bs=64k count=8 oflag=direct
+
+    umount /mnt
+    mount -t bcachefs -o very_degraded /dev/sdb /mnt
+
+    bcachefs device remove --force /dev/sdc
+
+    # should fail:
+    ! dd if=/mnt/foo of=/dev/null bs=64k count=1 iflag=direct
+
     umount /mnt
 }
