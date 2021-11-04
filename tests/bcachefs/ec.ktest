@@ -124,6 +124,43 @@ test_ec_lz4()
     #bcachefs fsck /dev/sd[bcdef]
 }
 
+test_ec_mixed_tiers()
+{
+    #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
+    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+
+    run_quiet "" bcachefs format -f		\
+	--errors=panic				\
+	--erasure_code				\
+	--compression=lz4			\
+	--replicas=2				\
+	--group dup 				\
+	/dev/sd[bc] 				\
+	--group tri 				\
+	/dev/sd[def] 				\
+	--foreground_target=dup			\
+	--promote_target=dup			\
+	--background_target=tri
+    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
+
+    mount -t bcachefs $devs /mnt
+
+    #enable_memory_faults
+    run_fio_randrw
+    #dd if=/dev/zero of=/mnt/foo bs=1M count=10 oflag=direct
+    #disable_memory_faults
+
+    #bcachefs fs usage -h /mnt
+    umount /mnt
+
+    # test remount:
+    echo "Testing remount"
+    mount -t bcachefs -o fsck $devs /mnt
+    umount /mnt
+
+    #bcachefs fsck /dev/sd[bcdef]
+}
+
 test_ec_gc()
 {
     #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
