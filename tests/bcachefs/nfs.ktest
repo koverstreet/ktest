@@ -10,6 +10,10 @@ require-kernel-config NFSD
 require-kernel-config NFSD_V3
 require-kernel-config NFSD_V4
 
+require-kernel-config NFS_FS
+require-kernel-config NFS_V3
+require-kernel-config NFS_V4
+
 test_nfs()
 {
     mkdir /export1 /export2
@@ -19,11 +23,15 @@ test_nfs()
 	/dev/sdb
     mount /dev/sdb /export2
 
-    echo "/export1  *(ro,insecure,all_squash,no_subtree_check)" >> /etc/exports
-    echo "/export2  *(ro,insecure,all_squash,no_subtree_check)" >> /etc/exports
+    echo "/export1  *(rw,insecure,no_root_squash,no_subtree_check)" >> /etc/exports
+    echo "/export2  *(rw,insecure,no_root_squash,no_subtree_check)" >> /etc/exports
     exportfs -a
-    exportfs -ua
 
+    mount -t nfs localhost:/export2 /mnt
+    dbench -S -t 30 2 -D /mnt/
+    umount /mnt
+
+    exportfs -ua
     umount /export2
 }
 
