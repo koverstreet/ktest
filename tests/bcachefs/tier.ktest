@@ -32,7 +32,7 @@ run_basic_tiering_test()
 {
     run_basic_fio_test "$@"			\
 	--block_size=4k				\
-	--btree_node_size=32k
+	--btree_node_size=32k			\
 	--bucket=256k				\
 	--label=ssd.ssd1 /dev/sdb		\
 	--label=ssd.ssd2 /dev/sdc		\
