@@ -532,10 +532,10 @@ test_striping()
 	    --errors=panic			\
 	    --data_checksum=none		\
 	    --replicas=2			\
-	    --group cache			\
+	    --label cache			\
 	    --durability=1			\
 	    --bucket=8M /dev/sd[b]		\
-	    --group hdd				\
+	    --label hdd				\
 	    --durability=2			\
 	    --bucket=8M /dev/sd[cd]		\
 	    --foreground_target=cache		\

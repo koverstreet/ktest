@@ -2,10 +2,10 @@
 
 require-lib bcachefs-test-libs.sh
 
-config-scratch-devs 1G
-config-scratch-devs 1G
 config-scratch-devs 4G
 config-scratch-devs 4G
+config-scratch-devs 16G
+config-scratch-devs 16G
 
 config-timeout $(stress_timeout)
 
@@ -25,17 +25,19 @@ test_labels()
     echo hdd	> options/background_target
 
     run_fio_randrw
+    umount /mnt
 }
 
 run_basic_tiering_test()
 {
     run_basic_fio_test "$@"			\
 	--block_size=4k				\
-	--bucket=8M				\
-	--group=ssd.ssd1 /dev/sdb		\
-	--group=ssd.ssd2 /dev/sdc		\
-	--group=hdd.hdd1 /dev/sdd		\
-	--group=hdd.hdd2 /dev/sde		\
+	--btree_node_size=32k
+	--bucket=256k				\
+	--label=ssd.ssd1 /dev/sdb		\
+	--label=ssd.ssd2 /dev/sdc		\
+	--label=hdd.hdd1 /dev/sdd		\
+	--label=hdd.hdd2 /dev/sde		\
 	--foreground_target=ssd			\
 	--promote_target=ssd			\
 	--background_target=hdd
@@ -46,10 +48,10 @@ test_tiering_torture()
     run_quiet "" bcachefs format		\
 	--block_size=4k				\
 	--bucket=8M				\
-	--group=ssd.ssd1 /dev/sdb		\
-	--group=ssd.ssd2 /dev/sdc		\
-	--group=hdd.hdd1 /dev/sdd		\
-	--group=hdd.hdd2 /dev/sde		\
+	--label=ssd.ssd1 /dev/sdb		\
+	--label=ssd.ssd2 /dev/sdc		\
+	--label=hdd.hdd1 /dev/sdd		\
+	--label=hdd.hdd2 /dev/sde		\
 	--foreground_target=ssd			\
 	--promote_target=ssd			\
 	--background_target=hdd
@@ -71,10 +73,10 @@ test_tiering_buffered()
 {
     run_quiet "" bcachefs format		\
 	--block_size=4k				\
-	--group=ssd.ssd1 /dev/sdb		\
-	--group=ssd.ssd2 /dev/sdc		\
-	--group=hdd.hdd1 /dev/sdd		\
-	--group=hdd.hdd2 /dev/sde		\
+	--label=ssd.ssd1 /dev/sdb		\
+	--label=ssd.ssd2 /dev/sdc		\
+	--label=hdd.hdd1 /dev/sdd		\
+	--label=hdd.hdd2 /dev/sde		\
 	--foreground_target=ssd			\
 	--promote_target=ssd			\
 	--background_target=hdd
@@ -102,8 +104,8 @@ test_tiering_buffered()
 test_writethrough()
 {
     run_basic_fio_test "$@"			\
-	--durability=0 --group=ssd /dev/sd[bc]	\
-	--durability=1 --group=hdd /dev/sd[de]	\
+	--durability=0 --label=ssd /dev/sd[bc]	\
+	--durability=1 --label=hdd /dev/sd[de]	\
 	--foreground_target=ssd			\
 	--promote_target=ssd			\
 	--background_target=hdd
@@ -114,8 +116,8 @@ test_promote()
     setup_tracing 'bcachefs:*'
 
     run_quiet "" bcachefs format		\
-	--durability=0 --group=ssd /dev/sdb	\
-	--durability=1 --group=hdd /dev/sdd	\
+	--durability=0 --label=ssd /dev/sdb	\
+	--durability=1 --label=hdd /dev/sdd	\
 	--foreground_target=hdd			\
 	--promote_target=ssd			\
 	--background_target=hdd
@@ -128,6 +130,26 @@ test_promote()
 
     bcachefs fs usage -h /mnt
     # should be some data on cache devices
+
+    umount /mnt
+}
+
+test_setattr()
+{
+    setup_tracing 'bcachefs:*'
+
+    run_quiet "" bcachefs format		\
+	--durability=0 --label=ssd /dev/sdb	\
+	--durability=1 --label=hdd /dev/sdd	\
+	--background_target=hdd
+
+    mount -t bcachefs /dev/sdb:/dev/sdd /mnt
+
+    touch /mnt/foo
+    touch /mnt/bar
+
+    bcachefs setattr --foreground_target /dev/sdb /mnt/
+    bcachefs setattr --promote_target ssd /mnt/
 
     umount /mnt
 }
@@ -152,6 +174,11 @@ test_tiering_crypto_lz4()
     run_basic_tiering_test --encrypted --no_passphrase --compression=lz4
 }
 
+test_tiering_crypto_zstd()
+{
+    run_basic_tiering_test --encrypted --no_passphrase --compression=zstd
+}
+
 test_tiering_replication()
 {
     run_basic_tiering_test --replicas=2
@@ -160,10 +187,10 @@ test_tiering_replication()
 test_tiering_variable_buckets()
 {
     run_basic_fio_test					\
-	--group=ssd --bucket=32k	/dev/sdb	\
-	--group=ssd --bucket=64k	/dev/sdc	\
-	--group=hdd --bucket=128k	/dev/sde	\
-	--group=hdd --bucket=256k	/dev/sdd	\
+	--label=ssd --bucket=32k	/dev/sdb	\
+	--label=ssd --bucket=64k	/dev/sdc	\
+	--label=hdd --bucket=128k	/dev/sde	\
+	--label=hdd --bucket=256k	/dev/sdd	\
 	--foreground_target=ssd				\
 	--promote_target=ssd				\
 	--background_target=hdd
@@ -173,10 +200,10 @@ test_tiering_variable_buckets_replicas()
 {
     run_basic_fio_test					\
 	--replicas=2					\
-	--group=ssd --bucket=32k	/dev/sdb	\
-	--group=ssd --bucket=64k	/dev/sdc	\
-	--group=hdd --bucket=128k	/dev/sde	\
-	--group=hdd --bucket=256k	/dev/sdd	\
+	--label=ssd --bucket=32k	/dev/sdb	\
+	--label=ssd --bucket=64k	/dev/sdc	\
+	--label=hdd --bucket=128k	/dev/sde	\
+	--label=hdd --bucket=256k	/dev/sdd	\
 	--foreground_target=ssd				\
 	--promote_target=ssd				\
 	--background_target=hdd
@@ -186,22 +213,22 @@ test_device_add()
 {
     run_quiet "" bcachefs format		\
 	--errors=panic				\
-	--group=ssd /dev/sdb			\
-	--group=hdd /dev/sd[de]
+	--label=ssd /dev/sdb			\
+	--label=hdd /dev/sd[de]
 
     mount -t bcachefs /dev/sdb:/dev/sdd:/dev/sde /mnt
 
     run_fio_randrw|tail -n200 &
 
-    bcachefs device add --group=hdd /mnt /dev/sdc
+    bcachefs device add --label=hdd /mnt /dev/sdc
 }
 
 test_mount_umount_torture()
 {
     run_quiet "" bcachefs format			\
 	--replicas=2					\
-	--group=ssd /dev/sd[bc]				\
-	--group=hdd /dev/sd[de]				\
+	--label=ssd /dev/sd[bc]				\
+	--label=hdd /dev/sd[de]				\
 	--foreground_target=ssd				\
 	--promote_target=ssd				\
 	--background_target=hdd
@@ -221,8 +248,8 @@ disabled_test_change_replicas()
 {
     run_quiet "" bcachefs format			\
 	--errors=panic				\
-	--group=ssd /dev/sd[bc]				\
-	--group=hdd /dev/sd[de]				\
+	--label=ssd /dev/sd[bc]				\
+	--label=hdd /dev/sd[de]				\
 	--foreground_target=ssd				\
 	--promote_target=ssd				\
 	--background_target=hdd

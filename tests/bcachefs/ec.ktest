@@ -134,10 +134,8 @@ test_ec_mixed_tiers()
 	--erasure_code				\
 	--compression=lz4			\
 	--replicas=2				\
-	--group dup 				\
-	/dev/sd[bc] 				\
-	--group tri 				\
-	/dev/sd[def] 				\
+	--label dup /dev/sd[bc] 		\
+	--label tri /dev/sd[def] 		\
 	--foreground_target=dup			\
 	--promote_target=dup			\
 	--background_target=tri
