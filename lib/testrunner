@@ -278,6 +278,9 @@ done
 copy_to_host
 check_taint
 
+echo -n "Kernel version: "
+uname -r
+
 if [[ $ret = 0 ]]; then
     echo "TEST SUCCESS"
 else
