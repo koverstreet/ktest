@@ -10,6 +10,7 @@ case $ktest_arch in
 	require-kernel-config MCORE2	# optimize for core2
 	require-kernel-config IO_DELAY_0XED
 	require-kernel-config 64BIT=n
+	require-kernel-config ACPI	# way slower without it, do not know why
 
 	have_kvmguest=1
 	have_virtio=1
@@ -21,6 +22,7 @@ case $ktest_arch in
 	require-kernel-config IO_DELAY_0XED
 	require-kernel-config IA32_EMULATION
 	require-kernel-config 64BIT
+	require-kernel-config ACPI	# way slower without it, do not know why
 
 	have_kvmguest=1
 	have_virtio=1
@@ -150,6 +152,9 @@ require-kernel-config NET_9P
 require-kernel-config NETWORK_FILESYSTEMS
 require-kernel-config 9P_FS
 
+# Fast RNG:
+require-kernel-config CONFIG_CRYPTO_DEV_VIRTIO
+
 # Crash dumps
 if [[ $ktest_crashdump = 1 ]]; then
     require-kernel-config KEXEC
@@ -171,6 +176,7 @@ require-kernel-config JUMP_LABEL
 # Tracing
 require-kernel-config FTRACE
 require-kernel-config FTRACE_SYSCALLS
+require-kernel-config FUNCTION_TRACER
 #require-kernel-config ENABLE_DEFAULT_TRACERS
 
 # Debugging options
