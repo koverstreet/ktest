@@ -26,6 +26,20 @@ list_tests()
     (cd "$ktest_dir/tests/xfstests/tests"; echo generic/???)
 }
 
+hook_xfstests()
+{
+    mkswap /dev/sde
+    swapon /dev/sde
+
+    useradd -m fsgqa
+    useradd fsgqa2
+    useradd 123456-fsgqa
+
+    mkdir -p /mnt/test /mnt/scratch
+
+    run_quiet "building $(basename $i)" make -j $ktest_cpus -C "$ktest_dir/tests/xfstests"
+}
+
 run_xfstests()
 {
     export FSTYP="$1"
@@ -41,30 +55,14 @@ RESULT_BASE=/ktest-out/xfstests
 LOGGER_PROG=true
 EOF
 
-    useradd -m fsgqa || true
-    useradd fsgqa2 || true
-    useradd 123456-fsgqa || true
+    export MKFS_OPTIONS
 
     rm -rf /ktest-out/xfstests
 
-    mkdir -p /mnt/test /mnt/scratch
-
     wipefs -af /dev/sdb
-
-    if [[ -z ${MKFS_OPTIONS+x} ]]; then
-	MKFS_OPTIONS=""
-    fi
-
     mkfs.$FSTYP $MKFS_OPTIONS -q /dev/sdb
-
     mount /dev/sdb /mnt/test
 
     cd "$ktest_dir/tests/xfstests"
-
-    run_quiet "building $(basename $i)" make -j $ktest_cpus
-
-    mkswap /dev/sde
-    swapon /dev/sde
-
     ./check "$@"
 }
