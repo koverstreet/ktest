@@ -27,6 +27,7 @@ ktest_crashdump=0
 ktest_kgdb=0
 ktest_ssh_port=0
 ktest_networking=user
+ktest_dio=off
 
 ktest_storage_bus=virtio-scsi-pci
 
@@ -391,7 +392,7 @@ start_vm()
     qemu_disk file="$ktest_root_image",snapshot=on
 
     for file in "${ktest_images[@]}"; do
-	qemu_disk file="$file",cache=unsafe
+	qemu_disk file="$file",snapshot=on,cache.no-flush=on,cache.direct=$ktest_dio
     done
 
     for size in "${ktest_scratch_devs[@]}"; do
