@@ -28,6 +28,7 @@ ktest_kgdb=0
 ktest_ssh_port=0
 ktest_networking=user
 ktest_dio=off
+ktest_nice=0
 
 ktest_storage_bus=virtio-scsi-pci
 
@@ -47,7 +48,7 @@ checkdep vde_switch		vde2
 
 # args:
 
-ktest_args="i:s:d:a:p:ISFLvxn:"
+ktest_args="i:s:d:a:p:ISFLvxn:N:"
 parse_ktest_arg()
 {
     local arg=$1
@@ -90,6 +91,9 @@ parse_ktest_arg()
 	n)
 	    ktest_networking=$OPTARG
 	    ;;
+	N)
+	    ktest_nice=$OPTARG
+	    ;;
     esac
 }
 
@@ -117,6 +121,10 @@ parse_args_post()
     else
 	ktest_crashdump=1
     fi
+
+    if [[ $ktest_nice != 0 ]]; then
+	renice  --priority $ktest_nice $$
+    fi
 }
 
 ktest_usage_opts()
@@ -138,6 +146,7 @@ ktest_usage_run_opts()
     echo "      -L              run all tests in infinite loop until failure"
     echo "      -v              verbose mode"
     echo "      -n (user|vde)   Networking type to use"
+    echo "      -N <val>        Nice value for kernel build and VM"
 }
 
 ktest_usage_cmds()
