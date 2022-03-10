@@ -15,9 +15,8 @@ KERNEL_ARCH=""
 ktest_dir="/host/$ktest_dir"
 ktest_tmp="/host/$ktest_tmp"
 
-if [ ! -e "/ktest" ]; then
-    ln -s $ktest_dir /ktest
-fi
+ln -sf $ktest_dir /ktest
+ln -sf /host/$home $home
 
 . "$ktest_dir/lib/util.sh"
 . "$ktest_dir/lib/parse-test.sh"
@@ -28,7 +27,7 @@ ln -sf "/host/$ktest_kernel_binary/lib/modules" /lib/modules
 depmod -a
 
 mkdir -p /root/.ssh
-cat /host/$home/.ssh/id*.pub > /root/.ssh/authorized_keys
+cat $home/.ssh/id*.pub > /root/.ssh/authorized_keys
 chmod 600 /root/.ssh/authorized_keys
 
 dmesg --console-on
@@ -40,9 +39,7 @@ ulimit -c unlimited
 # Log file system visible to host
 
 LOGDIR=/ktest-out
-if [ ! -e "$LOGDIR" ]; then
-    ln -s "/host/$ktest_out" $LOGDIR
-fi
+ln -sf "/host/$ktest_out" $LOGDIR
 
 # Core dump settings
 echo 1 > /proc/sys/fs/suid_dumpable
