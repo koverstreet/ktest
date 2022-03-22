@@ -65,6 +65,8 @@ require-kernel-config DEVTMPFS_MOUNT
 require-kernel-config BINFMT_ELF
 require-kernel-config BINFMT_SCRIPT
 
+require-kernel-config COMPACTION	# virtfs doesn't do well without it
+
 require-kernel-config PROC_KCORE	# XXX Needed?
 
 require-kernel-config TTY
