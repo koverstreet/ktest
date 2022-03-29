@@ -171,6 +171,13 @@ join_by()
     echo "$*"
 }
 
+log_verbose()
+{
+    if [[ $ktest_verbose != 0 ]]; then
+	echo "$@"
+    fi
+}
+
 run_quiet()
 {
     local msg=$1
