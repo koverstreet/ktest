@@ -13,9 +13,8 @@ ktest_root_image=""	# virtual machine root filesystem
                         #       auto-override: $HOME/.ktest/root
 ktest_kernel_binary=""		# dir that has the kernel to run
                         #       set with: -k <path>
-ktest_out=""		# dir for test output (logs, code coverage, etc.)
+ktest_out="./ktest_out"	# dir for test output (logs, code coverage, etc.)
 
-ktest_vmdir=""		# symlink to actual vm dir
 ktest_priority=0	# hint for how long test should run
 ktest_interactive=0     # if set to 1, timeout is ignored completely
                         #       sets with: -I
@@ -32,10 +31,8 @@ ktest_nice=0
 
 ktest_storage_bus=virtio-scsi-pci
 
-checkdep minicom
 checkdep socat
 checkdep qemu-system-x86_64	qemu-system-x86
-checkdep vde_switch		vde2
 
 # config files:
 [[ -f $ktest_dir/ktestrc ]]	&& . "$ktest_dir/ktestrc"
@@ -48,7 +45,7 @@ checkdep vde_switch		vde2
 
 # args:
 
-ktest_args="i:s:d:a:p:ISFLvxn:N:"
+ktest_args="i:s:a:p:ISFLvxn:N:"
 parse_ktest_arg()
 {
     local arg=$1
@@ -60,9 +57,6 @@ parse_ktest_arg()
 	s)
 	    ktest_tmp=$OPTARG
 	    ktest_no_cleanup_tmpdir=1
-	    ;;
-	d)
-	    ktest_vmdir=$OPTARG
 	    ;;
 	a)
 	    ktest_arch=$OPTARG
@@ -106,15 +100,8 @@ parse_args_post()
     if [[ -z $ktest_root_image ]]; then
 	ktest_root_image=/var/lib/ktest/root.$DEBIAN_ARCH
     fi
-    if [[ -z $ktest_out ]]; then
-	ktest_out=./ktest-out
-    fi
 
     ktest_out=$(readlink -f "$ktest_out")
-
-    if [[ -z $ktest_vmdir ]]; then
-	ktest_vmdir=$ktest_out/vm
-    fi
 
     if [[ $ktest_interactive = 1 ]]; then
 	ktest_kgdb=1
@@ -203,11 +190,11 @@ ktest_ssh()
 	    -o ControlMaster=no					\
 	)
 
-    if [[ -f $ktest_vmdir/ssh_port ]]; then
-	ktest_ssh_port=$(<$ktest_vmdir/ssh_port)
+    if [[ -f $ktest_out/vm/ssh_port ]]; then
+	ktest_ssh_port=$(<$ktest_out/vm/ssh_port)
 	ssh_cmd+=(-p $ktest_ssh_port)
-    elif [[ -d $ktest_vmdir/net ]]; then
-	sock=$ktest_vmdir/net
+    elif [[ -d $ktest_out/vm/net ]]; then
+	sock=$ktest_out/vm/net
 	ip="10.0.2.2"
 
 	checkdep /usr/include/lwipv6.h liblwipv6-dev
@@ -230,7 +217,7 @@ ktest_gdb()
     fi
 
     exec gdb -ex "set remote interrupt-on-connect"			\
-	     -ex "target remote | socat UNIX-CONNECT:$ktest_vmdir/vm-gdb -"\
+	     -ex "target remote | socat UNIX-CONNECT:$ktest_out/vm/vm-gdb -"\
 	     "$ktest_kernel_binary/vmlinux"
 }
 
@@ -244,28 +231,27 @@ ktest_kgdb()
     ktest_sysrq g
 
     exec gdb -ex "set remote interrupt-on-connect"			\
-	     -ex "target remote | socat UNIX-CONNECT:$ktest_vmdir/vm-kgdb -"\
+	     -ex "target remote | socat UNIX-CONNECT:$ktest_out/vm/vm-kgdb -"\
 	     "$ktest_kernel_binary/vmlinux"
 }
 
 ktest_mon()
 {
-    exec socat UNIX-CONNECT:"$ktest_vmdir/vm-mon" STDIO
-    exec nc "$ktest_vmdir/vm-0-mon"
-    #exec minicom -D "unix#$ktest_vmdir/vm-0-mon"
+    exec socat UNIX-CONNECT:"$ktest_out/vm/vm-mon" STDIO
+    exec nc "$ktest_out/vm/vm-0-mon"
 }
 
 ktest_con()
 {
-    exec socat UNIX-CONNECT:"$ktest_vmdir/vm-con" STDIO
-    exec nc "$ktest_vmdir/vm-0-con"
+    exec socat UNIX-CONNECT:"$ktest_out/vm/vm-con" STDIO
+    exec nc "$ktest_out/vm/vm-0-con"
 }
 
 ktest_sysrq()
 {
     local key=$1
 
-    echo sendkey alt-sysrq-$key | socat - "UNIX-CONNECT:$ktest_vmdir/vm-mon"
+    echo sendkey alt-sysrq-$key | socat - "UNIX-CONNECT:$ktest_out/vm/vm-mon"
 }
 
 start_vm()
@@ -357,6 +343,8 @@ start_vm()
 	    ;;
 	vde)
 	    local net="$ktest_tmp/net"
+
+	    checkdep vde_switch	vde2
 
 	    [[ ! -p "$ktest_tmp/vde_input" ]] && mkfifo "$ktest_tmp/vde_input"
 	    tail -f "$ktest_tmp/vde_input" |vde_switch -sock "$net" >& /dev/null &
