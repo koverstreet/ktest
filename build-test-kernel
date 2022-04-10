@@ -15,6 +15,7 @@ checkdep make
 ktest_kernel_source="."	# dir of kernel source
 			#       set with: -k <path>
 			#       defaults: current directory
+ktest_njobs=$(($(grep -c '^processor' /proc/cpuinfo) * 2))
 
 COVERAGE=""		# doing code coverage?
 MAKEARGS=()
@@ -108,7 +109,7 @@ do_make()
 	export CROSS_COMPILE="$ARCH_TRIPLE-"
     fi
 
-    make -j					\
+    make --jobs="$ktest_njobs"			\
 	--directory="$ktest_kernel_source"    	\
 	O="$ktest_kernel_build"			\
 	INSTALL_MOD_PATH="$ktest_kernel_binary"	\
