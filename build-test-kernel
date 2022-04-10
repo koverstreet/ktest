@@ -163,24 +163,8 @@ kernel_opt()
 
 build_kernel()
 {
-    local magic=$ktest_kernel_binary/ktest-kernel-binary-dir
-
-    if [[ -e $ktest_kernel_binary ]] && [[ ! -d $ktest_kernel_binary ]]; then
-	echo "$ktest_kernel_binary already exists and is not a directory"
-	exit 1
-    fi
-
-    if [[ -d $ktest_kernel_binary ]] && [[ -n $(ls -A $ktest_kernel_binary) ]]; then
-	if [[ ! -f $magic ]]; then
-	    echo "$ktest_kernel_binary already exists and has non ktest kernel contents"
-	    exit 1
-	fi
-
-	rm -rf "$ktest_kernel_binary"
-    fi
-
+    rm -rf "$ktest_kernel_binary"
     mkdir -p "$ktest_kernel_binary"
-    touch "$magic"
 
     new_config
 
