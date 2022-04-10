@@ -217,7 +217,7 @@ ktest_gdb()
     fi
 
     exec gdb -ex "set remote interrupt-on-connect"			\
-	     -ex "target remote | socat UNIX-CONNECT:$ktest_out/vm/vm-gdb -"\
+	     -ex "target remote | socat UNIX-CONNECT:$ktest_out/vm/gdb -"\
 	     "$ktest_kernel_binary/vmlinux"
 }
 
@@ -231,20 +231,14 @@ ktest_kgdb()
     ktest_sysrq g
 
     exec gdb -ex "set remote interrupt-on-connect"			\
-	     -ex "target remote | socat UNIX-CONNECT:$ktest_out/vm/vm-kgdb -"\
+	     -ex "target remote | socat UNIX-CONNECT:$ktest_out/vm/kgdb -"\
 	     "$ktest_kernel_binary/vmlinux"
 }
 
 ktest_mon()
 {
     exec socat UNIX-CONNECT:"$ktest_out/vm/vm-mon" STDIO
-    exec nc "$ktest_out/vm/vm-0-mon"
-}
-
-ktest_con()
-{
-    exec socat UNIX-CONNECT:"$ktest_out/vm/vm-con" STDIO
-    exec nc "$ktest_out/vm/vm-0-con"
+    exec nc "$ktest_out/vm/mon"
 }
 
 ktest_sysrq()
