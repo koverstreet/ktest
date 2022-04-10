@@ -93,7 +93,7 @@ parse_args_post()
 	elif [[ -f /var/lib/ktest/root.$DEBIAN_ARCH ]]; then
 	    ktest_root_image=/var/lib/ktest/root.$DEBIAN_ARCH
 	else
-	    echo "Root image not found in $HOME/.ktest or /var/lib/ktest"
+	    echo "Root image not found in $HOME/.ktest/root.$DEBIAN_ARCH or /var/lib/ktest/root.$DEBIAN_ARCH"
 	    echo "Use $ktest_dir/root_image create"
 	    exit 1
 	fi
