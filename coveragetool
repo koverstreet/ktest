@@ -3,28 +3,54 @@
 set -o nounset
 set -o errexit
 
-if [ "$#" -eq 0 ]; then
-    echo "Usage: coveragetool <outputdir> <inputs>..."
-    exit 1
+ktest_out="./ktest-out"
+
+usage()
+{
+    echo "coveragetool: Generate lcov code profiling report"
+    echo "Usage: coveragetool [options]"
+    echo "      -o <dir>        output directory; defaults to ./ktest-out"
+    echo "      -h              display this help and exit"
+}
+
+while getopts "o:h" arg; do
+    case $arg in
+	o)
+	    ktest_out=$OPTARG
+	    ;;
+	h)
+	    usage
+	    exit 0
+	    ;;
+    esac
+done
+shift $(( OPTIND - 1 ))
+
+if [ "$#" -ne 0 ]; then
+    ktest_out=$1
+else
+    ktest_out=./ktest-out
 fi
+
+ktest_out=$(readlink -f "$ktest_out")
 
 if ! which lcov > /dev/null; then
     echo "lcov not installed"
     exit 0
 fi
 
-lcov_out="$1"
-shift
+lcov_out="$ktest_out/lcov"
 
 info=$lcov_out/lcov.info
 html=$lcov_out/lcov.html
 tracefiles=""
 
+echo "lcov_out=$lcov_out"
 mkdir -p "$lcov_out"
 
 n=0
 
-for dir in $@; do
+for dir in $ktest_out/gcov.*; do
     out=$lcov_out/lcov.${n}.info
     tracefiles+=" --add-tracefile $out"
 
@@ -33,7 +59,7 @@ for dir in $@; do
     n=$((n+1))
 done
 
-[ -n "$tracefiles" ] || return 0
+[ -n "$tracefiles" ] || exit 0
 
 lcov --quiet --output-file "$info" $tracefiles
 genhtml --output-directory "$html" "$info"
