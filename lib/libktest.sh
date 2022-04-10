@@ -92,7 +92,7 @@ parse_args_post()
 
     if [[ -z $ktest_root_image ]]; then
 	if [[ -f $HOME/.ktest/root.$DEBIAN_ARCH ]]; then
-	    ktest_root_image="$HOME/.ktest/root.DEBIAN_ARCH"
+	    ktest_root_image="$HOME/.ktest/root.$DEBIAN_ARCH"
 	elif [[ -f /var/lib/ktest/root.$DEBIAN_ARCH ]]; then
 	    ktest_root_image=/var/lib/ktest/root.$DEBIAN_ARCH
 	else
