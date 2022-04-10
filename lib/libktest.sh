@@ -42,7 +42,7 @@ checkdep qemu-system-x86_64	qemu-system-x86
 
 # args:
 
-ktest_args="a:p:ISFLvxn:N:"
+ktest_args="a:o:p:ISFLvxn:N:"
 parse_ktest_arg()
 {
     local arg=$1
@@ -50,6 +50,9 @@ parse_ktest_arg()
     case $arg in
 	a)
 	    ktest_arch=$OPTARG
+	    ;;
+	o)
+	    ktest_out=$OPTARG
 	    ;;
 	p)
 	    ktest_priority=$OPTARG
