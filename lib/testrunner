@@ -14,6 +14,7 @@ KERNEL_ARCH=""
 
 ktest_dir="/host/$ktest_dir"
 ktest_tmp="/host/$ktest_tmp"
+ktest_out="/host/$ktest_out"
 
 ln -sf $ktest_dir /ktest
 ln -sf /host/$home $home
@@ -40,14 +41,10 @@ ulimit -c unlimited
 
 # Log file system visible to host
 
-LOGDIR=/ktest-out
-ln -sf "/host/$ktest_out" $LOGDIR
-
 # Core dump settings
 echo 1 > /proc/sys/fs/suid_dumpable
-echo "|/bin/cp --sparse=always /dev/stdin $LOGDIR/core.%e.PID%p.SIG%s.TIME%t" > /proc/sys/kernel/core_pattern
+echo "|/bin/cp --sparse=always /dev/stdin $ktest_out/core.%e.PID%p.SIG%s.TIME%t" > /proc/sys/kernel/core_pattern
 ulimit -c unlimited
-rm -f /ktest-out/core.*
 
 # Virtual block device tweaks
 echo none | tee /sys/block/sd*/queue/scheduler >/dev/null 2>&1 || true
@@ -55,8 +52,7 @@ echo none | tee /sys/block/sd*/queue/scheduler >/dev/null 2>&1 || true
 # Check if we are running the crashdump kernel
 if [[ -s /proc/vmcore ]]; then
     echo "Collecting crash dump..."
-    rm -f "$LOGDIR/vmcore"
-    cp --sparse=always /proc/vmcore "$LOGDIR/vmcore" || true
+    cp --sparse=always /proc/vmcore "$ktest_out/vmcore" || true
     sync
     poweroff
 fi
@@ -108,20 +104,20 @@ get_stratch_devs()
 
 copy_to_host()
 {
-    cat /sys/kernel/debug/tracing/trace >> $LOGDIR/trace.txt
+    cat /sys/kernel/debug/tracing/trace > $ktest_out/trace.txt
 
     # Code coverage
-    gcov_dir=/sys/kernel/debug/gcov
+    local gcov_dir=/sys/kernel/debug/gcov
 
     if [[ -d $gcov_dir ]]; then
 	# find a destination dir that doesn't exist, so we can copy multiple
 	# sets of gcov data from different tests/reboots and merge them later
 
 	for i in {0..99}; do
-	    dst=$LOGDIR/gcov.$i
+	    dst=$ktest_out/gcov.$i
 
 	    if [[ ! -d $dst ]]; then
-		cp -dR $gcov_dir $dst
+		cp -dR $gcov_dir "$dst"
 		break
 	    fi
 	done

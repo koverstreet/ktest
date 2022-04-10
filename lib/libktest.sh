@@ -287,6 +287,8 @@ start_vm()
     get_tmpdir
 
     mkdir -p "$ktest_out"
+    rm -f "$ktest_out/core.*"
+    rm -f "$ktest_out/vmcore"
     rm -f "$ktest_out/vm"
     ln -s "$ktest_tmp" "$ktest_out/vm"
 
