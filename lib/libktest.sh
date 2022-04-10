@@ -11,9 +11,7 @@ ktest_root_image=""	# virtual machine root filesystem
                         #       set with: -i <path>
                         #       defaults: /var/lib/ktest/root
                         #       auto-override: $HOME/.ktest/root
-ktest_kernel_binary=""		# dir that has the kernel to run
-                        #       set with: -k <path>
-ktest_out="./ktest_out"	# dir for test output (logs, code coverage, etc.)
+ktest_out="./ktest-out"	# dir for test output (logs, code coverage, etc.)
 
 ktest_priority=0	# hint for how long test should run
 ktest_interactive=0     # if set to 1, timeout is ignored completely
@@ -41,23 +39,15 @@ checkdep qemu-system-x86_64	qemu-system-x86
 
 # defaults:
 [[ -f $HOME/.ktestrc ]]		&& . "$HOME/.ktestrc"
-[[ -f $HOME/.ktest/root ]]	&& ktest_root_image="$HOME/.ktest/root"
 
 # args:
 
-ktest_args="i:s:a:p:ISFLvxn:N:"
+ktest_args="a:p:ISFLvxn:N:"
 parse_ktest_arg()
 {
     local arg=$1
 
     case $arg in
-	i)
-	    ktest_root_image=$OPTARG
-	    ;;
-	s)
-	    ktest_tmp=$OPTARG
-	    ktest_no_cleanup_tmpdir=1
-	    ;;
 	a)
 	    ktest_arch=$OPTARG
 	    ;;
@@ -98,10 +88,19 @@ parse_args_post()
     checkdep $QEMU_BIN $QEMU_PACKAGE
 
     if [[ -z $ktest_root_image ]]; then
-	ktest_root_image=/var/lib/ktest/root.$DEBIAN_ARCH
+	if [[ -f $HOME/.ktest/root.$DEBIAN_ARCH ]]; then
+	    ktest_root_image="$HOME/.ktest/root.DEBIAN_ARCH"
+	elif [[ -f /var/lib/ktest/root.$DEBIAN_ARCH ]]; then
+	    ktest_root_image=/var/lib/ktest/root.$DEBIAN_ARCH
+	else
+	    echo "Root image not found in $HOME/.ktest or /var/lib/ktest"
+	    echo "Use $ktest_dir/root_image create"
+	    exit 1
+	fi
     fi
 
     ktest_out=$(readlink -f "$ktest_out")
+    ktest_kernel_binary="$ktest_out/kernel.$ktest_arch"
 
     if [[ $ktest_interactive = 1 ]]; then
 	ktest_kgdb=1
@@ -116,6 +115,9 @@ parse_args_post()
 
 ktest_usage_opts()
 {
+    echo "      -a <arch>       architecture"
+    echo "      -o <dir>        output directory; defaults to ./ktest-out"
+    echo "      -n (user|vde)   Networking type to use"
     echo "      -x              bash debug statements"
     echo "      -h              display this help and exit"
 }
@@ -123,16 +125,11 @@ ktest_usage_opts()
 ktest_usage_run_opts()
 {
     echo "      -p <num>        hint for test duration (higher is longer, default is 0)"
-    echo "      -a <arch>       architecture"
-    echo "      -i <image>      ktest root image"
-    echo "      -s <dir>        directory for scratch drives"
-    echo "      -o <dir>        test output directory; defaults to ktest-out"
     echo "      -I              interactive mode - don't shut down VM automatically"
     echo "      -S              exit on test success"
     echo "      -F              failfast - stop after first test failure"
     echo "      -L              run all tests in infinite loop until failure"
     echo "      -v              verbose mode"
-    echo "      -n (user|vde)   Networking type to use"
     echo "      -N <val>        Nice value for kernel build and VM"
 }
 
@@ -295,7 +292,7 @@ start_vm()
     kernelargs+=(console=hvc0)
     kernelargs+=(root=/dev/sda rw log_buf_len=8M)
     kernelargs+=("ktest.dir=$ktest_dir")
-    kernelargs+=("ktest.env=$ktest_tmp/env")
+    kernelargs+=(ktest.env=$(readlink -f "$ktest_out/vm/env"))
     [[ $ktest_kgdb = 1 ]]	&& kernelargs+=(kgdboc=ttyS0,115200 nokaslr)
     [[ $ktest_verbose = 0 ]]	&& kernelargs+=(quiet systemd.show_status=0 systemd.log-target=journal)
     [[ $ktest_crashdump = 1 ]]	&& kernelargs+=(crashkernel=128M)
@@ -324,30 +321,34 @@ start_vm()
 	-device		virtio-serial					\
 	-chardev	stdio,id=console				\
 	-device		virtconsole,chardev=console			\
-	-serial		"unix:$ktest_tmp/vm-kgdb,server,nowait"		\
-	-monitor	"unix:$ktest_tmp/vm-mon,server,nowait"		\
-	-gdb		"unix:$ktest_tmp/vm-gdb,server,nowait"		\
+	-serial		"unix:$ktest_out/vm/kgdb,server,nowait"		\
+	-monitor	"unix:$ktest_out/vm/mon,server,nowait"		\
+	-gdb		"unix:$ktest_out/vm/gdb,server,nowait"		\
 	-device		virtio-rng-pci					\
 	-virtfs		local,path=/,mount_tag=host,security_model=none	\
 	-device		$ktest_storage_bus,id=hba			\
     )
 
+    if [[ -f $ktest_kernel_binary/initramfs ]]; then
+	qemu_cmd+=(-initrd 	"$ktest_kernel_binary/initramfs")
+    fi
+
     case $ktest_networking in
 	user)
 	    ktest_ssh_port=$(get_unused_port)
-	    echo $ktest_ssh_port > "$ktest_tmp/ssh_port"
+	    echo $ktest_ssh_port > "$ktest_out/vm/ssh_port"
 
 	    qemu_cmd+=( \
 		-nic    user,model=virtio,hostfwd=tcp:127.0.0.1:$ktest_ssh_port-:22	\
 	    )
 	    ;;
 	vde)
-	    local net="$ktest_tmp/net"
+	    local net="$ktest_out/vm/net"
 
 	    checkdep vde_switch	vde2
 
-	    [[ ! -p "$ktest_tmp/vde_input" ]] && mkfifo "$ktest_tmp/vde_input"
-	    tail -f "$ktest_tmp/vde_input" |vde_switch -sock "$net" >& /dev/null &
+	    [[ ! -p "$ktest_out/vm/vde_input" ]] && mkfifo "$ktest_out/vm/vde_input"
+	    tail -f "$ktest_out/vm/vde_input" |vde_switch -sock "$net" >& /dev/null &
 
 	    while [[ ! -e "$net" ]]; do
 		sleep 0.1
@@ -355,7 +356,7 @@ start_vm()
 	    slirpvde --sock "$net" --dhcp=10.0.2.2 --host 10.0.2.1/24 >& /dev/null &
 	    qemu_cmd+=( \
 		-net		nic,model=virtio,macaddr=de:ad:be:ef:00:00	\
-		-net		vde,sock="$ktest_tmp/net"			\
+		-net		vde,sock="$ktest_out/vm/net"			\
 	    )
 	    ;;
 	*)
@@ -393,7 +394,7 @@ start_vm()
     done
 
     for size in "${ktest_scratch_devs[@]}"; do
-	local file="$ktest_tmp/dev-$disknr"
+	local file="$ktest_out/vm/dev-$disknr"
 
 	truncate -s "$size" "$file"
 
@@ -401,21 +402,21 @@ start_vm()
     done
 
     for size in "${ktest_pmem_devs[@]}"; do
-	local file="$ktest_tmp/dev-$disknr"
+	local file="$ktest_out/vm/dev-$disknr"
 
 	fallocate -l "$size" "$file"
 	qemu_pmem mem-path="$file",size=$size
     done
 
-    set |grep -v "^PATH=" > "$ktest_tmp/env_tmp"
+    set |grep -v "^PATH=" > "$ktest_out/vm/env_tmp"
     readonly_variables="$(readonly | cut -d= -f1 | cut -d' ' -f3)"
     for variable in ${readonly_variables}
     do
-        grep -v "${variable}" "$ktest_tmp/env_tmp" > "$ktest_tmp/env"
-        cp "$ktest_tmp/env" "$ktest_tmp/env_tmp"
+        grep -v "${variable}" "$ktest_out/vm/env_tmp" > "$ktest_out/vm/env"
+        cp "$ktest_out/vm/env" "$ktest_out/vm/env_tmp"
     done
-    sed -i "s/^ ;$//g" "$ktest_tmp/env"
-    rm -rf "$ktest_tmp/env_tmp"
+    sed -i "s/^ ;$//g" "$ktest_out/vm/env"
+    rm -rf "$ktest_out/vm/env_tmp"
 
     set +o errexit
     set -o pipefail

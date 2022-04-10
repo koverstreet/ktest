@@ -26,7 +26,6 @@ usage()
     ktest_usage_opts
     echo
     echo " options for ktest run:"
-    echo "      -k <dir>        kernel to run"
     ktest_usage_run_opts
     echo
     ktest_usage_post
@@ -67,11 +66,8 @@ else
     exit 1
 fi
 
-while getopts "k:h${ktest_args}" arg; do
+while getopts "h${ktest_args}" arg; do
     case $arg in
-	k)
-	    ktest_kernel_binary=$OPTARG
-	    ;;
 	h)
 	    usage
 	    exit 0

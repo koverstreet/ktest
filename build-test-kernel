@@ -15,21 +15,9 @@ checkdep make
 ktest_kernel_source="."	# dir of kernel source
 			#       set with: -k <path>
 			#       defaults: current directory
-ktest_kernel_build=""	# kernel build dir
-			# defaults to
-			# $ktest_kernel_source/.build-test-kernel-$ktest_arch
-ktest_kernel_binary=""	# kernel output dir
-			# defaults to $ktest_kernel_build/kpkg
 
-BUILD=1			# if set to 1, kernel will build
-DEPS=1
 COVERAGE=""		# doing code coverage?
 MAKEARGS=()
-ktest_njobs=$(($(grep -c '^processor' /proc/cpuinfo) * 2))
-			# number of jobs to passed to make during kernel compile
-			#       sets with: -j
-			#       defaults to 2 * number of processor
-
 
 usage()
 {
@@ -45,13 +33,7 @@ usage()
     echo " options for build-test-kernel run:"
     ktest_usage_run_opts
     echo "      -k <dir>        kernel source dir"
-    echo "      -b <dir>        build directory for kernel (default: kernel_source/.build-test-kernel)"
-    echo "      -o <dir>        output directory for kernel binary (default: kernel_build/kpkg"
-    echo "      -K              don't rebuild kernel"
-    echo "      -D              don't modify kernel .config"
     echo "      -c <dir>        enable coverage for this dir (only valid without -K)"
-    echo "      -j <num>        j option to make"
-    echo "      -K              don't rebuild kernel"
     echo
     ktest_usage_post
 }
@@ -65,22 +47,10 @@ fi
 CMD="$1"
 shift
 
-while getopts "k:b:o:KDc:j:h${ktest_args}" arg; do
+while getopts "k:c:h${ktest_args}" arg; do
     case $arg in
 	k)
 	    ktest_kernel_source="$OPTARG"
-	    ;;
-	b)
-	    ktest_kernel_build="$OPTARG"
-	    ;;
-	o)
-	    ktest_kernel_binary="$OPTARG"
-	    ;;
-	K)
-	    BUILD=""
-	    ;;
-	D)
-	    DEPS=""
 	    ;;
 	c)
 	    if [[ ! -d $OPTARG ]]; then
@@ -95,10 +65,6 @@ while getopts "k:b:o:KDc:j:h${ktest_args}" arg; do
 	    MAKEARGS+=("GCOV_PROFILE_$OPTARG=y")
 	    COVERAGE=1
 	    ;;
-	j)
-	    ktest_njobs=$OPTARG
-	    ;;
-
 	h)
 	    usage
 	    exit 0
@@ -108,10 +74,10 @@ while getopts "k:b:o:KDc:j:h${ktest_args}" arg; do
 done
 shift $(( OPTIND - 1 ))
 
+parse_args_post
+
 # default parameters
 [[ -z $ktest_kernel_source ]]	&& ktest_kernel_source="."
-[[ -z $ktest_kernel_build ]]	&& ktest_kernel_build="$ktest_kernel_source/.build_test_kernel-$ktest_arch"
-[[ -z $ktest_kernel_binary ]]	&& ktest_kernel_binary="$ktest_kernel_build/kpgk"
 
 if [[ ! -d $ktest_kernel_source ]]; then
     echo "kernel source directory $ktest_kernel_source does not exist"
@@ -120,12 +86,8 @@ fi
 
 ktest_kernel_source=$(readlink -e "$ktest_kernel_source")
 
+ktest_kernel_build="$ktest_out/kernel_build.$ktest_arch"
 mkdir -p "$ktest_kernel_build"
-
-ktest_kernel_build=$(readlink -e "$ktest_kernel_build")
-ktest_kernel_binary=$(readlink -f "$ktest_kernel_binary")
-
-parse_args_post
 
 if [[ -n $CROSS_COMPILE ]]; then
     checkdep "$ARCH_TRIPLE-gcc" "gcc-$ARCH_TRIPLE"
@@ -136,7 +98,7 @@ run_ktest()
     arg=$1
     shift
 
-    "$KTEST" "$arg" $KTESTARGS -k "$ktest_kernel_binary" "$@"
+    "$KTEST" "$arg" $KTESTARGS "$@"
 }
 
 do_make()
@@ -146,12 +108,7 @@ do_make()
 	export CROSS_COMPILE="$ARCH_TRIPLE-"
     fi
 
-    # work around a bug in make - maybe not needed anymore?
-#    if [[ $# = 0 || $1 != nconfig ]]; then
-#	MAKEARGS+=("--output-sync=target")
-#    fi
-
-    make --jobs="$ktest_njobs"			\
+    make -j					\
 	--directory="$ktest_kernel_source"    	\
 	O="$ktest_kernel_build"			\
 	INSTALL_MOD_PATH="$ktest_kernel_binary"	\
@@ -224,19 +181,17 @@ build_kernel()
     mkdir -p "$ktest_kernel_binary"
     touch "$magic"
 
-    if [[ -n $DEPS ]]; then
-	new_config
+    new_config
 
-	for opt in "${ktest_kernel_config_require[@]}"; do
-	    [[ -n $opt ]] && kernel_opt set "$opt"
-	done
+    for opt in "${ktest_kernel_config_require[@]}"; do
+	[[ -n $opt ]] && kernel_opt set "$opt"
+    done
 
-	do_make olddefconfig
+    do_make olddefconfig
 
-	for opt in "${ktest_kernel_config_require[@]}"; do
-	    [[ -n $opt ]] && kernel_opt check "$opt"
-	done
-    fi
+    for opt in "${ktest_kernel_config_require[@]}"; do
+	[[ -n $opt ]] && kernel_opt check "$opt"
+    done
 
     case $KERNEL_ARCH in
 	mips)
@@ -286,9 +241,7 @@ cmd_run()
 	ktest_kernel_config_require+=(GCOV_KERNEL)
     fi
 
-    if [[ -n $BUILD ]]; then
-	run_quiet "building kernel" build_kernel
-    fi
+    run_quiet "building kernel" build_kernel
 
     start_vm
 }

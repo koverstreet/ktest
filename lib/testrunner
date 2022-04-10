@@ -266,12 +266,16 @@ cd /root
 
 set +e
 ret=0
+iterations=0
 while [[ $ret = 0 ]]; do
     run_tests $tests
     ret=$?
     pkill -P $$ >/dev/null || true
     [[ $ret != 0 ]]	    && break
     [[ $ktest_loop = 1 ]]   || break
+
+    iterations=$((iterations + 1))
+    echo "SUCCESSFUL ITERATIONS $iterations"
 done
 
 copy_to_host
