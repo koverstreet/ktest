@@ -237,7 +237,7 @@ ktest_kgdb()
 
 ktest_mon()
 {
-    exec socat UNIX-CONNECT:"$ktest_out/vm/vm-mon" STDIO
+    exec socat UNIX-CONNECT:"$ktest_out/vm/on" STDIO
     exec nc "$ktest_out/vm/mon"
 }
 
@@ -245,7 +245,7 @@ ktest_sysrq()
 {
     local key=$1
 
-    echo sendkey alt-sysrq-$key | socat - "UNIX-CONNECT:$ktest_out/vm/vm-mon"
+    echo sendkey alt-sysrq-$key | socat - "UNIX-CONNECT:$ktest_out/vm/mon"
 }
 
 start_vm()
