@@ -9,25 +9,6 @@ config-scratch-devs 16G
 
 config-timeout $(stress_timeout)
 
-test_labels()
-{
-    run_quiet "" bcachefs format /dev/sd[bcde]
-
-    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd:/dev/sde /mnt
-
-    cd /sys/fs/bcachefs/*
-    echo zstd	> options/background_compression
-    echo lz4	> options/compression
-    echo ssd	| tee dev-[01]/label
-    echo hdd	| tee dev-[23]/label
-    echo ssd	> options/foreground_target
-    echo ssd	> options/promote_target
-    echo hdd	> options/background_target
-
-    run_fio_randrw
-    umount /mnt
-}
-
 run_basic_tiering_test()
 {
     run_basic_fio_test "$@"			\
@@ -62,11 +43,25 @@ test_tiering_torture()
     run_fio_randrw --loops=50
 
     mount -o remount,ro /mnt
+    umount /mnt
 }
 
 test_tiering()
 {
     run_basic_tiering_test
+}
+
+test_tiering_drop_alloc()
+{
+    run_basic_tiering_test
+    # mount dropping all alloc info
+
+    echo "dropping alloc:"
+    mount -t bcachefs -o reconstruct_alloc,fsck,fix_errors /dev/sdb:/dev/sdc:/dev/sdd:/dev/sde /mnt
+    umount /mnt
+
+    echo "final fsck:"
+    bcachefs fsck -n /dev/sd[bcde]
 }
 
 test_tiering_buffered()
@@ -148,7 +143,7 @@ test_setattr()
     touch /mnt/foo
     touch /mnt/bar
 
-    bcachefs setattr --foreground_target /dev/sdb /mnt/
+    bcachefs setattr --foreground_target sdb /mnt/
     bcachefs setattr --promote_target ssd /mnt/
 
     umount /mnt
@@ -212,7 +207,6 @@ test_tiering_variable_buckets_replicas()
 test_device_add()
 {
     run_quiet "" bcachefs format		\
-	--errors=panic				\
 	--label=ssd /dev/sdb			\
 	--label=hdd /dev/sd[de]
 
@@ -221,6 +215,9 @@ test_device_add()
     run_fio_randrw|tail -n200 &
 
     bcachefs device add --label=hdd /mnt /dev/sdc
+
+    wait
+    umount /mnt
 }
 
 test_mount_umount_torture()
@@ -239,15 +236,9 @@ test_mount_umount_torture()
     done
 }
 
-test_dm_log_writes()
-{
-    exit 1
-}
-
-disabled_test_change_replicas()
+test_change_replicas()
 {
     run_quiet "" bcachefs format			\
-	--errors=panic				\
 	--label=ssd /dev/sd[bc]				\
 	--label=hdd /dev/sd[de]				\
 	--foreground_target=ssd				\

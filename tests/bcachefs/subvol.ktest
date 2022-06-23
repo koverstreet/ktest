@@ -9,7 +9,7 @@ config-timeout $(stress_timeout)
 
 test_snapshots_simple()
 {
-    NR_SNAPS=20
+    NR_SNAPS=1
 
     bcachefs_antagonist
 
@@ -22,6 +22,11 @@ test_snapshots_simple()
 	bcachefs subvolume snapshot snap-$i
     done
     popd
+
+    umount /mnt
+    sleep 0.2
+    bcachefs fsck -n /dev/sdb
+    exit
 
     for i in `seq 0 $NR_SNAPS|sort -r`; do
 	umount /mnt
@@ -40,7 +45,44 @@ test_snapshots_simple()
     umount /mnt
 }
 
-test_snapshots_dbench()
+test_files_many()
+{
+    #bcachefs_antagonist
+
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    for i in $(seq 0 1000001); do
+       	echo $i > /mnt/$i 
+    done
+
+    umount /mnt
+    sleep 0.2
+    time mount -t bcachefs -o fsck /dev/sdb /mnt
+    umount /mnt
+}
+
+d_test_snapshots_many()
+{
+    #bcachefs_antagonist
+
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    cd /mnt
+
+    for i in $(seq 0 1000001); do
+	bcachefs subvolume snapshot "snap_$(date -u +%F-%H%M%_S%N)"
+       	echo $i > snap_number
+    done
+
+    umount /mnt
+    sleep 0.2
+    mount -t bcachefs -o fsck /dev/sdb /mnt
+    umount /mnt
+}
+
+test_dbench()
 {
     # so wait doesn't hang
     [[ $(jobs -p) != "" ]] && kill $(jobs -p)
@@ -64,11 +106,6 @@ test_snapshots_dbench()
     df -h /mnt
 
     for i in `seq 0 $NR_SNAPS|sort -r`; do
-	umount /mnt
-	sleep 0.2
-	#bcachefs fsck -n /dev/sdb
-	mount -t bcachefs -o fsck /dev/sdb /mnt
-
 	echo "deleting snap-$i"
 	bcachefs subvolume delete /mnt/snap-$i
 	df -h /mnt
@@ -76,13 +113,41 @@ test_snapshots_dbench()
 
     umount /mnt
     sleep 0.2
-    bcachefs fsck -n /dev/sdb
-    mount /dev/sdb /mnt
+    #bcachefs fsck -n /dev/sdb
+    mount -t bcachefs -o fsck /dev/sdb /mnt
     df -h /mnt
     umount /mnt
 }
 
-test_snapshots_fio()
+test_reflink()
+{
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    pushd /mnt
+    cp -a /usr .
+    bcachefs subvolume snapshot snap-$i
+    cp -r --reflink usr usr2
+    popd
+
+    umount /mnt
+}
+
+d_test_finsert()
+{
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    pushd /mnt
+    dd if=/dev/zero of=foo bs=1M count=8 oflag=direct
+    bcachefs subvolume snapshot snap-$i
+    xfs_io -c "finsert 1024 1024" foo
+    popd
+
+    umount /mnt
+}
+
+d_test_snapshots_fio()
 {
     # so wait doesn't hang
     [[ $(jobs -p) != "" ]] && kill $(jobs -p)
@@ -174,6 +239,8 @@ test_subvol_create()
     mv /mnt/foo /mnt/subvolume_1
 
     umount /mnt
+
+    bcachefs fsck -n /dev/sdb
 }
 
 test_subvol_delete()
@@ -184,6 +251,8 @@ test_subvol_delete()
     rm -rf /mnt/subvolume_1
 
     umount /mnt
+
+    bcachefs fsck -n /dev/sdb
 }
 
 test_subvol_snapshot_create()
@@ -194,6 +263,22 @@ test_subvol_snapshot_create()
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
 
     umount /mnt
+
+    bcachefs fsck -n /dev/sdb
+}
+
+test_subvol_snapshot_create_ro()
+{
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+    bcachefs subvolume create /mnt/subvolume_1
+    bcachefs subvolume snapshot -r /mnt/subvolume_1 /mnt/snapshot_1
+
+    ! touch /mnt/snapshot_1/foo
+
+    umount /mnt
+
+    bcachefs fsck -n /dev/sdb
 }
 
 test_subvol_snapshot_delete()
@@ -205,9 +290,76 @@ test_subvol_snapshot_delete()
     bcachefs subvolume delete /mnt/snapshot_1
 
     umount /mnt
+
+    bcachefs fsck -n /dev/sdb
 }
 
-# Fails
+test_subvol_snapshot_delete_create()
+{
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+    bcachefs subvolume create /mnt/subvolume_1
+    bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
+    bcachefs subvolume delete /mnt/snapshot_1
+    bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
+
+    umount /mnt
+
+    bcachefs fsck -n /dev/sdb
+}
+
+d_test_subvol_snapshot_rm()
+{
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+    bcachefs subvolume create /mnt/subvolume_1
+    bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
+    rm -r /mnt/snapshot_1
+
+    umount /mnt
+
+    bcachefs fsck -n /dev/sdb
+}
+
+# Create a subvolume, then snapshot the parent subvolume, then move the child
+# subvolume:
+test_mkdir_mv_snapshot()
+{
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+    mkdir /mnt/dir1
+    bcachefs subvolume snapshot /mnt/ /mnt/snap1
+    mv /mnt/dir1 /mnt/dir2
+    umount /mnt
+
+    bcachefs fsck -n /dev/sdb
+}
+
+test_subvol_mv_snapshot()
+{
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+    bcachefs subvolume create /mnt/sub1
+    bcachefs subvolume snapshot /mnt/ /mnt/snap1
+    mv /mnt/sub1 /mnt/sub2
+    umount /mnt
+
+    bcachefs fsck -n /dev/sdb
+}
+
+# Test moving a subvol to another subvol
+test_subvol_mv_subvol()
+{
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+    bcachefs subvolume create /mnt/sub1
+    bcachefs subvolume create /mnt/sub2
+    mv /mnt/sub1 /mnt/sub2
+    umount /mnt
+
+    bcachefs fsck -n /dev/sdb
+}
+
 test_subvol_snapshot_reuse_snapshot_name()
 {
     run_quiet "" bcachefs format -f --errors=panic /dev/sdb
@@ -215,14 +367,13 @@ test_subvol_snapshot_reuse_snapshot_name()
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
     bcachefs subvolume delete /mnt/snapshot_1
-
-    # Next line fails
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
 
     umount /mnt
+
+    bcachefs fsck -n /dev/sdb
 }
 
-# Fails
 test_subvol_delete_snapshot_of_deleted_subvol()
 {
     run_quiet "" bcachefs format -f --errors=panic /dev/sdb
@@ -230,14 +381,13 @@ test_subvol_delete_snapshot_of_deleted_subvol()
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
     rm -rf /mnt/subvolume_1
-
-    # Next line fails
     bcachefs subvolume delete /mnt/snapshot_1
 
     umount /mnt
+
+    bcachefs fsck -n /dev/sdb
 }
 
-# Fails
 test_subvol_snapshot_delete_repeat()
 {
     run_quiet "" bcachefs format -f --errors=panic /dev/sdb
@@ -246,5 +396,42 @@ test_subvol_snapshot_delete_repeat()
         bcachefs subvolume snapshot /mnt/$i
         bcachefs subvolume delete /mnt/$i
     done
+    umount /mnt
+
+    bcachefs fsck -n /dev/sdb
+}
+
+test_subvol_snapshot_delete_fio()
+{
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    for i in $(seq 1 10); do
+	#run_fio_randrw --filesize=500M --bs=4k
+	dd if=/dev/zero of=/mnt/test bs=4k count=1024 oflag=direct
+        bcachefs subvolume snapshot /mnt/$i
+    done
+
+    for i in $(seq 1 10); do
+	umount /mnt
+	bcachefs fsck -n /dev/sdb
+	mount -t bcachefs -o fsck /dev/sdb /mnt
+    done
+
+    umount /mnt
+    bcachefs fsck -n /dev/sdb
+}
+
+test_snapshot_copygc()
+{
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    for i in $(seq 1 4); do
+	run_fio_randrw --filesize=1000M --loops=4 --bs=4k
+        bcachefs subvolume snapshot /mnt/$i
+    done
+
+    bcachefs fs usage -h /mnt
     umount /mnt
 }

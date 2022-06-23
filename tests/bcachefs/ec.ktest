@@ -16,8 +16,7 @@ config-timeout $(stress_timeout)
 
 test_ec_small()
 {
-    #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
-    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+    bcachefs_antagonist
 
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
@@ -29,7 +28,7 @@ test_ec_small()
     mount -t bcachefs $devs /mnt
 
     #enable_memory_faults
-    dd if=/dev/zero of=/mnt/foo bs=8M count=2 oflag=sync
+    dd if=/dev/zero of=/mnt/foo bs=1M count=1 oflag=sync
     #disable_memory_faults
 
     mount -o remount,ro /mnt
@@ -44,7 +43,7 @@ test_ec_small()
     mount -t bcachefs -o fsck $devs /mnt
     umount /mnt
 
-    #bcachefs fsck /dev/sd[bcdef]
+    bcachefs fsck /dev/sd[bcdef]
 }
 
 test_ec_umount()
@@ -64,14 +63,14 @@ test_ec_umount()
     done
 }
 
-test_ec()
+do_ec_test()
 {
-    #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
-    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+    bcachefs_antagonist
 
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	--erasure_code				\
+	"$@"					\
 	--replicas=2				\
 	/dev/sd[bcdef]
     devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
@@ -79,55 +78,44 @@ test_ec()
     mount -t bcachefs $devs /mnt
 
     #enable_memory_faults
+
     run_fio_randrw
+
     #disable_memory_faults
 
-    #bcachefs fs usage -h /mnt
+    bcachefs fs usage -h /mnt
     umount /mnt
+    bcachefs fsck -n /dev/sd[bcdef]
 
     # test remount:
     echo "Testing remount"
     mount -t bcachefs -o fsck $devs /mnt
+    cat /mnt/fiotest > /dev/null
     umount /mnt
+}
 
-    #bcachefs fsck /dev/sd[bcdef]
+test_ec()
+{
+    do_ec_test
 }
 
 test_ec_lz4()
 {
-    #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
-    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+    do_ec_test --compression=lz4
+}
 
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	--erasure_code				\
-	--compression=lz4			\
-	--replicas=2				\
-	/dev/sd[bcdef]
-    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
+test_ec_crypto()
+{
+    do_ec_test --encrypted --no_passphrase
+}
 
-    mount -t bcachefs $devs /mnt
-
-    #enable_memory_faults
-    run_fio_randrw
-    #dd if=/dev/zero of=/mnt/foo bs=1M count=10 oflag=direct
-    #disable_memory_faults
-
-    #bcachefs fs usage -h /mnt
-    umount /mnt
-
-    # test remount:
-    echo "Testing remount"
-    mount -t bcachefs -o fsck $devs /mnt
-    umount /mnt
-
-    #bcachefs fsck /dev/sd[bcdef]
+test_ec_crypto_lz4()
+{
+    do_ec_test --encrypted --no_passphrase --compression=lz4
 }
 
 test_ec_mixed_tiers()
 {
-    #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
-    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
 
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
@@ -145,10 +133,10 @@ test_ec_mixed_tiers()
 
     #enable_memory_faults
     run_fio_randrw
-    #dd if=/dev/zero of=/mnt/foo bs=1M count=10 oflag=direct
+    #dd if=/dev/zero of=/mnt/foo bs=1M count=100 oflag=direct
     #disable_memory_faults
 
-    #bcachefs fs usage -h /mnt
+    bcachefs fs usage -h /mnt
     umount /mnt
 
     # test remount:
@@ -156,15 +144,12 @@ test_ec_mixed_tiers()
     mount -t bcachefs -o fsck $devs /mnt
     umount /mnt
 
-    #bcachefs fsck /dev/sd[bcdef]
+    bcachefs fsck /dev/sd[bcdef]
 }
 
 test_ec_gc()
 {
-    #echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
-    echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
-    #echo 1 > /sys/module/bcachefs/parameters/expensive_debug_checks
-    #echo 1 > /sys/module/bcachefs/parameters/debug_check_iterators
+    bcachefs_antagonist
 
     run_quiet "" bcachefs format -f		\
 	--errors=continue			\
@@ -198,14 +183,14 @@ test_ec_gc()
     echo unmounting
     exit
 
-    #bcachefs fs usage -h /mnt
+    bcachefs fs usage -h /mnt
     umount /mnt
 
     # test remount:
     mount -t bcachefs -o fix_errors,erasure_code $devs /mnt
     umount /mnt
 
-    #bcachefs fsck /dev/sd[bcdef]
+    bcachefs fsck /dev/sd[bcdef]
 }
 
 do_remove_test()
@@ -221,7 +206,7 @@ do_remove_test()
 
     mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf /mnt
 
-    local fioout="$ktest_tmp/fioout"
+    local fioout="$ktest_out/fio-out"
     run_fio_randrw >"$fioout" 2>&1 &
     local fiopid=$!
 
@@ -258,22 +243,22 @@ do_remove_test()
     umount /mnt
 }
 
-test_device_remove_offline()
+d_test_device_remove_offline()
 {
     do_remove_test 1 0
 }
 
-test_device_remove_online()
+d_test_device_remove_online()
 {
     do_remove_test 0 0
 }
 
-test_device_evacuate_offline()
+d_test_device_evacuate_offline()
 {
     do_remove_test 1 1
 }
 
-test_device_evacuate_online()
+d_test_device_evacuate_online()
 {
     do_remove_test 0 1
 }

@@ -12,27 +12,15 @@ config-scratch-devs 4G
 config-scratch-devs 4G
 config-scratch-devs 4G
 
+config-mem 4G
+
 config-timeout $(stress_timeout)
-
-test_mount()
-{
-    run_quiet "" bcachefs format /dev/sd[bcdef]
-}
-
-test_foo()
-{
-    run_quiet "" bcachefs format --data_checksum=none --bucket=8M /dev/sdb
-    mount /dev/sdb /mnt
-    bcachefs device add /mnt /dev/sdd 
-    bcachefs device add /mnt /dev/sde
-    dd if=/dev/zero of=/mnt/foo bs=8M count=1024 oflag=direct
-}
 
 test_recovery()
 {
     run_quiet "" bcachefs format		\
 	--discard				\
-	--bucket=16k				\
+	--bucket=64k				\
 	--block_size=4k				\
 	/dev/sd[bcd]
 
@@ -113,7 +101,8 @@ test_largebuckets()
     run_quiet "" bcachefs format -f --bucket=8M /dev/sd[bcd]
 
     mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
-    dd if=/dev/zero of=/mnt/foo bs=16M count=1024 oflag=direct
+    dd if=/dev/zero of=/mnt/foo bs=8M count=1024 oflag=direct
+    umount /mnt
 }
 
 test_replicas()
@@ -125,14 +114,21 @@ test_replicas()
 
 test_replicas_variable_buckets()
 {
-    run_basic_fio_test				\
-	--replicas=2				\
-	--bucket=32k	/dev/sdb		\
-	--bucket=64k	/dev/sdc		\
-	--bucket=128k	/dev/sdd
+    run_quiet "" bcachefs format -f --errors=panic	\
+	--replicas=2					\
+	--bucket=32k	/dev/sdb			\
+	--bucket=64k	/dev/sdc			\
+	--bucket=128k	/dev/sdd			\
+	--bucket=128k	/dev/sde			\
+	--bucket=128k	/dev/sdf
+
+    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf /mnt
+    fs_mark -v -n 20000 -s 4096 -k -S 0 -D 1000 -N 100000 -d /mnt -t 60
+    df -h /mnt
+    umount /mnt
 }
 
-test_copygc_torture()
+d_test_copygc_torture()
 {
     loops=$((($ktest_priority + 1) * 4))
 
@@ -188,13 +184,12 @@ do_remove_test()
     evacuate=$2
 
     run_quiet "" bcachefs format		\
-	--errors=panic				\
 	--replicas=2				\
 	/dev/sd[bcd]
 
     mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
 
-    local fioout="$ktest_tmp/fioout"
+    local fioout="$ktest_out/fio-out"
     run_fio_randrw >"$fioout" 2>&1 &
     local fiopid=$!
 
@@ -212,11 +207,15 @@ do_remove_test()
 	echo "done"
     fi
 
+    bcachefs fs usage -h /mnt
+
     echo -n "removing /dev/sdb... "
     if [[ $evacuate = 1 ]]; then
-	bcachefs device remove		/dev/sdb
+	#bcachefs device remove		/dev/sdb
+	bcachefs device remove		0 /mnt
     else
-	bcachefs device remove --force	/dev/sdb
+	#bcachefs device remove --force	/dev/sdb
+	bcachefs device remove --force	0 /mnt
     fi
     echo "done"
 
@@ -225,6 +224,7 @@ do_remove_test()
 	return 1
     fi
 
+    bcachefs fs usage -h /mnt
     umount /mnt
 
     mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
@@ -253,17 +253,17 @@ test_device_evacuate_online()
 
 test_device_add()
 {
-    setup_tracing 'bcachefs:*'
+    #setup_tracing 'bcachefs:*'
 
     run_quiet "" bcachefs format		\
 	--block_size=4k				\
 	--errors=panic				\
+	--no_initialize				\
 	/dev/sdb
 
     mount /dev/sdb /mnt
 
-    local fioout="$ktest_tmp/fioout"
-    run_fio_randrw >"$fioout" 2>&1 &
+    run_fio_randrw >"$ktest_out/fio-out" 2>&1 &
     local fiopid=$!
 
     sleep 1
@@ -278,6 +278,8 @@ test_device_add()
     fi
 
     umount /mnt
+    bcachefs fsck -n /dev/sdb /dev/sdc
+
     mount -t bcachefs /dev/sdb:/dev/sdc /mnt
     umount /mnt
 }
@@ -291,15 +293,18 @@ test_device_set_state()
 
     mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
 
-    local fioout="$ktest_tmp/fioout"
-    run_fio_randrw >"$fioout" 2>&1 &
+    run_fio_randrw >"$ktest_out/fio-out" 2>&1 &
     local fiopid=$!
 
     sleep 1
 
-    for state in readonly failed spare; do
-	bcachefs device set-state --force   /dev/sdc $state
-	bcachefs device set-state	    /dev/sdc readwrite
+    for state in ro failed spare; do
+	echo "setting state $state"
+	bcachefs device set-state --force $state    /dev/sdc
+
+	echo "setting state rw"
+	#bcachefs device set-state	  rw /dev/sdc
+	bcachefs device set-state	  rw 1 /mnt
     done
 
     if ! wait $fiopid; then
@@ -319,14 +324,13 @@ test_device_ro()
 
     mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
 
-    local fioout="$ktest_tmp/fioout"
+    local fioout="$ktest_out/fio-out"
     run_fio_randrw >"$fioout" 2>&1 &
     local fiopid=$!
 
     sleep 4
 
-    bcachefs device remove /dev/sdc || true
-    #bcachefs device set-state /dev/sdc readonly
+    bcachefs device set-state ro /dev/sdc
 
     if ! wait $fiopid; then
 	cat "$fioout"
@@ -348,13 +352,13 @@ test_device_set_state_offline()
 
     mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
 
-    local fioout="$ktest_tmp/fioout"
+    local fioout="$ktest_out/fio-out"
     run_fio_randrw >"$fioout" 2>&1 &
     local fiopid=$!
 
     sleep 1
 
-    bcachefs device set-state --force	    /dev/sdc readonly
+    bcachefs device set-state --force	    ro /dev/sdc
 
     if ! wait $fiopid; then
 	cat "$fioout"
@@ -363,10 +367,11 @@ test_device_set_state_offline()
 
     umount /mnt
 
-    bcachefs device set-state --offline	    /dev/sdc readwrite
+    bcachefs device set-state --offline	    rw /dev/sdc
 
     mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
     cat /sys/block/sdc/bcachefs/state
+    umount /mnt
 }
 
 test_device_readd()
@@ -378,7 +383,7 @@ test_device_readd()
 
     mount -t bcachefs /dev/sdb:/dev/sdc /mnt
 
-    local fioout="$ktest_tmp/fioout"
+    local fioout="$ktest_out/fio-out"
     run_fio_randrw >"$fioout" 2>&1 &
     local fiopid=$!
 
@@ -407,6 +412,7 @@ do_replicas_errors_test()
 {
     error_type=$1
 
+    echo 1 > /sys/module/bcachefs/parameters/verify_all_btree_replicas
     #bcachefs_antagonist
 
     mdadm -B /dev/md0 -lfaulty -n1 /dev/sdc
@@ -421,8 +427,18 @@ do_replicas_errors_test()
     mdadm -G /dev/md0 -p$error_type
 
     run_fio_randrw
+
+    # Check the read retry path for indirect extents:
+    cp --reflink /mnt/fiotest /mnt/fiotest.reflinked
+    dd if=/mnt/fiotest of=/dev/null bs=4k iflag=direct
+
     umount /mnt
     mdadm --stop /dev/md0
+
+    #bcachefs fsck -n /dev/sdb /dev/sdc
+
+    mount -t bcachefs -o fsck /dev/sdb:/dev/sdc /mnt
+    umount /mnt
 }
 
 test_replicas_write_errors()
@@ -653,7 +669,7 @@ test_key_type_error()
 
     mount -t bcachefs /dev/sdb:/dev/sdc /mnt
     bcachefs setattr --data_replicas=1 /mnt
-    bcachefs setattr --foreground_target=/dev/sdc /mnt
+    bcachefs setattr --foreground_target=sdc /mnt
 
     dd if=/dev/zero of=/mnt/foo bs=64k count=8 oflag=direct
 

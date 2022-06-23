@@ -98,14 +98,20 @@ antagonist_switch_crc()
 
 bcachefs_antagonist()
 {
-    setup_tracing 'bcachefs:*'
+    #setup_tracing
+    #setup_tracing 'bcachefs:*'
     #echo 1 > /sys/module/bcachefs/parameters/expensive_debug_checks
     #echo 1 > /sys/module/bcachefs/parameters/debug_check_iterators
     #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+    #echo 1 > /sys/module/bcachefs/parameters/debug_check_btree_accounting
     #echo 1 > /sys/module/bcachefs/parameters/test_alloc_startup
+    #echo 1 > /sys/module/bcachefs/parameters/test_restart_gc
+    #echo 1 > /sys/module/bcachefs/parameters/test_reconstruct_alloc
     #echo 1 > /sys/module/bcachefs/parameters/verify_btree_ondisk
+    #echo 1 > /sys/module/bcachefs/parameters/verify_all_btree_replicas
     #echo 1 > /sys/module/bcachefs/parameters/btree_gc_coalesce_disabled
     #echo 1 > /sys/module/bcachefs/parameters/key_merging_disabled
+    #echo 1 > /sys/module/bcachefs/parameters/journal_seq_verify
 
     #enable_race_faults
 
@@ -113,7 +119,7 @@ bcachefs_antagonist()
     antagonist_shrink &
     antagonist_sync &
     antagonist_trigger_gc &
-    antagonist_switch_str_hash &
+    #antagonist_switch_str_hash &
 }
 
 fill_device()
@@ -185,7 +191,7 @@ run_basic_fio_test()
 
     bcachefs_antagonist
 
-    run_quiet "" bcachefs format -f --errors=panic "$@"
+    run_quiet "" bcachefs format -f --discard --no_initialize "$@"
 
     mount -t bcachefs -o fsck $(join_by : "${devs[@]}") /mnt
 
@@ -197,10 +203,10 @@ run_basic_fio_test()
     umount /mnt
 
     # test remount:
-    mount -t bcachefs -o fsck $(join_by : "${devs[@]}") /mnt
-    umount /mnt
+    #mount -t bcachefs -o fsck $(join_by : "${devs[@]}") /mnt
+    #umount /mnt
 
-    #bcachefs fsck "${devs[@]}"
+    bcachefs fsck -n "${devs[@]}"
 }
 
 require-kernel-config DEBUG_FS

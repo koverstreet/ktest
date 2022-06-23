@@ -2,10 +2,271 @@
 
 require-lib bcachefs-test-libs.sh
 
+require-kernel-config BCACHEFS_TESTS
+
+require-kernel-config MD
+require-kernel-config BLK_DEV_MD
+require-kernel-config MD_FAULTY
+
 config-scratch-devs 4G
 config-scratch-devs 4G
 
 config-timeout $(stress_timeout)
+
+test_stress_ng()
+{
+    apt install -y stress-ng
+    setup_tracing 'bcachefs:*'
+
+    run_quiet "" bcachefs format --no_initialize --version=11 -f /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+    cd /mnt
+    stress-ng  -v -t 60 --class filesystem --all 1 || true
+    stress-ng  -v -t 60 --class filesystem --all 2 || true
+    cd /root
+    umount /mnt
+}
+
+test_page_owner_thing()
+{
+    run_quiet "" bcachefs format -f --no_initialize /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+    dd if=/dev/zero of=/mnt/foo bs=8M count=1 oflag=direct
+    dd if=/mnt/foo of=/dev/null bs=8M count=1 iflag=direct
+    umount /mnt
+
+    cat /sys/kernel/debug/page_owner > /root/page_owner
+    /host/home/kent/linux/tools/vm/page_owner_sort /root/page_owner /ktest-out/page_owner
+}
+
+test_punch()
+{
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    xfs_io -f /mnt/foo -c "pwrite -S 0x55 0 16384"
+    xfs_io -f /mnt/foo -c "fsync"
+    xfs_io -f /mnt/foo -c "fpunch 4095 4097"
+
+    md5sum /mnt/foo
+    umount /mnt
+
+    mount -t bcachefs /dev/sdb /mnt
+    md5sum /mnt/foo
+    umount /mnt
+}
+
+test_remount_ro_rw()
+{
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    mount -o remount,ro /mnt
+    mount -o remount,rw /mnt
+    touch /mnt/foo
+    umount /mnt
+}
+
+test_extent_merge2()
+{
+    echo 1 > /sys/module/bcachefs/parameters/debug_check_iterators
+
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    fallocate -o    0 -l 4096 /mnt/foo
+    fallocate -o 4096 -l 4096 /mnt/foo
+
+    umount /mnt
+    bcachefs fsck -n /dev/sdb
+}
+
+test_reflink2()
+{
+    bcachefs_antagonist
+    run_quiet "" bcachefs format /dev/sdb
+
+    mount -t bcachefs /dev/sdb /mnt
+
+    dd if=/dev/urandom of=/mnt/foo bs=16k count=1 oflag=direct
+    cp --reflink /mnt/foo /mnt/foo2
+    cp --reflink /mnt/foo /mnt/foo3
+    cp --reflink /mnt/foo /mnt/foo4
+    cp --reflink /mnt/foo /mnt/foo5
+    cp --reflink /mnt/foo /mnt/foo6
+
+    cat /sys/kernel/debug/bcachefs/*/reflink
+
+    dd if=/dev/urandom of=/mnt/foo2 bs=4k oflag=direct conv=notrunc count=1
+    dd if=/dev/urandom of=/mnt/foo3 bs=4k oflag=direct conv=notrunc count=1 seek=1
+    dd if=/dev/urandom of=/mnt/foo4 bs=4k oflag=direct conv=notrunc count=1 seek=3
+
+    dd if=/dev/urandom of=/mnt/foo5 bs=4k oflag=direct conv=notrunc count=2
+    dd if=/dev/urandom of=/mnt/foo6 bs=4k oflag=direct conv=notrunc count=1 seek=3
+    dd if=/dev/urandom of=/mnt/foo6 bs=4k oflag=direct conv=notrunc count=1 seek=2
+
+    cat /sys/kernel/debug/bcachefs/*/reflink
+
+    cat /sys/kernel/debug/bcachefs/*/reflink|wc -l
+    rm /mnt/foo*
+    cat /sys/kernel/debug/bcachefs/*/reflink|wc -l
+}
+
+test_reflink()
+{
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    run_fio_randrw --filesize=1000M &
+
+    for i in `seq 0 10`; do
+	sleep 0.5
+	cp --reflink /mnt/fiotest /mnt/fiotest2
+	rm /mnt/fiotest2
+    done
+
+    wait
+
+    cat /sys/kernel/debug/bcachefs/*/reflink|wc -l
+    rm /mnt/fiotest*
+    nr_left=`cat /sys/kernel/debug/bcachefs/*/reflink|wc -l`
+    echo "nr_left: $nr_left"
+
+    [[ $nr_left = 0 ]]
+
+    umount /mnt
+}
+
+test_fio_raw()
+{
+    fio --eta=always				\
+	--exitall_on_error=1			\
+	--randrepeat=0				\
+	--ioengine=libaio			\
+	--iodepth=64				\
+	--iodepth_batch=16			\
+	--direct=1				\
+	--numjobs=1				\
+	--filename=/dev/sdb		    	\
+	--name=randread				\
+	--rw=randread				\
+	--size=40G				\
+	--bs=4k
+}
+
+test_rewrite_old_nodes()
+{
+    run_quiet "" bcachefs format -f --no_initialize --version=10 /dev/sdb
+
+    bcachefs show-super /dev/sdb
+
+    mount -t bcachefs /dev/sdb /mnt
+    dd if=/dev/zero of=/mnt/foo bs=4k count=65536 oflag=direct
+
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_gc
+    exit
+
+    umount /mnt
+
+    bcachefs show-super /dev/sdb
+
+    bcachefs fsck /dev/sdb
+
+    bcachefs show-super /dev/sdb
+
+    mount -t bcachefs -o version_upgrade /dev/sdb /mnt
+    bcachefs data job rewrite_old_nodes /mnt
+    umount /mnt
+
+    bcachefs fsck /dev/sdb
+
+    bcachefs show-super /dev/sdb
+}
+
+test_merge_torture_flakey()
+{
+    local loops=$((($ktest_priority + 1) * 3))
+    local n=40M
+
+    mdadm -B /dev/md0 -lfaulty -n1 /dev/sdb
+
+    run_quiet "" bcachefs format -f --btree_node_size=32k --errors=panic /dev/md0
+
+    for i in `seq 0 $loops`; do
+	echo "loop: $i"
+
+	mount -t bcachefs -o fsck /dev/md0 /mnt
+
+	echo seq_delete		$n 1	> /sys/fs/bcachefs/*/perf_test
+	echo -n "nodes: "
+	grep "^l " /sys/kernel/debug/bcachefs/*/xattrs-formats|wc -l
+	df -h /mnt
+
+	echo seq_insert		$n 1	> /sys/fs/bcachefs/*/perf_test &
+	sleep 10
+	mdadm -G /dev/md0 -pwrite-all
+	wait
+
+	umount /mnt
+	mdadm -G /dev/md0 -pnone
+
+	mount -t bcachefs -o fsck /dev/md0 /mnt
+
+	echo seq_delete		$n 1	> /sys/fs/bcachefs/*/perf_test &
+	sleep 2
+	mdadm -G /dev/md0 -pwrite-all
+	wait
+
+	umount /mnt
+	mdadm -G /dev/md0 -pnone
+    done
+
+    mdadm --stop /dev/md0
+}
+
+# Disabled, because currently OOMs
+d_test_merge_torture()
+{
+    setup_tracing
+
+    local loops=$((($ktest_priority + 1) * 3))
+    local n=10M
+
+    run_quiet "" bcachefs format -f --errors=panic --btree_node_size=8k --no_initialize /dev/sdb
+
+    for i in `seq 0 $loops`; do
+	mount -t bcachefs -o fsck /dev/sdb /mnt
+
+	echo "loop: $i"
+	echo rand_insert	$n 1	> /sys/fs/bcachefs/*/perf_test
+	df -h /mnt
+	echo rand_delete	$n 1	> /sys/fs/bcachefs/*/perf_test
+
+	echo -n "nodes: "
+	grep "^l " /sys/kernel/debug/bcachefs/*/xattrs-formats|wc -l
+	df -h /mnt
+
+	umount /mnt
+    done
+}
+
+test_make_files()
+{
+    run_quiet "" bcachefs format -f /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    echo 3 > /proc/sys/vm/drop_caches
+    free -m
+
+    for i in `seq 0 1`; do
+	echo -n > /mnt/$i
+    done
+
+    free -m
+    echo 3 > /proc/sys/vm/drop_caches
+    free -m
+    umount /mnt
+}
 
 test_journal_resize()
 {
@@ -19,6 +280,20 @@ test_journal_resize()
 
     wait
     umount /mnt
+}
+
+test_drop_alloc()
+{
+    run_quiet "" bcachefs format -f /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    run_fio_randrw --filesize=2G
+    umount /mnt
+
+    mount -t bcachefs -o reconstruct_alloc,fsck,fix_errors /dev/sdb /mnt
+    umount /mnt
+
+    bcachefs fsck -n /dev/sdb
 }
 
 test_reflink_inline_data()
@@ -46,27 +321,28 @@ test_split_compressed()
     umount /mnt
 }
 
-test_remount_loop()
-{
-    run_quiet "" bcachefs format /dev/sdb
-
-    while true; do
-	mount -t bcachefs -o fsck /dev/sdb /mnt
-	run_fio_randrw
-	umount /mnt
-    done
-}
-
 test_fcollapse()
 {
-    run_quiet "" bcachefs format /dev/sdb
-    mount -t bcachefs -o fsck /dev/sdb /mnt
+    run_quiet "" bcachefs format -f		\
+	--errors=panic				\
+	/dev/sdb
+    mount /dev/sdb /mnt
 
-    dd if=/dev/zero of=/mnt/foo bs=64k count=1 oflag=direct
+    dd if=/dev/zero of=/mnt/foo bs=4k count=4 oflag=direct
 
-    cat /sys/kernel/debug/bcachefs/*/extents
+    echo "before fcollapse"
+    cat /sys/kernel/debug/bcachefs/*/btrees/extents
+    ls -l /mnt/foo
+    echo
 
-    xfs_io -c "fcollapse 0 1024" /mnt/foo
+    xfs_io -c "fcollapse 4k 2k" /mnt/foo
+
+    echo "after fcollapse"
+    cat /sys/kernel/debug/bcachefs/*/btrees/extents
+    ls -l /mnt/foo
+    echo
+
+    umount /mnt
 }
 
 test_finsert()
@@ -76,9 +352,10 @@ test_finsert()
 
     dd if=/dev/zero of=/mnt/foo bs=64k count=1 oflag=direct
 
-    cat /sys/kernel/debug/bcachefs/*/extents
+    cat /sys/kernel/debug/bcachefs/*/btrees/extents
 
     xfs_io -c "finsert 1024 1024" /mnt/foo
+    umount /mnt
 }
 
 test_key_merge()
@@ -89,7 +366,7 @@ test_key_merge()
 
     dd if=/dev/zero of=/mnt/foo bs=8k count=128 oflag=direct
 
-    NR=$(cat /sys/kernel/debug/bcachefs/*/extents|wc -l)
+    NR=$(cat /sys/kernel/debug/bcachefs/*/btrees/extents|wc -l)
 
     [[ $NR -eq 4 ]]
 
@@ -106,30 +383,11 @@ test_key_merge_csum()
 
     cat /mnt/foo > /dev/null
 
-    NR=$(cat /sys/kernel/debug/bcachefs/*/extents|wc -l)
+    NR=$(cat /sys/kernel/debug/bcachefs/*/btrees/extents|wc -l)
 
     [[ $NR -le 16 ]]
 
     umount /mnt
-}
-
-test_reflink()
-{
-    bcachefs_antagonist
-    run_quiet "" bcachefs format /dev/sdb
-
-    mount -t bcachefs /dev/sdb /mnt
-
-    dd if=/dev/urandom of=/mnt/foo bs=8k count=1 oflag=direct
-    md5sum /mnt/foo
-
-    cp --reflink /mnt/foo /mnt/bar
-    md5sum /mnt/foo
-    md5sum /mnt/bar
-
-    #dd if=/dev/urandom of=/mnt/foo bs=8k count=1 oflag=sync
-    #dd if=/dev/urandom of=/mnt/bar bs=8k count=1 oflag=sync
-    #umount /mnt
 }
 
 test_reconstruct_alloc()
@@ -145,6 +403,8 @@ test_reconstruct_alloc()
     run_fio_randrw
     umount /mnt
 
+    fsck.bcachefs -n --reconstruct_alloc /dev/sdb
+
     mount -t bcachefs -o reconstruct_alloc,fix_errors,fsck /dev/sdb /mnt
     umount /mnt
 
@@ -156,6 +416,7 @@ test_reconstruct_alloc()
 test_recovery()
 {
     run_quiet "" bcachefs format		\
+	--errors=panic				\
 	--encrypted --no_passphrase		\
 	--bucket=8k				\
 	/dev/sdb
@@ -189,6 +450,24 @@ test_recovery()
     done
 }
 
+test_lz4_zeros()
+{
+    run_quiet "" bcachefs format -f --errors=panic --compression=lz4 --data_checksum=none --bucket=2M /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    dd if=/dev/zero of=/mnt/foo || true
+    umount /mnt
+}
+
+test_lz4_incompressible()
+{
+    run_quiet "" bcachefs format -f --errors=panic --compression=lz4 --data_checksum=none --bucket=2M /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    dd if=/dev/urandom of=/mnt/foo || true
+    umount /mnt
+}
+
 test_lz4()
 {
     run_basic_fio_test				\
@@ -199,8 +478,6 @@ test_lz4()
 test_lz4_buffered()
 {
     #bcachefs_antagonist
-    antagonist_trigger_gc &
-    echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
 
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
@@ -208,19 +485,17 @@ test_lz4_buffered()
 	/dev/sdb
     mount /dev/sdb /mnt
 
-    while true; do
-	echo starting copy
-	cp -rx / /mnt
+    echo starting copy
+    cp -rx / /mnt
 
-	echo starting sync 
-	sync
+    echo starting sync 
+    sync
 
-	#echo starting gc 
-	#echo 1 | tee /sys/fs/bcachefs/*/internal/trigger_gc >& /dev/null || true
+    #echo starting gc 
+    #echo 1 | tee /sys/fs/bcachefs/*/internal/trigger_gc >& /dev/null || true
 
-	echo starting rm
-	rm -rf /mnt/*
-    done
+    echo starting rm
+    rm -rf /mnt/*
 
     umount /mnt
 }
@@ -286,10 +561,10 @@ test_crc64()
 test_crypto_locked_mnt()
 {
     echo foo|bcachefs format --encrypted /dev/sdb
+    echo foo|bcachefs unlock -k session /dev/sdb
     mount -t bcachefs -o verbose /dev/sdb /mnt
     umount /mnt
-    bcachefs fsck				\
-	/dev/sdb
+    bcachefs fsck /dev/sdb
 }
 
 test_crypto()
@@ -319,10 +594,12 @@ run_copygc_torture()
 
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
+	--no_initialize	--version=14			\
+	--btree_node_size=8k			\
+	--data_checksum=none			\
 	"$@" /dev/sdb
 
     mount /dev/sdb /mnt
-    #enable_memory_faults
 
     fill_device /mnt/fiotest
 
@@ -334,7 +611,7 @@ run_copygc_torture()
 	    --stonewall				\
 	    --rw=randwrite			\
 	    --loops=$loops			\
-	    --bsrange=4k-4k
+	    --bsrange=4k-128k
 
 	cur_size=$(stat -c '%s' /mnt/fiotest)
 	new_size=$(($cur_size - 1048576))
@@ -350,8 +627,8 @@ run_copygc_torture()
     expect_sysfs cache cached_buckets	0
     expect_sysfs cache cached_data	0
 
-    #disable_memory_faults
     umount /mnt
+    bcachefs fsck -n /dev/sdb
 }
 
 test_copygc_torture()
@@ -377,6 +654,15 @@ test_small_buckets()
 	/dev/sdb
 }
 
+# Gets stuck due to only having 512 buckets
+test_large_buckets()
+{
+    run_basic_fio_test				\
+	--bucket=8M				\
+	--data_checksum=none			\
+	/dev/sdb
+}
+
 test_small_nodes()
 {
     run_basic_fio_test				\
@@ -385,7 +671,7 @@ test_small_nodes()
 	/dev/sdb
 }
 
-test_crypto_passphrase()
+d_test_crypto_passphrase()
 {
     bcachefs_antagonist
 
@@ -469,7 +755,6 @@ test_quota()
 
 # test nfs exports:
 require-kernel-config NFSD
-require-kernel-config NFSD_V3
 require-kernel-config NFSD_V4
 
 test_nfs()
@@ -567,7 +852,7 @@ test_journal_torture()
     mount -t bcachefs /dev/sdb /mnt
     #enable_memory_faults
 
-    echo 0 > /sys/fs/bcachefs/*/journal_write_delay_ms
+    echo 1 > /sys/fs/bcachefs/*/options/journal_flush_delay
 
     run_fio_randrw
 
@@ -694,6 +979,24 @@ test_debugfs()
     umount /mnt
 }
 
+test_set_option()
+{
+    run_quiet "" bcachefs format -f		\
+	--errors=panic				\
+	/dev/sdb
+
+    mount -t bcachefs /dev/sdb /mnt
+    bcachefs set-option --compression=zstd /dev/sdb
+    cat /sys/fs/bcachefs/*/options/compression
+    umount /mnt
+
+    bcachefs set-option --compression=lz4 /dev/sdb
+
+    mount -t bcachefs /dev/sdb /mnt
+    cat /sys/fs/bcachefs/*/options/compression
+    umount /mnt
+}
+
 disabled_test_swapfile()
 {
     run_quiet "" bcachefs format -f		\
@@ -713,7 +1016,7 @@ disabled_test_swapfile()
 
 migrate_from_fs()
 {
-    fstype=$1
+    local fstype=$1
 
     if [[ $fstype = ext4 ]]; then
 	run_quiet "" mkfs.$fstype -F /dev/sdb
@@ -734,7 +1037,9 @@ migrate_from_fs()
 	--encrypted				\
 	--no_passphrase				\
 	-F -f /mnt | tee /root/migratelog
-    offset=$(grep -oE 'sb=[[:digit:]]+' /root/migratelog|sed -e 's/sb=//')
+    offset=$(grep -w mount /root/migratelog|grep -oE 'sb=[[:digit:]]+'|sed -e 's/sb=//')
+
+    echo "Attempting to mount bcachefs filesystem with superblock offset $offset"
 
     if true; then
 	mkdir -p /mnt2
@@ -747,7 +1052,7 @@ migrate_from_fs()
 	    --exclude=/bcachefs			\
 	    --dry-run				\
 	    --itemize-changes		 	\
-	    /mnt/ /mnt2/ |tee /root/rsynclog
+	    /mnt/ /mnt2/ > /root/rsynclog
 
 	umount /mnt2
 	echo "rsync passed"
@@ -755,8 +1060,6 @@ migrate_from_fs()
 
     umount /mnt
     fsck.$fstype -n /dev/sdb
-
-    echo "Attempting to mount bcachefs filesystem with superblock offset"
 
     mount -t bcachefs -o sb=$offset /dev/sdb /mnt
     rm /mnt/old_migrated_filesystem
@@ -786,14 +1089,13 @@ test_migrate_from_btrfs()
     migrate_from_fs btrfs
 }
 
-test_migrate_from_bcachefs()
+d_test_migrate_from_bcachefs()
 {
     migrate_from_fs bcachefs
 }
 
-# fault injection:
-
-test_init_faults()
+# we don't currently have fault injection:
+d_test_init_faults()
 {
     setup_tracing 'bcachefs:*'
 
@@ -821,7 +1123,8 @@ test_init_faults()
     run_fault_injection_test bcachefs:meta:read	    init_fault_fn
 }
 
-test_meta_write_faults()
+# we don't currently have fault injection:
+d_test_meta_write_faults()
 {
     setup_tracing 'bcachefs:*'
 
@@ -842,54 +1145,6 @@ test_meta_write_faults()
     }
 
     run_fault_injection_test bcachefs:meta::write meta_write_fault_fn
-}
-
-test_make_test_image()
-{
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	--encrypted --no_passphrase		\
-	/dev/sdb
-
-    mount -t bcachefs /dev/sdb /mnt
-
-    for compress in none lz4 gzip zstd; do
-	for crc in none crc32c crc64; do
-	    setfattr -n bcachefs.compression -v $compress /mnt
-	    setfattr -n bcachefs.data_checksum -v $crc /mnt
-
-	    filename=/mnt/$compress-$crc
-	    fio --name=write --rw=write		\
-		--blocksize=1M --size=1M	\
-		--buffer_compress_percentage=20	\
-		--filename=$filename
-
-	    md5sum $filename > $filename.md5sum
-	done
-    done
-
-    umount /mnt
-}
-
-test_read_test_image()
-{
-    mount -t bcachefs /dev/sdb /mnt
-
-    for sum in /mnt/*.md5sum; do
-	f=${sum%.md5sum}
-
-	sum1=$(md5sum $f)
-	sum2=$(cat $sum)
-
-	if [[ $sum1 = $sum2 ]]; then
-	    echo $f: checksum matches
-	else
-	    echo $f: checksum mismatch
-	    return 1
-	fi
-    done
-
-    umount /mnt
 }
 
 test_long_name()
@@ -946,30 +1201,6 @@ disabled_test_invalid_keys()
     umount /mnt
 
     echo 0 > /sys/module/bcachefs/parameters/inject_invalid_keys
-}
-
-test_fcollapse()
-{
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	/dev/sdb
-    mount /dev/sdb /mnt
-
-    dd if=/dev/zero of=/mnt/foo bs=4k count=4 oflag=direct
-
-    echo "before fcollapse"
-    cat /sys/kernel/debug/bcachefs/*/extents
-    ls -l /mnt/foo
-    echo
-
-    xfs_io -c "fcollapse 4k 2k" /mnt/foo
-
-    echo "after fcollapse"
-    cat /sys/kernel/debug/bcachefs/*/extents
-    ls -l /mnt/foo
-    echo
-
-    umount /mnt
 }
 
 test_buffered_reads()
@@ -1034,9 +1265,6 @@ test_gc()
     antagonist_trigger_gc &
     run_fio_randrw
 
-    #dd if=/dev/zero of=/mnt/foo bs=1M count=16 oflag=direct
-    #echo 1 > /sys/fs/bcachefs/*/internal/trigger_gc
-
     umount /mnt
 
     mount -t bcachefs /dev/sdb /mnt
@@ -1086,6 +1314,7 @@ test_setattr()
     touch /mnt/foo/bar
 
     bcachefs setattr --compression lz4 /mnt/foo
+    bcachefs setattr --foreground_target= /mnt/foo
     getfattr -R -d -m - /mnt
 
     umount /mnt
@@ -1114,4 +1343,33 @@ test_dump()
     touch /mnt/b
     umount /mnt
     bcachefs dump -o /tmp/sdb.qcow2 /dev/sdb
+}
+
+test_kill_btree_node()
+{
+    run_quiet "" bcachefs format --errors=panic /dev/sdb
+
+    mount -t bcachefs /dev/sdb /mnt
+    cp -a /usr /mnt
+    umount /mnt
+
+    # Doesn't yet work with the alloc btree:
+    for btree in extents backpointers freespace; do
+	echo "Killing a btree node in btree $btree "
+	local index=1
+
+	[[ $btree = freespace ]] && index=0
+
+	bcachefs kill_btree_node -b $btree -i $index /dev/sdb
+
+	echo "Running fsck"
+	# How to assert exit status equals something specific with -o errexit?
+	mount -t bcachefs -o fsck,fix_errors,verbose /dev/sdb /mnt
+	umount /mnt
+	#bcachefs fsck -y /dev/sdb || true
+
+	echo
+	echo "Running fsck again; should be clean"
+	bcachefs fsck -y /dev/sdb || true
+    done
 }

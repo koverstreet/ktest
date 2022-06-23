@@ -52,4 +52,5 @@ list_tests()
     echo extent_overwrite_back
     echo extent_overwrite_middle
     echo extent_overwrite_all
+    echo snapshots
 }
