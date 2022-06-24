@@ -263,6 +263,11 @@ start_vm()
 	# timeout here is a backup:
 	qemu_cmd+=(-S -F -T $((60 + ktest_timeout)))
     fi
+
+    local test_basename=$(basename -s .ktest "$ktest_test")
+    qemu_cmd+=(-b "$test_basename")
+    qemu_cmd+=(-o "$ktest_out/out")
+
     qemu_cmd+=(--)
 
     if [[ -z $ktest_kernel_binary ]]; then
@@ -280,7 +285,11 @@ start_vm()
 
     get_tmpdir
 
-    mkdir -p "$ktest_out"
+    # Was outputting to a single log file, now a directory:
+    [[ -f $ktest_out/out ]] && rm -f "$ktest_out/out"
+
+    mkdir -p "$ktest_out/out"
+
     rm -f "$ktest_out/core.*"
     rm -f "$ktest_out/vmcore"
     rm -f "$ktest_out/vm"
@@ -421,6 +430,6 @@ start_vm()
     set -o pipefail
     shopt -s lastpipe
 
-    "${qemu_cmd[@]}"|tee "$ktest_out/out"
+    "${qemu_cmd[@]}"
     exit $?
 }

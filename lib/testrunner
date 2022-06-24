@@ -17,6 +17,7 @@ ktest_tmp="/host/$ktest_tmp"
 ktest_out="/host/$ktest_out"
 
 ln -sf $ktest_dir /ktest
+ln -sf $ktest_out /ktest-out
 ln -sf /host/$home $home
 
 . "$ktest_dir/lib/util.sh"

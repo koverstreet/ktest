@@ -100,3 +100,17 @@ functions.
 
 By default, tests are shell functions that start with test. You can define tests
 differently by defining the shell functions list_tests and run_test.
+
+
+
+AUTOMATION:
+===========
+
+Output logs go in ktest-out/out/; full output from a run of a .ktest test file
+goes in
+  ktest-out/out/$basename
+
+Individual tests go in
+  ktest-out/out/$basename.$testname
+
+Success or failure will be the very last line of the per-test logfiles.

@@ -1,7 +1,11 @@
+#define _GNU_SOURCE
+
+#include <ctype.h>
 #include <getopt.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,7 +42,77 @@ static void usage(void)
 	     "      -S              Exit on success\n"
 	     "      -F              Exit on failure\n"
 	     "      -T TIMEOUT      Timeout after TIMEOUT seconds\n"
+	     "      -b name         base name for log files\n"
+	     "      -o dir          output directory for log files\n"
 	     "      -h              Display this help and exit\n");
+}
+
+static char *mprintf(const char *fmt, ...)
+{
+	va_list args;
+	char *str;
+	int ret;
+
+	va_start(args, fmt);
+	ret = vasprintf(&str, fmt, args);
+	va_end(args);
+
+	if (ret < 0)
+		die("insufficient memory");
+
+	return str;
+}
+
+static char *log_path(const char *logdir, const char *basename, const char *testname)
+{
+	if (!basename)
+		basename = "out";
+
+	return !testname
+		? mprintf("%s/%s", logdir, basename)
+		: mprintf("%s/%s.%s", logdir, basename, testname);
+}
+
+static FILE *log_open(const char *logdir, const char *basename, const char *testname)
+{
+	char *path = log_path(logdir, basename, testname);
+
+	FILE *f = fopen(path, "w");
+	if (!f)
+		die("error opening %s: %m", path);
+
+	free(path);
+	setlinebuf(f);
+	return f;
+}
+
+static void strim(char *line)
+{
+	char *p = line;
+
+	while (!iscntrl(*p))
+		p++;
+	*p = 0;
+}
+
+static const char *str_starts_with(const char *str, const char *prefix)
+{
+	unsigned len = strlen(prefix);
+
+	if (strncmp(str, prefix, len))
+		return NULL;
+	return str + len;
+}
+
+static const char *test_starts(const char *line)
+{
+	return str_starts_with(line, "========= TEST   ");
+}
+
+static bool test_ends(char *line)
+{
+	return  str_starts_with(line, "========= FAILED ") ||
+		str_starts_with(line, "========= PASSED ");
 }
 
 int main(int argc, char *argv[])
@@ -48,6 +122,8 @@ int main(int argc, char *argv[])
 	unsigned long timeout = 0;
 	int opt, ret = EXIT_FAILURE;
 	struct timespec start, ts;
+	char *logdir = NULL;
+	char *basename = NULL;
 
 	setlinebuf(stdin);
 	setlinebuf(stdout);
@@ -55,7 +131,7 @@ int main(int argc, char *argv[])
 	if (clock_gettime(CLOCK_MONOTONIC, &start))
 		die("clock_gettime error: %m");
 
-	while ((opt = getopt(argc, argv, "SFT:h")) != -1) {
+	while ((opt = getopt(argc, argv, "SFT:b:o:h")) != -1) {
 		switch (opt) {
 		case 'S':
 			exit_on_success = true;
@@ -69,6 +145,12 @@ int main(int argc, char *argv[])
 			if (errno)
 				die("error parsing timeout: %m");
 			break;
+		case 'b':
+			basename = strdup(optarg);
+			break;
+		case 'o':
+			logdir = strdup(optarg);
+			break;
 		case 'h':
 			usage();
 			exit(EXIT_SUCCESS);
@@ -77,6 +159,9 @@ int main(int argc, char *argv[])
 			exit(EXIT_FAILURE);
 		}
 	}
+
+	if (!logdir)
+		die("Required option -o missing");
 
 	int pipefd[2];
 	if (pipe(pipefd))
@@ -117,18 +202,48 @@ int main(int argc, char *argv[])
 		goto out;
 	}
 
-	size_t n = 0, len;
+	FILE *logfile = log_open(logdir, basename, NULL);
+	FILE *test_logfile = NULL;
+
+	size_t n = 0, output_len = 0;
+	ssize_t len;
 	char *line = NULL;
+	char *output_line = NULL;
 
 	while ((len = getline(&line, &n, childf)) >= 0) {
+		strim(line);
+
+		const char *testname = test_starts(line);
+
+		if (test_logfile &&
+		    (testname || test_ends(line))) {
+			fputc('\n', test_logfile);
+			fclose(test_logfile);
+			test_logfile = NULL;
+		}
+
 		if (clock_gettime(CLOCK_MONOTONIC, &ts)) {
 			fprintf(stderr, "clock_gettime error: %m\n");
 			break;
 		}
 
+		if (output_len < n + 20) {
+			output_len = n + 20;
+			output_line = realloc(output_line, output_len);
+		}
+
 		unsigned long elapsed = ts.tv_sec - start.tv_sec;
-		printf("%.5lu ", elapsed);
-		fputs(line, stdout);
+
+		strim(line);
+		sprintf(output_line, "%.5lu %s\n", elapsed, line);
+
+		if (test_logfile)
+			fputs(output_line, test_logfile);
+		fputs(output_line, logfile);
+		fputs(output_line, stdout);
+
+		if (testname)
+			test_logfile = log_open(logdir, basename, testname);
 
 		if (exit_on_success &&
 		    strstr(line, "TEST SUCCESS")) {
