@@ -47,6 +47,7 @@ cmd_run()
     shift
     ktest_testargs="$@"
 
+    echo Running test $(basename "$ktest_test")
     parse_test_deps "$ktest_test"
 
     start_vm
