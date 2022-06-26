@@ -108,25 +108,12 @@ test_writethrough()
 
 test_promote()
 {
-    setup_tracing 'bcachefs:*'
-
-    run_quiet "" bcachefs format		\
+    run_basic_fio_test "$@"			\
 	--durability=0 --label=ssd /dev/sdb	\
 	--durability=1 --label=hdd /dev/sdd	\
 	--foreground_target=hdd			\
 	--promote_target=ssd			\
 	--background_target=hdd
-
-    mount -t bcachefs /dev/sdb:/dev/sdd /mnt
-
-    dd if=/dev/zero of=/mnt/foo bs=1M count=1024 oflag=direct
-
-    dd if=/mnt/foo of=/dev=null bs=1M count=1 iflag=direct
-
-    bcachefs fs usage -h /mnt
-    # should be some data on cache devices
-
-    umount /mnt
 }
 
 test_setattr()
@@ -206,6 +193,7 @@ test_tiering_variable_buckets_replicas()
 
 test_device_add()
 {
+    set_watchdog 60
     run_quiet "" bcachefs format		\
 	--label=ssd /dev/sdb			\
 	--label=hdd /dev/sd[de]
@@ -222,6 +210,7 @@ test_device_add()
 
 test_mount_umount_torture()
 {
+    set_watchdog 60
     run_quiet "" bcachefs format			\
 	--replicas=2					\
 	--label=ssd /dev/sd[bc]				\
@@ -238,6 +227,7 @@ test_mount_umount_torture()
 
 test_change_replicas()
 {
+    set_watchdog 60
     run_quiet "" bcachefs format			\
 	--label=ssd /dev/sd[bc]				\
 	--label=hdd /dev/sd[de]				\

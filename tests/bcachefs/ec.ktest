@@ -16,6 +16,8 @@ config-timeout $(stress_timeout)
 
 test_ec_small()
 {
+    set_watchdog 60
+
     bcachefs_antagonist
 
     run_quiet "" bcachefs format -f		\
@@ -48,6 +50,8 @@ test_ec_small()
 
 test_ec_umount()
 {
+    set_watchdog 60
+
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	--erasure_code				\
@@ -65,6 +69,8 @@ test_ec_umount()
 
 do_ec_test()
 {
+    set_watchdog 60
+
     bcachefs_antagonist
 
     run_quiet "" bcachefs format -f		\
@@ -116,6 +122,7 @@ test_ec_crypto_lz4()
 
 test_ec_mixed_tiers()
 {
+    set_watchdog 60
 
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
@@ -149,6 +156,8 @@ test_ec_mixed_tiers()
 
 test_ec_gc()
 {
+    set_watchdog 60
+
     bcachefs_antagonist
 
     run_quiet "" bcachefs format -f		\
@@ -197,6 +206,8 @@ do_remove_test()
 {
     offline=$1
     evacuate=$2
+
+    set_watchdog 60
 
     run_quiet "" bcachefs format		\
 	--errors=panic				\

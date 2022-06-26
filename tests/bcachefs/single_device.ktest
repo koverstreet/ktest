@@ -15,6 +15,8 @@ config-timeout $(stress_timeout)
 
 test_stress_ng()
 {
+    set_watchdog 60
+
     apt install -y stress-ng
     setup_tracing 'bcachefs:*'
 
@@ -27,20 +29,10 @@ test_stress_ng()
     umount /mnt
 }
 
-test_page_owner_thing()
-{
-    run_quiet "" bcachefs format -f --no_initialize /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
-    dd if=/dev/zero of=/mnt/foo bs=8M count=1 oflag=direct
-    dd if=/mnt/foo of=/dev/null bs=8M count=1 iflag=direct
-    umount /mnt
-
-    cat /sys/kernel/debug/page_owner > /root/page_owner
-    /host/home/kent/linux/tools/vm/page_owner_sort /root/page_owner /ktest-out/page_owner
-}
-
 test_punch()
 {
+    set_watchdog 10
+
     run_quiet "" bcachefs format -f --errors=panic /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
 
@@ -58,6 +50,8 @@ test_punch()
 
 test_remount_ro_rw()
 {
+    set_watchdog 10
+
     run_quiet "" bcachefs format -f --errors=panic /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
 
@@ -69,6 +63,7 @@ test_remount_ro_rw()
 
 test_extent_merge2()
 {
+    set_watchdog 10
     echo 1 > /sys/module/bcachefs/parameters/debug_check_iterators
 
     run_quiet "" bcachefs format -f --errors=panic /dev/sdb
@@ -83,6 +78,7 @@ test_extent_merge2()
 
 test_reflink2()
 {
+    set_watchdog 10
     bcachefs_antagonist
     run_quiet "" bcachefs format /dev/sdb
 
@@ -114,6 +110,7 @@ test_reflink2()
 
 test_reflink()
 {
+    set_watchdog 10
     run_quiet "" bcachefs format -f --errors=panic /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
 
@@ -139,6 +136,7 @@ test_reflink()
 
 test_fio_raw()
 {
+    set_watchdog 60
     fio --eta=always				\
 	--exitall_on_error=1			\
 	--randrepeat=0				\
@@ -156,6 +154,7 @@ test_fio_raw()
 
 test_rewrite_old_nodes()
 {
+    set_watchdog 60
     run_quiet "" bcachefs format -f --no_initialize --version=10 /dev/sdb
 
     bcachefs show-super /dev/sdb
@@ -185,6 +184,7 @@ test_rewrite_old_nodes()
 
 test_merge_torture_flakey()
 {
+    set_watchdog 600
     local loops=$((($ktest_priority + 1) * 3))
     local n=40M
 
@@ -252,6 +252,7 @@ d_test_merge_torture()
 
 test_make_files()
 {
+    set_watchdog 30
     run_quiet "" bcachefs format -f /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
 
@@ -270,6 +271,7 @@ test_make_files()
 
 test_journal_resize()
 {
+    set_watchdog 30
     run_quiet "" bcachefs format -f /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
 
@@ -284,6 +286,7 @@ test_journal_resize()
 
 test_drop_alloc()
 {
+    set_watchdog 30
     run_quiet "" bcachefs format -f /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
 
@@ -298,6 +301,7 @@ test_drop_alloc()
 
 test_reflink_inline_data()
 {
+    set_watchdog 30
     run_quiet "" bcachefs format -f /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
 
@@ -312,6 +316,7 @@ test_reflink_inline_data()
 
 test_split_compressed()
 {
+    set_watchdog 30
     run_quiet "" bcachefs format --compression=zstd /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
 
@@ -323,6 +328,7 @@ test_split_compressed()
 
 test_fcollapse()
 {
+    set_watchdog 30
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	/dev/sdb
@@ -347,6 +353,7 @@ test_fcollapse()
 
 test_finsert()
 {
+    set_watchdog 30
     run_quiet "" bcachefs format /dev/sdb
     mount -t bcachefs -o fsck /dev/sdb /mnt
 
@@ -360,6 +367,7 @@ test_finsert()
 
 test_key_merge()
 {
+    set_watchdog 30
     run_quiet "" bcachefs format --data_checksum=none /dev/sdb
 
     mount -t bcachefs /dev/sdb /mnt
@@ -375,6 +383,7 @@ test_key_merge()
 
 test_key_merge_csum()
 {
+    set_watchdog 30
     run_quiet "" bcachefs format --data_checksum=crc32c /dev/sdb
 
     mount -t bcachefs /dev/sdb /mnt
@@ -392,6 +401,7 @@ test_key_merge_csum()
 
 test_reconstruct_alloc()
 {
+    set_watchdog 30
     run_quiet "" bcachefs format --btree_node_size=16k /dev/sdb
 
     mount -t bcachefs -o reconstruct_alloc,fix_errors,fsck /dev/sdb /mnt
@@ -415,6 +425,7 @@ test_reconstruct_alloc()
 
 test_recovery()
 {
+    set_watchdog 30
     run_quiet "" bcachefs format		\
 	--errors=panic				\
 	--encrypted --no_passphrase		\
@@ -452,6 +463,7 @@ test_recovery()
 
 test_lz4_zeros()
 {
+    set_watchdog 30
     run_quiet "" bcachefs format -f --errors=panic --compression=lz4 --data_checksum=none --bucket=2M /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
 
@@ -461,6 +473,7 @@ test_lz4_zeros()
 
 test_lz4_incompressible()
 {
+    set_watchdog 30
     run_quiet "" bcachefs format -f --errors=panic --compression=lz4 --data_checksum=none --bucket=2M /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
 
@@ -477,6 +490,7 @@ test_lz4()
 
 test_lz4_buffered()
 {
+    set_watchdog 30
     #bcachefs_antagonist
 
     run_quiet "" bcachefs format -f		\
@@ -588,6 +602,8 @@ test_crypto_lz4()
 
 run_copygc_torture()
 {
+    set_watchdog 600
+
     loops=$((($ktest_priority + 1) * 4))
 
     bcachefs_antagonist
@@ -685,6 +701,8 @@ d_test_crypto_passphrase()
 
 test_partial_overwritten_extents()
 {
+    set_watchdog 10
+
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	--encrypted --no_passphrase		\
@@ -712,6 +730,7 @@ test_partial_overwritten_extents()
 # test the xattr interface for per-inode IO options:
 test_xattr()
 {
+    set_watchdog 10
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	/dev/sdb
@@ -738,6 +757,7 @@ test_xattr()
 
 test_quota()
 {
+    set_watchdog 10
     bcachefs_antagonist
 
     run_quiet "" bcachefs format -f		\
@@ -759,6 +779,7 @@ require-kernel-config NFSD_V4
 
 test_nfs()
 {
+    set_watchdog 10
     mkdir /export1 /export2
 
     run_quiet "" bcachefs format -f		\
@@ -776,6 +797,7 @@ test_nfs()
 
 test_suspend()
 {
+    set_watchdog 10
     umount $LOGDIR
 
     #setup_tracing 'bcachefs:*'
@@ -807,6 +829,7 @@ test_suspend()
 require-kernel-config MD,BLK_DEV_DM,DM_LOG_WRITES
 test_writelog()
 {
+    set_watchdog 60
     cd $LOGDIR
     ln -s $LOGDIR/log-writes/replay-log /usr/bin
 
@@ -843,6 +866,7 @@ test_writelog()
 
 test_journal_torture()
 {
+    set_watchdog 60
     bcachefs_antagonist
 
     run_quiet "" bcachefs format -f		\
@@ -862,6 +886,7 @@ test_journal_torture()
 
 test_online_resize()
 {
+    set_watchdog 60
     bcachefs_antagonist
 
     run_quiet "" bcachefs format -f		\
@@ -880,6 +905,7 @@ test_online_resize()
 
 test_offline_resize()
 {
+    set_watchdog 60
     bcachefs_antagonist
 
     run_quiet "" bcachefs format -f		\
@@ -902,6 +928,7 @@ test_offline_resize()
 
 test_offline_resize_lv()
 {
+    set_watchdog 60
     pvcreate /dev/sdb
     vgcreate vg /dev/sdb
     lvcreate -L 1G -n foo  vg
@@ -929,6 +956,7 @@ test_offline_resize_lv()
 
 test_offline_resize_lv_ext4()
 {
+    set_watchdog 20
     pvcreate /dev/sdb
     vgcreate vg /dev/sdb
     lvcreate -L 1G -n foo  vg
@@ -954,6 +982,7 @@ test_offline_resize_lv_ext4()
 
 test_sysfs()
 {
+    set_watchdog 10
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	/dev/sdb
@@ -966,6 +995,7 @@ test_sysfs()
 
 test_debugfs()
 {
+    set_watchdog 10
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	/dev/sdb
@@ -981,6 +1011,7 @@ test_debugfs()
 
 test_set_option()
 {
+    set_watchdog 10
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	/dev/sdb
@@ -1016,6 +1047,7 @@ disabled_test_swapfile()
 
 migrate_from_fs()
 {
+    set_watchdog 60
     local fstype=$1
 
     if [[ $fstype = ext4 ]]; then
@@ -1149,6 +1181,7 @@ d_test_meta_write_faults()
 
 test_long_name()
 {
+    set_watchdog 20
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	/dev/sdb
@@ -1167,6 +1200,7 @@ test_long_name()
 
 test_many_files()
 {
+    set_watchdog 60
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	/dev/sdb
@@ -1205,6 +1239,7 @@ disabled_test_invalid_keys()
 
 test_buffered_reads()
 {
+    set_watchdog 60
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	--bucket=8M				\
@@ -1221,6 +1256,7 @@ test_buffered_reads()
 
 test_small_fs()
 {
+    set_watchdog 60
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	--bucket=4k				\
@@ -1243,6 +1279,7 @@ test_small_torture()
 
 test_small_fsck()
 {
+    set_watchdog 60
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	--fs_size=1M				\
@@ -1255,6 +1292,7 @@ test_small_fsck()
 
 test_gc()
 {
+    set_watchdog 60
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	--compression=lz4			\
@@ -1273,6 +1311,7 @@ test_gc()
 
 test_attr_inherit()
 {
+    set_watchdog 60
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	/dev/sdb
@@ -1304,6 +1343,7 @@ test_attr_inherit()
 
 test_setattr()
 {
+    set_watchdog 60
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	/dev/sdb
@@ -1322,6 +1362,7 @@ test_setattr()
 
 test_mount_twice()
 {
+    set_watchdog 60
     mkdir -p /mnt/1 /mnt/2
     #run_quiet "" bcachefs format -f /dev/sdb
     mkfs.ext2 /dev/sdb
@@ -1335,6 +1376,7 @@ test_mount_twice()
 
 test_dump()
 {
+    set_watchdog 60
     run_quiet "" bcachefs format /dev/sdb
 
     mount -t bcachefs /dev/sdb /mnt
@@ -1347,6 +1389,7 @@ test_dump()
 
 test_kill_btree_node()
 {
+    set_watchdog 60
     run_quiet "" bcachefs format --errors=panic /dev/sdb
 
     mount -t bcachefs /dev/sdb /mnt
