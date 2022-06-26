@@ -227,16 +227,13 @@ int main(int argc, char *argv[])
 	ssize_t len;
 	char *line = NULL;
 
-	struct sigaction alarm_action = {
-		.sa_handler	= alarm_handler,
-		.sa_flags	= SA_RESTART,
-	};
+	struct sigaction alarm_action = { .sa_handler = alarm_handler };
 	if (sigaction(SIGALRM, &alarm_action, NULL))
 		die("sigaction error: %m");
 
 	if (timeout)
 		alarm(timeout);
-
+again:
 	while ((len = getline(&line, &n, childf)) >= 0) {
 		strim(line);
 
@@ -280,7 +277,11 @@ int main(int argc, char *argv[])
 		free(output);
 	}
 
-	fputs("done", stdout);
+	if (len == -1 && errno == EINTR) {
+		clearerr(childf);
+		goto again;
+	}
+
 	kill(child, SIGKILL);
 	exit(ret);
 }
