@@ -22,15 +22,14 @@ do {							\
 } while (0)
 
 static pid_t child;
-static bool print_timeout = true;
+static int childfd;
 
 static void alarm_handler(int sig)
 {
-	char msg[] = "TEST TIMEOUT\n";
-	kill(child, SIGKILL);
-	if (print_timeout)
-		write(STDOUT_FILENO, msg, strlen(msg));
-	_exit(EXIT_FAILURE);
+	char msg[] = "TEST FAILED (timed out)\n";
+
+	if (write(childfd, msg, strlen(msg)) != strlen(msg))
+		die("write error in alarm handler");
 }
 
 static void usage(void)
@@ -111,8 +110,9 @@ static const char *test_starts(const char *line)
 
 static bool test_ends(char *line)
 {
-	return  str_starts_with(line, "========= FAILED ") ||
-		str_starts_with(line, "========= PASSED ");
+	return  str_starts_with(line, "========= PASSED ") ||
+		str_starts_with(line, "========= FAILED ");
+}
 
 static FILE *popen_with_pid(char *argv[], pid_t *child)
 {
@@ -142,11 +142,32 @@ static FILE *popen_with_pid(char *argv[], pid_t *child)
 		die("error execing %s: %m", argv[0]);
 	}
 
+	childfd = pipefd[1];
+
 	FILE *childf = fdopen(pipefd[0], "r");
 	if (!childf)
 		die("fdopen error: %m");
 
 	return childf;
+}
+
+static void update_watchdog(const char *line)
+{
+	const char *new_watchdog = str_starts_with(line, "WATCHDOG ");
+	if (new_watchdog)
+		alarm(atoi(new_watchdog));
+}
+
+static char *output_line(const char *line, struct timespec start)
+{
+	struct timespec ts;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &ts))
+		die("clock_gettime error: %m");
+
+	unsigned long elapsed = ts.tv_sec - start.tv_sec;
+
+	return mprintf("%.5lu %s\n", elapsed, line);
 }
 
 int main(int argc, char *argv[])
@@ -155,7 +176,7 @@ int main(int argc, char *argv[])
 	bool exit_on_failure = false;
 	unsigned long timeout = 0;
 	int opt, ret = EXIT_FAILURE;
-	struct timespec start, ts;
+	struct timespec start;
 	char *logdir = NULL;
 	char *basename = NULL;
 
@@ -197,74 +218,69 @@ int main(int argc, char *argv[])
 	if (!logdir)
 		die("Required option -o missing");
 
-	struct sigaction alarm_action = { .sa_handler = alarm_handler };
+	FILE *childf = popen_with_pid(argv + optind, &child);
+
+	FILE *logfile = log_open(logdir, basename, NULL);
+	FILE *test_logfile = NULL;
+
+	size_t n = 0;
+	ssize_t len;
+	char *line = NULL;
+
+	struct sigaction alarm_action = {
+		.sa_handler	= alarm_handler,
+		.sa_flags	= SA_RESTART,
+	};
 	if (sigaction(SIGALRM, &alarm_action, NULL))
 		die("sigaction error: %m");
 
 	if (timeout)
 		alarm(timeout);
 
-	FILE *childf = popen_with_pid(argv + optind, &child);
-
-	FILE *logfile = log_open(logdir, basename, NULL);
-	FILE *test_logfile = NULL;
-
-	size_t n = 0, output_len = 0;
-	ssize_t len;
-	char *line = NULL;
-	char *output_line = NULL;
-
 	while ((len = getline(&line, &n, childf)) >= 0) {
 		strim(line);
 
+		char *output = output_line(line, start);
+
+		update_watchdog(line);
+
 		const char *testname = test_starts(line);
 
-		if (test_logfile &&
-		    (testname || test_ends(line))) {
-			fputc('\n', test_logfile);
+		if (test_logfile && testname) {
 			fclose(test_logfile);
 			test_logfile = NULL;
 		}
 
-		if (clock_gettime(CLOCK_MONOTONIC, &ts)) {
-			fprintf(stderr, "clock_gettime error: %m\n");
-			break;
-		}
-
-		if (output_len < n + 20) {
-			output_len = n + 20;
-			output_line = realloc(output_line, output_len);
-		}
-
-		unsigned long elapsed = ts.tv_sec - start.tv_sec;
-
-		strim(line);
-		sprintf(output_line, "%.5lu %s\n", elapsed, line);
-
 		if (test_logfile)
-			fputs(output_line, test_logfile);
-		fputs(output_line, logfile);
-		fputs(output_line, stdout);
+			fputs(output, test_logfile);
+		fputs(output, logfile);
+		fputs(output, stdout);
+
+		if (test_logfile && test_ends(line)) {
+			fclose(test_logfile);
+			test_logfile = NULL;
+		}
 
 		if (testname)
 			test_logfile = log_open(logdir, basename, testname);
 
-		if (exit_on_success &&
-		    strstr(line, "TEST SUCCESS")) {
+		if (exit_on_failure && str_starts_with(line, "TEST FAILED"))
+			break;
+
+		if (exit_on_success && str_starts_with(line, "TEST SUCCESS")) {
 			ret = 0;
 			break;
 		}
 
-		if (exit_on_failure && strstr(line, "TEST FAILED"))
-			break;
-
-		if (exit_on_failure && strstr(line, "Kernel panic")) {
-			/* Read output for five more seconds, then exit */
-			print_timeout = false;
+		if (exit_on_failure &&
+		    (strstr(line, "Kernel panic") ||
+		     strstr(line, "BUG")))
 			alarm(5);
-		}
+
+		free(output);
 	}
-out:
+
+	fputs("done", stdout);
 	kill(child, SIGKILL);
 	exit(ret);
 }

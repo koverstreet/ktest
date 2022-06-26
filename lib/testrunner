@@ -250,13 +250,16 @@ if [[ $tests = "none" ]]; then
     exit 0
 fi
 
-if [[ $ktest_exit_on_success = 0 && $ktest_interactive = 0 ]]; then
-    (
-	sleep $ktest_timeout
-	echo "TEST TIMEOUT - triggering crash"
-	echo c > /proc/sysrq-trigger
-    ) &
-fi
+
+# For now, timeouts/watchdogs are only handled in lib/qemu-wrapper.c:
+
+#if [[ $ktest_exit_on_success = 0 && $ktest_interactive = 0 ]]; then
+#    (
+#	sleep $ktest_timeout
+#	echo "TEST TIMEOUT - triggering crash"
+#	echo c > /proc/sysrq-trigger
+#    ) &
+#fi
 
 trap 'pkill -P $$ >/dev/null' EXIT
 cd /root

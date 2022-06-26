@@ -261,7 +261,7 @@ start_vm()
     else
 	# Inside the VM, we set a timer and on timeout trigger a crash dump. The
 	# timeout here is a backup:
-	qemu_cmd+=(-S -F -T $((60 + ktest_timeout)))
+	qemu_cmd+=(-S -F -T $ktest_timeout)
     fi
 
     local test_basename=$(basename -s .ktest "$ktest_test")
