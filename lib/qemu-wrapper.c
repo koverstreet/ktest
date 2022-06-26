@@ -113,6 +113,40 @@ static bool test_ends(char *line)
 {
 	return  str_starts_with(line, "========= FAILED ") ||
 		str_starts_with(line, "========= PASSED ");
+
+static FILE *popen_with_pid(char *argv[], pid_t *child)
+{
+	int pipefd[2];
+	if (pipe(pipefd))
+		die("error creating pipe: %m");
+
+	*child = fork();
+	if (*child < 0)
+		die("fork error: %m");
+
+	if (!*child) {
+		if (dup2(pipefd[1], STDOUT_FILENO) < 0)
+			die("dup2 error: %m");
+		if (dup2(pipefd[1], STDERR_FILENO) < 0)
+			die("dup2 error: %m");
+		close(pipefd[1]);
+
+		int devnull = open("/dev/null", O_RDONLY);
+		if (devnull < 0)
+			die("error opening /dev/null; %m");
+		if (dup2(devnull, STDIN_FILENO) < 0)
+			die("dup2 error: %m");
+		close(devnull);
+
+		execvp(argv[0], argv);
+		die("error execing %s: %m", argv[0]);
+	}
+
+	FILE *childf = fdopen(pipefd[0], "r");
+	if (!childf)
+		die("fdopen error: %m");
+
+	return childf;
 }
 
 int main(int argc, char *argv[])
@@ -163,32 +197,6 @@ int main(int argc, char *argv[])
 	if (!logdir)
 		die("Required option -o missing");
 
-	int pipefd[2];
-	if (pipe(pipefd))
-		die("error creating pipe: %m");
-
-	child = fork();
-	if (child < 0)
-		die("fork error: %m");
-
-	if (!child) {
-		if (dup2(pipefd[1], STDOUT_FILENO) < 0)
-			die("dup2 error: %m");
-		if (dup2(pipefd[1], STDERR_FILENO) < 0)
-			die("dup2 error: %m");
-		close(pipefd[1]);
-
-		int devnull = open("/dev/null", O_RDONLY);
-		if (devnull < 0)
-			die("error opening /dev/null; %m");
-		if (dup2(devnull, STDIN_FILENO) < 0)
-			die("dup2 error: %m");
-		close(devnull);
-
-		execvp(argv[optind], argv + optind);
-		die("error execing %s: %m", argv[optind]);
-	}
-
 	struct sigaction alarm_action = { .sa_handler = alarm_handler };
 	if (sigaction(SIGALRM, &alarm_action, NULL))
 		die("sigaction error: %m");
@@ -196,11 +204,7 @@ int main(int argc, char *argv[])
 	if (timeout)
 		alarm(timeout);
 
-	FILE *childf = fdopen(pipefd[0], "r");
-	if (!childf) {
-		fprintf(stderr, "fdopen error: %m\n");
-		goto out;
-	}
+	FILE *childf = popen_with_pid(argv + optind, &child);
 
 	FILE *logfile = log_open(logdir, basename, NULL);
 	FILE *test_logfile = NULL;
