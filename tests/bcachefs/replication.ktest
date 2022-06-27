@@ -18,6 +18,8 @@ config-timeout $(stress_timeout)
 
 test_recovery()
 {
+    set_watchdog 180
+
     run_quiet "" bcachefs format		\
 	--discard				\
 	--bucket=64k				\
@@ -49,37 +51,10 @@ test_recovery()
     done
 }
 
-disabled_test_assemble()
-{
-    run_quiet "" bcachefs format		\
-	--errors=panic				\
-	--discard				\
-	/dev/sd[bcd]
-
-    bcachefs assemble /dev/sd[bcd]
-
-    mount -t bcachefs /dev/sdb /mnt
-    umount /mnt
-}
-
-disabled_test_assemble_incremental()
-{
-    run_quiet "" bcachefs format		\
-	--errors=panic				\
-	/dev/sd[bcd]
-
-    bcachefs incremental /dev/sdb
-    bcachefs incremental /dev/sdc
-    bcachefs incremental /dev/sdd
-
-    mount -t bcachefs /dev/sdb /mnt
-    umount /mnt
-}
-
 test_multimount()
 {
+    set_watchdog 10
     bcachefs format				\
-	--errors=panic				\
 	/dev/sdb
 
     mkdir -p /mnt/1 /mnt/2
@@ -98,6 +73,7 @@ test_twodevices()
 
 test_largebuckets()
 {
+    set_watchdog 30
     run_quiet "" bcachefs format -f --bucket=8M /dev/sd[bcd]
 
     mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
@@ -114,7 +90,8 @@ test_replicas()
 
 test_replicas_variable_buckets()
 {
-    run_quiet "" bcachefs format -f --errors=panic	\
+    set_watchdog 60
+    run_quiet "" bcachefs format -f			\
 	--replicas=2					\
 	--bucket=32k	/dev/sdb			\
 	--bucket=64k	/dev/sdc			\
@@ -133,9 +110,9 @@ d_test_copygc_torture()
     loops=$((($ktest_priority + 1) * 4))
 
     bcachefs_antagonist
+    set_watchdog 600
 
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	"$@" /dev/sd[bcd]
 
     mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
@@ -180,6 +157,7 @@ d_test_copygc_torture()
 
 do_remove_test()
 {
+    set_watchdog 60
     offline=$1
     evacuate=$2
 
@@ -253,11 +231,11 @@ test_device_evacuate_online()
 
 test_device_add()
 {
+    set_watchdog 40
     #setup_tracing 'bcachefs:*'
 
     run_quiet "" bcachefs format		\
 	--block_size=4k				\
-	--errors=panic				\
 	--no_initialize				\
 	/dev/sdb
 
@@ -286,8 +264,9 @@ test_device_add()
 
 test_device_set_state()
 {
+    set_watchdog 30
+
     run_quiet "" bcachefs format		\
-	--errors=panic				\
 	--replicas=2				\
 	/dev/sd[bcd]
 
@@ -317,9 +296,10 @@ test_device_set_state()
 
 test_device_ro()
 {
+    set_watchdog 30
+
     run_quiet "" bcachefs format		\
 	--btree_node_size=128k			\
-	--errors=panic				\
 	/dev/sd[bcd]
 
     mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
@@ -345,8 +325,8 @@ test_device_ro()
 
 test_device_set_state_offline()
 {
+    set_watchdog 60
     run_quiet "" bcachefs format		\
-	--errors=panic				\
 	--replicas=2				\
 	/dev/sd[bcd]
 
@@ -376,8 +356,8 @@ test_device_set_state_offline()
 
 test_device_readd()
 {
+    set_watchdog 40
     run_quiet "" bcachefs format		\
-	--errors=panic				\
 	--replicas=2				\
 	/dev/sd[bc]
 
@@ -410,6 +390,7 @@ test_device_readd()
 
 do_replicas_errors_test()
 {
+    set_watchdog 180
     error_type=$1
 
     echo 1 > /sys/module/bcachefs/parameters/verify_all_btree_replicas
@@ -418,7 +399,6 @@ do_replicas_errors_test()
     mdadm -B /dev/md0 -lfaulty -n1 /dev/sdc
 
     run_quiet "" bcachefs format		\
-	--errors=panic				\
 	--replicas=2				\
 	/dev/md0 /dev/sdb
 
@@ -453,8 +433,9 @@ test_replicas_read_errors()
 
 test_cmd_fs_usage()
 {
+    set_watchdog 20
+
     run_quiet "" bcachefs format		\
-	--errors=panic				\
 	--replicas=2				\
 	--bucket=128k				\
 	/dev/sd[bcd]
@@ -482,8 +463,8 @@ test_cmd_fs_usage()
 
 test_rereplicate()
 {
+    set_watchdog 60
     run_quiet "" bcachefs format		\
-	--errors=panic				\
 	/dev/sd[bcd]
     mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
 
@@ -527,11 +508,11 @@ disabled_test_device_add_faults()
 
 test_striping()
 {
+    set_watchdog 60
     setup_tracing 'bcachefs:*'
 
     if false; then
 	run_quiet "" bcachefs format		\
-	    --errors=panic			\
 	    --replicas=2			\
 	    /dev/sd[bc]
 
@@ -545,7 +526,6 @@ test_striping()
 	dd if=/dev/zero of=/mnt/test1 bs=1M count=1024 oflag=direct
     else
 	run_quiet "" bcachefs format		\
-	    --errors=panic			\
 	    --data_checksum=none		\
 	    --replicas=2			\
 	    --label cache			\
@@ -571,7 +551,6 @@ test_striping()
 disabled_change_replicas()
 {
     run_quiet "" bcachefs format		\
-	--errors=panic				\
 	--replicas=2				\
 	/dev/sd[bc]
 
@@ -602,7 +581,6 @@ disabled_change_replicas()
 disabled_change_replicas2()
 {
     run_quiet "" bcachefs format		\
-	--errors=panic				\
 	--replicas=2				\
 	/dev/sd[bc]
 
@@ -622,11 +600,12 @@ disabled_change_replicas2()
 
 test_replicas_gc()
 {
+    set_watchdog 60
+
     echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
     #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
 
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	--replicas=2				\
 	/dev/sd[bcdef]
     devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
@@ -648,7 +627,9 @@ test_replicas_gc()
 
 test_replace_replica()
 {
-    bcachefs format --errors=panic --replicas=2 /dev/sd[bc]
+    set_watchdog 60
+
+    bcachefs format --replicas=2 /dev/sd[bc]
     mount -t bcachefs -o degraded /dev/sdb /mnt
 
     bcachefs device add -f /mnt /dev/sdd
@@ -665,7 +646,9 @@ test_replace_replica()
 
 test_key_type_error()
 {
-    bcachefs format --errors=panic --replicas=2 /dev/sd[bc]
+    set_watchdog 20
+
+    bcachefs format --replicas=2 /dev/sd[bc]
 
     mount -t bcachefs /dev/sdb:/dev/sdc /mnt
     bcachefs setattr --data_replicas=1 /mnt

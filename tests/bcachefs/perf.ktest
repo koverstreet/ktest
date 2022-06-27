@@ -11,27 +11,39 @@ if [[ $KERNEL_ARCH = x86 ]]; then
     require-kernel-config CRYPTO_CRC32C_INTEL
 fi
 
-config-mem	    8G
-config-scratch-devs 8G
-config-timeout	    600
+btree_node_size=512k
+t=12
 
-btree_node_size=8k
+config-mem	    16G
+config-scratch-devs 32G
+config-timeout	    180
+config-cpus	    $t
+
 n=10M
-t=4
 
 perf_mkfs()
 {
-    bcachefs format				\
+    run_quiet "" bcachefs format		\
 	--errors=panic				\
-	/dev/sdb >/dev/null
-	#--bucket=$btree_node_size		\
-	#--btree_node_size=$btree_node_size	\
-    mount /dev/sdb /mnt
+	--bucket=$btree_node_size		\
+	--btree_node_size=$btree_node_size	\
+	--no_initialize				\
+	--version=11				\
+	/dev/sdb
+    mount -t bcachefs -o version_upgrade /dev/sdb /mnt
+    bcachefs device resize-journal /dev/sdb 1G
+    sleep 1
+    bcachefs device resize-journal /dev/sdb 2G
+    sleep 1
+    bcachefs device resize-journal /dev/sdb 3G
+    sleep 1
+    bcachefs device resize-journal /dev/sdb 4G
     ln -sf /sys/fs/bcachefs/*/perf_test p
 }
 
 test_insert_overwrite()
 {
+    set_watchdog 180
     perf_mkfs
 
     echo seq_insert		$n 1	> p
@@ -43,65 +55,148 @@ test_insert_overwrite()
 
 test_perf_profile()
 {
+    set_watchdog 180
     perf_mkfs
 
-    perf_4.14 record -g -o seq_insert -- echo seq_insert $n 1	> p
-    perf_4.14 record -g -o seq_lookup -- echo seq_lookup $n 1	> p
+    perf record -g -o seq_insert -- echo seq_insert $n 1	> p
+    perf record -g -o seq_lookup -- echo seq_lookup $n 1	> p
 
-    perf_4.14 stat -- echo seq_lookup $n 1	> p
+    perf stat -- echo seq_lookup $n 1	> p
 
-    #perf_4.14 record -g -o seq_delete -- echo seq_delete $n 1	> p
+    #perf record -g -o seq_delete -- echo seq_delete $n 1	> p
 
     umount /mnt
 }
 
-test_merge_torture()
+test_perf_rand_insert_multi()
 {
+    set_watchdog 600
+    settle=0
+
     perf_mkfs
-    while true; do
-	echo seq_insert		$n 1	> p
-	echo seq_delete		$n 1	> p
-    done
+    #perf_4.19 record -a -- echo rand_insert_multi	$n $t	> p
+    #exit
+
+    echo rand_insert		$n 1	> p
+    echo seq_delete		$n 1	> p
+    sleep $settle
+
+    echo rand_insert		$n $t	> p
+    echo seq_delete		$n 1	> p
+    sleep $settle
+
+    echo rand_insert_multi	$n 1	> p
+    echo seq_delete		$n 1	> p
+    sleep $settle
+
+    echo rand_insert_multi	$n $t	> p
+    sleep $settle
+}
+
+test_perf_all_profile()
+{
+    set_watchdog 600
+    settle=0
+
+    perf_mkfs
+    echo starting benches
+
+    perf record -ao /ktest-out/seq_insert	-- echo seq_insert		$n 1	> p
+    sleep $settle
+    perf record -o /ktest-out/seq_lookup		-- echo seq_lookup		$n 1	> p
+    sleep $settle
+    perf record -ao /ktest-out/seq_delete		-- echo seq_delete		$n 1	> p
+    sleep $settle
+
+    perf record -ao /ktest-out/rand_insert		-- echo rand_insert		$n 1	> p
+    sleep $settle
+    perf record -ao /ktest-out/seq_delete		-- echo seq_delete		$n 1	> p
+    sleep $settle
+    perf record -ao /ktest-out/rand_insert_multikey -- echo rand_insert_multi	$n 1	> p
+    sleep $settle
+    echo seq_delete		$n 1	> p
+    sleep $settle
+    perf record -ao /ktest-out/rand_insert_mt	-- echo rand_insert	$n $t	> p
+    sleep $settle
+
+    perf record -o /ktest-out/rand_lookup		-- echo rand_lookup	$n 1	> p
+    sleep $settle
+    perf record -ao /ktest-out/rand_lookup_mt	-- echo rand_lookup	$n $t	> p
+    sleep $settle
+
+    perf record -ao /ktest-out/rand_mixed		-- echo rand_mixed		$n 1	> p
+    sleep $settle
+    perf record -ao /ktest-out/rand_mixed_mt	-- echo rand_mixed		$n $t	> p
+    sleep $settle
     umount /mnt
 }
 
 test_perf_all()
 {
+    set_watchdog 600
     settle=0
 
     perf_mkfs
-    #while true; do
-	echo starting benches
+    echo starting benches
 
-	echo seq_insert		$n 1	> p
-	sleep $settle
-	echo seq_lookup		$n 1	> p
-	sleep $settle
+    echo seq_insert		$n 1	> p
+    sleep $settle
+    echo seq_lookup		$n 1	> p
+    sleep $settle
+    echo seq_delete		$n 1	> p
+    sleep $settle
+
+    echo rand_insert	    	$n 1	> p
+    sleep $settle
+    echo seq_delete		$n 1	> p
+    sleep $settle
+
+    #echo rand_insert_multi	$n 1	> p
+    #sleep $settle
+    #echo seq_delete	    	$n 1	> p
+    #sleep $settle
+
+    echo rand_insert	    	$n $t	> p
+    sleep $settle
+
+    echo rand_lookup	    	$n 1	> p
+    sleep $settle
+    echo rand_lookup		$n $t	> p
+    sleep $settle
+
+    echo rand_mixed		$n 1	> p
+    sleep $settle
+    echo rand_mixed		$n $t	> p
+    sleep $settle
+    umount /mnt
+}
+
+test_perf_lookup()
+{
+    set_watchdog 600
+    settle=0
+
+    perf_mkfs
+    echo starting benches
+
+    for n in 10M 20M 50M 100M; do
 	echo seq_delete		$n 1	> p
 	sleep $settle
 
-	echo rand_insert	$n 1	> p
-	sleep $settle
-	echo seq_delete		$n 1	> p
-	sleep $settle
 	echo rand_insert	$n $t	> p
 	sleep $settle
-
 	echo rand_lookup	$n 1	> p
 	sleep $settle
 	echo rand_lookup	$n $t	> p
-	sleep $settle
+    done
 
-	echo rand_mixed		$n 1	> p
-	sleep $settle
-	echo rand_mixed		$n $t	> p
-	sleep $settle
     #done
     umount /mnt
 }
 
 do_unit_tests()
 {
+    set_watchdog 60
     perf_mkfs
 
     for i in $@; do
