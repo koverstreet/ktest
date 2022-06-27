@@ -91,6 +91,8 @@ test_perf_rand_insert_multi()
 
     echo rand_insert_multi	$n $t	> p
     sleep $settle
+
+    umount /mnt
 }
 
 test_perf_all_profile()
