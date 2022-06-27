@@ -21,31 +21,6 @@ do {							\
 	exit(EXIT_FAILURE);				\
 } while (0)
 
-static pid_t child;
-static int childfd;
-
-static void alarm_handler(int sig)
-{
-	char msg[] = "TEST FAILED (timed out)\n";
-
-	if (write(childfd, msg, strlen(msg)) != strlen(msg))
-		die("write error in alarm handler");
-}
-
-static void usage(void)
-{
-	puts("qemu-wrapper - wrapper for qemu to catch test success/failure\n"
-	     "Usage: qemu-wrapper [OPTIONS] -- <qemu-command>\n"
-	     "\n"
-	     "Options\n"
-	     "      -S              Exit on success\n"
-	     "      -F              Exit on failure\n"
-	     "      -T TIMEOUT      Timeout after TIMEOUT seconds\n"
-	     "      -b name         base name for log files\n"
-	     "      -o dir          output directory for log files\n"
-	     "      -h              Display this help and exit\n");
-}
-
 static char *mprintf(const char *fmt, ...)
 {
 	va_list args;
@@ -60,6 +35,34 @@ static char *mprintf(const char *fmt, ...)
 		die("insufficient memory");
 
 	return str;
+}
+
+static pid_t child;
+static int childfd;
+static const char *testname;
+
+static void alarm_handler(int sig)
+{
+	char *msg = mprintf("========= FAILED TIMEOUT %s",
+			    testname ?: "(no test");
+
+	if (write(childfd, msg, strlen(msg)) != strlen(msg))
+		die("write error in alarm handler");
+	free(msg);
+}
+
+static void usage(void)
+{
+	puts("qemu-wrapper - wrapper for qemu to catch test success/failure\n"
+	     "Usage: qemu-wrapper [OPTIONS] -- <qemu-command>\n"
+	     "\n"
+	     "Options\n"
+	     "      -S              Exit on success\n"
+	     "      -F              Exit on failure\n"
+	     "      -T TIMEOUT      Timeout after TIMEOUT seconds\n"
+	     "      -b name         base name for log files\n"
+	     "      -o dir          output directory for log files\n"
+	     "      -h              Display this help and exit\n");
 }
 
 static char *log_path(const char *logdir, const char *basename, const char *testname)
@@ -241,11 +244,12 @@ again:
 
 		update_watchdog(line);
 
-		const char *testname = test_starts(line);
+		testname = test_starts(line);
 
 		if (test_logfile && testname) {
 			fclose(test_logfile);
 			test_logfile = NULL;
+			testname = NULL;
 		}
 
 		if (test_logfile)
