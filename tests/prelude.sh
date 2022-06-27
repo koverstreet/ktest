@@ -11,6 +11,8 @@ case $ktest_arch in
 	require-kernel-config IO_DELAY_0XED
 	require-kernel-config 64BIT=n
 	require-kernel-config ACPI	# way slower without it, do not know why
+	require-kernel-config UNWINDER_FRAME_POINTER
+	require-kernel-config HARDLOCKUP_DETECTOR
 
 	have_kvmguest=1
 	have_virtio=1
@@ -20,9 +22,11 @@ case $ktest_arch in
 	require-kernel-config SMP
 	require-kernel-config MCORE2	# optimize for core2
 	require-kernel-config IO_DELAY_0XED
-	require-kernel-config IA32_EMULATION
+	#require-kernel-config IA32_EMULATION
 	require-kernel-config 64BIT
 	require-kernel-config ACPI	# way slower without it, do not know why
+	require-kernel-config UNWINDER_FRAME_POINTER
+	require-kernel-config HARDLOCKUP_DETECTOR
 
 	have_kvmguest=1
 	have_virtio=1
@@ -181,12 +185,8 @@ require-kernel-config FTRACE_SYSCALLS
 require-kernel-config FUNCTION_TRACER
 #require-kernel-config ENABLE_DEFAULT_TRACERS
 
-# Debugging options
-require-kernel-config UNWINDER_FRAME_POINTER
-
 require-kernel-config PANIC_ON_OOPS
 require-kernel-config SOFTLOCKUP_DETECTOR
-require-kernel-config HARDLOCKUP_DETECTOR
 require-kernel-config DETECT_HUNG_TASK
 #require-kernel-config DEFAULT_HUNG_TASK_TIMEOUT=30
 require-kernel-config WQ_WATCHDOG

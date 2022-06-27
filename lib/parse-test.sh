@@ -1,7 +1,7 @@
 
 parse_test_deps()
 {
-    ktest_cpus=$(grep -c '^processor' /proc/cpuinfo)
+    ktest_cpus=$(nproc)
     ktest_mem=""
     ktest_timeout=""
     ktest_kernel_append=()
@@ -9,6 +9,7 @@ parse_test_deps()
     ktest_scratch_devs=()
     ktest_make_install=()
     ktest_kernel_config_require=()
+    ktest_qemu_append=()
 
     local NEXT_SCRATCH_DEV="b"
     local TESTPROG=$1
@@ -90,6 +91,18 @@ parse_test_deps()
     }
 
     require-kernel-config()
+    {
+	local OLDIFS=$IFS
+	IFS=','
+
+	for i in $1; do
+	    ktest_kernel_config_require+=("$i")
+	done
+
+	IFS=$OLDIFS
+    }
+
+    require-qemu-append()
     {
 	local OLDIFS=$IFS
 	IFS=','

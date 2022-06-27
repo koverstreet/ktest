@@ -15,7 +15,7 @@ checkdep make
 ktest_kernel_source="."	# dir of kernel source
 			#       set with: -k <path>
 			#       defaults: current directory
-ktest_njobs=$(($(grep -c '^processor' /proc/cpuinfo) * 2))
+ktest_njobs=$(nproc)
 
 COVERAGE=""		# doing code coverage?
 MAKEARGS=()
@@ -180,10 +180,10 @@ build_kernel()
 
     case $KERNEL_ARCH in
 	mips)
-	    do_make vmlinuz
+	    do_make -k vmlinuz
 	    ;;
 	*)
-	    do_make
+	    do_make -k
 	    ;;
     esac
 
