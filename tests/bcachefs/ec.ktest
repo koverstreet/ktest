@@ -156,7 +156,7 @@ test_ec_mixed_tiers()
 
 test_ec_gc()
 {
-    set_watchdog 60
+    set_watchdog 1200
 
     bcachefs_antagonist
 

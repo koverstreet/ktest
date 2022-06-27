@@ -66,6 +66,8 @@ test_tiering_drop_alloc()
 
 test_tiering_buffered()
 {
+    set_watchdog 6000
+
     run_quiet "" bcachefs format		\
 	--block_size=4k				\
 	--label=ssd.ssd1 /dev/sdb		\

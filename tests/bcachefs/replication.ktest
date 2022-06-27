@@ -90,7 +90,7 @@ test_replicas()
 
 test_replicas_variable_buckets()
 {
-    set_watchdog 60
+    set_watchdog 600
     run_quiet "" bcachefs format -f			\
 	--replicas=2					\
 	--bucket=32k	/dev/sdb			\

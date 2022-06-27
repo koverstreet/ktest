@@ -286,7 +286,7 @@ test_journal_resize()
 
 test_drop_alloc()
 {
-    set_watchdog 30
+    set_watchdog 90
     run_quiet "" bcachefs format -f /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
 
@@ -1047,7 +1047,7 @@ disabled_test_swapfile()
 
 migrate_from_fs()
 {
-    set_watchdog 60
+    set_watchdog 180
     local fstype=$1
 
     if [[ $fstype = ext4 ]]; then
@@ -1069,7 +1069,7 @@ migrate_from_fs()
 	--encrypted				\
 	--no_passphrase				\
 	-F -f /mnt | tee /root/migratelog
-    offset=$(grep -w mount /root/migratelog|grep -oE 'sb=[[:digit:]]+'|sed -e 's/sb=//')
+    offset=$(grep -oE 'sb=[[:digit:]]+' /root/migratelog|head -n1|sed -e 's/sb=//')
 
     echo "Attempting to mount bcachefs filesystem with superblock offset $offset"
 
@@ -1094,13 +1094,13 @@ migrate_from_fs()
     fsck.$fstype -n /dev/sdb
 
     mount -t bcachefs -o sb=$offset /dev/sdb /mnt
-    rm /mnt/old_migrated_filesystem
     umount /mnt
 
     echo "Creating default superblock"
-
     bcachefs migrate-superblock -d /dev/sdb -o $offset
+
     mount -t bcachefs /dev/sdb /mnt
+    rm /mnt/old_migrated_filesystem
     umount /mnt
 }
 
