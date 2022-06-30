@@ -206,6 +206,9 @@ build_kernel()
     touch "$ktest_kernel_build/modules.builtin"
 
     do_make modules_install
+
+    local kernel_version=$(cat "$ktest_kernel_build/include/config/kernel.release")
+    /sbin/depmod -b "$ktest_kernel_binary/" -v $kernel_version
 }
 
 cmd_run()
