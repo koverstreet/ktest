@@ -39,7 +39,7 @@ static char *mprintf(const char *fmt, ...)
 
 static pid_t child;
 static int childfd;
-static const char *testname;
+static char *testname;
 
 static void alarm_handler(int sig)
 {
@@ -106,15 +106,20 @@ static const char *str_starts_with(const char *str, const char *prefix)
 	return str + len;
 }
 
-static const char *test_starts(const char *line)
+static char *test_starts(const char *line)
 {
-	return str_starts_with(line, "========= TEST   ");
-}
+	const char *testname = str_starts_with(line, "========= TEST   ");
+	char *ret, *p;
 
-static bool test_ends(char *line)
-{
-	return  str_starts_with(line, "========= PASSED ") ||
-		str_starts_with(line, "========= FAILED ");
+	if (!testname)
+		return NULL;
+
+	ret = strdup(testname);
+
+	while ((p = strchr(ret, '/')))
+		*p = '.';
+
+	return ret;
 }
 
 static FILE *popen_with_pid(char *argv[], pid_t *child)
@@ -171,6 +176,12 @@ static char *output_line(const char *line, struct timespec start)
 	unsigned long elapsed = ts.tv_sec - start.tv_sec;
 
 	return mprintf("%.5lu %s\n", elapsed, line);
+}
+
+static bool test_ends(char *line)
+{
+	return  str_starts_with(line, "========= PASSED ") ||
+		str_starts_with(line, "========= FAILED ");
 }
 
 int main(int argc, char *argv[])
@@ -249,6 +260,7 @@ again:
 		if (test_logfile && testname) {
 			fclose(test_logfile);
 			test_logfile = NULL;
+			free(testname);
 			testname = NULL;
 		}
 
@@ -262,8 +274,11 @@ again:
 			test_logfile = NULL;
 		}
 
-		if (testname)
+		if (testname) {
 			test_logfile = log_open(logdir, basename, testname);
+			free(testname);
+			testname = NULL;
+		}
 
 		if (exit_on_failure && str_starts_with(line, "TEST FAILED"))
 			break;
