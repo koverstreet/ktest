@@ -43,8 +43,8 @@ static char *testname;
 
 static void alarm_handler(int sig)
 {
-	char *msg = mprintf("========= FAILED TIMEOUT %s",
-			    testname ?: "(no test");
+	char *msg = mprintf("========= FAILED TIMEOUT %s\n",
+			    testname ?: "(no test)");
 
 	if (write(childfd, msg, strlen(msg)) != strlen(msg))
 		die("write error in alarm handler");
@@ -281,6 +281,9 @@ again:
 		}
 
 		if (exit_on_failure && str_starts_with(line, "TEST FAILED"))
+			break;
+
+		if (exit_on_failure && strstr(line, "FAILED TIMEOUT"))
 			break;
 
 		if (exit_on_success && str_starts_with(line, "TEST SUCCESS")) {
