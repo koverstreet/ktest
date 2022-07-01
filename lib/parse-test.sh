@@ -166,4 +166,117 @@ parse_test_deps()
 	echo "test must specify config-timeout"
 	exit 1
     fi
+
+    # may be overridden by test:
+    if [[ $(type -t run_test) != function ]]; then
+	run_test()
+	{
+	    local test=test_$1
+
+	    if [[ $(type -t $test) != function ]]; then
+		echo "test $1 does not exist"
+		exit 1
+	    fi
+
+	    $test
+	}
+    fi
+
+    # may be overridden by test:
+    if [[ $(type -t run_tests) != function ]]; then
+	run_tests()
+	{
+	    local tests_passed=()
+	    local tests_failed=()
+
+	    echo
+	    echo "Running tests $@"
+	    echo
+
+	    for i in $@; do
+		echo "========= TEST   $i"
+		echo
+
+		local start=$(date '+%s')
+		local ret=0
+		(set -e; run_test $i)
+		ret=$?
+		local finish=$(date '+%s')
+
+		pkill -P $$ >/dev/null
+
+		# XXX: check dmesg for warnings, oopses, slab corruption, etc. before
+		# signaling success
+
+		echo
+
+		if [[ $ret = 0 ]]; then
+		    echo "========= PASSED $i in $(($finish - $start))s"
+		    tests_passed+=($i)
+		else
+		    echo "========= FAILED $i in $(($finish - $start))s"
+		    tests_failed+=($i)
+
+		    # Try to clean up after a failed test so we can run the rest of
+		    # the tests - unless failfast is enabled, or there was only one
+		    # test to run:
+
+		    [[ $ktest_failfast = 1 ]] && break
+		    [[ $# = 1 ]] && break
+
+		    for mnt in $(awk '{print $2}' /proc/mounts|grep ^/mnt|sort -r); do
+			while [[ -n $(fuser -k -M -m $mnt) ]]; do
+			    sleep 1
+			done
+			umount $mnt
+		    done
+		fi
+	    done
+
+	    echo
+	    echo "Passed: ${tests_passed[@]}"
+	    echo "Failed: ${tests_failed[@]}"
+
+	    return ${#tests_failed[@]}
+	}
+    fi
+
+    # may be overridden by test:
+    if [[ $(type -t list_tests) != function ]]; then
+	list_tests()
+	{
+	    declare -F|sed -ne '/ test_/ s/.*test_// p'
+	}
+    fi
+
+    ktest_tests=$(list_tests)
+
+    if [[ -z $ktest_tests ]]; then
+	echo "No tests found"
+	echo "TEST FAILED"
+	exit 1
+    fi
+
+    local t
+
+    # Ensure specified tests exist:
+    if [[ -n $ktest_testargs ]]; then
+	for t in $ktest_testargs; do
+	    if ! echo "$ktest_tests"|grep -wq "$t"; then
+		echo "Test $t not found"
+		exit 1
+	    fi
+	done
+
+	ktest_tests="$ktest_testargs"
+    fi
+
+    # Mark tests not run:
+    local testname=$(basename -s .ktest "$ktest_test")
+    mkdir -p $ktest_out/out
+    for t in $ktest_tests; do
+	t=$(echo "$t"|tr / .)
+
+	echo "========= NOTRUN $t" > $ktest_out/out/$testname.$t
+    done
 }
