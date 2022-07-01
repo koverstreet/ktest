@@ -6,6 +6,7 @@ require-kernel-config MD
 require-kernel-config BLK_DEV_MD
 require-kernel-config MD_FAULTY
 require-kernel-config NET
+require-kernel-config BLK_DEV
 require-kernel-config BLK_DEV_NBD
 require-kernel-config TARGET_CORE
 require-kernel-config TCM_IBLOCK
@@ -75,7 +76,6 @@ test_iscsi()
     array_teardown
 }
 
-
 test_minio()
 {
     array_setup
@@ -89,7 +89,6 @@ test_minio()
 
     array_teardown
 }
-
 
 test_nbd()
 {
@@ -111,4 +110,3 @@ test_nbd()
 
     array_teardown
 }
-
