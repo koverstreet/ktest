@@ -153,6 +153,12 @@ parse_test_deps()
 	ktest_timeout=$n
     }
 
+    config-arch()
+    {
+	parse_arch "$1"
+	checkdep_arch
+    }
+
     pushd "$(dirname "$TESTPROG")"	> /dev/null
     . $(basename "$TESTPROG")
     popd				> /dev/null
@@ -273,7 +279,7 @@ parse_test_deps()
 
     # Mark tests not run:
     local testname=$(basename -s .ktest "$ktest_test")
-    mkdir -p $ktest_out/out
+    mkdir -p "$ktest_out/out"
     for t in $ktest_tests; do
 	t=$(echo "$t"|tr / .)
 

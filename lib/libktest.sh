@@ -84,10 +84,8 @@ parse_ktest_arg()
     esac
 }
 
-parse_args_post()
+checkdep_arch()
 {
-    parse_arch "$ktest_arch"
-
     checkdep $QEMU_BIN $QEMU_PACKAGE
 
     if [[ -z $ktest_root_image ]]; then
@@ -101,6 +99,12 @@ parse_args_post()
 	    exit 1
 	fi
     fi
+}
+
+parse_args_post()
+{
+    parse_arch "$ktest_arch"
+    checkdep_arch
 
     ktest_out=$(readlink -f "$ktest_out")
     ktest_kernel_binary="$ktest_out/kernel.$ktest_arch"

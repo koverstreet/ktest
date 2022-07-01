@@ -4,7 +4,13 @@
 # going to be able to run much with this kernel - this is really just for
 # checking if it builds
 
+config-arch x86
+
 require-lib bcachefs-test-libs.sh
-require-kernel-config 64BIT=n
 
 config-timeout 30
+
+test_boot()
+{
+    true
+}
