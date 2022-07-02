@@ -40,11 +40,12 @@ static char *mprintf(const char *fmt, ...)
 static pid_t child;
 static int childfd;
 static char *testname;
+static unsigned long timeout;
 
 static void alarm_handler(int sig)
 {
-	char *msg = mprintf("========= FAILED TIMEOUT %s\n",
-			    testname ?: "(no test)");
+	char *msg = mprintf("========= FAILED TIMEOUT %s in %lus\n",
+			    testname ?: "(no test)", timeout);
 
 	if (write(childfd, msg, strlen(msg)) != strlen(msg))
 		die("write error in alarm handler");
@@ -162,8 +163,10 @@ static FILE *popen_with_pid(char *argv[], pid_t *child)
 static void update_watchdog(const char *line)
 {
 	const char *new_watchdog = str_starts_with(line, "WATCHDOG ");
-	if (new_watchdog)
-		alarm(atoi(new_watchdog));
+	if (new_watchdog) {
+		timeout = atol(new_watchdog);
+		alarm(timeout);
+	}
 }
 
 static char *output_line(const char *line, struct timespec start)
@@ -181,14 +184,14 @@ static char *output_line(const char *line, struct timespec start)
 static bool test_ends(char *line)
 {
 	return  str_starts_with(line, "========= PASSED ") ||
-		str_starts_with(line, "========= FAILED ");
+		str_starts_with(line, "========= FAILED ") ||
+		str_starts_with(line, "========= NOTRUN");
 }
 
 int main(int argc, char *argv[])
 {
 	bool exit_on_success = false;
 	bool exit_on_failure = false;
-	unsigned long timeout = 0;
 	int opt, ret = EXIT_FAILURE;
 	struct timespec start;
 	char *logdir = NULL;
