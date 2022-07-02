@@ -602,7 +602,7 @@ test_crypto_lz4()
 
 run_copygc_torture()
 {
-    set_watchdog 600
+    set_watchdog 1200
 
     loops=$((($ktest_priority + 1) * 4))
 
