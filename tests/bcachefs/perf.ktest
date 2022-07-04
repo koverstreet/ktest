@@ -16,7 +16,6 @@ t=12
 
 config-mem	    16G
 config-scratch-devs 32G
-config-timeout	    180
 config-cpus	    $t
 
 n=10M

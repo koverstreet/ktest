@@ -8,8 +8,6 @@ require-kernel-config BCACHEFS_QUOTA
 config-scratch-devs 4G
 config-scratch-devs 4G
 
-config-timeout $(stress_timeout)
-
 require-git http://evilpiepirate.org/git/linuxquota.git
 require-make linuxquota
 

@@ -12,8 +12,6 @@ config-scratch-devs 4G
 config-scratch-devs 4G
 config-scratch-devs 4G
 
-config-timeout $(stress_timeout)
-
 test_ec_small()
 {
     set_watchdog 60

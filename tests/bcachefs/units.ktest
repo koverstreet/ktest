@@ -14,7 +14,6 @@ fi
 
 config-mem	    8G
 config-scratch-devs 8G
-config-timeout	    600
 
 btree_node_size=8k
 

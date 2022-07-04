@@ -13,7 +13,6 @@ require-kernel-config BCACHEFS_POSIX_ACL
 require-kernel-config BCACHEFS_QUOTA=y
 require-kernel-config QUOTA
 
-config-mem 4G
 config-cpus 24
 
 run_tests()

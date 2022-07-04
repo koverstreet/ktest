@@ -169,8 +169,7 @@ parse_test_deps()
     fi
 
     if [ -z "$ktest_timeout" ]; then
-	echo "test must specify config-timeout"
-	exit 1
+	ktest_timeout=6000
     fi
 
     # may be overridden by test:

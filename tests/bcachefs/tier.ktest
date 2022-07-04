@@ -7,8 +7,6 @@ config-scratch-devs 4G
 config-scratch-devs 16G
 config-scratch-devs 16G
 
-config-timeout $(stress_timeout)
-
 run_basic_tiering_test()
 {
     run_basic_fio_test "$@"			\

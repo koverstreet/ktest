@@ -11,8 +11,6 @@ require-kernel-config MD_FAULTY
 config-scratch-devs 4G
 config-scratch-devs 4G
 
-config-timeout $(stress_timeout)
-
 test_stress_ng()
 {
     set_watchdog 60

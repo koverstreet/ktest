@@ -5,8 +5,6 @@ require-lib bcachefs-test-libs.sh
 config-scratch-devs 4G
 config-scratch-devs 4G
 
-config-timeout $(stress_timeout)
-
 test_snapshots_simple()
 {
     NR_SNAPS=1

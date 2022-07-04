@@ -14,8 +14,6 @@ config-scratch-devs 4G
 
 config-mem 4G
 
-config-timeout $(stress_timeout)
-
 test_recovery()
 {
     set_watchdog 180
