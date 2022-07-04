@@ -3,6 +3,7 @@
 require-kernel-config JFS_FS
 require-kernel-config JFS_POSIX_ACL
 require-kernel-config JFS_DEBUG
+require-kernel-config QUOTA
 
 require-lib xfstests.sh
 
