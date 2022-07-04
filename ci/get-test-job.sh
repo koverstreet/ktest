@@ -1,9 +1,5 @@
 #!/bin/bash
 
-set -o nounset
-set -o errexit
-set -o errtrace
-
 [[ -f ~/.ktestrc ]] && . ~/.ktestrc
 
 # Clean stale test jobs:
