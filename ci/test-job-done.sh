@@ -63,7 +63,7 @@ git_commit_html()
 		TABLECLASS=table-danger
 		;;
 	    *NOTRUN*)
-		STATUSMSG=Not Run
+		STATUSMSG="Not Run"
 		;;
 	    *"NOT STARTED"*)
 		STATUSMSG="Not Started"
