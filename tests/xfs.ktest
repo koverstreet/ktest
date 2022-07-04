@@ -14,4 +14,3 @@ run_tests()
     export MKFS_OPTIONS="-m reflink=1,rmapbt=1 -i sparse=1 -b size=1024"
     run_xfstests xfs "$@"
 }
-

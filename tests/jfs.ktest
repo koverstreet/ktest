@@ -1,0 +1,14 @@
+#!/bin/bash
+
+require-kernel-config JFS_FS
+require-kernel-config JFS_POSIX_ACL
+require-kernel-config JFS_DEBUG
+
+require-lib xfstests.sh
+
+run_tests()
+{
+    export MKFS_OPTIONS=
+
+    run_xfstests jfs "$@"
+}

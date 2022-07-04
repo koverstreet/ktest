@@ -1,0 +1,12 @@
+#!/bin/bash
+
+require-kernel-config NILFS2_FS
+
+require-lib xfstests.sh
+
+run_tests()
+{
+    export MKFS_OPTIONS=
+
+    run_xfstests nilfs2 "$@"
+}

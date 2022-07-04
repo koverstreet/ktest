@@ -8,5 +8,7 @@ require-lib xfstests.sh
 
 run_tests()
 {
+    export MKFS_OPTIONS=
+
     run_xfstests ext2 "$@"
 }

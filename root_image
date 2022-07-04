@@ -71,12 +71,13 @@ parse_arch "$ktest_arch"
 
 mkdir -p "$(dirname "$ktest_image")"
 
-PACKAGES=(kexec-tools less psmisc openssh-server	\
-    build-essential make gcc g++			\
-    autoconf automake autopoint bison			\
-    pkg-config libtool-bin				\
+PACKAGES=(kexec-tools less psmisc openssh-server		\
+    build-essential make gcc g++				\
+    autoconf automake autopoint bison				\
+    pkg-config libtool-bin					\
     gdb strace ltrace linux-perf trace-cmd blktrace sysstat	\
-    hdparm btrfs-progs mdadm lvm2			\
+    hdparm mdadm lvm2						\
+    btrfs-progs jfsutils nilfs-tools f2fs-tools			\
     bc attr gawk acl rsync git python3-docutils)
 
 # stress testing:
