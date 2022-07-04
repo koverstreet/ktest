@@ -17,12 +17,15 @@ echo "Generating summary for branch $BRANCH commit $COMMIT"
 
 set +e
 STATUSES=$(find "$OUTPUT" -name status)
-grep -c PASSED			    $STATUSES	> $OUTPUT/nr_passed
-grep -c FAILED			    $STATUSES	> $OUTPUT/nr_failed
-grep -c NOTRUN			    $STATUSES	> $OUTPUT/nr_notrun
-grep -c "NOT STARTED"		    $STATUSES	> $OUTPUT/nr_notstarted
-grep -cvE '(PASSED|FAILED|NOTRUN)'  $STATUSES	> $OUTPUT/nr_unknown
-echo $STATUSES|wc -w				> $OUTPUT/nr_tests
+
+if [[ -n $STATUSES ]]; then
+    grep -c PASSED			    $STATUSES	> $OUTPUT/nr_passed
+    grep -c FAILED			    $STATUSES	> $OUTPUT/nr_failed
+    grep -c NOTRUN			    $STATUSES	> $OUTPUT/nr_notrun
+    grep -c "NOT STARTED"		    $STATUSES	> $OUTPUT/nr_notstarted
+    grep -cvE '(PASSED|FAILED|NOTRUN)'  $STATUSES	> $OUTPUT/nr_unknown
+    echo $STATUSES|wc -w				> $OUTPUT/nr_tests
+fi
 set -o errexit
 
 echo "Running test2web"
@@ -58,16 +61,18 @@ git_log_html()
 
 	    [[ ! -d $RESULTS ]] && break
 
-	    echo "<tr>"
-	    echo "<td> <a href=\"c/$COMMIT\">$COMMIT_SHORT</a> </td>"
-	    echo "<td> $DESCRIPTION </td>"
-	    echo "<td> $(<$RESULTS/nr_passed)      </td>"
-	    echo "<td> $(<$RESULTS/nr_failed)      </td>"
-	    echo "<td> $(<$RESULTS/nr_notstarted)  </td>"
-	    echo "<td> $(<$RESULTS/nr_notrun)      </td>"
-	    echo "<td> $(<$RESULTS/nr_unknown)     </td>"
-	    echo "<td> $(<$RESULTS/nr_tests)       </td>"
-	    echo "</tr>"
+	    if [[ -f $RESULTS/nr_tests ]]; then
+		echo "<tr>"
+		echo "<td> <a href=\"c/$COMMIT\">$COMMIT_SHORT</a> </td>"
+		echo "<td> $DESCRIPTION </td>"
+		echo "<td> $(<$RESULTS/nr_passed)      </td>"
+		echo "<td> $(<$RESULTS/nr_failed)      </td>"
+		echo "<td> $(<$RESULTS/nr_notstarted)  </td>"
+		echo "<td> $(<$RESULTS/nr_notrun)      </td>"
+		echo "<td> $(<$RESULTS/nr_unknown)     </td>"
+		echo "<td> $(<$RESULTS/nr_tests)       </td>"
+		echo "</tr>"
+	    fi
 	done
 
     echo "</table>"
