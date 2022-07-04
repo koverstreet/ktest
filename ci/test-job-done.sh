@@ -19,17 +19,73 @@ set +e
 STATUSES=$(find "$OUTPUT" -name status)
 
 if [[ -n $STATUSES ]]; then
-    grep -c PASSED			    $STATUSES	> $OUTPUT/nr_passed
-    grep -c FAILED			    $STATUSES	> $OUTPUT/nr_failed
-    grep -c NOTRUN			    $STATUSES	> $OUTPUT/nr_notrun
-    grep -c "NOT STARTED"		    $STATUSES	> $OUTPUT/nr_notstarted
-    grep -cvE '(PASSED|FAILED|NOTRUN)'  $STATUSES	> $OUTPUT/nr_unknown
+    cat $STATUSES|grep -c PASSED			> $OUTPUT/nr_passed
+    cat $STATUSES|grep -c FAILED			> $OUTPUT/nr_failed
+    cat $STATUSES|grep -c NOTRUN			> $OUTPUT/nr_notrun
+    cat $STATUSES|grep -c "NOT STARTED"			> $OUTPUT/nr_notstarted
+    cat $STATUSES|grep -cvE '(PASSED|FAILED|NOTRUN)'	> $OUTPUT/nr_unknown
     echo $STATUSES|wc -w				> $OUTPUT/nr_tests
 fi
 set -o errexit
 
-echo "Running test2web"
+#echo "Running test2web"
 #test2web "$COMMITTEXT" "$OUTPUT" > "$OUTPUT"/index.html
+
+git_commit_html()
+{
+    echo '<!DOCTYPE HTML>'
+    echo "<html><head><title>$(git log -n1 --pretty=format:%s)</title></head>"
+    echo '<link href="../../bootstrap.min.css" rel="stylesheet">'
+
+    echo '<body>'
+    echo '<div class="container">'
+
+
+    echo '<table class="table">'
+
+    echo "<tr>"
+    echo "<th>$(git log -n1 --pretty=format:%s)</th>"
+    echo "</tr>"
+
+    for STATUS in $(find $OUTPUT -name status); do
+	TESTNAME=$(basename $(dirname $STATUS))
+	TESTFILE=$(echo $TESTNAME|cut -d. -f1)
+	STATUSMSG=Unknown
+	TABLECLASS=table-secondary
+
+	case $(<$STATUS) in
+	    *PASSED*)
+		STATUSMSG=Passed
+		TABLECLASS=table-success
+		;;
+	    *FAILED*)
+		STATUSMSG=Failed
+		TABLECLASS=table-danger
+		;;
+	    *NOTRUN*)
+		STATUSMSG=Not Run
+		;;
+	    *"NOT STARTED"*)
+		STATUSMSG="Not Started"
+		;;
+	esac
+
+	echo "<tr class=$TABLECLASS>"
+	echo "<td> $TESTNAME </td>"
+	echo "<td> $STATUSMSG </td>"
+	echo "<td> <a href=$TESTNAME/log.br> log    </a> </td>"
+	echo "<td> <a href=$TESTFILE.br>     full log </a> </td>"
+	echo "<td> <a href=$TESTNAME>        output directory </a> </td>"
+	echo "</tr>"
+    done
+
+    echo "</table>"
+    echo "</div>"
+    echo "</body>"
+    echo "</html>"
+}
+
+git_commit_html > $OUTPUT/index.html
 
 git_log_html()
 {

@@ -24,6 +24,8 @@ sync_git_repos()
 }
 
 while true; do
+    echo "Getting test job"
+
     TEST_JOB=( $(ssh $JOBSERVER get-test-job.sh) )
 
     BRANCH=${TEST_JOB[0]}
@@ -68,6 +70,8 @@ while true; do
 	tail -n1 "$log" > $(dirname "$log")/status
 	brotli --rm -9 "$log"
     done
+
+    brotli --rm -9 ktest-out/out/$TEST_NAME
 
     OUTPUT=$JOBSERVER_OUTPUT_DIR/c/$COMMIT
     ssh $JOBSERVER mkdir -p $OUTPUT
