@@ -283,6 +283,7 @@ parse_test_deps()
     for t in $ktest_tests; do
 	t=$(echo "$t"|tr / .)
 
-	echo "========= NOTRUN $t" > $ktest_out/out/$testname.$t
+	mkdir -p $ktest_out/out/$testname.$t
+	echo "========= NOT STARTED" > $ktest_out/out/$testname.$t/status
     done
 }

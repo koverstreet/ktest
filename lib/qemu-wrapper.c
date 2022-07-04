@@ -73,7 +73,7 @@ static char *log_path(const char *logdir, const char *basename, const char *test
 
 	return !testname
 		? mprintf("%s/%s", logdir, basename)
-		: mprintf("%s/%s.%s", logdir, basename, testname);
+		: mprintf("%s/%s.%s/log", logdir, basename, testname);
 }
 
 static FILE *log_open(const char *logdir, const char *basename, const char *testname)
