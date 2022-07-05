@@ -52,7 +52,10 @@ while true; do
 
     sync_git_repos
     git_fetch linux $COMMIT
-    git checkout $COMMIT
+    git checkout FETCH_HEAD
+
+    git_fetch linux ci-monkeypatch
+    git merge --no-edit FETCH_HEAD
 
     mkdir -p ktest-out
     rm -rf ktest-out/out
