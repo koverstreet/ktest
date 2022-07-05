@@ -11,7 +11,7 @@ cd /home/bcachefs/linux
 BRANCH=$1
 COMMIT=$2
 OUTPUT=$JOBSERVER_OUTPUT_DIR/c/$COMMIT
-COMMITTEXT=$(git log -n1 $COMMIT)
+COMMIT_SUBJECT=$(git log -n1 --pretty=format:%s $COMMIT)
 
 echo "Generating summary for branch $BRANCH commit $COMMIT"
 
@@ -28,23 +28,19 @@ if [[ -n $STATUSES ]]; then
 fi
 set -o errexit
 
-#echo "Running test2web"
-#test2web "$COMMITTEXT" "$OUTPUT" > "$OUTPUT"/index.html
-
 git_commit_html()
 {
     echo '<!DOCTYPE HTML>'
-    echo "<html><head><title>$(git log -n1 --pretty=format:%s)</title></head>"
+    echo "<html><head><title>$COMMIT_SUBJECT</title></head>"
     echo '<link href="../../bootstrap.min.css" rel="stylesheet">'
 
     echo '<body>'
     echo '<div class="container">'
 
-
     echo '<table class="table">'
 
     echo "<tr>"
-    echo "<th>$(git log -n1 --pretty=format:%s)</th>"
+    echo "<th>$COMMIT_SUBJECT</th>"
     echo "</tr>"
 
     for STATUS in $(find $OUTPUT -name status); do
