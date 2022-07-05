@@ -6,6 +6,8 @@ set -o errtrace
 
 [[ -f ~/.ktestrc ]] && . ~/.ktestrc
 
+CI_DIR=$(dirname "$(readlink -f "$0")")
+
 cd /home/bcachefs/linux
 
 BRANCH=$1
@@ -37,11 +39,13 @@ git_commit_html()
     echo '<body>'
     echo '<div class="container">'
 
-    echo '<table class="table">'
-
-    echo "<tr>"
+    echo "<h3>"
     echo "<th>$COMMIT_SUBJECT</th>"
-    echo "</tr>"
+    echo "</h3>"
+
+    cat $CI_DIR/commit-filter
+
+    echo '<table class="table">'
 
     for STATUS in $(find $OUTPUT -name status); do
 	TESTNAME=$(basename $(dirname $STATUS))

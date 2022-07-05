@@ -1,0 +1,70 @@
+<!--
+https://choosealicense.com/licenses/0bsd/
+Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted.
+
+add the following after the </h1>, before <table>
+maybe relocate the script block to within <head></head>
+-->
+
+<style>
+    .hide-without-js {
+        display: none;
+    }
+    .filtered {
+        display: none;
+    }
+    #filters {
+        margin: 1em 0;
+    }
+    #filters label{
+        margin-left: 0.3em;
+    }
+</style>
+<div id="filters" class="hide-without-js">
+    Filter by:
+</div>
+<template id="filter-template" style="display:none">
+    <label class="checkbox-inline"><input type="checkbox" checked="checked" /></label>
+</template>
+<script>
+(function () {
+    function get_row_status(el) {
+        return el.querySelector("td:nth-child(2)").textContent.trim()
+    }
+    function refresh_filters() {
+        const shown_statuses = new Set()
+        for (const el of document.querySelectorAll("#filters label")) {
+            if (el.querySelector("input").checked) {
+                shown_statuses.add(el.textContent.trim())
+            }
+        }
+        const el_table = document.querySelector("table")
+        for (const el of el_table.querySelectorAll("tr")) {
+            const status = get_row_status(el)
+            if (shown_statuses.has(status)) {
+                el.classList.remove("filtered")
+            } else {
+                el.classList.add("filtered")
+            }
+        }
+    }
+    document.addEventListener("DOMContentLoaded", (event) => {
+        const js_class_name = "hide-without-js"
+        for (const el of document.getElementsByClassName(js_class_name)) {
+            el.classList.remove(js_class_name)
+        }
+        const result_types = new Set()
+        for (const el of document.querySelectorAll("tr")) {
+            result_types.add(get_row_status(el))
+        }
+        const el_filters = document.querySelector("#filters")
+        const el_filter_template = document.querySelector("#filter-template").content
+        for (const result of result_types) {
+            const el_new_filter = el_filter_template.cloneNode(true)
+            el_new_filter.querySelector("label").appendChild(document.createTextNode(` ${result}`))
+            el_new_filter.querySelector("input").addEventListener("change", refresh_filters)
+            el_filters.appendChild(el_new_filter)
+        }
+    })
+})()
+</script>
