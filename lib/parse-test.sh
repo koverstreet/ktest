@@ -208,7 +208,7 @@ parse_test_deps()
 		ret=$?
 		local finish=$(date '+%s')
 
-		pkill -P $$ >/dev/null
+		pkill -P $$ >/dev/null || true
 
 		# XXX: check dmesg for warnings, oopses, slab corruption, etc. before
 		# signaling success
