@@ -174,7 +174,7 @@ run_fio()
 
 run_fio_randrw()
 {
-    set_watchdog 300
+    set_watchdog 600
     run_fio					\
 	--name=randrw				\
 	--rw=randrw				\

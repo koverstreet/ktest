@@ -354,7 +354,7 @@ test_device_set_state_offline()
 
 test_device_readd()
 {
-    set_watchdog 40
+    set_watchdog 120
     run_quiet "" bcachefs format		\
 	--replicas=2				\
 	/dev/sd[bc]
