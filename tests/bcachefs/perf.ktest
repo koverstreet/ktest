@@ -174,7 +174,7 @@ test_perf_all()
 
 test_perf_lookup()
 {
-    set_watchdog 1200
+    set_watchdog 2000
     settle=0
 
     perf_mkfs

@@ -431,7 +431,7 @@ test_replicas_read_errors()
 
 test_cmd_fs_usage()
 {
-    set_watchdog 20
+    set_watchdog 60
 
     run_quiet "" bcachefs format		\
 	--replicas=2				\
@@ -439,7 +439,7 @@ test_cmd_fs_usage()
 	/dev/sd[bcd]
 
     echo -n "mounting... "
-    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+    mount -t bcachefs -o verbose /dev/sdb:/dev/sdc:/dev/sdd /mnt
     echo done
 
     echo "Before writing:"

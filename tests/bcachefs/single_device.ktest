@@ -993,7 +993,7 @@ test_sysfs()
 
 test_debugfs()
 {
-    set_watchdog 10
+    set_watchdog 30
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	/dev/sdb
