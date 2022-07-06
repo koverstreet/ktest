@@ -70,7 +70,6 @@ while true; do
     fi
 
     for log in $(find ktest-out/out -name log); do
-	tail -n1 "$log" > $(dirname "$log")/status
 	brotli --rm -9 "$log"
     done
 

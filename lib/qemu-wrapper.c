@@ -82,17 +82,23 @@ static void usage(void)
 	     "      -h              Display this help and exit\n");
 }
 
-static char *log_path(const char *testname)
+static FILE *test_file_open(const char *fname)
 {
-	return !testname
-		? mprintf("%s/%s", logdir, test_basename)
-		: mprintf("%s/%s.%s/log", logdir, test_basename, testname);
+	char *path = mprintf("%s/%s.%s/%s", logdir, test_basename,
+			     current_test, fname);
+
+	FILE *f = fopen(path, "w");
+	if (!f)
+		die("error opening %s: %m", path);
+
+	free(path);
+	setlinebuf(f);
+	return f;
 }
 
-static FILE *log_open(const char *testname)
+static FILE *log_open()
 {
-	char *path = log_path(testname);
-
+	char *path = mprintf("%s/%s", logdir, test_basename);
 	FILE *f = fopen(path, "w");
 	if (!f)
 		die("error opening %s: %m", path);
@@ -189,22 +195,29 @@ static void update_watchdog(const char *line)
 	}
 }
 
+static void write_test_status(const char *status)
+{
+	FILE *f = test_file_open("status");
+
+	fputs(status, f);
+	fclose(f);
+}
+
 static void test_start(char *new_test, struct timespec now)
 {
 	free(current_test);
 	current_test		= new_test;
 	current_test_start	= now;
-	current_test_log	= log_open(new_test);
+	current_test_log	= test_file_open("log");
+
+	write_test_status("TEST FAILED");
 }
 
 static void test_end(struct timespec now)
 {
-	char *duration_path = mprintf("%s/%s.%s/duration",
-				      logdir, test_basename, current_test);
-	FILE *duration = fopen(duration_path, "w");
+	FILE *duration = test_file_open("duration");
 	fprintf(duration, "%li", now.tv_sec - current_test_start.tv_sec);
 	fclose(duration);
-	free(duration_path);
 
 	fclose(current_test_log);
 	current_test_log = NULL;
@@ -260,7 +273,7 @@ int main(int argc, char *argv[])
 
 	FILE *childf = popen_with_pid(argv + optind, &child);
 
-	FILE *logfile = log_open(NULL);
+	FILE *logfile = log_open();
 
 	size_t n = 0;
 	ssize_t len;
@@ -296,8 +309,10 @@ again:
 		fputs(output, logfile);
 		fputs(output, stdout);
 
-		if (current_test_log && test_is_ending(line))
+		if (current_test_log && test_is_ending(line)) {
+			write_test_status(line);
 			test_end(now);
+		}
 
 		if (exit_on_failure && str_starts_with(line, "TEST FAILED"))
 			break;
