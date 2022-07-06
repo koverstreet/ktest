@@ -61,7 +61,7 @@ EOF
 
     wipefs -af /dev/sdb
     mkfs.$FSTYP $MKFS_OPTIONS -q /dev/sdb
-    mount /dev/sdb /mnt/test
+    mount -t $FSTYP /dev/sdb /mnt/test
 
     cd "$ktest_dir/tests/xfstests"
     ./check "$@"

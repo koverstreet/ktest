@@ -30,7 +30,7 @@ test_snapshots_simple()
 	umount /mnt
 	sleep 0.2
 	bcachefs fsck -n /dev/sdb
-	mount /dev/sdb /mnt
+	mount -t bcachefs /dev/sdb /mnt
 
 	echo "deleting snap-$i"
 	bcachefs subvolume delete /mnt/snap-$i

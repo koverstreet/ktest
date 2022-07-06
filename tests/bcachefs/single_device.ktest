@@ -330,7 +330,7 @@ test_fcollapse()
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	/dev/sdb
-    mount /dev/sdb /mnt
+    mount -t bcachefs /dev/sdb /mnt
 
     dd if=/dev/zero of=/mnt/foo bs=4k count=4 oflag=direct
 
@@ -495,7 +495,7 @@ test_lz4_buffered()
 	--errors=panic				\
 	--compression=lz4			\
 	/dev/sdb
-    mount /dev/sdb /mnt
+    mount -t bcachefs /dev/sdb /mnt
 
     echo starting copy
     cp -rx / /mnt
@@ -532,7 +532,7 @@ disabled_test_background_compression()
 	--errors=panic				\
 	--background_compression=zstd	    	\
 	/dev/sdb
-    mount /dev/sdb /mnt
+    mount -t bcachefs /dev/sdb /mnt
     echo zstd > /sys/fs/bcachefs/*/options/background_compression
     run_fio_randrw
 }
@@ -613,7 +613,7 @@ run_copygc_torture()
 	--data_checksum=none			\
 	"$@" /dev/sdb
 
-    mount /dev/sdb /mnt
+    mount -t bcachefs /dev/sdb /mnt
 
     fill_device /mnt/fiotest
 
@@ -761,7 +761,7 @@ test_quota()
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	/dev/sdb
-    mount -o usrquota,grpquota,prjquota /dev/sdb /mnt
+    mount -t bcachefs -o usrquota,grpquota,prjquota /dev/sdb /mnt
 
     loops=$((($ktest_priority + 1) * 4))
 
@@ -783,7 +783,7 @@ test_nfs()
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	/dev/sdb
-    mount /dev/sdb /export2
+    mount -t bcachefs /dev/sdb /export2
 
     echo "/export1  *(ro,insecure,all_squash,no_subtree_check)" >> /etc/exports
     echo "/export2  *(ro,insecure,all_squash,no_subtree_check)" >> /etc/exports
@@ -814,7 +814,7 @@ test_suspend()
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	/dev/sdb
-    mount /dev/sdb /mnt
+    mount -t bcachefs /dev/sdb /mnt
 
     if false; then
 	run_dbench
@@ -836,7 +836,7 @@ test_writelog()
     bcachefs format -f --btree_node_size=16k --errors=panic /dev/mapper/log
     dmsetup message log 0 mark mkfs
 
-    mount /dev/mapper/log /mnt
+    mount -t bcachefs /dev/mapper/log /mnt
     fs_mark -v -n 10000 -s 4096 -k -S 0 -D  1000 -N 1000 -d /mnt -t 10
     umount /mnt
 
@@ -856,7 +856,7 @@ test_writelog()
 	prev=$(( $e + 1 ))
 
 	dmsetup create snap --table "0 $(blockdev --getsz /dev/sdb) snapshot /dev/sdb /dev/sdd N 8"
-	mount -o ro /dev/mapper/snap /mnt
+	mount -t bcachefs -o ro /dev/mapper/snap /mnt
 	umount /mnt
 	dmsetup remove snap
     done
@@ -962,7 +962,7 @@ test_offline_resize_lv_ext4()
 
     mkfs.ext4 $dev
 
-    mount  $dev /mnt
+    mount -t bcachefs $dev /mnt
     df -h /mnt
     cat /proc/mounts
 
@@ -971,7 +971,7 @@ test_offline_resize_lv_ext4()
     df -h /mnt
     umount /mnt
 
-    mount  $dev /mnt
+    mount -t bcachefs $dev /mnt
     df -h /mnt
     umount /mnt
 
@@ -1050,10 +1050,10 @@ migrate_from_fs()
 
     if [[ $fstype = ext4 ]]; then
 	run_quiet "" mkfs.$fstype -F /dev/sdb
-	mount -o user_xattr /dev/sdb /mnt
+	mount -t $fstype -o user_xattr /dev/sdb /mnt
     else
 	run_quiet "" mkfs.$fstype -f /dev/sdb
-	mount /dev/sdb /mnt
+	mount -t $fstype /dev/sdb /mnt
     fi
 
     cp -a /usr /mnt
@@ -1134,7 +1134,7 @@ d_test_init_faults()
 	/dev/sdb
 
     # put some data on the filesystem
-    mount /dev/sdb /mnt
+    mount -t bcachefs /dev/sdb /mnt
 
     run_fio_randrw
     # dbench would be better, create a directory structure
@@ -1164,7 +1164,7 @@ d_test_meta_write_faults()
 
     meta_write_fault_fn()
     {
-	mount /dev/sdb /mnt
+	mount -t bcachefs /dev/sdb /mnt
 	(sleep 2; set_faults "$1 enable") &
 
 	# Should fail due to read only cache set
@@ -1183,7 +1183,7 @@ test_long_name()
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	/dev/sdb
-    mount /dev/sdb /mnt
+    mount -t bcachefs /dev/sdb /mnt
 
     local i=1
     local n="1"
@@ -1202,7 +1202,7 @@ test_many_files()
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	/dev/sdb
-    mount /dev/sdb /mnt
+    mount -t bcachefs /dev/sdb /mnt
 
     for i in {1..1000}; do
 	touch /mnt/$i
@@ -1210,7 +1210,7 @@ test_many_files()
 
     umount /mnt
 
-    mount /dev/sdb /mnt
+    mount -t bcachefs /dev/sdb /mnt
     umount /mnt
 }
 
@@ -1221,7 +1221,7 @@ disabled_test_invalid_keys()
     run_quiet "" bcachefs format -f		\
 	--errors=continue			\
 	/dev/sdb
-    mount /dev/sdb /mnt
+    mount -t bcachefs /dev/sdb /mnt
 
     for i in {1..1000}; do
 	touch /mnt/$i
@@ -1229,7 +1229,7 @@ disabled_test_invalid_keys()
 
     umount /mnt
 
-    mount -o fix_errors /dev/sdb /mnt
+    mount -t bcachefs -o fix_errors /dev/sdb /mnt
     umount /mnt
 
     echo 0 > /sys/module/bcachefs/parameters/inject_invalid_keys
@@ -1364,9 +1364,8 @@ test_mount_twice()
     mkdir -p /mnt/1 /mnt/2
     #run_quiet "" bcachefs format -f /dev/sdb
     mkfs.ext2 /dev/sdb
-    mount /dev/sdb /mnt/1
-    mount /dev/sdb /mnt/2
-    exit
+    mount -t ext2 /dev/sdb /mnt/1
+    mount -t ext2 /dev/sdb /mnt/2
 
     umount /mnt/1
     umount /mnt/2

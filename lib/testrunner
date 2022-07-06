@@ -212,5 +212,3 @@ if [[ $ret = 0 ]]; then
 else
     echo "TEST FAILED"
 fi
-
-exit 0

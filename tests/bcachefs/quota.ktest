@@ -51,7 +51,7 @@ test_usrquota()
 	    /dev/sdb >/dev/null
     fi
 
-    mount -o usrquota,grpquota,prjquota /dev/sdb /mnt
+    mount -t bcachefs -o usrquota,grpquota,prjquota /dev/sdb /mnt
 
     repquota -s /mnt
 
@@ -105,7 +105,7 @@ test_prjquota()
 	--errors=panic		\
 	/dev/sdb >/dev/null
 
-    mount -o usrquota,grpquota,prjquota /dev/sdb /mnt
+    mount -t bcachefs -o usrquota,grpquota,prjquota /dev/sdb /mnt
 
     repquota -vP  /mnt
     mkdir /mnt/q1

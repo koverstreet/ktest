@@ -27,7 +27,7 @@ run_test()
 	/dev/sdb >/dev/null
 	#--bucket=$btree_node_size		\
 	#--btree_node_size=$btree_node_size	\
-    mount /dev/sdb /mnt
+    mount -t bcachefs /dev/sdb /mnt
     ln -sf /sys/fs/bcachefs/*/perf_test p
 
     for i in $@; do
