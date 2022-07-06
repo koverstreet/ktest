@@ -69,11 +69,7 @@ while true; do
 	echo "TEST FAILED" > "ktest-out/out/$TEST_NAME"
     fi
 
-    for log in $(find ktest-out/out -name log); do
-	brotli --rm -9 "$log"
-    done
-
-    brotli --rm -9 ktest-out/out/$TEST_NAME
+    find ktest-out/out -type f -name \*.log -print0|xargs -0 brotli --rm -9
 
     OUTPUT=$JOBSERVER_OUTPUT_DIR/c/$COMMIT
     ssh $JOBSERVER mkdir -p $OUTPUT

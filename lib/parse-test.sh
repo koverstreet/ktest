@@ -10,6 +10,7 @@ parse_test_deps()
     ktest_make_install=()
     ktest_kernel_config_require=()
     ktest_qemu_append=()
+    ktest_basename=$(basename -s .ktest "$ktest_test")
 
     local NEXT_SCRATCH_DEV="b"
     local TESTPROG=$1
@@ -226,7 +227,7 @@ parse_test_deps()
 		    # the tests - unless failfast is enabled, or there was only one
 		    # test to run:
 
-		    [[ $ktest_failfast = 1 ]] && break
+		    $ktest_failfast  && break
 		    [[ $# = 1 ]] && break
 
 		    for mnt in $(awk '{print $2}' /proc/mounts|grep ^/mnt|sort -r); do
@@ -277,12 +278,12 @@ parse_test_deps()
     fi
 
     # Mark tests not run:
-    local testname=$(basename -s .ktest "$ktest_test")
-    mkdir -p "$ktest_out/out"
+    rm -rf "$ktest_out/out"
+    mkdir  "$ktest_out/out"
     for t in $ktest_tests; do
 	t=$(echo "$t"|tr / .)
 
-	mkdir -p $ktest_out/out/$testname.$t
-	echo "========= NOT STARTED" > $ktest_out/out/$testname.$t/status
+	mkdir -p $ktest_out/out/$ktest_basename.$t
+	echo "========= NOT STARTED" > $ktest_out/out/$ktest_basename.$t/status
     done
 }

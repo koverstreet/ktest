@@ -53,6 +53,7 @@ static unsigned long	timeout;
 
 static char		*logdir;
 static char		*test_basename;
+static char		*full_log;
 
 static char		*current_test;
 static struct timespec	current_test_start;
@@ -98,7 +99,7 @@ static FILE *test_file_open(const char *fname)
 
 static FILE *log_open()
 {
-	char *path = mprintf("%s/%s", logdir, test_basename);
+	char *path = mprintf("%s/%s", logdir, full_log);
 	FILE *f = fopen(path, "w");
 	if (!f)
 		die("error opening %s: %m", path);
@@ -195,11 +196,15 @@ static void update_watchdog(const char *line)
 	}
 }
 
-static void write_test_status(const char *status)
+static void write_test_file(const char *file, const char *fmt, ...)
 {
-	FILE *f = test_file_open("status");
+	va_list args;
+	FILE *f = test_file_open(file);
 
-	fputs(status, f);
+	va_start(args, fmt);
+	vfprintf(f, fmt, args);
+	va_end(args);
+
 	fclose(f);
 }
 
@@ -210,14 +215,12 @@ static void test_start(char *new_test, struct timespec now)
 	current_test_start	= now;
 	current_test_log	= test_file_open("log");
 
-	write_test_status("TEST FAILED");
+	write_test_file("status", "TEST FAILED");
 }
 
 static void test_end(struct timespec now)
 {
-	FILE *duration = test_file_open("duration");
-	fprintf(duration, "%li", now.tv_sec - current_test_start.tv_sec);
-	fclose(duration);
+	write_test_file("duration", "%li", now.tv_sec - current_test_start.tv_sec);
 
 	fclose(current_test_log);
 	current_test_log = NULL;
@@ -236,7 +239,7 @@ int main(int argc, char *argv[])
 	if (clock_gettime(CLOCK_MONOTONIC, &start))
 		die("clock_gettime error: %m");
 
-	while ((opt = getopt(argc, argv, "SFT:b:o:h")) != -1) {
+	while ((opt = getopt(argc, argv, "SFT:b:o:f:h")) != -1) {
 		switch (opt) {
 		case 'S':
 			exit_on_success = true;
@@ -252,6 +255,9 @@ int main(int argc, char *argv[])
 			break;
 		case 'b':
 			test_basename = strdup(optarg);
+			break;
+		case 'f':
+			full_log = strdup(optarg);
 			break;
 		case 'o':
 			logdir = strdup(optarg);
@@ -310,7 +316,7 @@ again:
 		fputs(output, stdout);
 
 		if (current_test_log && test_is_ending(line)) {
-			write_test_status(line);
+			write_test_file("status", "%s", line);
 			test_end(now);
 		}
 

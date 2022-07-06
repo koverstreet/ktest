@@ -17,7 +17,7 @@ ktest_priority=0	# hint for how long test should run
 ktest_interactive=0     # if set to 1, timeout is ignored completely
                         #       sets with: -I
 ktest_exit_on_success=0	# if true, exit on success, not failure or timeout
-ktest_failfast=0
+ktest_failfast=false
 ktest_loop=0
 ktest_verbose=0		# if false, append quiet to kernel commad line
 ktest_crashdump=0
@@ -31,6 +31,7 @@ ktest_storage_bus=virtio-scsi-pci
 
 checkdep socat
 checkdep qemu-system-x86_64	qemu-system-x86
+checkdep brotli
 
 # config files:
 [[ -f $ktest_dir/ktestrc ]]	&& . "$ktest_dir/ktestrc"
@@ -64,7 +65,7 @@ parse_ktest_arg()
 	    ktest_exit_on_success=1
 	    ;;
 	F)
-	    ktest_failfast=1
+	    ktest_failfast=true
 	    ;;
 	L)
 	    ktest_loop=1
@@ -252,27 +253,22 @@ ktest_sysrq()
     echo sendkey alt-sysrq-$key | socat - "UNIX-CONNECT:$ktest_out/vm/mon"
 }
 
+save_env()
+{
+    set |grep -v "^PATH=" > "$ktest_out/vm/env_tmp"
+    readonly_variables="$(readonly | cut -d= -f1 | cut -d' ' -f3)"
+    for variable in ${readonly_variables}
+    do
+	grep -v "${variable}" "$ktest_out/vm/env_tmp" > "$ktest_out/vm/env"
+	cp "$ktest_out/vm/env" "$ktest_out/vm/env_tmp"
+    done
+    sed -i "s/^ ;$//g" "$ktest_out/vm/env"
+    rm -rf "$ktest_out/vm/env_tmp"
+}
+
 start_vm()
 {
     make -C "$ktest_dir/lib" qemu-wrapper
-
-    local qemu_cmd=("$ktest_dir/lib/qemu-wrapper")
-
-    if [[ $ktest_interactive = 1 ]]; then
-	true
-    elif [[ $ktest_exit_on_success = 1 ]]; then
-	qemu_cmd+=(-S)
-    else
-	# Inside the VM, we set a timer and on timeout trigger a crash dump. The
-	# timeout here is a backup:
-	qemu_cmd+=(-S -F -T $ktest_timeout)
-    fi
-
-    local test_basename=$(basename -s .ktest "$ktest_test")
-    qemu_cmd+=(-b "$test_basename")
-    qemu_cmd+=(-o "$ktest_out/out")
-
-    qemu_cmd+=(--)
 
     if [[ -z $ktest_kernel_binary ]]; then
 	echo "Required parameter -k missing: kernel"
@@ -292,8 +288,6 @@ start_vm()
     # Was outputting to a single log file, now a directory:
     [[ -f $ktest_out/out ]] && rm -f "$ktest_out/out"
 
-    mkdir -p "$ktest_out/out"
-
     rm -f "$ktest_out/core.*"
     rm -f "$ktest_out/vmcore"
     rm -f "$ktest_out/vm"
@@ -311,7 +305,7 @@ start_vm()
 
     kernelargs+=("${ktest_kernel_append[@]}")
 
-    qemu_cmd+=("$QEMU_BIN" -nodefaults -nographic)
+    local qemu_cmd=("$QEMU_BIN" -nodefaults -nographic)
     case $ktest_arch in
 	x86|x86_64)
 	    qemu_cmd+=(-cpu host -machine type=q35,accel=kvm,nvdimm=on)
@@ -420,20 +414,66 @@ start_vm()
 	qemu_pmem mem-path="$file",size=$size
     done
 
-    set |grep -v "^PATH=" > "$ktest_out/vm/env_tmp"
-    readonly_variables="$(readonly | cut -d= -f1 | cut -d' ' -f3)"
-    for variable in ${readonly_variables}
-    do
-        grep -v "${variable}" "$ktest_out/vm/env_tmp" > "$ktest_out/vm/env"
-        cp "$ktest_out/vm/env" "$ktest_out/vm/env_tmp"
-    done
-    sed -i "s/^ ;$//g" "$ktest_out/vm/env"
-    rm -rf "$ktest_out/vm/env_tmp"
-
     set +o errexit
-    set -o pipefail
-    shopt -s lastpipe
 
-    "${qemu_cmd[@]}"
-    exit $?
+    ktest_tests=$(echo $ktest_tests)
+    local ktest_vm_idx=0
+
+    while true; do
+	local full_log=$ktest_basename.$(hostname).$(date -Iseconds).log
+
+	for t in $ktest_tests; do
+	    local fname=$(echo "$t"|tr / .)
+	    ln -sfr "$ktest_out/out/$full_log.br"			\
+		    "$ktest_out/out/$ktest_basename.$fname/full_log.br"
+	done
+
+	local qemu_wrapper_cmd=("$ktest_dir/lib/qemu-wrapper")
+
+	qemu_wrapper_cmd+=(-T $ktest_timeout)
+	qemu_wrapper_cmd+=(-f "$full_log")
+
+	if [[ $ktest_interactive = 1 ]]; then
+	    true
+	elif [[ $ktest_exit_on_success = 1 ]]; then
+	    qemu_wrapper_cmd+=(-S)
+	else
+	    qemu_wrapper_cmd+=(-S -F)
+	fi
+
+	local test_basename=$(basename -s .ktest "$ktest_test")
+	qemu_wrapper_cmd+=(-b "$test_basename")
+	qemu_wrapper_cmd+=(-o "$ktest_out/out")
+
+	save_env
+
+	echo "Starting KVM ($ktest_vm_idx)"
+	"${qemu_wrapper_cmd[@]}" -- "${qemu_cmd[@]}"
+	local ret=$?
+
+	$ktest_failfast && break
+
+	local tests_remaining=
+
+	for t in $ktest_tests; do
+	    local fname=$(echo "$t"|tr / .)
+	    if grep -q "NOT STARTED" $ktest_out/out/$ktest_basename.$fname/status; then
+		tests_remaining="$tests_remaining $t"
+	    fi
+	done
+
+	tests_remaining=$(echo $tests_remaining)
+
+	[[ -z $tests_remaining ]] && break
+
+	if [[ $tests_remaining = $ktest_tests ]]; then
+	    echo "Failed to make progress"
+	    break
+	fi
+
+	ktest_tests="$tests_remaining"
+	let ktest_vm_idx++
+    done
+
+    exit $ret
 }
