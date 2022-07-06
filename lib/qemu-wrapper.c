@@ -37,10 +37,26 @@ static char *mprintf(const char *fmt, ...)
 	return str;
 }
 
+static struct timespec xclock_gettime(clockid_t clockid)
+{
+	struct timespec ts;
+
+	if (clock_gettime(clockid, &ts))
+		die("clock_gettime error: %m");
+	return ts;
+}
+
 static pid_t child;
 static int childfd;
-static char *current_test;
-static unsigned long timeout;
+
+static unsigned long	timeout;
+
+static char		*logdir;
+static char		*test_basename;
+
+static char		*current_test;
+static struct timespec	current_test_start;
+static FILE		*current_test_log;
 
 static void alarm_handler(int sig)
 {
@@ -66,19 +82,16 @@ static void usage(void)
 	     "      -h              Display this help and exit\n");
 }
 
-static char *log_path(const char *logdir, const char *basename, const char *testname)
+static char *log_path(const char *testname)
 {
-	if (!basename)
-		basename = "out";
-
 	return !testname
-		? mprintf("%s/%s", logdir, basename)
-		: mprintf("%s/%s.%s/log", logdir, basename, testname);
+		? mprintf("%s/%s", logdir, test_basename)
+		: mprintf("%s/%s.%s/log", logdir, test_basename, testname);
 }
 
-static FILE *log_open(const char *logdir, const char *basename, const char *testname)
+static FILE *log_open(const char *testname)
 {
-	char *path = log_path(logdir, basename, testname);
+	char *path = log_path(testname);
 
 	FILE *f = fopen(path, "w");
 	if (!f)
@@ -107,7 +120,7 @@ static const char *str_starts_with(const char *str, const char *prefix)
 	return str + len;
 }
 
-static char *test_starts(const char *line)
+static char *test_is_starting(const char *line)
 {
 	const char *testname = str_starts_with(line, "========= TEST   ");
 	char *ret, *p;
@@ -121,6 +134,13 @@ static char *test_starts(const char *line)
 		*p = '.';
 
 	return ret;
+}
+
+static bool test_is_ending(char *line)
+{
+	return  str_starts_with(line, "========= PASSED ") ||
+		str_starts_with(line, "========= FAILED ") ||
+		str_starts_with(line, "========= NOTRUN");
 }
 
 static FILE *popen_with_pid(char *argv[], pid_t *child)
@@ -169,23 +189,25 @@ static void update_watchdog(const char *line)
 	}
 }
 
-static char *output_line(const char *line, struct timespec start)
+static void test_start(char *new_test, struct timespec now)
 {
-	struct timespec ts;
-
-	if (clock_gettime(CLOCK_MONOTONIC, &ts))
-		die("clock_gettime error: %m");
-
-	unsigned long elapsed = ts.tv_sec - start.tv_sec;
-
-	return mprintf("%.5lu %s\n", elapsed, line);
+	free(current_test);
+	current_test		= new_test;
+	current_test_start	= now;
+	current_test_log	= log_open(new_test);
 }
 
-static bool test_ends(char *line)
+static void test_end(struct timespec now)
 {
-	return  str_starts_with(line, "========= PASSED ") ||
-		str_starts_with(line, "========= FAILED ") ||
-		str_starts_with(line, "========= NOTRUN");
+	char *duration_path = mprintf("%s/%s.%s/duration",
+				      logdir, test_basename, current_test);
+	FILE *duration = fopen(duration_path, "w");
+	fprintf(duration, "%li", now.tv_sec - current_test_start.tv_sec);
+	fclose(duration);
+	free(duration_path);
+
+	fclose(current_test_log);
+	current_test_log = NULL;
 }
 
 int main(int argc, char *argv[])
@@ -194,8 +216,6 @@ int main(int argc, char *argv[])
 	bool exit_on_failure = false;
 	int opt, ret = EXIT_FAILURE;
 	struct timespec start;
-	char *logdir = NULL;
-	char *basename = NULL;
 
 	setlinebuf(stdin);
 	setlinebuf(stdout);
@@ -218,7 +238,7 @@ int main(int argc, char *argv[])
 				die("error parsing timeout: %m");
 			break;
 		case 'b':
-			basename = strdup(optarg);
+			test_basename = strdup(optarg);
 			break;
 		case 'o':
 			logdir = strdup(optarg);
@@ -232,13 +252,15 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	if (!test_basename)
+		die("Required option -b missing");
+
 	if (!logdir)
 		die("Required option -o missing");
 
 	FILE *childf = popen_with_pid(argv + optind, &child);
 
-	FILE *logfile = log_open(logdir, basename, NULL);
-	FILE *test_logfile = NULL;
+	FILE *logfile = log_open(NULL);
 
 	size_t n = 0;
 	ssize_t len;
@@ -252,35 +274,30 @@ int main(int argc, char *argv[])
 		alarm(timeout);
 again:
 	while ((len = getline(&line, &n, childf)) >= 0) {
+		struct timespec now = xclock_gettime(CLOCK_MONOTONIC);
+
 		strim(line);
 
-		char *output = output_line(line, start);
+		char *output = mprintf("%.5lu %s\n", now.tv_sec - start.tv_sec, line);
 
 		update_watchdog(line);
 
-		char *testname = test_starts(line);
+		char *new_test = test_is_starting(line);
 
 		/* If a test is starting, close logfile for previous test: */
-		if (test_logfile && testname) {
-			fclose(test_logfile);
-			test_logfile = NULL;
-		}
+		if (current_test_log && new_test)
+			test_end(now);
 
-		if (test_logfile)
-			fputs(output, test_logfile);
+		if (new_test)
+			test_start(new_test, now);
+
+		if (current_test_log)
+			fputs(output, current_test_log);
 		fputs(output, logfile);
 		fputs(output, stdout);
 
-		if (test_logfile && test_ends(line)) {
-			fclose(test_logfile);
-			test_logfile = NULL;
-		}
-
-		if (testname) {
-			test_logfile = log_open(logdir, basename, testname);
-			free(current_test);
-			current_test = testname;
-		}
+		if (current_test_log && test_is_ending(line))
+			test_end(now);
 
 		if (exit_on_failure && str_starts_with(line, "TEST FAILED"))
 			break;
