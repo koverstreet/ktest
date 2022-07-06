@@ -47,13 +47,15 @@ git_commit_html()
 
     echo '<table class="table">'
 
-    for STATUS in $(find $OUTPUT -name status); do
-	TESTNAME=$(basename $(dirname $STATUS))
+    for STATUSFILE in $(find $OUTPUT -name status); do
+	STATUS=$(<$STATUSFILE)
+	DURATION=$(echo $STATUS|grep -Eo '[0-9]+s' || true)
+	TESTNAME=$(basename $(dirname $STATUSFILE))
 	TESTFILE=$(echo $TESTNAME|cut -d. -f1)
 	STATUSMSG=Unknown
 	TABLECLASS=table-secondary
 
-	case $(<$STATUS) in
+	case $STATUS in
 	    *PASSED*)
 		STATUSMSG=Passed
 		TABLECLASS=table-success
@@ -73,6 +75,7 @@ git_commit_html()
 	echo "<tr class=$TABLECLASS>"
 	echo "<td> $TESTNAME </td>"
 	echo "<td> $STATUSMSG </td>"
+	echo "<td> $DURATION </td>"
 	echo "<td> <a href=$TESTNAME/log.br> log    </a> </td>"
 	echo "<td> <a href=$TESTFILE.br>     full log </a> </td>"
 	echo "<td> <a href=$TESTNAME>        output directory </a> </td>"
