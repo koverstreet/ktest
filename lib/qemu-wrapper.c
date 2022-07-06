@@ -39,13 +39,13 @@ static char *mprintf(const char *fmt, ...)
 
 static pid_t child;
 static int childfd;
-static char *testname;
+static char *current_test;
 static unsigned long timeout;
 
 static void alarm_handler(int sig)
 {
 	char *msg = mprintf("========= FAILED TIMEOUT %s in %lus\n",
-			    testname ?: "(no test)", timeout);
+			    current_test ?: "(no test)", timeout);
 
 	if (write(childfd, msg, strlen(msg)) != strlen(msg))
 		die("write error in alarm handler");
@@ -258,13 +258,12 @@ again:
 
 		update_watchdog(line);
 
-		testname = test_starts(line);
+		char *testname = test_starts(line);
 
+		/* If a test is starting, close logfile for previous test: */
 		if (test_logfile && testname) {
 			fclose(test_logfile);
 			test_logfile = NULL;
-			free(testname);
-			testname = NULL;
 		}
 
 		if (test_logfile)
@@ -279,8 +278,8 @@ again:
 
 		if (testname) {
 			test_logfile = log_open(logdir, basename, testname);
-			free(testname);
-			testname = NULL;
+			free(current_test);
+			current_test = testname;
 		}
 
 		if (exit_on_failure && str_starts_with(line, "TEST FAILED"))
