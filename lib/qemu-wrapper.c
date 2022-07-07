@@ -49,6 +49,7 @@ static struct timespec xclock_gettime(clockid_t clockid)
 static pid_t child;
 static int childfd;
 
+static unsigned long	default_timeout;
 static unsigned long	timeout;
 
 static char		*logdir;
@@ -69,18 +70,10 @@ static void alarm_handler(int sig)
 	free(msg);
 }
 
-static void usage(void)
+static void set_timeout(unsigned long new_timeout)
 {
-	puts("qemu-wrapper - wrapper for qemu to catch test success/failure\n"
-	     "Usage: qemu-wrapper [OPTIONS] -- <qemu-command>\n"
-	     "\n"
-	     "Options\n"
-	     "      -S              Exit on success\n"
-	     "      -F              Exit on failure\n"
-	     "      -T TIMEOUT      Timeout after TIMEOUT seconds\n"
-	     "      -b name         base name for log files\n"
-	     "      -o dir          output directory for log files\n"
-	     "      -h              Display this help and exit\n");
+	timeout = new_timeout;
+	alarm(new_timeout);
 }
 
 static FILE *test_file_open(const char *fname)
@@ -187,13 +180,11 @@ static FILE *popen_with_pid(char *argv[], pid_t *child)
 	return childf;
 }
 
-static void update_watchdog(const char *line)
+static void read_watchdog(const char *line)
 {
 	const char *new_watchdog = str_starts_with(line, "WATCHDOG ");
-	if (new_watchdog) {
-		timeout = atol(new_watchdog);
-		alarm(timeout);
-	}
+	if (new_watchdog)
+		set_timeout(atol(new_watchdog));
 }
 
 static void write_test_file(const char *file, const char *fmt, ...)
@@ -216,6 +207,8 @@ static void test_start(char *new_test, struct timespec now)
 	current_test_log	= test_file_open("log");
 
 	write_test_file("status", "TEST FAILED");
+
+	set_timeout(default_timeout);
 }
 
 static void test_end(struct timespec now)
@@ -224,6 +217,22 @@ static void test_end(struct timespec now)
 
 	fclose(current_test_log);
 	current_test_log = NULL;
+
+	set_timeout(default_timeout);
+}
+
+static void usage(void)
+{
+	puts("qemu-wrapper - wrapper for qemu to catch test success/failure\n"
+	     "Usage: qemu-wrapper [OPTIONS] -- <qemu-command>\n"
+	     "\n"
+	     "Options\n"
+	     "      -S              Exit on success\n"
+	     "      -F              Exit on failure\n"
+	     "      -T TIMEOUT      Timeout after TIMEOUT seconds\n"
+	     "      -b name         base name for log files\n"
+	     "      -o dir          output directory for log files\n"
+	     "      -h              Display this help and exit");
 }
 
 int main(int argc, char *argv[])
@@ -249,7 +258,7 @@ int main(int argc, char *argv[])
 			break;
 		case 'T':
 			errno = 0;
-			timeout = strtoul(optarg, NULL, 10);
+			default_timeout = strtoul(optarg, NULL, 10);
 			if (errno)
 				die("error parsing timeout: %m");
 			break;
@@ -289,8 +298,7 @@ int main(int argc, char *argv[])
 	if (sigaction(SIGALRM, &alarm_action, NULL))
 		die("sigaction error: %m");
 
-	if (timeout)
-		alarm(timeout);
+	set_timeout(default_timeout);
 again:
 	while ((len = getline(&line, &n, childf)) >= 0) {
 		struct timespec now = xclock_gettime(CLOCK_MONOTONIC);
@@ -299,7 +307,7 @@ again:
 
 		char *output = mprintf("%.5lu %s\n", now.tv_sec - start.tv_sec, line);
 
-		update_watchdog(line);
+		read_watchdog(line);
 
 		char *new_test = test_is_starting(line);
 
