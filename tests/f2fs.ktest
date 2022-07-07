@@ -1,5 +1,7 @@
 #!/bin/bash
 
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/xfstests.sh
+
 require-kernel-config F2FS_FS
 require-kernel-config F2FS_STAT_FS
 require-kernel-config F2FS_FS_XATTR
@@ -7,11 +9,11 @@ require-kernel-config F2FS_FS_POSIX_ACL
 require-kernel-config F2FS_CHECK_FS
 require-kernel-config F2FS_FAULT_INJECTION
 
-require-lib xfstests.sh
-
 run_tests()
 {
     export MKFS_OPTIONS=
 
     run_xfstests f2fs "$@"
 }
+
+main "$@"

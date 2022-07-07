@@ -4,7 +4,7 @@
 # going to be able to run much with this kernel - this is really just for
 # checking if it builds
 
-require-lib bcache-test-libs.sh
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcache-test-libs.sh
 
 require-kernel-config 64BIT=n
 

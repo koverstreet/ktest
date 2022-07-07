@@ -1,8 +1,8 @@
 #!/bin/bash
 
-require-kernel-config NILFS2_FS
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/xfstests.sh
 
-require-lib xfstests.sh
+require-kernel-config NILFS2_FS
 
 run_tests()
 {
@@ -10,3 +10,5 @@ run_tests()
 
     run_xfstests nilfs2 "$@"
 }
+
+main "$@"

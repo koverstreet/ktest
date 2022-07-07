@@ -6,7 +6,7 @@
 
 config-arch x86
 
-require-lib bcachefs-test-libs.sh
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
 
 config-timeout 30
 
@@ -14,3 +14,5 @@ test_boot()
 {
     true
 }
+
+main "$@"

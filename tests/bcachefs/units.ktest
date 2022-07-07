@@ -1,6 +1,6 @@
 #!/bin/bash
 
-require-lib ../prelude.sh
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
 
 require-make bcachefs-tools
 
@@ -53,3 +53,5 @@ list_tests()
     echo extent_overwrite_all
     echo snapshots
 }
+
+main "$@"

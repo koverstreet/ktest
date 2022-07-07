@@ -1,13 +1,13 @@
 #!/bin/bash
 
-require-lib bcachefs-test-libs.sh
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
 
 require-git http://evilpiepirate.org/git/linuxquota.git
 require-make linuxquota
 
 require-git http://evilpiepirate.org/git/xfstests.git ../xfstests
 
-require-lib ../xfstests.sh
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../xfstests.sh
 
 require-kernel-config BCACHEFS_POSIX_ACL
 require-kernel-config BCACHEFS_QUOTA=y
@@ -26,3 +26,5 @@ run_tests()
 
     run_xfstests bcachefs "$@"
 }
+
+main "$@"

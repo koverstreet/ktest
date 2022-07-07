@@ -3,7 +3,8 @@
 # ktest framework.
 #
 
-require-lib ../test-libs.sh
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../test-libs.sh
+
 require-git http://evilpiepirate.org/git/bcachefs-tools.git
 require-make bcachefs-tools
 

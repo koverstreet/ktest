@@ -1,5 +1,7 @@
 #!/bin/bash
 
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/xfstests.sh
+
 require-kernel-config XFS_FS
 require-kernel-config XFS_QUOTA
 require-kernel-config XFS_POSIX_ACL
@@ -7,10 +9,10 @@ require-kernel-config XFS_RT XFS_ONLINE_SCRUB
 #require-kernel-config XFS_DEBUG
 require-kernel-config QUOTA
 
-require-lib xfstests.sh
-
 run_tests()
 {
     export MKFS_OPTIONS="-m reflink=1,rmapbt=1 -i sparse=1 -b size=1024"
     run_xfstests xfs "$@"
 }
+
+main "$@"

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-require-lib bcache-test-libs.sh
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcache-test-libs.sh
 
 config-cache 2G
 config-bucket-size 8k

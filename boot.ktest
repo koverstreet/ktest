@@ -1,6 +1,6 @@
 #!/bin/bash
 
-require-lib tests/prelude.sh
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/tests/test-libs.sh
 
 config-mem 2G
 config-scratch-devs 4G

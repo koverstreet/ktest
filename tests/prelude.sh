@@ -1,223 +1,267 @@
+# Basic libs for ktest tests:
 
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../lib/common.sh
 
-have_kvmguest=0
-have_virtio=0
-have_suspend=0
+trap 'echo "Error $? from: $BASH_COMMAND, exiting" >&2' ERR
 
-case $ktest_arch in
-    x86)
-	require-kernel-config SMP
-	require-kernel-config MCORE2	# optimize for core2
-	require-kernel-config IO_DELAY_0XED
-	require-kernel-config 64BIT=n
-	require-kernel-config ACPI	# way slower without it, do not know why
-	require-kernel-config UNWINDER_FRAME_POINTER
-	require-kernel-config HARDLOCKUP_DETECTOR
+ktest_cpus=$(nproc)
+ktest_mem=""
+ktest_timeout=""
+ktest_kernel_append=()
+ktest_images=()
+ktest_scratch_devs=()
+ktest_make_install=()
+ktest_kernel_config_require=()
+ktest_qemu_append=()
 
-	have_kvmguest=1
-	have_virtio=1
-	have_suspend=1
-	;;
-    x86_64)
-	require-kernel-config SMP
-	require-kernel-config MCORE2	# optimize for core2
-	require-kernel-config IO_DELAY_0XED
-	#require-kernel-config IA32_EMULATION
-	require-kernel-config 64BIT
-	require-kernel-config ACPI	# way slower without it, do not know why
-	require-kernel-config UNWINDER_FRAME_POINTER
-	require-kernel-config HARDLOCKUP_DETECTOR
+NEXT_SCRATCH_DEV="b"
+BUILD_ON_HOST=""
 
-	have_kvmguest=1
-	have_virtio=1
-	have_suspend=1
-	;;
-    powerpc)
-	require-kernel-config ADVANCED_OPTIONS
+require-git()
+{
+    local req="$1"
+    local dir=$(basename $req)
+    dir=${dir%%.git}
 
-	have_kvmguest=1
-	have_virtio=1
-	have_suspend=1
-	;;
-    mips)
-	require-kernel-config MIPS_MALTA
-	require-kernel-config CPU_MIPS${BITS}_R2
-	require-kernel-config CPU_BIG_ENDIAN=y
-	require-kernel-config CPU_LITTLE_ENDIAN=n
-	require-kernel-config 32BIT
+    if [[ $# -ge 2 ]]; then
+	dir=$2
+    fi
 
-	have_virtio=1
-	ktest_storage_bus=piix4-ide
-	;;
-esac
+    dir=$(dirname $(readlink -e "${BASH_SOURCE[1]}"))/$dir
 
-# Normal kernel functionality:
-#require-kernel-config PREEMPT
-#require-kernel-config NO_HZ
-#require-kernel-config HZ_100
+    if [[ ! -d $dir ]]; then
+	git clone $req $dir
+    fi
+}
 
-require-kernel-config LOCALVERSION_AUTO
+do-build-deb()
+{
+    local path=$(readlink -e "$1")
+    local name=$(basename $path)
 
-require-kernel-config HIGH_RES_TIMERS
+    get_tmpdir
 
-require-kernel-config SYSVIPC
-require-kernel-config CGROUPS
-require-kernel-config SWAP		# systemd segfaults if you don't have swap support...
-require-kernel-config MODULES,MODULE_UNLOAD
-require-kernel-config DEVTMPFS
-require-kernel-config DEVTMPFS_MOUNT
-require-kernel-config BINFMT_ELF
-require-kernel-config BINFMT_SCRIPT
+    make -C "$path"
 
-require-kernel-config COMPACTION	# virtfs doesn't do well without it
+    cp -drl $path $ktest_tmp
+    pushd "$ktest_tmp/$name" > /dev/null
 
-require-kernel-config PROC_KCORE	# XXX Needed?
+    # make -nc actually work:
+    rm -f debian/*.debhelper.log
 
-require-kernel-config TTY
-require-kernel-config VT
+    debuild --no-lintian -b -i -I -us -uc -nc
+    popd > /dev/null
+}
 
-# KVM guest support:
-if [[ $have_kvmguest = 1 ]]; then
-    require-kernel-config HYPERVISOR_GUEST
-    require-kernel-config PARAVIRT
-    require-kernel-config KVM_GUEST
-fi
+# $1 is a source repository, which will be built (with make) and then turned
+# into a dpkg
+require-build-deb()
+{
+    local req=$1
 
-if [[ $have_virtio = 1 ]]; then
-    require-kernel-config VIRTIO_MENU
-    require-kernel-config VIRTIO_PCI
-    require-kernel-config HW_RANDOM_VIRTIO
-    require-kernel-config VIRTIO_CONSOLE
-    require-kernel-config VIRTIO_NET
-    require-kernel-config NET_9P_VIRTIO
-fi
+    if ! [[ -d $req ]]; then
+	echo "build-deb dependency $req not found"
+	exit 1
+    fi
 
-if [[ $have_suspend = 1 ]]; then
-    require-kernel-config PM
-    require-kernel-config SUSPEND
-    require-kernel-config PM_SLEEP
-    require-kernel-config PM_DEBUG
-    require-kernel-append no_console_suspend
-fi
+    checkdep debuild devscripts
 
-case $ktest_storage_bus in
-    virtio-scsi-pci)
-	require-kernel-config SCSI_VIRTIO
-	;;
-    ahci)
-	require-kernel-config ATA
-	require-kernel-config SATA_AHCI
-	;;
-    piix4-ide)
-	require-kernel-config ATA
-	require-kernel-config ATA_SFF
-	require-kernel-config ATA_PIIX
-	;;
-    lsi)
-	require-kernel-config SCSI_MPT3SAS
-esac
+    run_quiet "building $(basename $req)" do-build-deb $req
+}
 
-# PCI:
-require-kernel-config PCI
+require-make()
+{
+    local req=$(dirname $(readlink -e ${BASH_SOURCE[1]}))/$1
 
-# Rng:
-require-kernel-config HW_RANDOM
+    if [[ ! -d $req ]]; then
+	echo "require-make: $req not found"
+	exit 1
+    fi
 
-# Clock:
-require-kernel-config RTC_CLASS
-require-kernel-config RTC_HCTOSYS
-require-kernel-config RTC_DRV_CMOS
+    ktest_make_install+=("$req")
 
-# Console:
-require-kernel-config SERIAL_8250	# XXX can probably drop
-require-kernel-config SERIAL_8250_CONSOLE
+    if [[ -n $BUILD_ON_HOST ]]; then
+	run_quiet "building $1" make -C "$req"
+    fi
+}
 
-# Block devices:
-require-kernel-config SCSI
-require-kernel-config SCSI_LOWLEVEL	# what's this for?
-require-kernel-config BLK_DEV_SD	# disk support
+require-kernel-config()
+{
+    local OLDIFS=$IFS
+    IFS=','
 
-# Networking
-require-kernel-config NET
-require-kernel-config PACKET
-require-kernel-config UNIX
-require-kernel-config INET
-require-kernel-config IP_MULTICAST
-require-kernel-config NETDEVICES
+    for i in $1; do
+	ktest_kernel_config_require+=("$i")
+    done
 
-# Filesystems:
-require-kernel-config TMPFS
-require-kernel-config INOTIFY_USER
-require-kernel-config CONFIGFS_FS	# systemd
+    IFS=$OLDIFS
+}
 
-# Root filesystem:
-require-kernel-config EXT4_FS
-require-kernel-config EXT4_FS_POSIX_ACL
+require-qemu-append()
+{
+    local OLDIFS=$IFS
+    IFS=','
 
-require-kernel-config NET_9P
-require-kernel-config NETWORK_FILESYSTEMS
-require-kernel-config 9P_FS
+    for i in $1; do
+	ktest_kernel_config_require+=("$i")
+    done
 
-# Fast RNG:
-require-kernel-config CONFIG_CRYPTO_DEV_VIRTIO
+    IFS=$OLDIFS
+}
 
-# Crash dumps
-if [[ $ktest_crashdump = 1 ]]; then
-    require-kernel-config KEXEC
-    require-kernel-config CRASH_DUMP
-    require-kernel-config RELOCATABLE
-fi
+require-kernel-append()
+{
+    ktest_kernel_append+=($1)
+}
 
-# KGDB:
-require-kernel-config KGDB
-require-kernel-config KGDB_SERIAL_CONSOLE
-require-kernel-config VMAP_STACK=n
-require-kernel-config RANDOMIZE_BASE=n
-require-kernel-config RANDOMIZE_MEMORY=n
+config-scratch-devs()
+{
+    ktest_scratch_devs+=("$1")
+}
 
-# Profiling:
-require-kernel-config PROFILING
-require-kernel-config JUMP_LABEL
+config-pmem-devs()
+{
+    ktest_pmem_devs+=("$1")
+}
 
-# Tracing
-require-kernel-config FTRACE
-require-kernel-config FTRACE_SYSCALLS
-require-kernel-config FUNCTION_TRACER
-#require-kernel-config ENABLE_DEFAULT_TRACERS
+config-image()
+{
+    ktest_images+=("$1")
+}
 
-require-kernel-config PANIC_ON_OOPS
-require-kernel-config SOFTLOCKUP_DETECTOR
-require-kernel-config DETECT_HUNG_TASK
-#require-kernel-config DEFAULT_HUNG_TASK_TIMEOUT=30
-require-kernel-config WQ_WATCHDOG
+config-cpus()
+{
+    ktest_cpus=$1
+}
 
-require-kernel-config DEBUG_FS
-require-kernel-config MAGIC_SYSRQ
-require-kernel-config DEBUG_INFO
-require-kernel-config DEBUG_INFO_DWARF4
-require-kernel-config GDB_SCRIPTS
-require-kernel-config DEBUG_KERNEL
-#require-kernel-config DEBUG_RODATA
-#require-kernel-config DEBUG_SET_MODULE_RONX
+config-mem()
+{
+    ktest_mem=$1
+}
 
-require-kernel-config DEBUG_LIST
+config-timeout()
+{
+    n=$1
+    if [ "${EXTENDED_DEBUG:-0}" == 1 ]; then
+	n=$((n * 2))
+    fi
+    ktest_timeout=$n
+}
 
-# More expensive
-#require-kernel-config DYNAMIC_DEBUG
+config-arch()
+{
+    parse_arch "$1"
+    checkdep_arch
+}
 
-# Expensive
-#require-kernel-config DEBUG_ATOMIC_SLEEP
-#require-kernel-config DEBUG_MUTEXES
-#require-kernel-config DEBUG_PREEMPT
+set_watchdog()
+{
+    echo WATCHDOG $1
+}
 
-#require-kernel-config DEBUG_SLAB
-#require-kernel-config DEBUG_SPINLOCK
+run_test()
+{
+    local test=test_$1
 
-#require-kernel-config LOCKDEP_SUPPORT
-#require-kernel-config PROVE_LOCKING
+    if [[ $(type -t $test) != function ]]; then
+	echo "test $1 does not exist"
+	exit 1
+    fi
 
-#require-kernel-config PROVE_RCU
-#require-kernel-config RCU_CPU_STALL_VERBOSE
+    $test
+}
 
-# expensive, doesn't catch that much
-# require-kernel-config DEBUG_PAGEALLOC
+run_tests()
+{
+    local tests_passed=()
+    local tests_failed=()
+
+    echo
+    echo "Running tests $@"
+    echo
+
+    for i in $@; do
+	echo "========= TEST   $i"
+	echo
+
+	local start=$(date '+%s')
+	local ret=0
+	(set -e; run_test $i)
+	ret=$?
+	local finish=$(date '+%s')
+
+	pkill -P $$ >/dev/null || true
+
+	# XXX: check dmesg for warnings, oopses, slab corruption, etc. before
+	# signaling success
+
+	echo
+
+	if [[ $ret = 0 ]]; then
+	    echo "========= PASSED $i in $(($finish - $start))s"
+	    tests_passed+=($i)
+	else
+	    echo "========= FAILED $i in $(($finish - $start))s"
+	    tests_failed+=($i)
+
+	    # Try to clean up after a failed test so we can run the rest of
+	    # the tests - unless failfast is enabled, or there was only one
+	    # test to run:
+
+	    $ktest_failfast  && break
+	    [[ $# = 1 ]] && break
+
+	    for mnt in $(awk '{print $2}' /proc/mounts|grep ^/mnt|sort -r); do
+		while [[ -n $(fuser -k -M -m $mnt) ]]; do
+		    sleep 1
+		done
+		umount $mnt
+	    done
+	fi
+    done
+
+    echo
+    echo "Passed: ${tests_passed[@]}"
+    echo "Failed: ${tests_failed[@]}"
+
+    return ${#tests_failed[@]}
+}
+
+list_tests()
+{
+    declare -F|sed -ne '/ test_/ s/.*test_// p'
+}
+
+main()
+{
+    if [[ $BASH_ARGC = 0 ]]; then
+	exit 0
+    fi
+
+    local arg=$1
+    shift
+
+    case $arg in
+	deps)
+	    echo "ktest_cpus=$ktest_cpus"
+	    echo "ktest_mem=$ktest_mem"
+	    echo "ktest_timeout=$ktest_timeout"
+	    echo "ktest_kernel_append=${ktest_kernel_append[@]}"
+	    echo "ktest_images=(${ktest_images[@]})"
+	    echo "ktest_scratch_devs=(${ktest_scratch_devs[@]})"
+	    echo "ktest_make_install=(${ktest_make_install[@]})"
+	    echo "ktest_kernel_config_require=(${ktest_kernel_config_require[@]})"
+	    echo "ktest_qemu_append=(${ktest_qemu_append[@]})"
+	    ;;
+	list-tests)
+	    list_tests
+	    ;;
+	run-tests)
+	    run_tests "$@"
+	    ;;
+	*)
+	    usage
+	    exit 1
+	    ;;
+    esac
+}

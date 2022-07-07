@@ -1,6 +1,6 @@
 #!/bin/bash
 
-require-lib		../prelude.sh
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/../test-libs.sh
 
 config-timeout		60
 config-mem		512M

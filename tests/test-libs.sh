@@ -3,7 +3,8 @@
 # ktest framework.
 #
 
-require-lib prelude.sh
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/prelude.sh
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/kconfig.sh
 
 config-mem 2G
 

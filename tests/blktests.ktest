@@ -2,10 +2,10 @@
 
 # blktests wrapper:
 
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/test-libs.sh
+
 require-git https://github.com/osandov/blktests.git
 require-make blktests
-
-require-lib test-libs.sh
 
 require-kernel-config FAULT_INJECTION,FAULT_INJECTION_DEBUG_FS,FAIL_MAKE_REQUEST
 require-kernel-config MD,BLK_DEV_DM,DM_FLAKEY,DM_SNAPSHOT,DM_LOG_WRITES

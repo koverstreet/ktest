@@ -1,6 +1,6 @@
 #!/bin/bash
 
-require-lib bcachefs-test-libs.sh
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
 
 config-scratch-devs 4G
 config-scratch-devs 4G
@@ -227,7 +227,7 @@ test_mount_umount_torture()
 
 test_change_replicas()
 {
-    set_watchdog 60
+    set_watchdog 180
     run_quiet "" bcachefs format			\
 	--label=ssd /dev/sd[bc]				\
 	--label=hdd /dev/sd[de]				\
@@ -268,3 +268,5 @@ test_change_replicas()
     kill %1
     umount /mnt
 }
+
+main $@

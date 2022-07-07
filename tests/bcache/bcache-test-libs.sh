@@ -3,7 +3,7 @@
 # ktest framework.
 #
 
-require-lib ../test-libs.sh
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/../test-libs.sh
 require-build-deb bcache-tools
 
 require-kernel-config MD

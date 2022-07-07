@@ -1,6 +1,6 @@
 #!/bin/bash
 
-require-lib test-libs.sh
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/xfstests.sh
 
 require-kernel-config BTRFS_FS
 require-kernel-config BTRFS_FS_POSIX_ACL
@@ -10,11 +10,11 @@ require-kernel-config BTRFS_DEBUG
 require-kernel-config BTRFS_ASSERT
 require-kernel-config BTRFS_FS_REF_VERIFY
 
-require-lib xfstests.sh
-
 run_tests()
 {
     export MKFS_OPTIONS=
 
     run_xfstests btrfs "$@"
 }
+
+main "$@"

@@ -266,6 +266,14 @@ save_env()
     rm -rf "$ktest_out/vm/env_tmp"
 }
 
+get_unused_port()
+{
+    comm -23 --nocheck-order \
+	<(seq 10000 65535) \
+	<(ss -tan | awk '{print $4}' | cut -d':' -f2 | grep '[0-9]\{1,5\}' | sort -n | uniq) \
+	| shuf | head -n1
+}
+
 start_vm()
 {
     make -C "$ktest_dir/lib" qemu-wrapper

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-require-lib ./test-libs.sh
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/test-libs.sh
 
 require-kernel-config MD
 require-kernel-config BLK_DEV_MD
@@ -64,3 +64,5 @@ test_raid5()
 {
     run_mdtest 5
 }
+
+main "$@"

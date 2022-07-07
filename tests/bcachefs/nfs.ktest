@@ -1,6 +1,6 @@
 #!/bin/bash
 
-require-lib bcachefs-test-libs.sh
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
 
 config-scratch-devs 4G
 
@@ -33,3 +33,4 @@ test_nfs()
     umount /export2
 }
 
+main "$@"

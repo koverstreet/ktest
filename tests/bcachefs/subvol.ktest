@@ -1,6 +1,6 @@
 #!/bin/bash
 
-require-lib bcachefs-test-libs.sh
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
 
 config-scratch-devs 4G
 config-scratch-devs 4G
@@ -433,3 +433,5 @@ test_snapshot_copygc()
     bcachefs fs usage -h /mnt
     umount /mnt
 }
+
+main "$@"

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-require-lib bcachefs-test-libs.sh
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
 
 require-kernel-config MD
 require-kernel-config BLK_DEV_MD
@@ -271,3 +271,5 @@ d_test_device_evacuate_online()
 {
     do_remove_test 0 1
 }
+
+main "$@"

@@ -1,4 +1,6 @@
 
+. "$ktest_dir/lib/common.sh"
+
 ktest_no_cleanup_tmpdir=""
 ktest_tmp=${ktest_tmp:-""}
 
@@ -162,61 +164,4 @@ parse_arch()
 #    if [[ $ktest_arch != $(uname -m) ]]; then
 #	CROSS_COMPILE=1
 #    fi
-}
-
-join_by()
-{
-    local IFS="$1"
-    shift
-    echo "$*"
-}
-
-log_verbose()
-{
-    if [[ $ktest_verbose != 0 ]]; then
-	echo "$@"
-    fi
-}
-
-run_quiet()
-{
-    local msg=$1
-    shift
-
-    if [[ $ktest_verbose = 0 ]]; then
-	if [[ -n $msg ]]; then
-	    echo -n "$msg... "
-	fi
-
-	get_tmpdir
-	local out="$ktest_tmp/out-$msg"
-
-	set +e
-	(set -e; "$@") > "$out" 2>&1
-	local ret=$?
-	set -e
-
-	if [[ $ret != 0 ]]; then
-	    echo
-	    cat "$out"
-	    exit 1
-	fi
-
-	if [[ -n $msg ]]; then
-	    echo done
-	fi
-    else
-	if [[ -n $msg ]]; then
-	    echo "$msg:"
-	fi
-	"$@"
-    fi
-}
-
-get_unused_port()
-{
-    comm -23 --nocheck-order \
-	<(seq 10000 65535) \
-	<(ss -tan | awk '{print $4}' | cut -d':' -f2 | grep '[0-9]\{1,5\}' | sort -n | uniq) \
-	| shuf | head -n1
 }

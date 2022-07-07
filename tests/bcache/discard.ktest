@@ -1,6 +1,6 @@
 #!/bin/bash
 
-require-lib bcache-test-libs.sh
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcache-test-libs.sh
 
 require-lib ../../../vm-tests/container_lib.sh
 require-container ioctl_test

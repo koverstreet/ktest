@@ -1,6 +1,6 @@
 # xfstests wrapper:
 
-require-lib test-libs.sh
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/test-libs.sh
 
 require-git https://git.kernel.org/pub/scm/fs/xfs/xfstests-dev.git xfstests
 
@@ -23,7 +23,7 @@ config-timeout 7200
 
 list_tests()
 {
-    (cd "$ktest_dir/tests/xfstests/tests"; echo generic/???)
+    (cd $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/xfstests/tests; echo generic/???)
 }
 
 hook_xfstests()

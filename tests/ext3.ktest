@@ -1,9 +1,9 @@
 #!/bin/bash
 
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/xfstests.sh
+
 require-kernel-config EXT3_FS
 require-kernel-config EXT4_FS_POSIX_ACL
-
-require-lib xfstests.sh
 
 run_tests()
 {
@@ -11,3 +11,5 @@ run_tests()
 
     run_xfstests ext3 "$@"
 }
+
+main "$@"

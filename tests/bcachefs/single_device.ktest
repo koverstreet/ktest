@@ -1,6 +1,6 @@
 #!/bin/bash
 
-require-lib bcachefs-test-libs.sh
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
 
 require-kernel-config BCACHEFS_TESTS
 
@@ -1413,3 +1413,5 @@ test_kill_btree_node()
 	bcachefs fsck -y /dev/sdb || true
     done
 }
+
+main "$@"
