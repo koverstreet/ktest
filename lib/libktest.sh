@@ -85,23 +85,6 @@ parse_ktest_arg()
     esac
 }
 
-checkdep_arch()
-{
-    checkdep $QEMU_BIN $QEMU_PACKAGE
-
-    if [[ -z $ktest_root_image ]]; then
-	if [[ -f $HOME/.ktest/root.$DEBIAN_ARCH ]]; then
-	    ktest_root_image="$HOME/.ktest/root.$DEBIAN_ARCH"
-	elif [[ -f /var/lib/ktest/root.$DEBIAN_ARCH ]]; then
-	    ktest_root_image=/var/lib/ktest/root.$DEBIAN_ARCH
-	else
-	    echo "Root image not found in $HOME/.ktest/root.$DEBIAN_ARCH or /var/lib/ktest/root.$DEBIAN_ARCH"
-	    echo "Use $ktest_dir/root_image create"
-	    exit 1
-	fi
-    fi
-}
-
 parse_args_post()
 {
     parse_arch "$ktest_arch"
