@@ -4,9 +4,9 @@
 # going to be able to run much with this kernel - this is really just for
 # checking if it builds
 
-config-arch x86
-
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+config-arch x86
 
 config-timeout 30
 
