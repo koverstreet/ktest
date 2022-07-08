@@ -6,10 +6,7 @@ set -o nounset
 set -o errexit
 set -o errtrace
 
-trap 'echo "Error $? from: $BASH_COMMAND, exiting" >&2' ERR
-
 export PS4='+`basename ${BASH_SOURCE[0]}`:${LINENO}:${FUNCNAME[0]:+${FUNCNAME[0]}()}+ '
-
 KERNEL_ARCH=""
 
 . /host/$ktest_env

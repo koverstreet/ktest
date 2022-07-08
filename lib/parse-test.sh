@@ -3,6 +3,7 @@ parse_test_deps()
 {
     ktest_basename=$(basename -s .ktest "$ktest_test")
 
+    #export ktest_crashdump
     eval $("$ktest_test" deps)
 
     parse_arch "$ktest_arch"

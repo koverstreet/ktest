@@ -167,11 +167,11 @@ require-kernel-config 9P_FS
 require-kernel-config CONFIG_CRYPTO_DEV_VIRTIO
 
 # Crash dumps
-if [[ $ktest_crashdump = 1 ]]; then
-    require-kernel-config KEXEC
-    require-kernel-config CRASH_DUMP
-    require-kernel-config RELOCATABLE
-fi
+#if [[ $ktest_crashdump = 1 ]]; then
+#    require-kernel-config KEXEC
+#    require-kernel-config CRASH_DUMP
+#    require-kernel-config RELOCATABLE
+#fi
 
 # KGDB:
 require-kernel-config KGDB

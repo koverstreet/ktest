@@ -1,4 +1,29 @@
 
+set -o nounset
+set -o errtrace
+set -o errtrace
+
+ktest_tmp=${ktest_tmp:-""}
+ktest_exit()
+{
+    local children=$(jobs -rp)
+    if [[ -n $children ]]; then
+	kill -9 $children >& /dev/null
+	wait $(jobs -rp) >& /dev/null
+    fi
+
+    [[ -n $ktest_tmp ]] && rm -rf "$ktest_tmp"
+}
+
+trap ktest_exit EXIT
+
+get_tmpdir()
+{
+    if [[ -z $ktest_tmp ]]; then
+	ktest_tmp=$(mktemp --tmpdir -d $(basename "$0")-XXXXXXXXXX)
+    fi
+}
+
 log_verbose()
 {
     if [[ $ktest_verbose != 0 ]]; then

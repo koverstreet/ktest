@@ -2,8 +2,6 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../lib/common.sh
 
-trap 'echo "Error $? from: $BASH_COMMAND, exiting" >&2' ERR
-
 if [[ ! -v ktest_verbose ]]; then
     ktest_verbose=0
     ktest_cpus=$(nproc)
