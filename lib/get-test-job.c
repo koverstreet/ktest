@@ -99,8 +99,8 @@ static void test_job_print(test_job job)
 
 	char **subtest;
 	darray_foreach(subtest, job.subtests)
-		printf(" %s", *subtest);
-	printf("\n");
+		fprintf(stderr, " %s", *subtest);
+	fprintf(stderr, "\n");
 }
 
 static strings get_subtests(char *test_path)
@@ -148,16 +148,26 @@ static strings get_subtests(char *test_path)
 	return ret;
 }
 
+static char *slashes_to_dots(const char *str)
+{
+	char *p, *ret = strdup(str);
+
+	while ((p = strchr(ret, '/')))
+		*p = '.';
+
+	return ret;
+}
+
 static bool lockfile_exists(const char *commit,
 			    const char *test_path,
 			    const char *subtest,
 			    bool create)
 {
 	char *test_name = test_basename(test_path);
+	char *subtest_mangled = slashes_to_dots(subtest);
 	char *commitdir = mprintf("%s/%s", outdir, commit);
-	char *testdir = mprintf("%s/%s.%s", commitdir, test_name, subtest);
-	char *lockfile = mprintf("%s/status",
-				 testdir, subtest);
+	char *testdir = mprintf("%s/%s.%s", commitdir, test_name, subtest_mangled);
+	char *lockfile = mprintf("%s/status", testdir);
 	bool exists;
 
 	if (!create) {
@@ -178,6 +188,7 @@ static bool lockfile_exists(const char *commit,
 	free(lockfile);
 	free(testdir);
 	free(commitdir);
+	free(subtest_mangled);
 	free(test_name);
 
 	return exists;
