@@ -229,10 +229,10 @@ static test_job get_best_test_job()
 		if (!branch || !test_path)
 			continue;
 
-		strings subtests = get_subtests(test_path);
-
 		if (verbose)
-			fprintf(stderr, "branch %s test %s\n", branch, test_path);
+			fprintf(stderr, "get_best_test_job: checking branch %s test %s\n", branch, test_path);
+
+		strings subtests = get_subtests(test_path);
 
 		test_job job = branch_get_next_test_job(branch, test_path, subtests);
 
@@ -248,6 +248,10 @@ static test_job get_best_test_job()
 
 	if (!best.branch)
 		die("Nothing found");
+
+	if (verbose)
+		fprintf(stderr, "get_best_test_job: best %s %s %s age %u\n",
+			best.branch, best.commit, best.test, best.age);
 
 	fclose(branches);
 	free(line);
@@ -303,10 +307,6 @@ int main(int argc, char *argv[])
 	do {
 		test_job_free(&job);
 		job = get_best_test_job();
-
-		if (verbose)
-			fprintf(stderr, "got %s %s %s age %u\n",
-				job.branch, job.commit, job.test, job.age);
 
 		darray_free(subtests);
 		darray_init(subtests);
