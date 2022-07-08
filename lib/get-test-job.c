@@ -92,6 +92,17 @@ static void test_job_free(test_job *job)
 	memset(job, 0, sizeof(*job));
 }
 
+static void test_job_print(test_job job)
+{
+	fprintf(stderr, "%s %s %s age %u subtests",
+		job.branch, job.commit, job.test, job.age);
+
+	char **subtest;
+	darray_foreach(subtest, job.subtests)
+		printf(" %s", *subtest);
+	printf("\n");
+}
+
 static strings get_subtests(char *test_path)
 {
 	darray_char output;
@@ -152,8 +163,12 @@ static bool lockfile_exists(const char *commit,
 	if (!create) {
 		exists = access(lockfile, F_OK) == 0;
 	} else {
-		mkdir(commitdir, 0755);
-		mkdir(testdir, 0755);
+		if (mkdir(commitdir, 0755) < 0 && errno != EEXIST)
+			die("error creating %s", commitdir);
+
+		if (mkdir(testdir, 0755) < 0 && errno != EEXIST)
+			die("error creating %s", testdir);
+
 		int fd = open(lockfile, O_RDWR|O_CREAT|O_EXCL, 0644);
 		exists = fd < 0;
 		if (!exists)
@@ -230,7 +245,8 @@ static test_job get_best_test_job()
 			continue;
 
 		if (verbose)
-			fprintf(stderr, "get_best_test_job: checking branch %s test %s\n", branch, test_path);
+			fprintf(stderr, "get_best_test_job: checking branch %s test %s\n",
+				branch, test_path);
 
 		strings subtests = get_subtests(test_path);
 
@@ -249,9 +265,10 @@ static test_job get_best_test_job()
 	if (!best.branch)
 		die("Nothing found");
 
-	if (verbose)
-		fprintf(stderr, "get_best_test_job: best %s %s %s age %u\n",
-			best.branch, best.commit, best.test, best.age);
+	if (verbose) {
+		fprintf(stderr, "get_best_test_job: best ");
+		test_job_print(best);
+	}
 
 	fclose(branches);
 	free(line);
