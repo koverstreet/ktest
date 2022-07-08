@@ -158,51 +158,34 @@ parse_arch()
 
 checkdep()
 {
-	local dep=$1
-	local package=$dep
+    local dep=$1
+    local package=$dep
 
-	if [[ $# -ge 2 ]]; then
-	    package=$2
-	else
-	    package=$dep
-	fi
+    if [[ $# -ge 2 ]]; then
+	package=$2
+    else
+	package=$dep
+    fi
 
-	local found=0
+    local found=0
 
-	if [[ ${dep:0:1} = / ]]; then
-	    # absolute path
-	    [[ -e $dep ]] && found=1
-	else
-	    which "$dep" > /dev/null 2>&1 && found=1
-	fi
+    if [[ ${dep:0:1} = / ]]; then
+	# absolute path
+	[[ -e $dep ]] && found=1
+    else
+	which "$dep" > /dev/null 2>&1 && found=1
+    fi
 
-	if [[ $found = 0 ]]; then
-		echo -n "$dep not found"
+    if [[ $found = 0 ]]; then
+	echo -n "$dep not found"
 
-		if which apt-get > /dev/null 2>&1 && \
-			which sudo > /dev/null 2>&1; then
-			echo ", installing $package:"
-			sudo apt-get -qq install --no-install-recommends "$package"
+	if which apt-get > /dev/null 2>&1 && \
+	    which sudo > /dev/null 2>&1; then
+		    echo ", installing $package:"
+		    sudo apt-get -qq install --no-install-recommends "$package"
 		else
-			echo ", please install"
-			exit 1
-		fi
-	fi
-}
-
-checkdep_arch()
-{
-    checkdep $QEMU_BIN $QEMU_PACKAGE
-
-    if [[ -z $ktest_root_image ]]; then
-	if [[ -f $HOME/.ktest/root.$DEBIAN_ARCH ]]; then
-	    ktest_root_image="$HOME/.ktest/root.$DEBIAN_ARCH"
-	elif [[ -f /var/lib/ktest/root.$DEBIAN_ARCH ]]; then
-	    ktest_root_image=/var/lib/ktest/root.$DEBIAN_ARCH
-	else
-	    echo "Root image not found in $HOME/.ktest/root.$DEBIAN_ARCH or /var/lib/ktest/root.$DEBIAN_ARCH"
-	    echo "Use $ktest_dir/root_image create"
-	    exit 1
+		    echo ", please install"
+		    exit 1
 	fi
     fi
 }

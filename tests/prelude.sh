@@ -4,18 +4,21 @@
 
 trap 'echo "Error $? from: $BASH_COMMAND, exiting" >&2' ERR
 
-ktest_cpus=$(nproc)
-ktest_mem=""
-ktest_timeout=""
-ktest_kernel_append=()
-ktest_images=()
-ktest_scratch_devs=()
-ktest_make_install=()
-ktest_kernel_config_require=()
-ktest_qemu_append=()
+if [[ ! -v ktest_verbose ]]; then
+    ktest_verbose=0
+    ktest_cpus=$(nproc)
+    ktest_mem=""
+    ktest_timeout=""
+    ktest_kernel_append=()
+    ktest_images=()
+    ktest_scratch_devs=()
+    ktest_make_install=()
+    ktest_kernel_config_require=()
+    ktest_qemu_append=()
 
-NEXT_SCRATCH_DEV="b"
-BUILD_ON_HOST=""
+    NEXT_SCRATCH_DEV="b"
+    BUILD_ON_HOST=""
+fi
 
 require-git()
 {
@@ -111,7 +114,7 @@ require-qemu-append()
 
 require-kernel-append()
 {
-    ktest_kernel_append+=($1)
+    ktest_kernel_append+=("$1")
 }
 
 config-scratch-devs()
@@ -150,8 +153,7 @@ config-timeout()
 
 config-arch()
 {
-    parse_arch "$1"
-    checkdep_arch
+    ktest_arch=$1
 }
 
 set_watchdog()
@@ -243,10 +245,11 @@ main()
 
     case $arg in
 	deps)
+	    echo "ktest_arch=$ktest_arch"
 	    echo "ktest_cpus=$ktest_cpus"
 	    echo "ktest_mem=$ktest_mem"
 	    echo "ktest_timeout=$ktest_timeout"
-	    echo "ktest_kernel_append=${ktest_kernel_append[@]}"
+	    echo "ktest_kernel_append=(${ktest_kernel_append[@]})"
 	    echo "ktest_images=(${ktest_images[@]})"
 	    echo "ktest_scratch_devs=(${ktest_scratch_devs[@]})"
 	    echo "ktest_make_install=(${ktest_make_install[@]})"

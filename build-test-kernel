@@ -168,6 +168,8 @@ build_kernel()
 
     new_config
 
+    log_verbose "kernel_config_require: ${ktest_kernel_config_require[@]}"
+
     for opt in "${ktest_kernel_config_require[@]}"; do
 	[[ -n $opt ]] && kernel_opt set "$opt"
     done

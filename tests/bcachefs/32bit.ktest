@@ -1,12 +1,8 @@
 #!/bin/bash
 
-# Note: create-vm-image doesn't create a vm with a 32 bit userland, so we're not
-# going to be able to run much with this kernel - this is really just for
-# checking if it builds
+ktest_arch=x86
 
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
-
-config-arch x86
 
 config-timeout 30
 

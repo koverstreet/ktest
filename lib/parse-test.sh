@@ -5,6 +5,8 @@ parse_test_deps()
 
     eval $("$ktest_test" deps)
 
+    parse_arch "$ktest_arch"
+
     if [ -z "$ktest_mem" ]; then
 	echo "test must specify config-mem"
 	exit 1

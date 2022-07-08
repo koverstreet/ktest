@@ -22,9 +22,6 @@ ln -sf $ktest_dir /ktest
 ln -sf $ktest_out /ktest-out
 ln -sf /host/$home $home
 
-. "$ktest_dir/lib/util.sh"
-. "$ktest_dir/lib/parse-test.sh"
-
 ktest_no_cleanup_tmpdir=1
 
 log_verbose "Testrunner starting"

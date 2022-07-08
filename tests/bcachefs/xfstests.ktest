@@ -10,7 +10,7 @@ require-git http://evilpiepirate.org/git/xfstests.git ../xfstests
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../xfstests.sh
 
 require-kernel-config BCACHEFS_POSIX_ACL
-require-kernel-config BCACHEFS_QUOTA=y
+require-kernel-config BCACHEFS_QUOTA
 require-kernel-config QUOTA
 
 config-cpus 24
