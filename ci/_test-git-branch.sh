@@ -59,7 +59,7 @@ git merge --no-edit FETCH_HEAD || git reset --hard
 mkdir -p ktest-out
 rm -rf ktest-out/out
 
-build-test-kernel run $TEST_PATH || true
+build-test-kernel run $TEST_PATH ${TEST_JOB[@]:3} || true
 
 if [[ -f ktest-out/out/$TEST_NAME ]]; then
     echo "Test $TEST_NAME completed"

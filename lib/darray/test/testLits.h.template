@@ -1,0 +1,149 @@
+static int testdarray_from_lit(void);
+static int testdarray_append_lit(void);
+static int testdarray_prepend_lit(void);
+
+static void testLits(void) {
+	testing(darray_from_lit);
+	ok1(testdarray_from_lit());
+	
+	testing(testdarray_append_lit);
+	ok1(testdarray_append_lit());
+	
+	testing(testdarray_prepend_lit);
+	ok1(testdarray_prepend_lit());
+}
+
+static int testdarray_from_lit(void) {
+	darray_char a = darray_new();
+	size_t testsPassed = 0;
+	size_t len = 0;
+	
+	@forEachRandomString
+		/* Test @i */
+		darray_from_lit(a, @str);
+		len = strlen(@str);
+		if (len != sizeof(@str)-1)
+			goto end;
+		if (a.size != len)
+			goto end;
+		if (a.size > a.alloc)
+			goto end;
+		if (strcmp(a.item, @str))
+			goto end;
+		darray_free(a);
+		darray_init(a);
+		testsPassed++;
+	@end
+	
+end:
+	darray_free(a);
+	return testsPassed == @amount;
+}
+
+typedef struct {
+	char *item;
+	size_t size;
+} testLits_string;
+
+static int testdarray_append_lit(void) {
+	darray_char a = darray_new();
+	darray(testLits_string) strings = darray_new();
+	testLits_string *i;
+	size_t testsPassed = 0;
+	size_t oldSize;
+	testLits_string append;
+	size_t offs = 0;
+	
+	@forEachRandomString
+		/* Test @i */
+		append.size = sizeof(@str)-1;
+		oldSize = a.size;
+		darray_append_lit(a, @str);
+		if (a.size != oldSize+append.size)
+			goto end;
+		if (a.size > a.alloc)
+			goto end;
+		if (a.item[a.size])
+			goto end;
+		if (memcmp(a.item+oldSize, @str, a.size-oldSize))
+			goto end;
+		append.item = strdup(@str);
+		darray_append(strings, append);
+		testsPassed++;
+	@end
+	
+	if (strings.size != @amount)
+		goto end;
+	
+	darray_foreach(i, strings) {
+		if (a.size-offs < i->size)
+			goto end;
+		if (memcmp(a.item+offs, i->item, i->size))
+			goto end;
+		offs += i->size;
+	};
+	
+	if (offs != a.size)
+		goto end;
+	if (a.item[offs])
+		goto end;
+	testsPassed++;
+	
+end:
+	darray_free(a);
+	darray_foreach(i, strings)
+		free(i->item);
+	darray_free(strings);
+	return testsPassed == @amount+1;
+}
+
+static int testdarray_prepend_lit(void) {
+	darray_char a = darray_new();
+	darray(testLits_string) strings = darray_new();
+	testLits_string *i;
+	size_t testsPassed = 0;
+	size_t oldSize;
+	testLits_string append;
+	size_t offs;
+	
+	@forEachRandomString
+		/* Test @i */
+		append.size = sizeof(@str)-1;
+		oldSize = a.size;
+		darray_prepend_lit(a, @str);
+		if (a.size != oldSize+append.size)
+			goto end;
+		if (a.size > a.alloc)
+			goto end;
+		if (a.item[a.size])
+			goto end;
+		if (memcmp(a.item, @str, a.size-oldSize))
+			goto end;
+		append.item = strdup(@str);
+		darray_append(strings, append);
+		testsPassed++;
+	@end
+	
+	offs = a.size;
+	if (a.item[offs])
+		goto end;
+	if (strings.size != @amount)
+		goto end;
+	darray_foreach(i, strings) {
+		if (offs < i->size)
+			goto end;
+		offs -= i->size;
+		if (memcmp(a.item+offs, i->item, i->size))
+			goto end;
+	};
+	if (offs)
+		goto end;
+	testsPassed++;
+	
+end:
+	darray_free(a);
+	darray_foreach(i, strings)
+		free(i->item);
+	darray_free(strings);
+	return testsPassed == @amount+1;
+}
