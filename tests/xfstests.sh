@@ -26,24 +26,30 @@ list_tests()
     (cd $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/xfstests/tests; echo generic/???)
 }
 
-hook_xfstests()
-{
-    mkswap /dev/sde
-    swapon /dev/sde
-
-    useradd -m fsgqa
-    useradd fsgqa2
-    useradd 123456-fsgqa
-
-    mkdir -p /mnt/test /mnt/scratch
-
-    run_quiet "building $(basename $i)" make -j $ktest_cpus -C "$ktest_dir/tests/xfstests"
-}
-
 run_xfstests()
 {
     export FSTYP="$1"
     shift
+
+    if [[ ! -f /xfstests-init-done ]]; then
+	mkswap /dev/sde
+	swapon /dev/sde
+
+	useradd -m fsgqa
+	useradd fsgqa2
+	useradd 123456-fsgqa
+
+	mkdir -p /mnt/test /mnt/scratch
+
+	run_quiet "building $(basename $i)" make -j $ktest_cpus -C "$ktest_dir/tests/xfstests"
+
+	rm -rf /ktest-out/xfstests
+
+	wipefs -af /dev/sdb
+	mkfs.$FSTYP $MKFS_OPTIONS -q /dev/sdb
+
+	touch /xfstests-init-done
+    fi
 
     cat << EOF > /ktest/tests/xfstests/local.config
 TEST_DEV=/dev/sdb
@@ -56,11 +62,6 @@ LOGGER_PROG=true
 EOF
 
     export MKFS_OPTIONS
-
-    rm -rf /ktest-out/xfstests
-
-    wipefs -af /dev/sdb
-    mkfs.$FSTYP $MKFS_OPTIONS -q /dev/sdb
     mount -t $FSTYP /dev/sdb /mnt/test
 
     cd "$ktest_dir/tests/xfstests"

@@ -115,6 +115,11 @@ case $ktest_storage_bus in
 	;;
     lsi)
 	require-kernel-config SCSI_MPT3SAS
+	;;
+    *)
+	echo "No storage bus selected"
+	exit 1
+	;;
 esac
 
 # PCI:

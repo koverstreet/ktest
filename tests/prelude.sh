@@ -10,6 +10,7 @@ if [[ ! -v ktest_verbose ]]; then
     ktest_mem=""
     ktest_timeout=""
     ktest_kernel_append=()
+    ktest_storage_bus=virtio-scsi-pci
     ktest_images=()
     ktest_scratch_devs=()
     ktest_make_install=()
@@ -250,6 +251,7 @@ main()
 	    echo "ktest_mem=$ktest_mem"
 	    echo "ktest_timeout=$ktest_timeout"
 	    echo "ktest_kernel_append=(${ktest_kernel_append[@]})"
+	    echo "ktest_storage_bus=$ktest_storage_bus"
 	    echo "ktest_images=(${ktest_images[@]})"
 	    echo "ktest_scratch_devs=(${ktest_scratch_devs[@]})"
 	    echo "ktest_make_install=(${ktest_make_install[@]})"

@@ -27,8 +27,6 @@ ktest_networking=user
 ktest_dio=off
 ktest_nice=0
 
-ktest_storage_bus=virtio-scsi-pci
-
 checkdep socat
 checkdep qemu-system-x86_64	qemu-system-x86
 checkdep brotli
