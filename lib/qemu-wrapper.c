@@ -206,7 +206,7 @@ static void test_start(char *new_test, struct timespec now)
 	current_test_start	= now;
 	current_test_log	= test_file_open("log");
 
-	write_test_file("status", "TEST FAILED");
+	write_test_file("status", "TEST FAILED\n");
 
 	set_timeout(default_timeout);
 }
@@ -324,7 +324,7 @@ again:
 		fputs(output, stdout);
 
 		if (current_test_log && test_is_ending(line)) {
-			write_test_file("status", "%s", line);
+			write_test_file("status", "%s\n", line);
 			test_end(now);
 		}
 
