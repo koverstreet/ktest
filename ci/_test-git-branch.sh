@@ -68,7 +68,7 @@ else
     echo "TEST FAILED" > "ktest-out/out/$TEST_NAME"
 fi
 
-find ktest-out/out -type f -name \*.log -print0|xargs -0 brotli --rm -9
+find ktest-out/out -type f -name \*log -print0|xargs -0 brotli --rm -9
 
 OUTPUT=$JOBSERVER_OUTPUT_DIR/c/$COMMIT
 ssh $JOBSERVER mkdir -p $OUTPUT

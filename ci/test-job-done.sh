@@ -50,7 +50,6 @@ git_commit_html()
     for STATUSFILE in $(find $OUTPUT -name status); do
 	STATUS=$(<$STATUSFILE)
 	TESTNAME=$(basename $(dirname $STATUSFILE))
-	TESTFILE=$(echo $TESTNAME|cut -d. -f1)
 	STATUSMSG=Unknown
 	TABLECLASS=table-secondary
 
@@ -82,7 +81,7 @@ git_commit_html()
 	echo "<td> $STATUSMSG </td>"
 	echo "<td> $DURATION </td>"
 	echo "<td> <a href=$TESTNAME/log.br>	    log			</a> </td>"
-	echo "<td> <a href=$TESTFILE/full_log.br>   full log		</a> </td>"
+	echo "<td> <a href=$TESTNAME/full_log.br>   full log		</a> </td>"
 	echo "<td> <a href=$TESTNAME>		    output directory	</a> </td>"
 	echo "</tr>"
     done
