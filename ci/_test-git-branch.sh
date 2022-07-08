@@ -61,13 +61,6 @@ rm -rf ktest-out/out
 
 build-test-kernel run $TEST_PATH ${TEST_JOB[@]:3} || true
 
-if [[ -f ktest-out/out/$TEST_NAME ]]; then
-    echo "Test $TEST_NAME completed"
-else
-    echo "Test $TEST_NAME failed to start"
-    echo "TEST FAILED" > "ktest-out/out/$TEST_NAME"
-fi
-
 find ktest-out/out -type f -name \*log -print0|xargs -0 brotli --rm -9
 
 OUTPUT=$JOBSERVER_OUTPUT_DIR/c/$COMMIT
