@@ -47,7 +47,7 @@ if [[ -z $TEST_PATH ]]; then
     exit 1
 fi
 
-echo "Running test $TEST_PATH on commit $COMMIT from branch $BRANCH"
+echo "Running test job ${TEST_JOB[@]}"
 
 sync_git_repos
 git_fetch linux $COMMIT

@@ -101,6 +101,9 @@ static strings get_subtests(char *test_path)
 	darray_init(output);
 	darray_init(ret);
 
+	if (verbose)
+		fprintf(stderr, "Getting subtests for %s\n", test_path);
+
 	char *cmd = mprintf("%s list-tests", test_path);
 	FILE *f = popen(cmd, "r");
 	free(cmd);
@@ -112,11 +115,13 @@ static strings get_subtests(char *test_path)
 		darray_make_room(output, 4096);
 
 		bytes_read = fread(output.item + output.size,
-				   1, 4096, f);
+				   1, 4095, f);
 		output.size += bytes_read;
 	} while (bytes_read);
 
 	pclose(f);
+
+	output.item[output.size] = '\0';
 
 	char *subtest, *p = output.item;
 	while ((subtest = strtok(p, " \t\n"))) {
@@ -198,7 +203,7 @@ static test_job branch_get_next_test_job(char *branch,
 	}
 	fprintf(stderr, "error looking up commits on branch %s\n", branch);
 success:
-	fclose(commits);
+	pclose(commits);
 	free(commit);
 	free(cmd);
 	return ret;
@@ -269,6 +274,7 @@ int main(int argc, char *argv[])
 	strings subtests;
 	char **subtest;
 
+	darray_init(subtests);
 	memset(&job, 0, sizeof(job));
 
 	while ((opt = getopt(argc, argv, "b:o:vh")) != -1) {
@@ -302,6 +308,7 @@ int main(int argc, char *argv[])
 			fprintf(stderr, "got %s %s %s age %u\n",
 				job.branch, job.commit, job.test, job.age);
 
+		darray_free(subtests);
 		darray_init(subtests);
 
 		darray_foreach(subtest, job.subtests)
@@ -313,4 +320,9 @@ int main(int argc, char *argv[])
 	darray_foreach(subtest, subtests)
 		printf(" %s", *subtest);
 	printf("\n");
+
+	test_job_free(&job);
+	darray_free(subtests);
+	free(outdir);
+	free(branches_to_test);
 }
