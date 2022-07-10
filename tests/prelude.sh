@@ -4,6 +4,7 @@
 
 if [[ ! -v ktest_verbose ]]; then
     ktest_verbose=0
+    ktest_priority=0
     ktest_cpus=$(nproc)
     ktest_mem=""
     ktest_timeout=""
