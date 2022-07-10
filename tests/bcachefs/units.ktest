@@ -8,7 +8,7 @@ require-kernel-config BCACHEFS_FS
 require-kernel-config BCACHEFS_DEBUG
 require-kernel-config BCACHEFS_TESTS
 
-if [[ $KERNEL_ARCH = x86 ]]; then
+if [[ $ktest_arch = x86 ]]; then
     require-kernel-config CRYPTO_CRC32C_INTEL
 fi
 

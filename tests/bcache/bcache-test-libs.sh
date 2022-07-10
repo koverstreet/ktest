@@ -12,7 +12,7 @@ require-kernel-config AUTOFS_FS
 
 require-make ../../ltp-fsx/
 
-if [[ $KERNEL_ARCH = x86 ]]; then
+if [[ $ktest_arch = x86 ]]; then
     require-kernel-config CRYPTO_CRC32C_INTEL
 fi
 
