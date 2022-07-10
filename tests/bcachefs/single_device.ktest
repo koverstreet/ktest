@@ -796,7 +796,6 @@ test_nfs()
 test_suspend()
 {
     set_watchdog 10
-    umount $LOGDIR
 
     #setup_tracing 'bcachefs:*'
 
@@ -822,44 +821,6 @@ test_suspend()
 	run_antagonist
 	run_stress
     fi
-}
-
-require-kernel-config MD,BLK_DEV_DM,DM_LOG_WRITES
-test_writelog()
-{
-    set_watchdog 60
-    cd $LOGDIR
-    ln -s $LOGDIR/log-writes/replay-log /usr/bin
-
-    dmsetup create log --table "0 $(blockdev --getsz /dev/sdb) log-writes /dev/sdb /dev/sdc"
-
-    bcachefs format -f --btree_node_size=16k --errors=panic /dev/mapper/log
-    dmsetup message log 0 mark mkfs
-
-    mount -t bcachefs /dev/mapper/log /mnt
-    fs_mark -v -n 10000 -s 4096 -k -S 0 -D  1000 -N 1000 -d /mnt -t 10
-    umount /mnt
-
-    dmsetup remove log
-
-    nr_entries=$(replay-log --log /dev/sdc|cut -d= -f4)
-    nr_flush=$(replay-log --log /dev/sdc --list --start-mark mkfs --next-flush --next-fua|wc -l)
-    echo "Replaying $nr_flush/$nr_entries entries:"
-
-    dd if=/dev/zero of=/dev/sdb 2>/dev/null || true
-
-    prev=0
-    for e in $(replay-log --log /dev/sdc --list --start-mark mkfs --next-flush --next-fua); do
-	echo "testing entry $e"
-
-	replay-log --log /dev/sdc --replay /dev/sdb --start $prev --limit $(( $e - $prev + 1))
-	prev=$(( $e + 1 ))
-
-	dmsetup create snap --table "0 $(blockdev --getsz /dev/sdb) snapshot /dev/sdb /dev/sdd N 8"
-	mount -t bcachefs -o ro /dev/mapper/snap /mnt
-	umount /mnt
-	dmsetup remove snap
-    done
 }
 
 test_journal_torture()
@@ -942,32 +903,6 @@ test_offline_resize_lv()
 
     lvresize -L +1G $dev
     bcachefs device resize $dev
-    df -h /mnt
-    umount /mnt
-
-    mount -t bcachefs $dev /mnt
-    df -h /mnt
-    umount /mnt
-
-    vgremove -f vg
-}
-
-test_offline_resize_lv_ext4()
-{
-    set_watchdog 20
-    pvcreate /dev/sdb
-    vgcreate vg /dev/sdb
-    lvcreate -L 1G -n foo  vg
-    dev=/dev/vg/foo
-
-    mkfs.ext4 $dev
-
-    mount -t bcachefs $dev /mnt
-    df -h /mnt
-    cat /proc/mounts
-
-    lvresize -L +1G $dev
-    resize2fs $dev
     df -h /mnt
     umount /mnt
 
