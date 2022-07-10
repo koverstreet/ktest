@@ -162,6 +162,9 @@ fi
 trap 'pkill -P $$ >/dev/null' EXIT
 cd /root
 
+export ktest_failfast
+export ktest_out
+
 set +e
 ret=0
 iterations=0
