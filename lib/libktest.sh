@@ -277,9 +277,6 @@ start_vm()
 
     get_tmpdir
 
-    # Was outputting to a single log file, now a directory:
-    [[ -f $ktest_out/out ]] && rm -f "$ktest_out/out"
-
     rm -f "$ktest_out/core.*"
     rm -f "$ktest_out/vmcore"
     rm -f "$ktest_out/vm"
@@ -407,65 +404,6 @@ start_vm()
     done
 
     set +o errexit
-
-    ktest_tests=$(echo $ktest_tests)
-    local ktest_vm_idx=0
-
-    while true; do
-	local full_log=$ktest_basename.$(hostname).$(date -Iseconds).log
-
-	for t in $ktest_tests; do
-	    local fname=$(echo "$t"|tr / .)
-	    ln -sfr "$ktest_out/out/$full_log.br"			\
-		    "$ktest_out/out/$ktest_basename.$fname/full_log.br"
-	done
-
-	local qemu_wrapper_cmd=("$ktest_dir/lib/qemu-wrapper")
-
-	qemu_wrapper_cmd+=(-T $ktest_timeout)
-	qemu_wrapper_cmd+=(-f "$full_log")
-
-	if [[ $ktest_interactive = 1 ]]; then
-	    true
-	elif [[ $ktest_exit_on_success = 1 ]]; then
-	    qemu_wrapper_cmd+=(-S)
-	else
-	    qemu_wrapper_cmd+=(-S -F)
-	fi
-
-	local test_basename=$(basename -s .ktest "$ktest_test")
-	qemu_wrapper_cmd+=(-b "$test_basename")
-	qemu_wrapper_cmd+=(-o "$ktest_out/out")
-
-	save_env
-
-	echo "Starting KVM ($ktest_vm_idx)"
-	"${qemu_wrapper_cmd[@]}" -- "${qemu_cmd[@]}"
-	local ret=$?
-
-	$ktest_failfast && break
-
-	local tests_remaining=
-
-	for t in $ktest_tests; do
-	    local fname=$(echo "$t"|tr / .)
-	    if grep -q "NOT STARTED" $ktest_out/out/$ktest_basename.$fname/status; then
-		tests_remaining="$tests_remaining $t"
-	    fi
-	done
-
-	tests_remaining=$(echo $tests_remaining)
-
-	[[ -z $tests_remaining ]] && break
-
-	if [[ $tests_remaining = $ktest_tests ]]; then
-	    echo "Failed to make progress"
-	    break
-	fi
-
-	ktest_tests="$tests_remaining"
-	let ktest_vm_idx++
-    done
-
-    exit $ret
+    save_env
+    "${qemu_cmd[@]}"
 }

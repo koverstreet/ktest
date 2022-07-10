@@ -1,8 +1,6 @@
 
 parse_test_deps()
 {
-    ktest_basename=$(basename -s .ktest "$ktest_test")
-
     #export ktest_crashdump
     eval $("$ktest_test" deps)
 
@@ -18,6 +16,7 @@ parse_test_deps()
     fi
 
     ktest_tests=$("$ktest_test" list-tests)
+    ktest_tests=$(echo $ktest_tests)
 
     if [[ -z $ktest_tests ]]; then
 	echo "No tests found"
@@ -38,14 +37,4 @@ parse_test_deps()
 
 	ktest_tests="$ktest_testargs"
     fi
-
-    # Mark tests not run:
-    rm -rf "$ktest_out/out"
-    mkdir  "$ktest_out/out"
-    for t in $ktest_tests; do
-	t=$(echo "$t"|tr / .)
-
-	mkdir -p $ktest_out/out/$ktest_basename.$t
-	echo "========= NOT STARTED" > $ktest_out/out/$ktest_basename.$t/status
-    done
 }
