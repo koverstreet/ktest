@@ -223,8 +223,8 @@ static void test_end(struct timespec now)
 
 static void usage(void)
 {
-	puts("qemu-wrapper - wrapper for qemu to catch test success/failure\n"
-	     "Usage: qemu-wrapper [OPTIONS] -- <qemu-command>\n"
+	puts("supervisor - test supervisor"
+	     "Usage: supervisor [OPTIONS] -- <test-command>\n"
 	     "\n"
 	     "Options\n"
 	     "      -S              Exit on success\n"

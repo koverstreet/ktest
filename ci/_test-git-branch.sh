@@ -67,7 +67,7 @@ for t in ${SUBTESTS[@]}; do
     echo "========= NOT STARTED" > ktest-out/out/$TEST_NAME.$t/status
 done
 
-make -C "$KTEST_DIR/lib" qemu-wrapper
+make -C "$KTEST_DIR/lib" supervisor
 
 while (( ${#SUBTESTS[@]} )); do
     FULL_LOG=$TEST_NAME.$(hostname).$(date -Iseconds).log
@@ -78,7 +78,7 @@ while (( ${#SUBTESTS[@]} )); do
 	    "ktest-out/out/$TEST_NAME.$FNAME/full_log.br"
     done
 
-    $KTEST_DIR/lib/qemu-wrapper -T 1200 -f "$FULL_LOG" -S -F	\
+    $KTEST_DIR/lib/supervisor -T 1200 -f "$FULL_LOG" -S -F	\
 	-b $TEST_NAME -o ktest-out/out				\
 	build-test-kernel run $TEST_PATH ${SUBTESTS[@]} || true
 

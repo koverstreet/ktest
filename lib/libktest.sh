@@ -260,8 +260,6 @@ start_vm()
 
     log_verbose "ktest_arch=$ktest_arch"
 
-    make -C "$ktest_dir/lib" qemu-wrapper
-
     if [[ -z $ktest_kernel_binary ]]; then
 	echo "Required parameter -k missing: kernel"
 	exit 1
