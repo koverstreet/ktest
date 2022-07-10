@@ -7,6 +7,8 @@ set -o errtrace
 KTEST_DIR=$(dirname "$(readlink -e "$0")")/..
 JOBSERVER_LINUX_REPO=ssh://$JOBSERVER/$JOBSERVER_HOME/linux
 
+. $KTEST_DIR/lib/common.sh
+
 git_fetch()
 {
     local repo=$1
@@ -80,7 +82,8 @@ while (( ${#SUBTESTS[@]} )); do
 
     $KTEST_DIR/lib/supervisor -T 1200 -f "$FULL_LOG" -S -F	\
 	-b $TEST_NAME -o ktest-out/out				\
-	build-test-kernel run $TEST_PATH ${SUBTESTS[@]} || true
+	build-test-kernel run $TEST_PATH ${SUBTESTS[@]} &
+    wait
 
     SUBTESTS_REMAINING=()
 

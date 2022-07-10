@@ -60,6 +60,13 @@ static char		*current_test;
 static struct timespec	current_test_start;
 static FILE		*current_test_log;
 
+static void term_handler(int sig)
+{
+	fprintf(stderr, "caught signal %i, exiting\n", sig);
+	kill(child, SIGTERM);
+	exit(EXIT_FAILURE);
+}
+
 static void alarm_handler(int sig)
 {
 	char *msg = mprintf("========= FAILED TIMEOUT %s in %lus\n",
@@ -286,6 +293,15 @@ int main(int argc, char *argv[])
 	if (!logdir)
 		die("Required option -o missing");
 
+	struct sigaction term_action = { .sa_handler = term_handler };
+	if (sigaction(SIGTERM, &term_action, NULL) ||
+	    sigaction(SIGINT, &term_action, NULL) ||
+	    sigaction(SIGHUP, &term_action, NULL) ||
+	    sigaction(SIGPIPE, &term_action, NULL) ||
+	    sigaction(SIGUSR1, &term_action, NULL) ||
+	    sigaction(SIGUSR2, &term_action, NULL))
+		die("sigaction error: %m");
+
 	FILE *childf = popen_with_pid(argv + optind, &child);
 
 	FILE *logfile = log_open();
@@ -352,6 +368,6 @@ again:
 		goto again;
 	}
 
-	kill(child, SIGKILL);
+	kill(child, SIGTERM);
 	exit(ret);
 }
