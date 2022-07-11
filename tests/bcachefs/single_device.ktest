@@ -13,9 +13,7 @@ config-scratch-devs 4G
 
 test_stress_ng()
 {
-    set_watchdog 60
-
-    apt install -y stress-ng
+    set_watchdog 300
     setup_tracing 'bcachefs:*'
 
     run_quiet "" bcachefs format --no_initialize --version=11 -f /dev/sdb
@@ -89,7 +87,7 @@ test_reflink2()
     cp --reflink /mnt/foo /mnt/foo5
     cp --reflink /mnt/foo /mnt/foo6
 
-    cat /sys/kernel/debug/bcachefs/*/reflink
+    cat /sys/kernel/debug/bcachefs/*/btrees/reflink
 
     dd if=/dev/urandom of=/mnt/foo2 bs=4k oflag=direct conv=notrunc count=1
     dd if=/dev/urandom of=/mnt/foo3 bs=4k oflag=direct conv=notrunc count=1 seek=1
@@ -99,11 +97,13 @@ test_reflink2()
     dd if=/dev/urandom of=/mnt/foo6 bs=4k oflag=direct conv=notrunc count=1 seek=3
     dd if=/dev/urandom of=/mnt/foo6 bs=4k oflag=direct conv=notrunc count=1 seek=2
 
-    cat /sys/kernel/debug/bcachefs/*/reflink
+    cat /sys/kernel/debug/bcachefs/*/btrees/reflink
 
-    cat /sys/kernel/debug/bcachefs/*/reflink|wc -l
+    cat /sys/kernel/debug/bcachefs/*/btrees/reflink|wc -l
     rm /mnt/foo*
-    cat /sys/kernel/debug/bcachefs/*/reflink|wc -l
+    cat /sys/kernel/debug/bcachefs/*/btrees/reflink|wc -l
+
+    umount /mnt
 }
 
 test_reflink()
@@ -159,10 +159,6 @@ test_rewrite_old_nodes()
 
     mount -t bcachefs /dev/sdb /mnt
     dd if=/dev/zero of=/mnt/foo bs=4k count=65536 oflag=direct
-
-    echo 1 > /sys/fs/bcachefs/*/internal/trigger_gc
-    exit
-
     umount /mnt
 
     bcachefs show-super /dev/sdb
@@ -284,7 +280,7 @@ test_journal_resize()
 
 test_drop_alloc()
 {
-    set_watchdog 90
+    set_watchdog 120
     run_quiet "" bcachefs format -f /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
 
@@ -399,7 +395,7 @@ test_key_merge_csum()
 
 test_reconstruct_alloc()
 {
-    set_watchdog 30
+    set_watchdog 120
     run_quiet "" bcachefs format --btree_node_size=16k /dev/sdb
 
     mount -t bcachefs -o reconstruct_alloc,fix_errors,fsck /dev/sdb /mnt
@@ -608,8 +604,7 @@ run_copygc_torture()
 
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	--no_initialize	--version=14			\
-	--btree_node_size=8k			\
+	--no_initialize	--version=14		\
 	--data_checksum=none			\
 	"$@" /dev/sdb
 
@@ -818,7 +813,7 @@ test_suspend()
     if false; then
 	run_dbench
     else
-	run_antagonist
+	bcachefs_antagonist
 	run_stress
     fi
 }
@@ -1207,7 +1202,7 @@ test_small_fs()
 
 test_small_torture()
 {
-    run_copygc_torture --bucket=4k --fs_size=512k
+    run_copygc_torture --bucket=4k --fs_size=32M
 }
 
 test_small_fsck()

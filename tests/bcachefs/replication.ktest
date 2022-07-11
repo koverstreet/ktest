@@ -155,7 +155,7 @@ d_test_copygc_torture()
 
 do_remove_test()
 {
-    set_watchdog 60
+    set_watchdog 180
     offline=$1
     evacuate=$2
 
@@ -262,7 +262,7 @@ test_device_add()
 
 test_device_set_state()
 {
-    set_watchdog 30
+    set_watchdog 120
 
     run_quiet "" bcachefs format		\
 	--replicas=2				\
@@ -294,7 +294,7 @@ test_device_set_state()
 
 test_device_ro()
 {
-    set_watchdog 30
+    set_watchdog 120
 
     run_quiet "" bcachefs format		\
 	--btree_node_size=128k			\
@@ -323,7 +323,7 @@ test_device_ro()
 
 test_device_set_state_offline()
 {
-    set_watchdog 60
+    set_watchdog 120
     run_quiet "" bcachefs format		\
 	--replicas=2				\
 	/dev/sd[bcd]
