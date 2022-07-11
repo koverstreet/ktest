@@ -260,6 +260,35 @@ test_device_add()
     umount /mnt
 }
 
+test_device_add_label()
+{
+    # Test setting device label when adding
+    # Caught bugs:
+    #   - label was not set correctly; set to dev-0 label instead of new one.
+
+    bcachefs format -L test_add_label --label=foo /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+    bcachefs device add --label=bar /mnt /dev/sdc
+    expect_sysfs dev-1 label bar
+    umount /mnt
+}
+
+test_device_add_label_compound()
+{
+    # Test adding a device with a compond label, a '.' separated "path"
+    # (e.g. ssd.sata)
+    # Caught bugs:
+    #   - filesystem crashed with message "Invalid superblock section disk_groups".
+
+    set_watchdog 30
+
+    bcachefs format -L test_add_compound_label --label=hdd /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+    bcachefs device add --label=foo.bar /mnt /dev/sdc
+    expect_sysfs dev-1 label foo.bar
+    umount /mnt
+}
+
 test_device_set_state()
 {
     set_watchdog 120
@@ -383,6 +412,30 @@ test_device_readd()
     umount /mnt
 
     mount -t bcachefs /dev/sdb:/dev/sdc /mnt
+    umount /mnt
+}
+
+test_device_repeated_add_remove()
+{
+    ## Test rapidly adding and removing the same device.
+    # Caught bugs:
+    #   - found a race condition that leads to a kernel BUG in btree_key_cache.
+
+    set_watchdog 120
+
+    bcachefs format -L test_device_repeated_add_remove --label=hdd /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    for ii in {1..10}; do
+        echo "add-remove run #$ii ----------------------------------------------------"
+        echo "bcachefs device add"
+        bcachefs device add /mnt /dev/sdc
+        echo "bcachefs device evacuate"
+        bcachefs device evacuate /dev/sdc
+        echo "bcachefs device remove"
+        bcachefs device remove /dev/sdc
+    done
+
     umount /mnt
 }
 
