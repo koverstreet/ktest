@@ -407,8 +407,14 @@ test_reconstruct_alloc()
     run_fio_randrw
     umount /mnt
 
-    fsck.bcachefs -n --reconstruct_alloc /dev/sdb
+    echo "Running fsck --reconstruct_alloc"
+    fsck.bcachefs -ny --reconstruct_alloc /dev/sdb  && rc=$? || rc=$? 
+    if [[ $rc != 1 ]]; then
+	echo "Bad exit status from fsck: $rc"
+	exit 1
+    fi
 
+    echo "Mounting with -o reconstruct_alloc"
     mount -t bcachefs -o reconstruct_alloc,fix_errors,fsck /dev/sdb /mnt
     umount /mnt
 
