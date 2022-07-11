@@ -204,11 +204,6 @@ ZZ
     rm -f "$MNT/lib/udev/rules.d/*hdparm*"
 
     echo $(hostname)-kvm >"$MNT/etc/hostname"
-
-    # Use most recent version of perf installed, instead of failing if it
-    # doesn't match the kernel version:
-    mkdir -p "$MNT/usr/local/bin"
-    install -m0755 "$ktest_dir/lib/perf" "$MNT/usr/local/bin/perf"
 }
 
 update_packages()
