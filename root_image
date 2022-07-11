@@ -78,7 +78,8 @@ PACKAGES=(kexec-tools less psmisc openssh-server		\
     gdb strace ltrace linux-perf trace-cmd blktrace sysstat	\
     hdparm mdadm lvm2						\
     btrfs-progs jfsutils nilfs-tools f2fs-tools			\
-    bc attr gawk acl rsync git python3-docutils)
+    bc attr gawk acl rsync git python3-docutils			\
+    stress-ng)
 
 # stress testing:
 PACKAGES+=(fio dbench bonnie++ fsmark)
@@ -237,9 +238,9 @@ update_oob_packages()
 
 trim_image()
 {
-    e2fsck -f "$ktest_image"
-    resize2fs -M "$ktest_image"			# shrinks the file
-    resize2fs "$ktest_image" "$IMAGE_SIZE"	# re-grows as sparse
+    e2fsck -f "$1"
+    resize2fs -M "$1"			# shrinks the file
+    resize2fs "$1" "$IMAGE_SIZE"	# re-grows as sparse
 }
 
 umount_image()
@@ -264,14 +265,16 @@ cmd_update()
     MNT=$(mktemp --tmpdir -d $(basename "$0")-XXXXXXXXXX)
     trap 'umount_image' EXIT
 
-    mount "$ktest_image" "$MNT"
+    cp "$ktest_image" "$ktest_image".new
+    mount "$ktest_image".new "$MNT"
 
     update_packages
     update_oob_packages
     update_files
 
     umount_image
-    trim_image
+    trim_image "$ktest_image".new
+    mv "$ktest_image".new "$ktest_image"
 }
 
 cmd_create()
