@@ -102,7 +102,9 @@ find ktest-out/out -type f -name \*log -print0|xargs -0 brotli --rm -9
 
 OUTPUT=$JOBSERVER_OUTPUT_DIR/c/$COMMIT
 ssh $JOBSERVER mkdir -p $OUTPUT
-scp -r ktest-out/out/* $JOBSERVER:$OUTPUT
+
+(cd ktest-out/out; tar --create --file - *)|
+    ssh $JOBSERVER "(cd $OUTPUT; tar --extract --file -)"
 
 echo "Running test-job-done.sh"
 ssh $JOBSERVER test-job-done.sh $BRANCH $COMMIT
