@@ -149,6 +149,8 @@ BRANCH_LOG=$(echo "$BRANCH"|tr / _).html
 git_log_html > "$JOBSERVER_OUTPUT_DIR/$BRANCH_LOG"
 
 echo "Running rsync"
-flock --nonblock .rsync.lock rsync -r --delete $JOBSERVER_OUTPUT_DIR/ testdashboard@evilpiepirate.org:public_html || true
+flock --nonblock .rsync.lock rsync -r --links --delete	\
+    $JOBSERVER_OUTPUT_DIR/				\
+    testdashboard@evilpiepirate.org:public_html || true
 
 echo "Success"
