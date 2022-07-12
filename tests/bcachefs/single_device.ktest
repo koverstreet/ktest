@@ -3,6 +3,7 @@
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
 
 require-kernel-config BCACHEFS_TESTS
+require-kernel-config BCACHEFS_QUOTA
 
 require-kernel-config MD
 require-kernel-config BLK_DEV_MD
@@ -409,7 +410,7 @@ test_reconstruct_alloc()
 
     echo "Running fsck --reconstruct_alloc"
     fsck.bcachefs -ny --reconstruct_alloc /dev/sdb  && rc=$? || rc=$? 
-    if [[ $rc != 1 ]]; then
+    if (( $rc != 0 && $rc != 1 )); then
 	echo "Bad exit status from fsck: $rc"
 	exit 1
     fi
@@ -467,7 +468,8 @@ test_lz4_zeros()
     run_quiet "" bcachefs format -f --errors=panic --compression=lz4 --data_checksum=none --bucket=2M /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
 
-    dd if=/dev/zero of=/mnt/foo || true
+    dd if=/dev/zero of=/mnt/foo bs=1M count=10
+    # XXX check disk space used
     umount /mnt
 }
 
