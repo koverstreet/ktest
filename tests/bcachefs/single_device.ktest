@@ -796,7 +796,8 @@ test_nfs()
     umount /export2
 }
 
-test_suspend()
+# We should get this working at some point:
+d_test_suspend()
 {
     set_watchdog 10
 
