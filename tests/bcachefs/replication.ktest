@@ -237,7 +237,7 @@ test_device_add()
 	--no_initialize				\
 	/dev/sdb
 
-    mount /dev/sdb /mnt
+    mount -t bcachefs /dev/sdb /mnt
 
     run_fio_randrw >"$ktest_out/fio-out" 2>&1 &
     local fiopid=$!
