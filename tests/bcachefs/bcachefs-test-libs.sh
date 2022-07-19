@@ -102,7 +102,7 @@ bcachefs_antagonist()
     #setup_tracing
     #setup_tracing 'bcachefs:*'
     #echo 1 > /sys/module/bcachefs/parameters/expensive_debug_checks
-    #echo 1 > /sys/module/bcachefs/parameters/debug_check_iterators
+    echo 1 > /sys/module/bcachefs/parameters/debug_check_iterators
     #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
     #echo 1 > /sys/module/bcachefs/parameters/debug_check_btree_accounting
     #echo 1 > /sys/module/bcachefs/parameters/test_alloc_startup
