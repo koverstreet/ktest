@@ -115,6 +115,10 @@ test_reflink()
 
     run_fio_randrw --filesize=1000M &
 
+    while [[ ! -f /mnt/fiotest ]]; do
+	sleep 1
+    done
+
     for i in `seq 0 10`; do
 	sleep 0.5
 	cp --reflink /mnt/fiotest /mnt/fiotest2
@@ -123,9 +127,9 @@ test_reflink()
 
     wait
 
-    cat /sys/kernel/debug/bcachefs/*/reflink|wc -l
+    cat /sys/kernel/debug/bcachefs/*/btrees/reflink|wc -l
     rm /mnt/fiotest*
-    nr_left=`cat /sys/kernel/debug/bcachefs/*/reflink|wc -l`
+    nr_left=`cat /sys/kernel/debug/bcachefs/*/btrees/reflink|wc -l`
     echo "nr_left: $nr_left"
 
     [[ $nr_left = 0 ]]
@@ -667,7 +671,7 @@ test_copygc_torture_lz4()
 test_small_buckets()
 {
     run_basic_fio_test				\
-	--bucket=4k				\
+	--bucket=32k				\
 	/dev/sdb
 }
 
