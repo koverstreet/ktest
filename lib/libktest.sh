@@ -248,6 +248,9 @@ save_env()
 
 get_unused_port()
 {
+    # This probably shouldn't be needed, but I was unable to determine which
+    # part of the pipeline was returning an error:
+    set +o pipefail
     comm -23 --nocheck-order \
 	<(seq 10000 65535) \
 	<(ss -tan | awk '{print $4}' | cut -d':' -f2 | grep '[0-9]\{1,5\}' | sort -n | uniq) \
