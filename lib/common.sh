@@ -3,6 +3,8 @@ set -o nounset
 set -o errtrace
 set -o errtrace
 
+trap 'echo "Error $? from: $BASH_COMMAND, exiting" >&2' ERR
+
 ktest_tmp=${ktest_tmp:-""}
 ktest_exit()
 {
@@ -13,6 +15,7 @@ ktest_exit()
     fi
 
     [[ -n $ktest_tmp ]] && rm -rf "$ktest_tmp"
+    true
 }
 
 trap ktest_exit EXIT
