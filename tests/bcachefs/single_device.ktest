@@ -198,7 +198,7 @@ test_merge_torture_flakey()
 
 	echo seq_delete		$n 1	> /sys/fs/bcachefs/*/perf_test
 	echo -n "nodes: "
-	grep "^l " /sys/kernel/debug/bcachefs/*/xattrs-formats|wc -l
+	grep "^l " /sys/kernel/debug/bcachefs/*/btrees/xattrs-formats|wc -l
 	df -h /mnt
 
 	echo seq_insert		$n 1	> /sys/fs/bcachefs/*/perf_test &
@@ -496,7 +496,7 @@ test_lz4()
 
 test_lz4_buffered()
 {
-    set_watchdog 30
+    set_watchdog 120
     #bcachefs_antagonist
 
     run_quiet "" bcachefs format -f		\
