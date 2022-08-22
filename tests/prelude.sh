@@ -9,7 +9,12 @@ if [[ ! -v ktest_verbose ]]; then
     ktest_mem=""
     ktest_timeout=""
     ktest_kernel_append=()
-    ktest_storage_bus=virtio-scsi-pci
+
+    # virtio-scsi-pci semes to be buggy: reading the superblock on the root
+    # filesystem randomly returns zeroes
+    #ktest_storage_bus=virtio-scsi-pci
+    ktest_storage_bus=ahci
+
     ktest_images=()
     ktest_scratch_devs=()
     ktest_make_install=()
