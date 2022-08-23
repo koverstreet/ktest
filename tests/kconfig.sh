@@ -209,6 +209,7 @@ require-kernel-config PROFILING
 require-kernel-config JUMP_LABEL
 
 # Tracing
+require-kernel-config PERF_EVENTS
 require-kernel-config FTRACE
 require-kernel-config FTRACE_SYSCALLS
 require-kernel-config FUNCTION_TRACER
