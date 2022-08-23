@@ -129,6 +129,9 @@ case $ktest_storage_bus in
     virtio-scsi-pci)
 	require-kernel-config SCSI_VIRTIO
 	;;
+    virtio-blk)
+	require-kernel-config VIRTIO_BLK
+	;;
     ahci)
 	require-kernel-config ATA
 	require-kernel-config SATA_AHCI

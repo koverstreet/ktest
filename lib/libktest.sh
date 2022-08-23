@@ -324,7 +324,6 @@ start_vm()
 	-gdb		"unix:$ktest_out/vm/gdb,server,nowait"		\
 	-device		virtio-rng-pci					\
 	-virtfs		local,path=/,mount_tag=host,security_model=none	\
-	-device		$ktest_storage_bus,id=hba			\
     )
 
     if [[ -f $ktest_kernel_binary/initramfs ]]; then
@@ -362,6 +361,14 @@ start_vm()
 	    exit 1
     esac
 
+    case $ktest_storage_bus in
+	virtio-blk)
+	    ;;
+	*)
+	    qemu_cmd+=(-device $ktest_storage_bus,id=hba)
+	    ;;
+    esac
+
     local disknr=0
 
     qemu_disk()
@@ -370,6 +377,9 @@ start_vm()
 	case $ktest_storage_bus in
 	    ahci|piix4-ide)
 		qemu_cmd+=(-device ide-hd,bus=hba.$disknr,drive=disk$disknr)
+		;;
+	    virtio-blk)
+		qemu_cmd+=(-device virtio-blk-device,drive=disk$disknr,bootindex=$disknr)
 		;;
 	    *)
 		qemu_cmd+=(-device scsi-hd,bus=hba.0,drive=disk$disknr)
