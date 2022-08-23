@@ -28,7 +28,6 @@ ktest_dio=off
 ktest_nice=0
 
 checkdep socat
-checkdep qemu-system-x86_64	qemu-system-x86
 checkdep brotli
 
 # config files:
@@ -259,9 +258,10 @@ get_unused_port()
 
 start_vm()
 {
-    checkdep_arch
-
     log_verbose "ktest_arch=$ktest_arch"
+
+    checkdep $QEMU_BIN $QEMU_PACKAGE
+    check_root_image_exists
 
     if [[ -z $ktest_kernel_binary ]]; then
 	echo "Required parameter -k missing: kernel"

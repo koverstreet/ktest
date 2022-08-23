@@ -1,7 +1,7 @@
 
 . "$ktest_dir/lib/common.sh"
 
-checkdep_arch()
+check_root_image_exists()
 {
     if [[ -z $ktest_root_image ]]; then
 	if [[ -f $HOME/.ktest/root.$DEBIAN_ARCH ]]; then
