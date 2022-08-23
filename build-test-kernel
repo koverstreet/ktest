@@ -11,6 +11,9 @@ KTEST=$ktest_dir/ktest
 
 checkdep gcc
 checkdep make
+checkdep bison
+checkdep flex
+checkdep bc
 
 ktest_kernel_source="."	# dir of kernel source
 			#       set with: -k <path>
