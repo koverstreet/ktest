@@ -285,7 +285,6 @@ start_vm()
 
     local kernelargs=()
     kernelargs+=(mitigations=off)
-    kernelargs+=(console=hvc0)
     kernelargs+=(root=/dev/sda rw log_buf_len=8M)
     kernelargs+=("ktest.dir=$ktest_dir")
     kernelargs+=(ktest.env=$(readlink -f "$ktest_out/vm/env"))
@@ -299,6 +298,9 @@ start_vm()
     case $ktest_arch in
 	x86|x86_64)
 	    qemu_cmd+=(-cpu host -machine type=q35,accel=kvm,nvdimm=on)
+	    ;;
+	aarch64)
+	    qemu_cmd+=(-cpu host -machine type=virt,gic-version=max,accel=kvm)
 	    ;;
 	mips)
 	    qemu_cmd+=(-cpu 24Kf -machine malta)

@@ -13,10 +13,13 @@ case $ktest_arch in
 	require-kernel-config ACPI	# way slower without it, do not know why
 	require-kernel-config UNWINDER_FRAME_POINTER
 	require-kernel-config HARDLOCKUP_DETECTOR
+	require-kernel-config RTC_DRV_CMOS
 
 	have_kvmguest=1
 	have_virtio=1
 	have_suspend=1
+
+	require-kernel-append console=hvc0
 	;;
     x86_64)
 	require-kernel-config SMP
@@ -27,10 +30,22 @@ case $ktest_arch in
 	require-kernel-config ACPI	# way slower without it, do not know why
 	require-kernel-config UNWINDER_FRAME_POINTER
 	require-kernel-config HARDLOCKUP_DETECTOR
+	require-kernel-config RTC_DRV_CMOS
 
 	have_kvmguest=1
 	have_virtio=1
 	have_suspend=1
+
+	require-kernel-append console=hvc0
+	;;
+    aarch64)
+	require-kernel-config CONFIG_SERIAL_AMBA_PL011
+	require-kernel-config CONFIG_SERIAL_AMBA_PL011_CONSOLE
+	require-kernel-config PCI_HOST_GENERIC
+
+	have_virtio=1
+
+	require-kernel-append console=hvc0
 	;;
     powerpc)
 	require-kernel-config ADVANCED_OPTIONS
@@ -38,6 +53,8 @@ case $ktest_arch in
 	have_kvmguest=1
 	have_virtio=1
 	have_suspend=1
+
+	require-kernel-append console=hvc0
 	;;
     mips)
 	require-kernel-config MIPS_MALTA
@@ -48,6 +65,12 @@ case $ktest_arch in
 
 	have_virtio=1
 	ktest_storage_bus=piix4-ide
+
+	require-kernel-append console=hvc0
+	;;
+    *)
+	echo "Kernel architecture not supported by kconfig.sh"
+	exit 1
 	;;
 esac
 
@@ -85,11 +108,13 @@ fi
 
 if [[ $have_virtio = 1 ]]; then
     require-kernel-config VIRTIO_MENU
+    require-kernel-config VIRTIO_MMIO
     require-kernel-config VIRTIO_PCI
     require-kernel-config HW_RANDOM_VIRTIO
     require-kernel-config VIRTIO_CONSOLE
     require-kernel-config VIRTIO_NET
     require-kernel-config NET_9P_VIRTIO
+    require-kernel-config CONFIG_CRYPTO_DEV_VIRTIO
 fi
 
 if [[ $have_suspend = 1 ]]; then
@@ -131,7 +156,6 @@ require-kernel-config HW_RANDOM
 # Clock:
 require-kernel-config RTC_CLASS
 require-kernel-config RTC_HCTOSYS
-require-kernel-config RTC_DRV_CMOS
 
 # Console:
 require-kernel-config SERIAL_8250	# XXX can probably drop
@@ -162,9 +186,6 @@ require-kernel-config EXT4_FS_POSIX_ACL
 require-kernel-config NET_9P
 require-kernel-config NETWORK_FILESYSTEMS
 require-kernel-config 9P_FS
-
-# Fast RNG:
-require-kernel-config CONFIG_CRYPTO_DEV_VIRTIO
 
 # Crash dumps
 #if [[ $ktest_crashdump = 1 ]]; then

@@ -75,7 +75,7 @@ PACKAGES=(kexec-tools less psmisc openssh-server		\
     build-essential make gcc g++				\
     autoconf automake autopoint bison				\
     pkg-config libtool-bin					\
-    gdb strace ltrace linux-perf trace-cmd blktrace sysstat	\
+    gdb strace linux-perf trace-cmd blktrace sysstat		\
     hdparm mdadm lvm2						\
     btrfs-progs jfsutils nilfs-tools f2fs-tools			\
     bc attr gawk acl rsync git python3-docutils			\

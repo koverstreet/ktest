@@ -194,13 +194,22 @@ build_kernel()
 
     local BOOT=$ktest_kernel_build/arch/$KERNEL_ARCH/boot
 
-    if   [[ -f "$BOOT/bzImage" ]]; then
-	install -m0644 "$BOOT/bzImage"		"$ktest_kernel_binary/vmlinuz"
-    elif [[ -f "$BOOT/vmlinux.strip" ]]; then
-	install -m0644 "$BOOT/vmlinux.strip"	"$ktest_kernel_binary/vmlinuz"
-    else
-	install -m0644 "$ktest_kernel_build/vmlinux"	"$ktest_kernel_binary/vmlinuz"
-    fi
+    case $ktest_arch in
+	x86*)
+	    install -m0644 "$BOOT/bzImage"	"$ktest_kernel_binary/vmlinuz"
+	    ;;
+	aarch64)
+	    install -m0644 "$BOOT/Image"	"$ktest_kernel_binary/vmlinuz"
+	    ;;
+	mips)
+	    install -m0644 "$BOOT/vmlinux.strip"	"$ktest_kernel_binary/vmlinuz"
+	    #install -m0644 "$ktest_kernel_build/vmlinux"	"$ktest_kernel_binary/vmlinuz"
+	    ;;
+	default)
+	    echo "Don't know how to install kernel"
+	    exit 1
+	    ;;
+    esac
 
     install -m0644 "$ktest_kernel_build/vmlinux" "$ktest_kernel_binary/vmlinux"
     install -m0644 "$ktest_kernel_build/.config" "$ktest_kernel_binary/config"

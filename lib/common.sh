@@ -105,6 +105,17 @@ parse_arch()
 	    QEMU_PACKAGE=qemu-system-x86
 	    QEMU_BIN=qemu-system-x86_64
 	    ;;
+	aarch64)
+	    ktest_arch=aarch64
+	    DEBIAN_ARCH=arm64
+	    ARCH_TRIPLE=
+
+	    KERNEL_ARCH=arm64
+	    BITS=64
+
+	    QEMU_PACKAGE=qemu-system-arm
+	    QEMU_BIN=qemu-system-aarch64
+	    ;;
 	mips)
 	    DEBIAN_ARCH=mips
 	    ARCH_TRIPLE=mips-linux-gnu
@@ -184,11 +195,7 @@ checkdep()
     local dep=$1
     local package=$dep
 
-    if [[ $# -ge 2 ]]; then
-	package=$2
-    else
-	package=$dep
-    fi
+    [[ $# -ge 2 ]] && package=$2
 
     local found=0
 
