@@ -67,6 +67,12 @@ static void term_handler(int sig)
 	exit(EXIT_FAILURE);
 }
 
+static void child_handler(int sig)
+{
+	/* If the child exits early we treat it as a test failure: */
+	exit(EXIT_FAILURE);
+}
+
 static void alarm_handler(int sig)
 {
 	char *msg = mprintf("========= FAILED TIMEOUT %s in %lus\n",
@@ -309,6 +315,10 @@ int main(int argc, char *argv[])
 	size_t n = 0;
 	ssize_t len;
 	char *line = NULL;
+
+	struct sigaction child_action = { .sa_handler = child_handler };
+	if (sigaction(SIGCHLD, &child_action, NULL))
+		die("sigaction error: %m");
 
 	struct sigaction alarm_action = { .sa_handler = alarm_handler };
 	if (sigaction(SIGALRM, &alarm_action, NULL))

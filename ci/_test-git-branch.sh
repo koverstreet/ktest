@@ -82,7 +82,7 @@ while (( ${#SUBTESTS[@]} )); do
 
     $KTEST_DIR/lib/supervisor -T 1200 -f "$FULL_LOG" -S -F	\
 	-b $TEST_NAME -o ktest-out/out				\
-	build-test-kernel run $TEST_PATH ${SUBTESTS[@]} &
+	-- build-test-kernel run $TEST_PATH ${SUBTESTS[@]} &
     wait
 
     SUBTESTS_REMAINING=()
