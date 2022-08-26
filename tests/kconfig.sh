@@ -39,8 +39,6 @@ case $ktest_arch in
 	require-kernel-append console=hvc0
 	;;
     aarch64)
-	require-kernel-config CONFIG_SERIAL_AMBA_PL011
-	require-kernel-config CONFIG_SERIAL_AMBA_PL011_CONSOLE
 	require-kernel-config PCI_HOST_GENERIC
 
 	have_virtio=1

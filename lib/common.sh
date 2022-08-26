@@ -105,10 +105,10 @@ parse_arch()
 	    QEMU_PACKAGE=qemu-system-x86
 	    QEMU_BIN=qemu-system-x86_64
 	    ;;
-	aarch64)
+	aarch64|arm64)
 	    ktest_arch=aarch64
 	    DEBIAN_ARCH=arm64
-	    ARCH_TRIPLE=
+	    ARCH_TRIPLE=aarch64-linux-gnu
 
 	    KERNEL_ARCH=arm64
 	    BITS=64
