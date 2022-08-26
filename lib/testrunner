@@ -17,6 +17,9 @@ ktest_out="/host/$ktest_out"
 
 ln -sf $ktest_dir /ktest
 ln -sf $ktest_out /ktest-out
+
+# Some home directories are in weird places:
+mkdir -p $(dirname $home)
 ln -sf /host/$home $home
 
 ktest_no_cleanup_tmpdir=1
