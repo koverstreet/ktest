@@ -3,8 +3,17 @@
 [[ -f ~/.ktestrc ]] && . ~/.ktestrc
 
 # Clean stale test jobs:
+
 cd $JOBSERVER_OUTPUT_DIR
-find -size 0 -cmin +180 |xargs rm -f > /dev/null
+
+if [[ ! -f stale-job-cleanup ]]; then
+    touch stale-job-cleanup
+fi
+
+if [[ $(find stale-job-cleanup -mmin +5) ]]; then
+    find -size 0 -cmin +180 |xargs rm -f > /dev/null
+    touch stale-job-cleanup
+fi
 
 cd $JOBSERVER_HOME/linux
 flock --nonblock .git_fetch.lock git fetch --all > /dev/null
