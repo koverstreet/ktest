@@ -22,7 +22,7 @@ sync_git_repos()
     local repo
 
     for repo in ${JOBSERVER_GIT_REPOS[@]}; do
-	(cd ~/$repo; git_fetch $repo; git checkout -f FETCH_HEAD) > /dev/null
+	(cd ~/$repo; git_fetch $repo || true; git checkout -f FETCH_HEAD) > /dev/null
     done
 }
 
