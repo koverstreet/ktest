@@ -8,7 +8,7 @@ set -o errtrace
 
 CI_DIR=$(dirname "$(readlink -f "$0")")
 
-cd /home/bcachefs/linux
+cd $JOBSERVER_LINUX_DIR
 
 BRANCH=$1
 COMMIT=$2
@@ -47,7 +47,7 @@ git_commit_html()
 
     echo '<table class="table">'
 
-    for STATUSFILE in $(find $OUTPUT -name status); do
+    for STATUSFILE in $(find $OUTPUT -name status|sort); do
 	STATUS=$(<$STATUSFILE)
 	TESTNAME=$(basename $(dirname $STATUSFILE))
 	STATUSMSG=Unknown
@@ -147,10 +147,5 @@ git_log_html()
 echo "Creating log for $BRANCH"
 BRANCH_LOG=$(echo "$BRANCH"|tr / _).html
 git_log_html > "$JOBSERVER_OUTPUT_DIR/$BRANCH_LOG"
-
-echo "Running rsync"
-flock --nonblock .rsync.lock rsync -r --links --delete	\
-    $JOBSERVER_OUTPUT_DIR/				\
-    testdashboard@evilpiepirate.org:public_html || true
 
 echo "Success"
