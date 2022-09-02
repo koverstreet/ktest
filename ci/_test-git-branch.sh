@@ -51,6 +51,8 @@ if [[ -z $TEST_PATH ]]; then
     exit 1
 fi
 
+echo "Running test $TEST_PATH for branch $BRANCH and commit $COMMIT"
+
 sync_git_repos
 git_fetch linux $COMMIT
 git checkout FETCH_HEAD
