@@ -11,8 +11,10 @@ if [[ ! -f stale-job-cleanup ]]; then
 fi
 
 if [[ $(find stale-job-cleanup -mmin +5) ]]; then
+    echo -n "Cleaning stale jobs.. " >&2
     find -size 0 -cmin +180 |xargs rm -f > /dev/null
     touch stale-job-cleanup
+    echo " done" >&2
 fi
 
 cd $JOBSERVER_HOME/linux

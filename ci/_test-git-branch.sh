@@ -4,6 +4,8 @@ set -o nounset
 set -o errexit
 set -o errtrace
 
+ktest_verbose=0
+
 KTEST_DIR=$(dirname "$(readlink -e "$0")")/..
 JOBSERVER_LINUX_REPO=ssh://$JOBSERVER/$JOBSERVER_HOME/linux
 
@@ -53,12 +55,13 @@ fi
 
 echo "Running test $TEST_NAME for branch $BRANCH and commit $COMMIT"
 
-sync_git_repos
-git_fetch linux $COMMIT
-git checkout FETCH_HEAD
+run_quiet "Syncing git repos" sync_git_repos
 
-git_fetch linux ci-monkeypatch
-git merge --no-edit FETCH_HEAD || git reset --hard
+run_quiet "Fetching $COMMIT" git_fetch linux $COMMIT
+run_quiet "Checking out $COMMIT" git checkout FETCH_HEAD
+
+run_quiet "Fetching ci-monkeypatch" git_fetch linux ci-monkeypatch
+run_quiet "Merging ci-monkeypatch"  git merge --no-edit FETCH_HEAD || git reset --hard
 
 rm -rf ktest-out/out
 mkdir -p ktest-out/out
@@ -82,6 +85,8 @@ while (( ${#SUBTESTS[@]} )); do
 	    "ktest-out/out/$TEST_NAME.$FNAME/full_log.br"
     done
 
+    echo "Running test $TEST_NAME ${SUBTESTS[@]}"
+
     $KTEST_DIR/lib/supervisor -T 1200 -f "$FULL_LOG" -S -F	\
 	-b $TEST_NAME -o ktest-out/out				\
 	-- build-test-kernel run $TEST_PATH ${SUBTESTS[@]} > /dev/null &
@@ -100,11 +105,13 @@ while (( ${#SUBTESTS[@]} )); do
     SUBTESTS=( "${SUBTESTS_REMAINING[@]}" )
 done
 
+echo "Compressing output"
 find ktest-out/out -type f -name \*log -print0|xargs -0 brotli --rm -9
 
 OUTPUT=$JOBSERVER_OUTPUT_DIR/c/$COMMIT
 ssh $JOBSERVER mkdir -p $OUTPUT
 
+echo "Sending results to jobserver"
 (cd ktest-out/out; tar --create --file - *)|
     ssh $JOBSERVER "(cd $OUTPUT; tar --extract --file -)"
 
