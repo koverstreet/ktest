@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -158,21 +159,16 @@ static char *slashes_to_dots(const char *str)
 	return ret;
 }
 
-static bool lockfile_exists(const char *commit,
-			    const char *test_path,
-			    const char *subtest,
-			    bool create)
+static bool __lockfile_exists(const char *commitdir,
+			      const char *testdir,
+			      const char *lockfile,
+			      bool create)
 {
-	char *test_name = test_basename(test_path);
-	char *subtest_mangled = slashes_to_dots(subtest);
-	char *commitdir = mprintf("%s/%s", outdir, commit);
-	char *testdir = mprintf("%s/%s.%s", commitdir, test_name, subtest_mangled);
-	char *lockfile = mprintf("%s/status", testdir);
-	bool exists;
-
 	if (!create) {
-		exists = access(lockfile, F_OK) == 0;
+		return access(lockfile, F_OK) == 0;
 	} else {
+		bool exists;
+
 		if (mkdir(commitdir, 0755) < 0 && errno != EEXIST)
 			die("error creating %s", commitdir);
 
@@ -183,6 +179,39 @@ static bool lockfile_exists(const char *commit,
 		exists = fd < 0;
 		if (!exists)
 			close(fd);
+
+		return exists;
+	}
+}
+
+static bool lockfile_exists(const char *commit,
+			    const char *test_path,
+			    const char *subtest,
+			    bool create)
+{
+	char *test_name = test_basename(test_path);
+	char *subtest_mangled = slashes_to_dots(subtest);
+	char *commitdir = mprintf("%s/%s", outdir, commit);
+	char *testdir = mprintf("%s/%s.%s", commitdir, test_name, subtest_mangled);
+	char *lockfile = mprintf("%s/status", testdir);
+	struct timeval now;
+	struct stat statbuf;
+	bool exists;
+
+	gettimeofday(&now, NULL);
+
+	exists = __lockfile_exists(commitdir, testdir, lockfile, create);
+
+	if (exists &&
+	    !stat(lockfile, &statbuf) &&
+	    !statbuf.st_size &&
+	    S_ISREG(statbuf.st_mode) &&
+	    statbuf.st_ctime + 20 * 60 < now.tv_sec &&
+	    !unlink(lockfile)) {
+		fprintf(stderr, "Deleting stale test job %s %s %s (%lu minutes old)\n",
+			commit, test_name, subtest,
+			(now.tv_sec - statbuf.st_ctime) / 60);
+		exists = false;
 	}
 
 	free(lockfile);
