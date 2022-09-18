@@ -206,7 +206,7 @@ static bool lockfile_exists(const char *commit,
 	    !stat(lockfile, &statbuf) &&
 	    !statbuf.st_size &&
 	    S_ISREG(statbuf.st_mode) &&
-	    statbuf.st_ctime + 20 * 60 < now.tv_sec &&
+	    statbuf.st_ctime + 60 * 60 < now.tv_sec &&
 	    !unlink(lockfile)) {
 		fprintf(stderr, "Deleting stale test job %s %s %s (%lu minutes old)\n",
 			commit, test_name, subtest,
