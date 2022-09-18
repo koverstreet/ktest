@@ -175,7 +175,7 @@ run_fio()
 
 run_fio_randrw()
 {
-    set_watchdog 600
+    set_watchdog 1200
     run_fio					\
 	--name=randrw				\
 	--rw=randrw				\
@@ -185,7 +185,7 @@ run_fio_randrw()
 
 run_basic_fio_test()
 {
-    set_watchdog 600
+    set_watchdog 1200
     local devs=()
 
     for i in "$@"; do

@@ -229,7 +229,7 @@ test_device_evacuate_online()
 
 test_device_add()
 {
-    set_watchdog 40
+    set_watchdog 120
     #setup_tracing 'bcachefs:*'
 
     run_quiet "" bcachefs format		\
@@ -484,7 +484,7 @@ test_replicas_read_errors()
 
 test_cmd_fs_usage()
 {
-    set_watchdog 60
+    set_watchdog 120
 
     run_quiet "" bcachefs format		\
 	--replicas=2				\
