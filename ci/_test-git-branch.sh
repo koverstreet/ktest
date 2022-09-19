@@ -37,6 +37,7 @@ COMMIT=${TEST_JOB[1]}
 TEST_PATH=${TEST_JOB[2]}
 TEST_NAME=$(basename -s .ktest $TEST_PATH)
 SUBTESTS=( "${TEST_JOB[@]:3}" )
+OUTPUT=$JOBSERVER_OUTPUT_DIR/$COMMIT
 
 if [[ -z $BRANCH ]]; then
     echo "Error getting test job: need git branch"
@@ -108,12 +109,8 @@ done
 echo "Compressing output"
 find ktest-out/out -type f -name \*log -print0|xargs -0 brotli --rm -9
 
-OUTPUT=$JOBSERVER_OUTPUT_DIR/c/$COMMIT
 ssh $JOBSERVER mkdir -p $OUTPUT
 
 echo "Sending results to jobserver"
 (cd ktest-out/out; tar --create --file - *)|
     ssh $JOBSERVER "(cd $OUTPUT; tar --extract --file -)"
-
-echo "Running test-job-done.sh"
-ssh $JOBSERVER test-job-done.sh $BRANCH $COMMIT
