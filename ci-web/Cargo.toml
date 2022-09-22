@@ -1,12 +1,20 @@
 [package]
-name = "ci-web"
+name = "ci-cgi"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[[bin]]
+name = "get-test-job"
+path = "src/get-test-job.rs"
+
+#[workspace]
+#members = ["get-test-job", "ci-cgi"]
 
 [dependencies]
 cgi = "0.6"
 git2 = "0.14"
 querystring = "1.1.0"
 dirs = "4.0.0"
+multimap = "0.8.3"
+die = "0.2.0"
+libc = "0.2"
