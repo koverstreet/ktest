@@ -30,7 +30,7 @@ sync_git_repos()
 
 echo "Getting test job"
 
-TEST_JOB=( $(ssh $JOBSERVER get-test-job.sh) )
+TEST_JOB=( $(ssh $JOBSERVER get-test-job) )
 
 BRANCH=${TEST_JOB[0]}
 COMMIT=${TEST_JOB[1]}

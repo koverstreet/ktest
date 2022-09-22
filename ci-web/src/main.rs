@@ -1,14 +1,14 @@
-use git2::Repository;
 use std::fmt::Write;
 use std::fs::File;
-use std::io::{self, Read, BufRead};
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::io::Read;
+use std::path::Path;
 extern crate cgi;
-extern crate dirs;
 extern crate querystring;
 
-const COMMIT_FILTER:    &str = include_str!("../../ci/commit-filter");
+mod lib;
+use lib::*;
+
+const COMMIT_FILTER:    &str = include_str!("../commit-filter");
 const STYLESHEET:       &str = "/bootstrap.min.css";
 
 fn read_file(f: &Path) -> Option<String> {
@@ -16,93 +16,6 @@ fn read_file(f: &Path) -> Option<String> {
     let mut file = File::open(f).ok()?;
     file.read_to_string(&mut ret).ok()?;
     Some(ret)
-}
-
-fn read_lines<P>(filename: P) -> io::Result<io::Lines<io::BufReader<File>>>
-where P: AsRef<Path>, {
-    let file = File::open(filename)?;
-    Ok(io::BufReader::new(file).lines())
-}
-
-fn git_get_commit(repo: &git2::Repository, reference: String) -> Result<git2::Commit, git2::Error> {
-    let r = repo.revparse_single(&reference);
-    if let Err(e) = r {
-        eprintln!("Error from resolve_reference_from_short_name {} in {}: {}", reference, repo.path().display(), e);
-        return Err(e);
-    }
-
-    let r = r.unwrap().peel_to_commit();
-    if let Err(e) = r {
-        eprintln!("Error from peel_to_commit {} in {}: {}", reference, repo.path().display(), e);
-        return Err(e);
-    }
-    r
-}
-
-struct Ktestrc {
-    ci_linux_repo:       PathBuf,
-    ci_output_dir:       PathBuf,
-    ci_branches_to_test: PathBuf,
-}
-
-fn ktestrc_read() -> Ktestrc {
-    let mut ktestrc = Ktestrc {
-        ci_linux_repo:          PathBuf::new(),
-        ci_output_dir:          PathBuf::new(),
-        ci_branches_to_test:    PathBuf::new(),
-    };
-
-    if let Some(home) = dirs::home_dir() {
-        ktestrc.ci_branches_to_test = home.join("BRANCHES-TO-TEST");
-    }
-
-    fn ktestrc_get(rc: &'static str, var: &'static str) -> Option<PathBuf> {
-        let cmd = format!(". {}; echo -n ${}", rc, var);
-
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(&cmd)
-            .output()
-            .expect("failed to execute process /bin/sh")
-            .stdout;
-
-        let output = String::from_utf8_lossy(&output);
-        let output = output.trim();
-
-        if !output.is_empty() {
-            Some(PathBuf::from(output))
-        } else {
-            None
-        }
-    }
-
-    if let Some(v) = ktestrc_get("/etc/ktestrc", "JOBSERVER_LINUX_DIR") {
-        ktestrc.ci_linux_repo = v;
-    }
-
-    if let Some(v) = ktestrc_get("/etc/ktestrc", "JOBSERVER_OUTPUT_DIR") {
-        ktestrc.ci_output_dir = v;
-    }
-
-    if let Some(v) = ktestrc_get("/etc/ktestrc", "JOBSERVER_BRANCHES_TO_TEST") {
-        ktestrc.ci_branches_to_test = v;
-    }
-
-    /*
-    if let Some(v) = ktestrc_get("$HOME/.ktestrc", "JOBSERVER_LINUX_DIR") {
-        ktestrc.ci_linux_repo = v;
-    }
-
-    if let Some(v) = ktestrc_get("$HOME/.ktestrc", "JOBSERVER_OUTPUT_DIR") {
-        ktestrc.ci_output_dir = v;
-    }
-
-    if let Some(v) = ktestrc_get("$HOME/.ktestrc", "JOBSERVER_BRANCHES_TO_TEST") {
-        ktestrc.ci_branches_to_test = v;
-    }
-    */
-
-    ktestrc
 }
 
 #[derive(PartialEq)]
@@ -325,21 +238,18 @@ fn ci_list_branches(ci: &Ci) -> cgi::Response {
     writeln!(&mut out, "<body>").unwrap();
     writeln!(&mut out, "<table class=\"table\">").unwrap();
 
-    if let Ok(lines) = read_lines(&ci.ktestrc.ci_branches_to_test) {
-        let branches: std::collections::HashSet<_> = lines
-            .filter_map(|i| i.ok())
-            .map(|i| if let Some(w) = i.split_whitespace().nth(0) { Some(String::from(w)) } else { None })
-            .filter_map(|i| i)
-            .collect();
+    let lines = read_lines(&ci.ktestrc.ci_branches_to_test).unwrap();
+    let branches: std::collections::HashSet<_> = lines
+        .filter_map(|i| i.ok())
+        .map(|i| if let Some(w) = i.split_whitespace().nth(0) { Some(String::from(w)) } else { None })
+        .filter_map(|i| i)
+        .collect();
 
-        let mut branches: Vec<_> = branches.iter().collect();
-        branches.sort();
+    let mut branches: Vec<_> = branches.iter().collect();
+    branches.sort();
 
-        for b in branches {
-            writeln!(&mut out, "<tr> <th> <a href={}?log={}>{}</a> </th> </tr>", ci.script_name, b, b).unwrap();
-        }
-    } else {
-        writeln!(&mut out, "(BRANCHES-TO-TEST not found)").unwrap();
+    for b in branches {
+        writeln!(&mut out, "<tr> <th> <a href={}?log={}>{}</a> </th> </tr>", ci.script_name, b, b).unwrap();
     }
 
     writeln!(&mut out, "</table>").unwrap();
@@ -383,7 +293,7 @@ cgi::cgi_main! {|request: cgi::Request| -> cgi::Response {
                                      ktestrc.ci_branches_to_test.as_os_str()));
     }
 
-    let repo = Repository::open(&ktestrc.ci_linux_repo).unwrap();
+    let repo = git2::Repository::open(&ktestrc.ci_linux_repo).unwrap();
 
     let ci = Ci {
         ktestrc:            ktestrc,
