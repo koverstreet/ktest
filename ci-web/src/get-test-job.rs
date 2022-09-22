@@ -162,6 +162,11 @@ fn create_job_lockfiles(rc: &Ktestrc, mut job: TestJob) -> Option<TestJob> {
 
 fn main() {
     let ktestrc = ktestrc_read();
+    if let Err(e) = ktestrc {
+        eprintln!("could not read config; {}", e);
+        process::exit(1);
+    }
+    let ktestrc = ktestrc.unwrap();
 
     let repo = git2::Repository::open(&ktestrc.ci_linux_repo);
     if let Err(e) = repo {

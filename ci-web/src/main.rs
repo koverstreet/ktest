@@ -277,6 +277,10 @@ fn error_response(msg: String) -> cgi::Response {
 
 cgi::cgi_main! {|request: cgi::Request| -> cgi::Response {
     let ktestrc = ktestrc_read();
+    if let Err(e) = ktestrc {
+        return error_response(format!("could not read config; {}", e));
+    }
+    let ktestrc = ktestrc.unwrap();
 
     if !ktestrc.ci_linux_repo.exists() {
         return error_response(format!("required file missing: JOBSERVER_LINUX_DIR (got {:?})",
