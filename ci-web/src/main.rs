@@ -90,15 +90,17 @@ struct Ci {
 }
 
 fn commit_get_results(ci: &Ci, commit_id: &String) -> Vec<TestResult> {
-    let mut dirents: Vec<_> = ci.ktestrc.ci_output_dir.join(commit_id)
-        .read_dir()
-        .expect("read_dir call failed")
-        .filter_map(|i| i.ok())
-        .collect();
+    let r = ci.ktestrc.ci_output_dir.join(commit_id).read_dir();
 
-    dirents.sort_by_key(|x| x.file_name());
+    if let Ok(r) = r {
+        let mut dirents: Vec<_> = r.filter_map(|i| i.ok()).collect();
 
-    dirents.iter().map(|x| read_test_result(x)).filter_map(|i| i).collect()
+        dirents.sort_by_key(|x| x.file_name());
+
+        dirents.iter().map(|x| read_test_result(x)).filter_map(|i| i).collect()
+    } else {
+        Vec::new()
+    }
 }
 
 fn ci_log(ci: &Ci, branch: String) -> cgi::Response {
@@ -238,7 +240,12 @@ fn ci_list_branches(ci: &Ci) -> cgi::Response {
     writeln!(&mut out, "<body>").unwrap();
     writeln!(&mut out, "<table class=\"table\">").unwrap();
 
-    let lines = read_lines(&ci.ktestrc.ci_branches_to_test).unwrap();
+    let lines = read_lines(&ci.ktestrc.ci_branches_to_test);
+    if let Err(e) = lines {
+        return error_response(format!("error opening ci_branches_to_test {:?}: {}", ci.ktestrc.ci_branches_to_test, e));
+    }
+    let lines = lines.unwrap();
+
     let branches: std::collections::HashSet<_> = lines
         .filter_map(|i| i.ok())
         .map(|i| if let Some(w) = i.split_whitespace().nth(0) { Some(String::from(w)) } else { None })
@@ -282,22 +289,16 @@ cgi::cgi_main! {|request: cgi::Request| -> cgi::Response {
     }
     let ktestrc = ktestrc.unwrap();
 
-    if !ktestrc.ci_linux_repo.exists() {
-        return error_response(format!("required file missing: JOBSERVER_LINUX_DIR (got {:?})",
-                                      ktestrc.ci_linux_repo.as_os_str()));
-    }
-
     if !ktestrc.ci_output_dir.exists() {
         return error_response(format!("required file missing: JOBSERVER_OUTPUT_DIR (got {:?})",
-                                      ktestrc.ci_output_dir.as_os_str()));
+                                      ktestrc.ci_output_dir));
     }
 
-    if !ktestrc.ci_branches_to_test.exists() {
-        return error_response(format!("required file missing: JOBSERVER_BRANCHES_TO_TEST (got {:?})",
-                                     ktestrc.ci_branches_to_test.as_os_str()));
+    let repo = git2::Repository::open(&ktestrc.ci_linux_repo);
+    if let Err(e) = repo {
+        return error_response(format!("error opening repository {:?}: {}", ktestrc.ci_linux_repo, e));
     }
-
-    let repo = git2::Repository::open(&ktestrc.ci_linux_repo).unwrap();
+    let repo = repo.unwrap();
 
     let ci = Ci {
         ktestrc:            ktestrc,
