@@ -9,7 +9,7 @@ mod lib;
 use lib::*;
 
 const COMMIT_FILTER:    &str = include_str!("../commit-filter");
-const STYLESHEET:       &str = "/bootstrap.min.css";
+const STYLESHEET:       &str = "bootstrap.min.css";
 
 fn read_file(f: &Path) -> Option<String> {
     let mut ret = String::new();
@@ -217,9 +217,9 @@ fn ci_commit(ci: &Ci, commit_id: String) -> cgi::Response {
         writeln!(&mut out, "<td> {} </td>", result.name).unwrap();
         writeln!(&mut out, "<td> {} </td>", result.status.to_str()).unwrap();
         writeln!(&mut out, "<td> {}s </td>", result.duration).unwrap();
-        writeln!(&mut out, "<td> <a href=/c/{}/{}/log.br>        log                 </a> </td>", &commit_id, result.name).unwrap();
-        writeln!(&mut out, "<td> <a href=/c/{}/{}/full_log.br>   full log            </a> </td>", &commit_id, result.name).unwrap();
-        writeln!(&mut out, "<td> <a href=/c/{}/{}>		        output directory    </a> </td>", &commit_id, result.name).unwrap();
+        writeln!(&mut out, "<td> <a href=c/{}/{}/log.br>        log                 </a> </td>", &commit_id, result.name).unwrap();
+        writeln!(&mut out, "<td> <a href=c/{}/{}/full_log.br>   full log            </a> </td>", &commit_id, result.name).unwrap();
+        writeln!(&mut out, "<td> <a href=c/{}/{}>		        output directory    </a> </td>", &commit_id, result.name).unwrap();
         writeln!(&mut out, "</tr>").unwrap();
     }
 
