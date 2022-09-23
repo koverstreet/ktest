@@ -2,6 +2,7 @@ use std::fmt::Write;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use regex::Regex;
 extern crate cgi;
 extern crate querystring;
 
@@ -87,13 +88,16 @@ struct Ci {
     repo:               git2::Repository,
     stylesheet:         String,
     script_name:        String,
+    tests_matching:     Regex,
 }
 
 fn commit_get_results(ci: &Ci, commit_id: &String) -> Vec<TestResult> {
     let r = ci.ktestrc.ci_output_dir.join(commit_id).read_dir();
 
     if let Ok(r) = r {
-        let mut dirents: Vec<_> = r.filter_map(|i| i.ok()).collect();
+        let mut dirents: Vec<_> = r.filter_map(|i| i.ok())
+            .filter(|i| ci.tests_matching.is_match(&i.file_name().to_string_lossy()))
+            .collect();
 
         dirents.sort_by_key(|x| x.file_name());
 
@@ -148,7 +152,7 @@ fn ci_log(ci: &Ci, branch: String) -> cgi::Response {
 
         if !r.is_empty() {
             if nr_empty != 0 {
-                writeln!(&mut out, "<tr> ... </tr>").unwrap();
+                writeln!(&mut out, "<tr> <td> ({} untested commits) </td> </tr>", nr_empty).unwrap();
                 nr_empty = 0;
             }
 
@@ -300,16 +304,19 @@ cgi::cgi_main! {|request: cgi::Request| -> cgi::Response {
     }
     let repo = repo.unwrap();
 
+    let query = cgi_header_get(&request, "x-cgi-query-string");
+    let query: std::collections::HashMap<_, _> =
+        querystring::querify(&query).into_iter().collect();
+
+    let tests_matching = query.get("test").unwrap_or(&"");
+
     let ci = Ci {
         ktestrc:            ktestrc,
         repo:               repo,
         stylesheet:         String::from(STYLESHEET),
         script_name:        cgi_header_get(&request, "x-cgi-script-name"),
+        tests_matching:     Regex::new(tests_matching).unwrap_or(Regex::new("").unwrap()),
     };
-
-    let query = cgi_header_get(&request, "x-cgi-query-string");
-    let query: std::collections::HashMap<_, _> =
-        querystring::querify(&query).into_iter().collect();
 
     if let Some(commit) = query.get("commit") {
         ci_commit(&ci, commit.to_string())

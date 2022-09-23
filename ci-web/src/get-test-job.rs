@@ -1,9 +1,9 @@
 extern crate libc;
 use std::fs::{OpenOptions, create_dir_all};
-use std::os::unix::fs::OpenOptionsExt;
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process;
+use memoize::memoize;
 mod lib;
 use lib::{Ktestrc, read_lines, ktestrc_read, git_get_commit};
 
@@ -11,8 +11,9 @@ extern crate multimap;
 use multimap::MultiMap;
 use die::die;
 
-fn get_subtests(test_path: &str) -> Vec<String> {
-    let test_name = Path::new(test_path).file_stem();
+#[memoize]
+fn get_subtests(test_path: PathBuf) -> Vec<String> {
+    let test_name = test_path.file_stem();
 
     if let Some(test_name) = test_name {
         let test_name = test_name.to_string_lossy();
@@ -38,19 +39,25 @@ fn lockfile_exists(rc: &Ktestrc, commit: &str, subtest: &str, create: bool) -> b
         if !create {
             lockfile.exists()
         } else {
-            let dir = lockfile.parent();
-            let r = create_dir_all(dir.unwrap());
-
+            let dir = lockfile.parent().unwrap();
+            let r = create_dir_all(dir);
             if let Err(e) = r {
                 if e.kind() != ErrorKind::AlreadyExists {
                     die!("error creating {:?}: {}", dir, e);
                 }
             }
 
-            let mut options = OpenOptions::new();
-            options.write(true);
-            options.custom_flags(libc::O_CREAT);
-            options.open(lockfile).is_ok()
+            let r = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(lockfile);
+            if let Err(ref e) = r {
+                if e.kind() != ErrorKind::AlreadyExists {
+                    die!("error creating {:?}: {}", lockfile, e);
+                }
+            }
+
+            r.is_ok()
         }
     }
 
@@ -91,7 +98,7 @@ fn branch_get_next_test_job(rc: &Ktestrc, repo: &git2::Repository,
         subtests:   Vec::new(),
     };
 
-    let subtests = get_subtests(test_path);
+    let subtests = get_subtests(PathBuf::from(test_path));
 
     let mut walk = repo.revwalk().unwrap();
     let reference = git_get_commit(&repo, branch.to_string());
@@ -175,6 +182,13 @@ fn main() {
         process::exit(1);
     }
     let repo = repo.unwrap();
+
+    let _r = std::process::Command::new("flock")
+        .arg("--nonblock")
+        .arg(".git_fetch.lock")
+        .arg("git").arg("fetch").arg("--all")
+        .current_dir(&ktestrc.ci_linux_repo)
+        .output();
 
     let lines = read_lines(&ktestrc.ci_branches_to_test);
     if let Err(e) = lines {
