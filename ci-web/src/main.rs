@@ -79,7 +79,7 @@ fn read_test_result(testdir: &std::fs::DirEntry) -> Option<TestResult> {
     Some(TestResult {
         name:       testdir.file_name().into_string().unwrap(),
         status:     TestStatus::from_str(&read_file(&testdir.path().join("status"))?),
-        duration:   read_file(&testdir.path().join("duration"))?.parse().ok()?
+        duration:   read_file(&testdir.path().join("duration")).unwrap_or("0".to_string()).parse().unwrap_or(0),
     })
 }
 
