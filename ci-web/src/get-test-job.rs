@@ -54,7 +54,7 @@ fn lockfile_exists(rc: &Ktestrc, commit: &str, subtest: &str, create: bool) -> b
         }
     }
 
-    let lockfile = rc.ci_output_dir.join(commit).join(subtest);
+    let lockfile = rc.ci_output_dir.join(commit).join(subtest).join("status");
     let mut exists = test_or_create(&lockfile, create);
 
     if exists {
