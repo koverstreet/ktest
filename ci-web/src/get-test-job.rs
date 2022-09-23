@@ -13,28 +13,20 @@ use die::die;
 
 #[memoize]
 fn get_subtests(test_path: PathBuf) -> Vec<String> {
-    let test_name = test_path.file_stem();
+    let output = std::process::Command::new(&test_path)
+        .arg("list-tests")
+        .output()
+        .expect(&format!("failed to execute process {:?} ", &test_path))
+        .stdout;
+    let output = String::from_utf8_lossy(&output);
 
-    if let Some(test_name) = test_name {
-        let test_name = test_name.to_string_lossy();
-
-        let output = std::process::Command::new(&test_path)
-            .arg("list-tests")
-            .output()
-            .expect(&format!("failed to execute process {:?} ", &test_path))
-            .stdout;
-        let output = String::from_utf8_lossy(&output);
-
-        output
-            .split_whitespace()
-            .map(|i| format!("{}.{}", test_name, i))
-            .collect()
-    } else {
-        Vec::new()
-    }
+    output
+        .split_whitespace()
+        .map(|i| i.to_string())
+        .collect()
 }
 
-fn lockfile_exists(rc: &Ktestrc, commit: &str, subtest: &str, create: bool) -> bool {
+fn lockfile_exists(rc: &Ktestrc, commit: &str, test_path: &Path, subtest: &str, create: bool) -> bool {
     fn test_or_create(lockfile: &Path, create: bool) -> bool {
         if !create {
             lockfile.exists()
@@ -61,7 +53,10 @@ fn lockfile_exists(rc: &Ktestrc, commit: &str, subtest: &str, create: bool) -> b
         }
     }
 
-    let lockfile = rc.ci_output_dir.join(commit).join(subtest).join("status");
+    let test_name = test_path.file_stem().unwrap().to_string_lossy();
+    let lockfile = rc.ci_output_dir.join(commit)
+        .join(format!("{}.{}", test_name, subtest))
+        .join("status");
     let mut exists = test_or_create(&lockfile, create);
 
     if exists {
@@ -120,7 +115,7 @@ fn branch_get_next_test_job(rc: &Ktestrc, repo: &git2::Repository,
         ret.commit = commit.clone();
 
         for subtest in subtests.iter() {
-            if !lockfile_exists(rc, &commit, subtest, false) {
+            if !lockfile_exists(rc, &commit, &Path::new(test_path), subtest, false) {
                 ret.subtests.push(subtest.to_string());
                 if ret.subtests.len() > 20 {
                     break;
@@ -160,7 +155,7 @@ fn get_best_test_job(rc: &Ktestrc, repo: &git2::Repository,
 
 fn create_job_lockfiles(rc: &Ktestrc, mut job: TestJob) -> Option<TestJob> {
     job.subtests = job.subtests.iter()
-        .filter(|i| lockfile_exists(rc, &job.commit, &i, true))
+        .filter(|i| lockfile_exists(rc, &job.commit, &Path::new(&job.test), &i, true))
         .map(|i| i.to_string())
         .collect();
 
