@@ -7,9 +7,10 @@ use memoize::memoize;
 mod lib;
 use lib::{Ktestrc, read_lines, ktestrc_read, git_get_commit};
 
-extern crate multimap;
 use multimap::MultiMap;
 use die::die;
+
+use glob::glob;
 
 #[memoize]
 fn get_subtests(test_path: PathBuf) -> Vec<String> {
@@ -82,17 +83,17 @@ struct TestJob {
     branch:     String,
     commit:     String,
     age:        usize,
-    test:       String,
+    test:       PathBuf,
     subtests:   Vec<String>,
 }
 
 fn branch_get_next_test_job(rc: &Ktestrc, repo: &git2::Repository,
-                            branch: &str, test_path: &str) -> Option<TestJob> {
+                            branch: &str, test_path: &PathBuf) -> Option<TestJob> {
     let mut ret =  TestJob {
         branch:     branch.to_string(),
         commit:     String::new(),
         age:        0,
-        test:       test_path.to_string(),
+        test:       test_path.clone(),
         subtests:   Vec::new(),
     };
 
@@ -118,7 +119,7 @@ fn branch_get_next_test_job(rc: &Ktestrc, repo: &git2::Repository,
         ret.commit = commit.clone();
 
         for subtest in subtests.iter() {
-            if !lockfile_exists(rc, &commit, &Path::new(test_path), subtest, false) {
+            if !lockfile_exists(rc, &commit, &test_path, subtest, false) {
                 ret.subtests.push(subtest.to_string());
                 if ret.subtests.len() > 20 {
                     break;
@@ -137,7 +138,7 @@ fn branch_get_next_test_job(rc: &Ktestrc, repo: &git2::Repository,
 }
 
 fn get_best_test_job(rc: &Ktestrc, repo: &git2::Repository,
-                     branch_tests: &MultiMap<String, String>) -> Option<TestJob> {
+                     branch_tests: &MultiMap<String, PathBuf>) -> Option<TestJob> {
     let mut ret: Option<TestJob> = None;
 
     for (branch, testvec) in branch_tests.iter_all() {
@@ -198,7 +199,7 @@ fn main() {
 
     let lines = lines.filter_map(|i| i.ok());
 
-    let mut branch_tests: MultiMap<String, String> = MultiMap::new();
+    let mut branch_tests: MultiMap<String, PathBuf > = MultiMap::new();
 
     for l in lines {
         let l: Vec<_> = l.split_whitespace().take(2).collect();
@@ -206,7 +207,11 @@ fn main() {
         if l.len() == 2 {
             let branch  = l[0];
             let test    = l[1];
-            branch_tests.insert(branch.to_string(), test.to_string());
+
+            for i in glob(test).expect(&format!("No tests matching {}", test))
+                               .filter_map(|i| i.ok()) {
+                branch_tests.insert(branch.to_string(), i);
+            }
         }
     }
 
@@ -221,7 +226,7 @@ fn main() {
 
         job = create_job_lockfiles(&ktestrc, job.unwrap());
         if let Some(job) = job {
-            print!("{} {} {}", job.branch, job.commit, job.test);
+            print!("{} {} {}", job.branch, job.commit, job.test.display());
             for t in job.subtests {
                 print!(" {}", t);
             }
