@@ -60,14 +60,17 @@ fn lockfile_exists(rc: &Ktestrc, commit: &str, test_path: &Path, subtest: &str, 
     let mut exists = test_or_create(&lockfile, create);
 
     if exists {
-        let timeout = std::time::Duration::new(3600, 0);
-        let now = std::time::SystemTime::now();
+        let timeout = std::time::Duration::from_secs(3600);
         let metadata = std::fs::metadata(&lockfile).unwrap();
+        let elapsed = metadata.modified().unwrap()
+            .elapsed()
+            .unwrap_or(std::time::Duration::from_secs(0));
 
-        if metadata.len() == 0&&
-           metadata.is_file() &&
-           metadata.modified().unwrap() + timeout < now &&
+        if metadata.is_file() &&
+           metadata.len() == 0 &&
+           elapsed > timeout &&
            std::fs::remove_file(&lockfile).is_ok() {
+            eprintln!("Deleted stale lock file {:?} (age {:?})", lockfile, elapsed);
             exists = test_or_create(&lockfile, create);
         }
     }
@@ -141,11 +144,11 @@ fn get_best_test_job(rc: &Ktestrc, repo: &git2::Repository,
         for test in testvec {
             let job = branch_get_next_test_job(rc, repo, branch, test);
 
-            if let Some(job) = job {
-                match &ret {
-                    Some(r) => if r.age > job.age { ret = Some(job) },
-                    None    => ret = Some(job),
-                }
+            let ret_age = ret.as_ref().map_or(std::usize::MAX, |x| x.age);
+            let job_age = job.as_ref().map_or(std::usize::MAX, |x| x.age);
+
+            if job_age < ret_age {
+                ret = job;
             }
         }
     }
@@ -173,7 +176,7 @@ fn main() {
     let repo = git2::Repository::open(&ktestrc.ci_linux_repo);
     if let Err(e) = repo {
         eprintln!("Error opening {:?}: {}", ktestrc.ci_linux_repo, e);
-        eprintln!("Please specify correct JOBSERVER_LINUX_DIR");
+        eprintln!("Please specify correct ci_linux_repo");
         process::exit(1);
     }
     let repo = repo.unwrap();
@@ -188,7 +191,7 @@ fn main() {
     let lines = read_lines(&ktestrc.ci_branches_to_test);
     if let Err(e) = lines {
         eprintln!("Error opening {:?}: {}", ktestrc.ci_branches_to_test, e);
-        eprintln!("Please specify correct JOBSERVER_BRANCHES_TO_TEST");
+        eprintln!("Please specify correct ci_branches_to_test");
         process::exit(1);
     }
     let lines = lines.unwrap();
@@ -217,16 +220,14 @@ fn main() {
         }
 
         job = create_job_lockfiles(&ktestrc, job.unwrap());
-        if job.is_some() {
+        if let Some(job) = job {
+            print!("{} {} {}", job.branch, job.commit, job.test);
+            for t in job.subtests {
+                print!(" {}", t);
+            }
+            println!("");
             break;
         }
     }
 
-    if let Some(job) = job {
-        print!("{} {} {}", job.branch, job.commit, job.test);
-        for t in job.subtests {
-            print!(" {}", t);
-        }
-        println!("");
-    }
 }
