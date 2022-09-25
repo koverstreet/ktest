@@ -33,6 +33,8 @@ impl TestStatus {
     fn from_str(status: &str) -> TestStatus {
         if status.is_empty() {
             TestStatus::InProgress
+        } else if status.contains("IN PROGRESS") {
+            TestStatus::InProgress
         } else if status.contains("PASSED") {
             TestStatus::Passed
         } else if status.contains("FAILED") {

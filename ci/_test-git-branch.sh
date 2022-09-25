@@ -72,7 +72,7 @@ for t in ${SUBTESTS[@]}; do
     t=$(echo "$t"|tr / .)
 
     mkdir ktest-out/out/$TEST_NAME.$t
-    echo "========= NOT STARTED" > ktest-out/out/$TEST_NAME.$t/status
+    echo "IN PROGRESS" > ktest-out/out/$TEST_NAME.$t/status
 done
 
 make -C "$KTEST_DIR/lib" supervisor
@@ -95,22 +95,29 @@ while (( ${#SUBTESTS[@]} )); do
 
     SUBTESTS_REMAINING=()
 
+    t=${SUBTESTS[0]}
+    FNAME=$(echo "$t"|tr / .)
+
+    if grep -q "IN PROGRESS" ktest-out/out/$TEST_NAME.$FNAME/status; then
+	echo "NOT STARTED" > ktest-out/out/$TEST_NAME.$FNAME/status
+    fi
+
     for t in ${SUBTESTS[@]:1}; do
 	FNAME=$(echo "$t"|tr / .)
 
-	if grep -q "NOT STARTED" ktest-out/out/$TEST_NAME.$FNAME/status; then
+	if grep -q "IN PROGRESS" ktest-out/out/$TEST_NAME.$FNAME/status; then
 	    SUBTESTS_REMAINING+=($t)
 	fi
     done
 
+    echo "Compressing output"
+    find ktest-out/out -type f -name \*log -print0|xargs -0 brotli --rm -9
+
+    ssh $JOBSERVER mkdir -p $OUTPUT
+
+    echo "Sending results to jobserver"
+    (cd ktest-out/out; tar --create --file - *)|
+	ssh $JOBSERVER "(cd $OUTPUT; tar --extract --file -)"
+
     SUBTESTS=( "${SUBTESTS_REMAINING[@]}" )
 done
-
-echo "Compressing output"
-find ktest-out/out -type f -name \*log -print0|xargs -0 brotli --rm -9
-
-ssh $JOBSERVER mkdir -p $OUTPUT
-
-echo "Sending results to jobserver"
-(cd ktest-out/out; tar --create --file - *)|
-    ssh $JOBSERVER "(cd $OUTPUT; tar --extract --file -)"
