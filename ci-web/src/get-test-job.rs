@@ -3,6 +3,7 @@ use std::fs::{OpenOptions, create_dir_all};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process;
+use std::time::SystemTime;
 use memoize::memoize;
 mod lib;
 use lib::{Ktestrc, read_lines, ktestrc_read, git_get_commit};
@@ -28,41 +29,15 @@ fn get_subtests(test_path: PathBuf) -> Vec<String> {
 }
 
 fn lockfile_exists(rc: &Ktestrc, commit: &str, test_path: &Path, subtest: &str, create: bool) -> bool {
-    fn test_or_create(lockfile: &Path, create: bool) -> bool {
-        if !create {
-            lockfile.exists()
-        } else {
-            let dir = lockfile.parent().unwrap();
-            let r = create_dir_all(dir);
-            if let Err(e) = r {
-                if e.kind() != ErrorKind::AlreadyExists {
-                    die!("error creating {:?}: {}", dir, e);
-                }
-            }
-
-            let r = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(lockfile);
-            if let Err(ref e) = r {
-                if e.kind() != ErrorKind::AlreadyExists {
-                    die!("error creating {:?}: {}", lockfile, e);
-                }
-            }
-
-            r.is_ok()
-        }
-    }
-
     let test_name = test_path.file_stem().unwrap().to_string_lossy();
     let lockfile = rc.ci_output_dir.join(commit)
         .join(format!("{}.{}", test_name, subtest))
         .join("status");
-    let mut exists = test_or_create(&lockfile, create);
 
-    if exists {
-        let timeout = std::time::Duration::from_secs(3600);
-        let metadata = std::fs::metadata(&lockfile).unwrap();
+    let timeout = std::time::Duration::from_secs(3600);
+    let metadata = std::fs::metadata(&lockfile);
+
+    if let Ok(metadata) = metadata {
         let elapsed = metadata.modified().unwrap()
             .elapsed()
             .unwrap_or(std::time::Duration::from_secs(0));
@@ -71,12 +46,36 @@ fn lockfile_exists(rc: &Ktestrc, commit: &str, test_path: &Path, subtest: &str, 
            metadata.len() == 0 &&
            elapsed > timeout &&
            std::fs::remove_file(&lockfile).is_ok() {
-            eprintln!("Deleted stale lock file {:?} (age {:?})", lockfile, elapsed);
-            exists = test_or_create(&lockfile, create);
+            eprintln!("Deleted stale lock file {:?}, mtime {:?} now {:?} elapsed {:?})",
+                      &lockfile, metadata.modified().unwrap(),
+                      SystemTime::now(),
+                      elapsed);
         }
     }
 
-    exists
+    if !create {
+        lockfile.exists()
+    } else {
+        let dir = lockfile.parent().unwrap();
+        let r = create_dir_all(dir);
+        if let Err(e) = r {
+            if e.kind() != ErrorKind::AlreadyExists {
+                die!("error creating {:?}: {}", dir, e);
+            }
+        }
+
+        let r = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lockfile);
+        if let Err(ref e) = r {
+            if e.kind() != ErrorKind::AlreadyExists {
+                die!("error creating {:?}: {}", lockfile, e);
+            }
+        }
+
+        r.is_ok()
+    }
 }
 
 struct TestJob {
