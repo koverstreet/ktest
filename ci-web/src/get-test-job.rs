@@ -29,12 +29,12 @@ fn get_subtests(test_path: PathBuf) -> Vec<String> {
 }
 
 fn lockfile_exists(rc: &Ktestrc, commit: &str, test_path: &Path, subtest: &str, create: bool) -> bool {
+    let subtest = subtest.replace("/", ".");
     let test_name = test_path.file_stem().unwrap().to_string_lossy();
     let lockfile = rc.ci_output_dir.join(commit)
         .join(format!("{}.{}", test_name, subtest))
         .join("status");
 
-    /*
     let timeout = std::time::Duration::from_secs(3600);
     let metadata = std::fs::metadata(&lockfile);
 
@@ -53,7 +53,6 @@ fn lockfile_exists(rc: &Ktestrc, commit: &str, test_path: &Path, subtest: &str, 
                       elapsed);
         }
     }
-    */
 
     if !create {
         lockfile.exists()
