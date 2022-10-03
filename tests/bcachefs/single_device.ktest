@@ -139,7 +139,7 @@ test_reflink()
 
 test_fio_raw()
 {
-    set_watchdog 60
+    set_watchdog 120
     fio --eta=always				\
 	--exitall_on_error=1			\
 	--randrepeat=0				\
@@ -608,7 +608,7 @@ test_crypto_lz4()
 
 run_copygc_torture()
 {
-    set_watchdog 1200
+    set_watchdog 2400
 
     loops=$((($ktest_priority + 1) * 4))
 
@@ -1329,7 +1329,7 @@ test_dump()
 
 test_kill_btree_node()
 {
-    set_watchdog 60
+    set_watchdog 120
     run_quiet "" bcachefs format --errors=panic /dev/sdb
 
     mount -t bcachefs /dev/sdb /mnt

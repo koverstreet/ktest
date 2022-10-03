@@ -88,7 +88,7 @@ test_replicas()
 
 test_replicas_variable_buckets()
 {
-    set_watchdog 600
+    set_watchdog 1200
     run_quiet "" bcachefs format -f			\
 	--replicas=2					\
 	--bucket=32k	/dev/sdb			\
@@ -155,7 +155,7 @@ d_test_copygc_torture()
 
 do_remove_test()
 {
-    set_watchdog 180
+    set_watchdog 300
     offline=$1
     evacuate=$2
 
@@ -229,7 +229,7 @@ test_device_evacuate_online()
 
 test_device_add()
 {
-    set_watchdog 120
+    set_watchdog 240
     #setup_tracing 'bcachefs:*'
 
     run_quiet "" bcachefs format		\
