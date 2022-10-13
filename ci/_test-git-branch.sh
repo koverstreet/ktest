@@ -61,9 +61,6 @@ run_quiet "Syncing git repos" sync_git_repos
 run_quiet "Fetching $COMMIT" git_fetch linux $COMMIT
 run_quiet "Checking out $COMMIT" git checkout FETCH_HEAD
 
-run_quiet "Fetching ci-monkeypatch" git_fetch linux ci-monkeypatch
-run_quiet "Merging ci-monkeypatch"  git merge --no-edit FETCH_HEAD || git reset --hard
-
 rm -rf ktest-out/out
 mkdir -p ktest-out/out
 
