@@ -167,6 +167,10 @@ require-kernel-config SCSI
 require-kernel-config SCSI_LOWLEVEL	# what's this for?
 require-kernel-config BLK_DEV_SD	# disk support
 
+# Block layer writeback throttling:
+require-kernel-config BLK_WBT
+require-kernel-config BLK_WBT_MQ
+
 # Networking
 require-kernel-config NET
 require-kernel-config PACKET
@@ -228,7 +232,7 @@ require-kernel-config DEBUG_KERNEL
 #require-kernel-config DEBUG_RODATA
 #require-kernel-config DEBUG_SET_MODULE_RONX
 
-require-kernel-config DEBUG_LIST
+#require-kernel-config DEBUG_LIST
 
 # More expensive
 #require-kernel-config DYNAMIC_DEBUG
