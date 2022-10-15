@@ -187,6 +187,8 @@ require-kernel-config CONFIGFS_FS	# systemd
 # Root filesystem:
 require-kernel-config EXT4_FS
 require-kernel-config EXT4_FS_POSIX_ACL
+# fstests generic/270 requires capabilities on root fs
+require-kernel-config EXT4_FS_SECURITY
 
 require-kernel-config NET_9P
 require-kernel-config NETWORK_FILESYSTEMS
