@@ -24,6 +24,8 @@ test_stress_ng()
     stress-ng  -v -t 60 --class filesystem --all 2 || true
     cd /root
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_punch()
@@ -43,6 +45,8 @@ test_punch()
     mount -t bcachefs /dev/sdb /mnt
     md5sum /mnt/foo
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_remount_ro_rw()
@@ -56,6 +60,8 @@ test_remount_ro_rw()
     mount -o remount,rw /mnt
     touch /mnt/foo
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_extent_merge2()
@@ -71,6 +77,8 @@ test_extent_merge2()
 
     umount /mnt
     bcachefs fsck -n /dev/sdb
+
+    check_counters /dev/sdb
 }
 
 test_reflink2()
@@ -105,6 +113,8 @@ test_reflink2()
     cat /sys/kernel/debug/bcachefs/*/btrees/reflink|wc -l
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_reflink()
@@ -135,6 +145,8 @@ test_reflink()
     [[ $nr_left = 0 ]]
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_fio_raw()
@@ -179,6 +191,8 @@ test_rewrite_old_nodes()
     bcachefs fsck /dev/sdb
 
     bcachefs show-super /dev/sdb
+
+    check_counters /dev/sdb
 }
 
 test_merge_torture_flakey()
@@ -221,6 +235,8 @@ test_merge_torture_flakey()
     done
 
     mdadm --stop /dev/md0
+
+    check_counters /dev/sdb
 }
 
 # Disabled, because currently OOMs
@@ -266,6 +282,8 @@ test_make_files()
     echo 3 > /proc/sys/vm/drop_caches
     free -m
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_journal_resize()
@@ -281,6 +299,8 @@ test_journal_resize()
 
     wait
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_drop_alloc()
@@ -296,6 +316,8 @@ test_drop_alloc()
     umount /mnt
 
     bcachefs fsck -n /dev/sdb
+
+    check_counters /dev/sdb
 }
 
 test_reflink_inline_data()
@@ -311,6 +333,8 @@ test_reflink_inline_data()
     md5sum /root/foo /mnt/foo*
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_split_compressed()
@@ -323,6 +347,8 @@ test_split_compressed()
     dd if=/dev/zero of=/mnt/foo bs=128k	    count=1 oflag=direct
     dd if=/dev/urandom of=/mnt/foo bs=4k    count=1 seek=1 oflag=direct conv=notrunc
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_fcollapse()
@@ -348,6 +374,8 @@ test_fcollapse()
     echo
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_finsert()
@@ -362,6 +390,8 @@ test_finsert()
 
     xfs_io -c "finsert 1024 1024" /mnt/foo
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_key_merge()
@@ -378,6 +408,8 @@ test_key_merge()
     [[ $NR -eq 4 ]]
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_key_merge_csum()
@@ -396,6 +428,8 @@ test_key_merge_csum()
     [[ $NR -le 16 ]]
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_reconstruct_alloc()
@@ -426,6 +460,8 @@ test_reconstruct_alloc()
     bcachefs fsck -n /dev/sdb
     mount -t bcachefs -o fsck /dev/sdb /mnt
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_recovery()
@@ -464,6 +500,8 @@ test_recovery()
 
 	umount /mnt
     done
+
+    check_counters /dev/sdb
 }
 
 test_lz4_zeros()
@@ -475,6 +513,8 @@ test_lz4_zeros()
     dd if=/dev/zero of=/mnt/foo bs=1M count=10
     # XXX check disk space used
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_lz4_incompressible()
@@ -485,6 +525,8 @@ test_lz4_incompressible()
 
     dd if=/dev/urandom of=/mnt/foo || true
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_lz4()
@@ -511,13 +553,12 @@ test_lz4_buffered()
     echo starting sync 
     sync
 
-    #echo starting gc 
-    #echo 1 | tee /sys/fs/bcachefs/*/internal/trigger_gc >& /dev/null || true
-
     echo starting rm
     rm -rf /mnt/*
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_gzip()
@@ -543,6 +584,8 @@ disabled_test_background_compression()
     mount -t bcachefs /dev/sdb /mnt
     echo zstd > /sys/fs/bcachefs/*/options/background_compression
     run_fio_randrw
+
+    check_counters /dev/sdb
 }
 
 test_compress_no_checksum()
@@ -585,6 +628,8 @@ test_crypto_locked_mnt()
     mount -t bcachefs -o verbose /dev/sdb /mnt
     umount /mnt
     bcachefs fsck /dev/sdb
+
+    check_counters /dev/sdb
 }
 
 test_crypto()
@@ -596,6 +641,8 @@ test_crypto()
     umount /mnt
     bcachefs fsck				\
 	/dev/sdb
+
+    check_counters /dev/sdb
 }
 
 test_crypto_lz4()
@@ -650,6 +697,8 @@ run_copygc_torture()
 
     umount /mnt
     bcachefs fsck -n /dev/sdb
+
+    check_counters /dev/sdb
 }
 
 test_copygc_torture()
@@ -730,6 +779,8 @@ test_partial_overwritten_extents()
     dd if=/dev/zero	of=/mnt/baz  bs=4k   count=1 skip=7 oflag=direct conv=notrunc
     dd if=/mnt/baz	of=/dev/null bs=4k   count=8 skip=0 iflag=direct > /dev/null
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 # test the xattr interface for per-inode IO options:
@@ -758,6 +809,8 @@ test_xattr()
     getfattr -R -m - -d /mnt
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_quota()
@@ -776,6 +829,8 @@ test_quota()
 
     rm /mnt/fiotest
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 # test nfs exports:
@@ -798,6 +853,8 @@ test_nfs()
     exportfs -ua
 
     umount /export2
+
+    check_counters /dev/sdb
 }
 
 # We should get this working at some point:
@@ -829,6 +886,8 @@ d_test_suspend()
 	bcachefs_antagonist
 	run_stress
     fi
+
+    check_counters /dev/sdb
 }
 
 test_journal_torture()
@@ -849,6 +908,8 @@ test_journal_torture()
 
     #disable_memory_faults
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_online_resize()
@@ -868,6 +929,8 @@ test_online_resize()
     df -h /mnt
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_offline_resize()
@@ -891,6 +954,8 @@ test_offline_resize()
     mount -t bcachefs /dev/sdb /mnt
     df -h /mnt
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_offline_resize_lv()
@@ -932,6 +997,8 @@ test_sysfs()
     find -H /sys/fs/bcachefs/ -type f -perm -0400 -exec cat {} \; > /dev/null
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_debugfs()
@@ -948,6 +1015,8 @@ test_debugfs()
     find -H /sys/kernel/debug/bcachefs/ -type f -perm -0400 -exec cat {} \; > /dev/null
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_set_option()
@@ -967,6 +1036,8 @@ test_set_option()
     mount -t bcachefs /dev/sdb /mnt
     cat /sys/fs/bcachefs/*/options/compression
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 disabled_test_swapfile()
@@ -1043,6 +1114,8 @@ migrate_from_fs()
     mount -t bcachefs /dev/sdb /mnt
     rm /mnt/old_migrated_filesystem
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_migrate_from_ext4()
@@ -1137,6 +1210,8 @@ test_long_name()
     echo $i
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_many_files()
@@ -1155,6 +1230,8 @@ test_many_files()
 
     mount -t bcachefs /dev/sdb /mnt
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 disabled_test_invalid_keys()
@@ -1193,6 +1270,8 @@ test_buffered_reads()
     time dd if=/mnt/foo of=/dev/null bs=1M count=1024
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_small_fs()
@@ -1211,6 +1290,8 @@ test_small_fs()
 
     df -h /mnt
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_small_torture()
@@ -1248,6 +1329,8 @@ test_gc()
 
     mount -t bcachefs /dev/sdb /mnt
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_attr_inherit()
@@ -1280,6 +1363,8 @@ test_attr_inherit()
     getfattr -R -d -m - /mnt/bar/baz
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_setattr()
@@ -1299,6 +1384,8 @@ test_setattr()
     getfattr -R -d -m - /mnt
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_mount_twice()
@@ -1355,6 +1442,8 @@ test_kill_btree_node()
 	echo "Running fsck again; should be clean"
 	bcachefs fsck -y /dev/sdb || true
     done
+
+    check_counters /dev/sdb
 }
 
 main "$@"

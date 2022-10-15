@@ -47,6 +47,8 @@ test_recovery()
 
 	umount /mnt
     done
+
+    check_counters /dev/sdb
 }
 
 test_multimount()
@@ -61,6 +63,8 @@ test_multimount()
 
     umount /mnt/1
     umount /mnt/2
+
+    check_counters /dev/sdb
 }
 
 test_twodevices()
@@ -77,6 +81,8 @@ test_largebuckets()
     mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
     dd if=/dev/zero of=/mnt/foo bs=8M count=1024 oflag=direct
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_replicas()
@@ -101,6 +107,8 @@ test_replicas_variable_buckets()
     fs_mark -v -n 20000 -s 4096 -k -S 0 -D 1000 -N 100000 -d /mnt -t 60
     df -h /mnt
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 d_test_copygc_torture()
@@ -151,6 +159,8 @@ d_test_copygc_torture()
 
     #disable_memory_faults
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 do_remove_test()
@@ -205,6 +215,8 @@ do_remove_test()
 
     mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_device_remove_offline()
@@ -258,6 +270,8 @@ test_device_add()
 
     mount -t bcachefs /dev/sdb:/dev/sdc /mnt
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_device_add_label()
@@ -271,6 +285,8 @@ test_device_add_label()
     bcachefs device add --label=bar /mnt /dev/sdc
     expect_sysfs dev-1 label bar
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_device_add_label_compound()
@@ -287,6 +303,8 @@ test_device_add_label_compound()
     bcachefs device add --label=foo.bar /mnt /dev/sdc
     expect_sysfs dev-1 label foo.bar
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_device_set_state()
@@ -319,6 +337,8 @@ test_device_set_state()
     fi
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_device_ro()
@@ -348,6 +368,8 @@ test_device_ro()
 
     mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_device_set_state_offline()
@@ -379,6 +401,8 @@ test_device_set_state_offline()
     mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
     cat /sys/block/sdc/bcachefs/state
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_device_readd()
@@ -413,6 +437,8 @@ test_device_readd()
 
     mount -t bcachefs /dev/sdb:/dev/sdc /mnt
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_device_repeated_add_remove()
@@ -437,6 +463,8 @@ test_device_repeated_add_remove()
     done
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 do_replicas_errors_test()
@@ -470,6 +498,8 @@ do_replicas_errors_test()
 
     mount -t bcachefs -o fsck /dev/sdb:/dev/sdc /mnt
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_replicas_write_errors()
@@ -510,6 +540,8 @@ test_cmd_fs_usage()
     df -h /mnt
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_rereplicate()
@@ -534,6 +566,8 @@ test_rereplicate()
 
     mount -t bcachefs -o degraded /dev/sdb:/dev/sdc /mnt
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 disabled_test_device_add_faults()
@@ -555,6 +589,8 @@ disabled_test_device_add_faults()
     run_fault_injection_test bcachefs:bch_fs_init:dev_alloc	device_add_fault_fn
     run_fault_injection_test bcachefs:bch_fs_init:alloc_start	device_add_fault_fn
     run_fault_injection_test bcachefs:bch_fs_init:read_super	device_add_fault_fn
+
+    check_counters /dev/sdb
 }
 
 test_striping()
@@ -597,6 +633,8 @@ test_striping()
     bcachefs fs usage -h /mnt
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 disabled_change_replicas()
@@ -627,6 +665,8 @@ disabled_change_replicas()
 
     kill %1
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 disabled_change_replicas2()
@@ -647,6 +687,8 @@ disabled_change_replicas2()
     done
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_replicas_gc()
@@ -674,6 +716,8 @@ test_replicas_gc()
     umount /mnt
 
     bcachefs fsck /dev/sd[bcdef]
+
+    check_counters /dev/sdb
 }
 
 test_replace_replica()
@@ -693,6 +737,8 @@ test_replace_replica()
 
     mount -t bcachefs -o degraded /dev/sdd /mnt
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_key_type_error()
@@ -716,6 +762,8 @@ test_key_type_error()
     ! dd if=/mnt/foo of=/dev/null bs=64k count=1 iflag=direct
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 main "$@"

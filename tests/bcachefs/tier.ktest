@@ -42,6 +42,8 @@ test_tiering_torture()
 
     mount -o remount,ro /mnt
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_tiering()
@@ -60,6 +62,8 @@ test_tiering_drop_alloc()
 
     echo "final fsck:"
     bcachefs fsck -n /dev/sd[bcde]
+
+    check_counters /dev/sdb
 }
 
 test_tiering_buffered()
@@ -94,6 +98,8 @@ test_tiering_buffered()
 	--rw=randrw				\
 	--bsrange=512-16k
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_writethrough()
@@ -134,6 +140,8 @@ test_setattr()
     bcachefs setattr --promote_target ssd /mnt/
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_tiering_no_checksum()
@@ -206,6 +214,8 @@ test_device_add()
 
     wait
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_mount_umount_torture()
@@ -223,6 +233,8 @@ test_mount_umount_torture()
 	mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd:/dev/sde /mnt
 	umount /mnt
     done
+
+    check_counters /dev/sdb
 }
 
 test_change_replicas()
@@ -267,6 +279,8 @@ test_change_replicas()
 
     kill %1
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 main $@

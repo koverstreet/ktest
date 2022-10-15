@@ -41,6 +41,8 @@ test_snapshots_simple()
     sleep 0.2
     mount -t bcachefs -o fsck /dev/sdb /mnt
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_files_many()
@@ -58,6 +60,8 @@ test_files_many()
     sleep 0.2
     time mount -t bcachefs -o fsck /dev/sdb /mnt
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 d_test_snapshots_many()
@@ -78,6 +82,8 @@ d_test_snapshots_many()
     sleep 0.2
     mount -t bcachefs -o fsck /dev/sdb /mnt
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_dbench()
@@ -115,6 +121,8 @@ test_dbench()
     mount -t bcachefs -o fsck /dev/sdb /mnt
     df -h /mnt
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_reflink()
@@ -129,6 +137,8 @@ test_reflink()
     popd
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 d_test_finsert()
@@ -143,6 +153,8 @@ d_test_finsert()
     popd
 
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 d_test_snapshots_fio()
@@ -225,6 +237,8 @@ d_test_snapshots_fio()
     mount -t bcachefs -o fsck /dev/sdb /mnt
     df -h /mnt
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_subvol_create()
@@ -239,6 +253,8 @@ test_subvol_create()
     umount /mnt
 
     bcachefs fsck -n /dev/sdb
+
+    check_counters /dev/sdb
 }
 
 test_subvol_delete()
@@ -251,6 +267,8 @@ test_subvol_delete()
     umount /mnt
 
     bcachefs fsck -n /dev/sdb
+
+    check_counters /dev/sdb
 }
 
 test_subvol_snapshot_create()
@@ -263,6 +281,8 @@ test_subvol_snapshot_create()
     umount /mnt
 
     bcachefs fsck -n /dev/sdb
+
+    check_counters /dev/sdb
 }
 
 test_subvol_snapshot_create_ro()
@@ -277,6 +297,8 @@ test_subvol_snapshot_create_ro()
     umount /mnt
 
     bcachefs fsck -n /dev/sdb
+
+    check_counters /dev/sdb
 }
 
 test_subvol_snapshot_delete()
@@ -290,6 +312,8 @@ test_subvol_snapshot_delete()
     umount /mnt
 
     bcachefs fsck -n /dev/sdb
+
+    check_counters /dev/sdb
 }
 
 test_subvol_snapshot_delete_create()
@@ -304,6 +328,8 @@ test_subvol_snapshot_delete_create()
     umount /mnt
 
     bcachefs fsck -n /dev/sdb
+
+    check_counters /dev/sdb
 }
 
 d_test_subvol_snapshot_rm()
@@ -317,6 +343,8 @@ d_test_subvol_snapshot_rm()
     umount /mnt
 
     bcachefs fsck -n /dev/sdb
+
+    check_counters /dev/sdb
 }
 
 # Create a subvolume, then snapshot the parent subvolume, then move the child
@@ -331,6 +359,8 @@ test_mkdir_mv_snapshot()
     umount /mnt
 
     bcachefs fsck -n /dev/sdb
+
+    check_counters /dev/sdb
 }
 
 test_subvol_mv_snapshot()
@@ -343,6 +373,8 @@ test_subvol_mv_snapshot()
     umount /mnt
 
     bcachefs fsck -n /dev/sdb
+
+    check_counters /dev/sdb
 }
 
 # Test moving a subvol to another subvol
@@ -356,6 +388,8 @@ test_subvol_mv_subvol()
     umount /mnt
 
     bcachefs fsck -n /dev/sdb
+
+    check_counters /dev/sdb
 }
 
 test_subvol_snapshot_reuse_snapshot_name()
@@ -370,6 +404,8 @@ test_subvol_snapshot_reuse_snapshot_name()
     umount /mnt
 
     bcachefs fsck -n /dev/sdb
+
+    check_counters /dev/sdb
 }
 
 test_subvol_delete_snapshot_of_deleted_subvol()
@@ -384,6 +420,8 @@ test_subvol_delete_snapshot_of_deleted_subvol()
     umount /mnt
 
     bcachefs fsck -n /dev/sdb
+
+    check_counters /dev/sdb
 }
 
 test_subvol_snapshot_delete_repeat()
@@ -397,6 +435,8 @@ test_subvol_snapshot_delete_repeat()
     umount /mnt
 
     bcachefs fsck -n /dev/sdb
+
+    check_counters /dev/sdb
 }
 
 test_subvol_snapshot_delete_fio()
@@ -418,6 +458,8 @@ test_subvol_snapshot_delete_fio()
 
     umount /mnt
     bcachefs fsck -n /dev/sdb
+
+    check_counters /dev/sdb
 }
 
 test_snapshot_copygc()
@@ -432,6 +474,41 @@ test_snapshot_copygc()
 
     bcachefs fs usage -h /mnt
     umount /mnt
+
+    check_counters /dev/sdb
+}
+
+test_snapshot_many_overwrite()
+{
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    for i in $(seq 1 100000); do
+	echo foo > /mnt/test
+        bcachefs subvolume snapshot /mnt/snap.$i
+    done
+
+    bcachefs fs usage -h /mnt
+    umount /mnt
+
+    check_counters /dev/sdb
+}
+
+test_snapshot_prjquota()
+{
+    run_quiet "" bcachefs format -f --errors=panic --prjquota /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+
+    echo foo > /mnt/test
+    bcachefs subvolume snapshot /mnt/snap.$i
+
+    bcachefs fs usage -h /mnt
+    umount /mnt
+
+    mount -t bcachefs /dev/sdb /mnt
+    umount /mnt
+
+    check_counters /dev/sdb
 }
 
 main "$@"

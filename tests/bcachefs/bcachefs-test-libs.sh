@@ -123,6 +123,30 @@ bcachefs_antagonist()
     #antagonist_switch_str_hash &
 }
 
+check_one_counter()
+{
+    local nr_commits=$1
+    local fail=$2
+    local nr_fail=$3
+
+    if (( $nr_fail * 10 > $nr_commits )); then
+	echo "Too many $fail events: $nr_fail"
+	echo "Transaction commits: $nr_commits"
+	exit 1
+    fi
+}
+
+check_counters()
+{
+    local dev=$1
+    local nr_commits=$(bcachefs show-super -f counters $dev|awk '/transaction_commit/ {print $2}')
+
+    bcachefs show-super -f counters $dev|grep -E '(fail|restart)'|
+	while read -r line; do
+	    check_one_counter $nr_commits $line
+	done
+}
+
 fill_device()
 {
     local filename=$1
@@ -210,6 +234,8 @@ run_basic_fio_test()
     #umount /mnt
 
     bcachefs fsck -n "${devs[@]}"
+
+    check_counters ${devs[0]}
 }
 
 require-kernel-config DEBUG_FS

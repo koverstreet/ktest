@@ -44,11 +44,13 @@ test_ec_small()
     umount /mnt
 
     bcachefs fsck /dev/sd[bcdef]
+
+    check_counters /dev/sdb
 }
 
 test_ec_umount()
 {
-    set_watchdog 60
+    set_watchdog 180
 
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
@@ -57,12 +59,14 @@ test_ec_umount()
 	/dev/sd[bcdef]
     devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
 
-    for i in $(seq 1 100); do
+    for i in $(seq 1 10); do
 	mount -t bcachefs $devs /mnt
 	dd if=/dev/zero of=/mnt/foo bs=8M count=128
 	sync
 	umount /mnt
     done
+
+    check_counters /dev/sdb
 }
 
 do_ec_test()
@@ -96,6 +100,8 @@ do_ec_test()
     mount -t bcachefs -o fsck $devs /mnt
     cat /mnt/fiotest > /dev/null
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 test_ec()
@@ -150,6 +156,8 @@ test_ec_mixed_tiers()
     umount /mnt
 
     bcachefs fsck /dev/sd[bcdef]
+
+    check_counters /dev/sdb
 }
 
 test_ec_gc()
@@ -198,6 +206,8 @@ test_ec_gc()
     umount /mnt
 
     bcachefs fsck /dev/sd[bcdef]
+
+    check_counters /dev/sdb
 }
 
 do_remove_test()
@@ -250,6 +260,8 @@ do_remove_test()
 
     mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf /mnt
     umount /mnt
+
+    check_counters /dev/sdb
 }
 
 d_test_device_remove_offline()
