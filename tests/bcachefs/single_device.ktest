@@ -548,7 +548,7 @@ test_lz4_buffered()
     mount -t bcachefs /dev/sdb /mnt
 
     echo starting copy
-    cp -rx / /mnt
+    cp -rx / /mnt/foo
 
     echo starting sync 
     sync
