@@ -141,7 +141,7 @@ check_counters()
     local dev=$1
     local nr_commits=$(bcachefs show-super -f counters $dev|awk '/transaction_commit/ {print $2}')
 
-    bcachefs show-super -f counters $dev|grep -E '(fail|restart)'|
+    bcachefs show-super -f counters $dev|grep -E '(fail|restart)'|grep -v path_relock_fail|
 	while read -r line; do
 	    check_one_counter $nr_commits $line
 	done
