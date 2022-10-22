@@ -11,12 +11,34 @@ JOBSERVER_LINUX_REPO=ssh://$JOBSERVER/$JOBSERVER_HOME/linux
 
 . $KTEST_DIR/lib/common.sh
 
+ssh() {
+    (
+	set +o errexit
+
+	while true; do
+	    env ssh "$@"
+	    (($? != 255)) && break
+	    sleep 1
+	    tput cuu1
+	    tput el
+	done
+    )
+}
+
 git_fetch()
 {
     local repo=$1
     shift
 
-    git fetch ssh://$JOBSERVER/$JOBSERVER_HOME/$repo $@
+    (
+	set +o errexit
+
+	while true; do
+	    git fetch ssh://$JOBSERVER/$JOBSERVER_HOME/$repo $@
+	    (($? != 128)) && break
+	    sleep 1
+	done
+    )
 }
 
 sync_git_repos()
