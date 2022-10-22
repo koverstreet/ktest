@@ -1416,7 +1416,7 @@ test_dump()
 
 test_kill_btree_node()
 {
-    set_watchdog 120
+    set_watchdog 240
     run_quiet "" bcachefs format --errors=panic /dev/sdb
 
     mount -t bcachefs /dev/sdb /mnt

@@ -514,7 +514,7 @@ test_replicas_read_errors()
 
 test_cmd_fs_usage()
 {
-    set_watchdog 120
+    set_watchdog 240
 
     run_quiet "" bcachefs format		\
 	--replicas=2				\
