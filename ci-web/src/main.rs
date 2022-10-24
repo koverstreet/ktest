@@ -233,6 +233,12 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
         writeln!(&mut out, "<td> <a href=c/{}/{}/log.br>        log                 </a> </td>", &commit_id, result.name).unwrap();
         writeln!(&mut out, "<td> <a href=c/{}/{}/full_log.br>   full log            </a> </td>", &commit_id, result.name).unwrap();
         writeln!(&mut out, "<td> <a href=c/{}/{}>		        output directory    </a> </td>", &commit_id, result.name).unwrap();
+
+        if let Some(branch) = &ci.branch {
+            writeln!(&mut out, "<td> <a href={}?branch={}&test=^{}$> git log        </a> </td>",
+                     ci.script_name, &branch, result.name).unwrap();
+        }
+
         writeln!(&mut out, "</tr>").unwrap();
     }
 
