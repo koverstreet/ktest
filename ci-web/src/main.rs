@@ -96,7 +96,7 @@ struct Ci {
     tests_matching:     Regex,
 }
 
-fn commit_get_results(ci: &Ci, commit_id: &String) -> Vec<TestResult> {
+fn __commit_get_results(ci: &Ci, commit_id: &String) -> Vec<TestResult> {
     let r = ci.ktestrc.ci_output_dir.join(commit_id).read_dir();
 
     if let Ok(r) = r {
@@ -112,20 +112,82 @@ fn commit_get_results(ci: &Ci, commit_id: &String) -> Vec<TestResult> {
     }
 }
 
-fn ci_log(ci: &Ci) -> cgi::Response {
+struct CommitResults {
+    id:             String,
+    message:        String,
+    tests:          Vec<TestResult>
+}
+
+fn commit_get_results(ci: &Ci, commit: &git2::Commit) -> CommitResults {
+    let id = commit.id().to_string();
+    let tests = __commit_get_results(ci, &id);
+
+    CommitResults {
+        id:         id,
+        message:    commit.message().unwrap().to_string(),
+        tests:      tests,
+    }
+}
+
+fn branch_get_results(ci: &Ci) -> Result<Vec<CommitResults>, String> {
+    let mut nr_empty = 0;
+    let mut ret: Vec<CommitResults> = Vec::new();
+
     let branch = ci.branch.as_ref().unwrap();
-    let mut out = String::new();
     let mut walk = ci.repo.revwalk().unwrap();
 
     let reference = git_get_commit(&ci.repo, branch.clone());
     if reference.is_err() {
         /* XXX: return a 404 */
-        return error_response(format!("commit not found"));
+        return Err(format!("commit not found"));
     }
     let reference = reference.unwrap();
 
     if let Err(e) = walk.push(reference.id()) {
-        return error_response(format!("Error walking {}: {}", branch, e));
+        return Err(format!("Error walking {}: {}", branch, e));
+    }
+
+    for commit in walk
+            .filter_map(|i| i.ok())
+            .filter_map(|i| ci.repo.find_commit(i).ok()) {
+        let r = commit_get_results(ci, &commit);
+
+        if !r.tests.is_empty() {
+            nr_empty = 0;
+        } else {
+            nr_empty += 1;
+            if nr_empty > 100 {
+                break;
+            }
+        }
+
+        ret.push(r);
+    }
+
+    
+    while !ret.is_empty() && ret[ret.len() - 1].tests.is_empty() {
+        ret.pop();
+    }
+
+    Ok(ret)
+}
+
+fn ci_log(ci: &Ci) -> cgi::Response {
+    let mut out = String::new();
+    let branch = ci.branch.as_ref().unwrap();
+
+    let commits = branch_get_results(ci);
+    if let Err(e) = commits {
+        return error_response(e);
+    }
+
+    let commits = commits.unwrap();
+
+    let mut multiple_test_view = false;
+    for r in &commits {
+        if r.tests.len() > 1 {
+            multiple_test_view = true;
+        }
     }
 
     writeln!(&mut out, "<!DOCTYPE HTML>").unwrap();
@@ -136,62 +198,92 @@ fn ci_log(ci: &Ci) -> cgi::Response {
     writeln!(&mut out, "<div class=\"container\">").unwrap();
     writeln!(&mut out, "<table class=\"table\">").unwrap();
 
-    writeln!(&mut out, "<tr>").unwrap();
-    writeln!(&mut out, "<th> Commit      </th>").unwrap();
-    writeln!(&mut out, "<th> Description </th>").unwrap();
-    writeln!(&mut out, "<th> Passed      </th>").unwrap();
-    writeln!(&mut out, "<th> Failed      </th>").unwrap();
-    writeln!(&mut out, "<th> Not started </th>").unwrap();
-    writeln!(&mut out, "<th> Not run     </th>").unwrap();
-    writeln!(&mut out, "<th> In progress </th>").unwrap();
-    writeln!(&mut out, "<th> Unknown     </th>").unwrap();
-    writeln!(&mut out, "<th> Total       </th>").unwrap();
-    writeln!(&mut out, "<th> Duration    </th>").unwrap();
-    writeln!(&mut out, "</tr>").unwrap();
 
-    let mut nr_empty = 0;
-    for commit in walk
-            .filter_map(|i| i.ok())
-            .filter_map(|i| ci.repo.find_commit(i).ok()) {
-        let id = commit.id().to_string();
-        let r = commit_get_results(ci, &id);
+    if multiple_test_view {
+        writeln!(&mut out, "<tr>").unwrap();
+        writeln!(&mut out, "<th> Commit      </th>").unwrap();
+        writeln!(&mut out, "<th> Description </th>").unwrap();
+        writeln!(&mut out, "<th> Passed      </th>").unwrap();
+        writeln!(&mut out, "<th> Failed      </th>").unwrap();
+        writeln!(&mut out, "<th> Not started </th>").unwrap();
+        writeln!(&mut out, "<th> Not run     </th>").unwrap();
+        writeln!(&mut out, "<th> In progress </th>").unwrap();
+        writeln!(&mut out, "<th> Unknown     </th>").unwrap();
+        writeln!(&mut out, "<th> Total       </th>").unwrap();
+        writeln!(&mut out, "<th> Duration    </th>").unwrap();
+        writeln!(&mut out, "</tr>").unwrap();
 
-        if !r.is_empty() {
-            if nr_empty != 0 {
-                writeln!(&mut out, "<tr> <td> ({} untested commits) </td> </tr>", nr_empty).unwrap();
-                nr_empty = 0;
-            }
+        let mut nr_empty = 0;
+        for r in &commits {
+            if !r.tests.is_empty() {
+                if nr_empty != 0 {
+                    writeln!(&mut out, "<tr> <td> ({} untested commits) </td> </tr>", nr_empty).unwrap();
+                    nr_empty = 0;
+                }
 
-            fn count(r: &Vec<TestResult>, t: TestStatus) -> usize {
-                r.iter().filter(|x| x.status == t).count()
-            }
+                fn count(r: &Vec<TestResult>, t: TestStatus) -> usize {
+                    r.iter().filter(|x| x.status == t).count()
+                }
 
-            let message = commit.message().unwrap();
-            let subject_len = message.find('\n').unwrap_or(message.len());
+                let subject_len = r.message.find('\n').unwrap_or(r.message.len());
 
-            let duration: usize = r.iter().map(|x| x.duration).sum();
+                let duration: usize = r.tests.iter().map(|x| x.duration).sum();
 
-            writeln!(&mut out, "<tr>").unwrap();
-            writeln!(&mut out, "<td> <a href=\"{}?branch={}&commit={}\">{}</a> </td>",
-                     ci.script_name, branch,
-                     id, &id.as_str()[..14]).unwrap();
-            writeln!(&mut out, "<td> {} </td>", &message[..subject_len]).unwrap();
-            writeln!(&mut out, "<td> {} </td>", count(&r, TestStatus::Passed)).unwrap();
-            writeln!(&mut out, "<td> {} </td>", count(&r, TestStatus::Failed)).unwrap();
-            writeln!(&mut out, "<td> {} </td>", count(&r, TestStatus::NotStarted)).unwrap();
-            writeln!(&mut out, "<td> {} </td>", count(&r, TestStatus::NotRun)).unwrap();
-            writeln!(&mut out, "<td> {} </td>", count(&r, TestStatus::InProgress)).unwrap();
-            writeln!(&mut out, "<td> {} </td>", count(&r, TestStatus::Unknown)).unwrap();
-            writeln!(&mut out, "<td> {} </td>", r.len()).unwrap();
-            writeln!(&mut out, "<td> {}s </td>", duration).unwrap();
-            writeln!(&mut out, "</tr>").unwrap();
-        } else {
-            nr_empty += 1;
-            if nr_empty > 100 {
-                break;
+                writeln!(&mut out, "<tr>").unwrap();
+                writeln!(&mut out, "<td> <a href=\"{}?branch={}&commit={}\">{}</a> </td>",
+                         ci.script_name, branch,
+                         r.id, &r.id.as_str()[..14]).unwrap();
+                writeln!(&mut out, "<td> {} </td>", &r.message[..subject_len]).unwrap();
+                writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::Passed)).unwrap();
+                writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::Failed)).unwrap();
+                writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::NotStarted)).unwrap();
+                writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::NotRun)).unwrap();
+                writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::InProgress)).unwrap();
+                writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::Unknown)).unwrap();
+                writeln!(&mut out, "<td> {} </td>", r.tests.len()).unwrap();
+                writeln!(&mut out, "<td> {}s </td>", duration).unwrap();
+                writeln!(&mut out, "</tr>").unwrap();
+            } else {
+                nr_empty += 1;
             }
         }
+    } else {
+        writeln!(&mut out, "<tr>").unwrap();
+        writeln!(&mut out, "<th> Commit      </th>").unwrap();
+        writeln!(&mut out, "<th> Description </th>").unwrap();
+        writeln!(&mut out, "<th> Status      </th>").unwrap();
+        writeln!(&mut out, "<th> Duration    </th>").unwrap();
+        writeln!(&mut out, "</tr>").unwrap();
+
+        let mut nr_empty = 0;
+        for r in &commits {
+            if !r.tests.is_empty() {
+                if nr_empty != 0 {
+                    writeln!(&mut out, "<tr> <td> ({} untested commits) </td> </tr>", nr_empty).unwrap();
+                    nr_empty = 0;
+                }
+
+                let subject_len = r.message.find('\n').unwrap_or(r.message.len());
+                let t = &r.tests[0];
+
+                writeln!(&mut out, "<tr class={}>", t.status.table_class()).unwrap();
+                writeln!(&mut out, "<td> <a href=\"{}?branch={}&commit={}\">{}</a> </td>",
+                         ci.script_name, branch,
+                         r.id, &r.id.as_str()[..14]).unwrap();
+                writeln!(&mut out, "<td> {} </td>", &r.message[..subject_len]).unwrap();
+                writeln!(&mut out, "<td> {} </td>", t.status.to_str()).unwrap();
+                writeln!(&mut out, "<td> {}s </td>", t.duration).unwrap();
+                writeln!(&mut out, "<td> <a href=c/{}/{}/log.br>        log                 </a> </td>", &r.id, t.name).unwrap();
+                writeln!(&mut out, "<td> <a href=c/{}/{}/full_log.br>   full log            </a> </td>", &r.id, t.name).unwrap();
+                writeln!(&mut out, "<td> <a href=c/{}/{}>		        output directory    </a> </td>", &r.id, t.name).unwrap();
+                writeln!(&mut out, "</tr>").unwrap();
+            } else {
+                nr_empty += 1;
+            }
+        }
+
     }
+
     writeln!(&mut out, "</table>").unwrap();
     writeln!(&mut out, "</div>").unwrap();
     writeln!(&mut out, "</body>").unwrap();
@@ -225,7 +317,7 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
 
     writeln!(&mut out, "<table class=\"table\">").unwrap();
 
-    for result in commit_get_results(ci, &commit_id) {
+    for result in __commit_get_results(ci, &commit_id) {
         writeln!(&mut out, "<tr class={}>", result.status.table_class()).unwrap();
         writeln!(&mut out, "<td> {} </td>", result.name).unwrap();
         writeln!(&mut out, "<td> {} </td>", result.status.to_str()).unwrap();
