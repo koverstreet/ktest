@@ -90,6 +90,9 @@ struct Ci {
     repo:               git2::Repository,
     stylesheet:         String,
     script_name:        String,
+
+    branch:             Option<String>,
+    commit:             Option<String>,
     tests_matching:     Regex,
 }
 
@@ -109,7 +112,8 @@ fn commit_get_results(ci: &Ci, commit_id: &String) -> Vec<TestResult> {
     }
 }
 
-fn ci_log(ci: &Ci, branch: String) -> cgi::Response {
+fn ci_log(ci: &Ci) -> cgi::Response {
+    let branch = ci.branch.as_ref().unwrap();
     let mut out = String::new();
     let mut walk = ci.repo.revwalk().unwrap();
 
@@ -168,7 +172,9 @@ fn ci_log(ci: &Ci, branch: String) -> cgi::Response {
             let duration: usize = r.iter().map(|x| x.duration).sum();
 
             writeln!(&mut out, "<tr>").unwrap();
-            writeln!(&mut out, "<td> <a href=\"{}?commit={}\">{}</a> </td>", ci.script_name, id, &id.as_str()[..14]).unwrap();
+            writeln!(&mut out, "<td> <a href=\"{}?branch={}&commit={}\">{}</a> </td>",
+                     ci.script_name, branch,
+                     id, &id.as_str()[..14]).unwrap();
             writeln!(&mut out, "<td> {} </td>", &message[..subject_len]).unwrap();
             writeln!(&mut out, "<td> {} </td>", count(&r, TestStatus::Passed)).unwrap();
             writeln!(&mut out, "<td> {} </td>", count(&r, TestStatus::Failed)).unwrap();
@@ -193,7 +199,8 @@ fn ci_log(ci: &Ci, branch: String) -> cgi::Response {
     cgi::html_response(200, out)
 }
 
-fn ci_commit(ci: &Ci, commit_id: String) -> cgi::Response {
+fn ci_commit(ci: &Ci) -> cgi::Response {
+    let commit_id = ci.commit.as_ref().unwrap();
     let mut out = String::new();
     let commit = git_get_commit(&ci.repo, commit_id.clone());
     if commit.is_err() {
@@ -262,7 +269,7 @@ fn ci_list_branches(ci: &Ci) -> cgi::Response {
     branches.sort();
 
     for b in branches {
-        writeln!(&mut out, "<tr> <th> <a href={}?log={}>{}</a> </th> </tr>", ci.script_name, b, b).unwrap();
+        writeln!(&mut out, "<tr> <th> <a href={}?branch={}>{}</a> </th> </tr>", ci.script_name, b, b).unwrap();
     }
 
     writeln!(&mut out, "</table>").unwrap();
@@ -317,13 +324,16 @@ cgi::cgi_main! {|request: cgi::Request| -> cgi::Response {
         repo:               repo,
         stylesheet:         String::from(STYLESHEET),
         script_name:        cgi_header_get(&request, "x-cgi-script-name"),
+
+        branch:             query.get("branch").map(|x| x.to_string()),
+        commit:             query.get("commit").map(|x| x.to_string()),
         tests_matching:     Regex::new(tests_matching).unwrap_or(Regex::new("").unwrap()),
     };
 
-    if let Some(commit) = query.get("commit") {
-        ci_commit(&ci, commit.to_string())
-    } else if let Some(log) = query.get("log") {
-        ci_log(&ci, log.to_string())
+    if ci.commit.is_some() {
+        ci_commit(&ci)
+    } else if ci.branch.is_some() {
+        ci_log(&ci)
     } else {
         ci_list_branches(&ci)
     }
