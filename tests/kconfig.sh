@@ -212,6 +212,12 @@ require-kernel-config RANDOMIZE_MEMORY=n
 require-kernel-config PROFILING
 require-kernel-config JUMP_LABEL
 
+# iotop:
+require-kernel-config TASK_DELAY_ACCT
+require-kernel-config TASKSTATS
+require-kernel-config TASK_XACCT
+require-kernel-config TASK_IO_ACCOUNTING
+
 # Tracing
 require-kernel-config PERF_EVENTS
 require-kernel-config FTRACE
