@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
 
-. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/xfstests.sh
-
 require-kernel-config EXT4_FS
 require-kernel-config EXT4_FS_POSIX_ACL
 require-kernel-config EXT4_DEBUG
 require-kernel-config QUOTA
 
+require-lib xfstests.sh
+
 run_tests()
 {
     export MKFS_OPTIONS=
 
-    run_xfstests ext4 "$@"
+    run_xfstests minix "$@"
 }
-
-main "$@"

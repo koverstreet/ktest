@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/test-libs.sh
+
+require-kernel-config FTRACE
+require-kernel-config FUNCTION_TRACER
+require-kernel-config FUNCTION_GRAPH_TRACER
+require-kernel-config DYNAMIC_FTRACE
+require-kernel-config FPROBE
+require-kernel-config FUNCTION_PROFILER
+require-kernel-config STACK_TRACER
+require-kernel-config IRQSOFF_TRACER
+require-kernel-config SCHED_TRACER
+require-kernel-config HWLAT_TRACER
+require-kernel-config OSNOISE_TRACER
+require-kernel-config TIMERLAT_TRACER
+require-kernel-config KPROBE_EVENTS
+require-kernel-config KPROBE_EVENTS_ON_NOTRACE
+require-kernel-config SYNTH_EVENTS
+require-kernel-config BLK_DEV_IO_TRACE
+require-kernel-config HIST_TRIGGERS
+require-kernel-config TRACE_EVENT_INJECT
+require-kernel-config TRACEPOINT_BENCHMARK
+require-kernel-config RING_BUFFER_BENCHMARK
+require-kernel-config TRACE_EVAL_MAP_FILE
+require-kernel-config FTRACE_RECORD_RECURSION
+#require-kernel-config FTRACE_STARTUP_TEST
+require-kernel-config FTRACE_SORT_STARTUP_TEST
+require-kernel-config RING_BUFFER_STARTUP_TEST
+require-kernel-config RING_BUFFER_VALIDATE_TIME_DELTAS
+require-kernel-config PREEMPTIRQ_DELAY_TEST=m
+require-kernel-config KPROBE_EVENT_GEN_TEST=m
+require-kernel-config SYNTH_EVENT_GEN_TEST=m
+
+config-mem 1G
+
+test_ftrace()
+{
+    echo "running ftrace tests"
+    cd /host/home/kent/linux/tools/testing/selftests/ftrace
+    ./ftracetest "$@"
+}
+
+main "$@"

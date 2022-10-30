@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Note: create-vm-image doesn't create a vm with a 32 bit userland, so we're not
 # going to be able to run much with this kernel - this is really just for

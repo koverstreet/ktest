@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
 
@@ -663,7 +663,6 @@ run_copygc_torture()
 
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	--no_initialize	--version=14		\
 	--data_checksum=none			\
 	"$@" /dev/sdb
 

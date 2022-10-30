@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/tests/test-libs.sh
 

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/test-libs.sh
+
+require-kernel-config RUNTIME_TESTING_MENU
+require-kernel-config TEST_PRINTF
+
+config-timeout $(stress_timeout)
+
+test_printf()
+{
+    dmesg|grep test_printf:
+    dmesg|grep test_printf:|tail -n1|grep -q passed
+}
+
+main "$@"
