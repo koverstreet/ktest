@@ -17,7 +17,7 @@ ssh() {
 
 	while true; do
 	    env ssh "$@"
-	    (($? != 255)) && break
+	    (($? == 0)) && break
 	    sleep 1
 	    tput cuu1
 	    tput el
@@ -35,7 +35,7 @@ git_fetch()
 
 	while true; do
 	    git fetch ssh://$JOBSERVER/$JOBSERVER_HOME/$repo $@
-	    (($? != 128)) && break
+	    (($? == 0)) && break
 	    sleep 1
 	done
     )
