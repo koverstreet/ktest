@@ -51,9 +51,13 @@ run_xfstests()
 	touch /xfstests-init-done
     fi
 
+    # mkfs.xfs 5.19 requires these variables to be exported into its
+    # environment to allow sub-300MB filesystems for fstests.
+    export TEST_DEV=/dev/sdb
+    export TEST_DIR=/mnt/test
     cat << EOF > /ktest/tests/xfstests/local.config
-TEST_DEV=/dev/sdb
-TEST_DIR=/mnt/test
+TEST_DEV=$TEST_DEV
+TEST_DIR=$TEST_DIR
 SCRATCH_DEV=/dev/sdc
 SCRATCH_MNT=/mnt/scratch
 LOGWRITES_DEV=/dev/sdd
