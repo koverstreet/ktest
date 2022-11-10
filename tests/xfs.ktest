@@ -11,7 +11,7 @@ require-kernel-config QUOTA
 
 run_tests()
 {
-    export MKFS_OPTIONS="-m reflink=1,rmapbt=1 -i sparse=1 -b size=1024"
+    export MKFS_OPTIONS="-m reflink=1,rmapbt=1 -i sparse=1,nrext64=1"
     run_xfstests xfs "$@"
 }
 
