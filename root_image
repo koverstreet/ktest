@@ -75,7 +75,7 @@ PACKAGES=(kexec-tools less psmisc openssh-server		\
     build-essential make gcc g++				\
     autoconf automake autopoint bison				\
     pkg-config libtool-bin					\
-    gdb strace linux-perf trace-cmd blktrace sysstat iotop	\
+    gdb strace linux-perf trace-cmd blktrace sysstat iotop htop	\
     hdparm mdadm lvm2						\
     btrfs-progs jfsutils nilfs-tools f2fs-tools			\
     bc attr gawk acl rsync git python3-docutils			\
@@ -98,6 +98,9 @@ PACKAGES+=(acct bsdextrautils xfsprogs xfslibs-dev quota libcap2-bin)
 PACKAGES+=(libattr1-dev libaio-dev libgdbm-dev libacl1-dev gettext)
 PACKAGES+=(libssl-dev libgdbm-dev libgdbm-compat-dev liburing-dev)
 PACKAGES+=(duperemove thin-provisioning-tools)
+
+# xfsprogs:
+PACKAGES+=(libinih-dev)
 
 # nfs testing:
 PACKAGES+=(nfs-kernel-server)
@@ -216,21 +219,6 @@ update_packages()
     rm -f "$MNT/var/cache/apt/archives/*.deb"
 }
 
-update_oob_packages()
-{
-    # MINIO and WARP
-    mkdir -p "$MNT/tmp/minio"
-    if [[ $DEBIAN_ARCH = amd64 ]]
-    then
-        wget -O "$MNT/usr/local/bin/minio" https://dl.min.io/server/minio/release/linux-amd64/minio
-	wget -O "$MNT/tmp/minio/warp.deb" https://github.com/minio/warp/releases/download/v0.3.27/warp_0.3.27_Linux_x86_64.deb
-        _chroot "$MNT" dpkg -i /tmp/minio/warp.deb
-        chmod +x "$MNT/usr/local/bin/minio"
-    fi
-
-    rm -rf /tmp/minio
-}
-
 trim_image()
 {
     e2fsck -f "$1"
@@ -264,7 +252,6 @@ cmd_update()
     mount "$ktest_image".new "$MNT"
 
     update_packages
-    update_oob_packages
     update_files
 
     umount_image
@@ -299,7 +286,6 @@ cmd_create()
     _chroot "$MNT" dpkg --configure -a
 
     update_packages
-    update_oob_packages
     update_files
 
     umount_image
