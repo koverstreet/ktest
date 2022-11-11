@@ -27,7 +27,7 @@ ktest_no_cleanup_tmpdir=1
 log_verbose "Testrunner starting"
 
 mkdir -p /root/.ssh
-cat $home/.ssh/id*.pub > /root/.ssh/authorized_keys
+cat /host/$home/.ssh/id*.pub > /root/.ssh/authorized_keys
 chmod 600 /root/.ssh/authorized_keys
 
 ln -sf "/host/$ktest_kernel_binary/lib/modules" /lib/modules
