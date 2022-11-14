@@ -52,7 +52,13 @@ sync_git_repos()
 
 echo "Getting test job"
 
-TEST_JOB=( $(ssh $JOBSERVER get-test-job) )
+while true; do
+    TEST_JOB=( $(ssh $JOBSERVER get-test-job) )
+
+    [[ ${#TEST_JOB[@]} != 0 ]] && break
+
+    sleep 30
+done
 
 BRANCH=${TEST_JOB[0]}
 COMMIT=${TEST_JOB[1]}
