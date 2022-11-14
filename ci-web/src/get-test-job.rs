@@ -132,6 +132,9 @@ fn branch_get_next_test_job(rc: &Ktestrc, repo: &git2::Repository,
         }
 
         ret.age += 1;
+        if ret.age > 50 {
+            break;
+        }
     }
 
     None

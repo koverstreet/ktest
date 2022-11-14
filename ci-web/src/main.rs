@@ -131,6 +131,7 @@ fn commit_get_results(ci: &Ci, commit: &git2::Commit) -> CommitResults {
 
 fn branch_get_results(ci: &Ci) -> Result<Vec<CommitResults>, String> {
     let mut nr_empty = 0;
+    let mut nr_commits = 0;
     let mut ret: Vec<CommitResults> = Vec::new();
 
     let branch = ci.branch.as_ref().unwrap();
@@ -162,6 +163,11 @@ fn branch_get_results(ci: &Ci) -> Result<Vec<CommitResults>, String> {
         }
 
         ret.push(r);
+
+        nr_commits += 1;
+        if nr_commits > 50 {
+            break;
+        }
     }
 
     
@@ -281,7 +287,6 @@ fn ci_log(ci: &Ci) -> cgi::Response {
                 nr_empty += 1;
             }
         }
-
     }
 
     writeln!(&mut out, "</table>").unwrap();
