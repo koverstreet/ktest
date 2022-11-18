@@ -13,7 +13,7 @@ config-mem 2G
 setup_tracing()
 {
     echo > /sys/kernel/debug/tracing/trace
-    echo 4096 > /sys/kernel/debug/tracing/buffer_size_kb
+    echo 8 > /sys/kernel/debug/tracing/buffer_size_kb
     echo $@ > /sys/kernel/debug/tracing/set_event
     echo trace_printk > /sys/kernel/debug/tracing/trace_options
     echo 1 > /proc/sys/kernel/ftrace_dump_on_oops

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-git http://evilpiepirate.org/git/linuxquota.git
+require-make linuxquota
+
+require-git http://evilpiepirate.org/git/xfstests.git ../xfstests
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../xfstests.sh
+
+require-kernel-config BCACHEFS_POSIX_ACL
+require-kernel-config BCACHEFS_QUOTA
+require-kernel-config QUOTA
+
+config-cpus 24
+
+run_tests()
+{
+    #echo trace_printk > /sys/kernel/debug/tracing/trace_options
+    setup_tracing 'bcachefs:*'
+
+    bcachefs_antagonist
+
+    export MKFS_OPTIONS="--nocow"
+
+    run_xfstests bcachefs "$@"
+}
+
+main "$@"
