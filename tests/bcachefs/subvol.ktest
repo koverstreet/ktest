@@ -483,7 +483,7 @@ test_snapshot_many_overwrite()
     run_quiet "" bcachefs format -f --errors=panic /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
 
-    for i in $(seq 1 100000); do
+    for i in $(seq 1 100); do
 	echo foo > /mnt/test
         bcachefs subvolume snapshot /mnt/snap.$i
     done
