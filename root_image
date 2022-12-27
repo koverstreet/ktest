@@ -184,6 +184,8 @@ update_files()
     cat > "$MNT/etc/systemd/journald.conf" <<-ZZ
 [Journal]
 Storage=none
+ForwardToConsole=no
+MaxLevelConsole=emerg
 ZZ
 
     mkdir -p "$MNT/etc/network"

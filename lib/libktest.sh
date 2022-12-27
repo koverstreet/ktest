@@ -96,7 +96,7 @@ parse_args_post()
     fi
 
     if [[ $ktest_nice != 0 ]]; then
-	renice  --priority $ktest_nice $$
+	renice  --priority $ktest_nice $$ >/dev/null
     fi
 }
 
@@ -289,7 +289,7 @@ start_vm()
     kernelargs+=("ktest.dir=$ktest_dir")
     kernelargs+=(ktest.env=$(readlink -f "$ktest_out/vm/env"))
     [[ $ktest_kgdb = 1 ]]	&& kernelargs+=(kgdboc=ttyS0,115200 nokaslr)
-    [[ $ktest_verbose = 0 ]]	&& kernelargs+=(quiet systemd.show_status=0 systemd.log-target=journal)
+    [[ $ktest_verbose = 0 ]]	&& kernelargs+=(quiet systemd.show_status=0 systemd.log-target=null)
     [[ $ktest_crashdump = 1 ]]	&& kernelargs+=(crashkernel=128M)
 
     kernelargs+=("${ktest_kernel_append[@]}")
@@ -323,7 +323,7 @@ start_vm()
 	-monitor	"unix:$ktest_out/vm/mon,server,nowait"		\
 	-gdb		"unix:$ktest_out/vm/gdb,server,nowait"		\
 	-device		virtio-rng-pci					\
-	-virtfs		local,path=/,mount_tag=host,security_model=none	\
+	-virtfs		local,path=/,mount_tag=host,security_model=none,multidevs=remap	\
     )
 
     if [[ -f $ktest_kernel_binary/initramfs ]]; then
