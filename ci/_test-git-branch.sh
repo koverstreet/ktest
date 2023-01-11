@@ -144,5 +144,7 @@ while (( ${#SUBTESTS[@]} )); do
     (cd ktest-out/out; tar --create --file - *)|
 	ssh $JOBSERVER "(cd $OUTPUT; tar --extract --file -)"
 
+    ssh $JOBSERVER gen-commit-summary $COMMIT
+
     SUBTESTS=( "${SUBTESTS_REMAINING[@]}" )
 done
