@@ -42,7 +42,7 @@ pub fn ktestrc_read() -> Result<Ktestrc, Box<dyn Error>> {
     Ok(ktestrc)
 }
 
-#[derive(Serialize, Deserialize, PartialEq)]
+#[derive(Serialize, Deserialize, PartialEq, Copy, Clone)]
 pub enum TestStatus {
     InProgress,
     Passed,
@@ -94,7 +94,7 @@ impl TestStatus {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Copy, Clone)]
 pub struct TestResult {
     pub status:     TestStatus,
     pub duration:   usize,
@@ -128,4 +128,10 @@ pub fn commitdir_get_results(ktestrc: &Ktestrc, commit_id: &String) -> TestResul
     }
 
     results
+}
+
+pub fn commitdir_get_results_toml(ktestrc: &Ktestrc, commit_id: &String) -> Result<TestResultsMap, Box<dyn Error>> {
+    let toml = read_to_string(ktestrc.ci_output_dir.join(commit_id.to_owned() + ".toml"))?;
+    let r: TestResults = toml::from_str(&toml)?;
+    Ok(r.d)
 }

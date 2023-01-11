@@ -10,6 +10,13 @@ use lib::*;
 const COMMIT_FILTER:    &str = include_str!("../commit-filter");
 const STYLESHEET:       &str = "bootstrap.min.css";
 
+fn filter_results(r: TestResultsMap, tests_matching: &Regex) -> TestResultsMap {
+    r.iter()
+        .filter(|i| tests_matching.is_match(&i.0) )
+        .map(|(k, v)| (k.clone(), *v))
+        .collect()
+}
+
 struct Ci {
     ktestrc:            Ktestrc,
     repo:               git2::Repository,
@@ -22,21 +29,9 @@ struct Ci {
 }
 
 fn commitdir_get_results_filtered(ci: &Ci, commit_id: &String) -> TestResultsMap {
-    let mut results = BTreeMap::new();
+    let results = commitdir_get_results_toml(&ci.ktestrc, commit_id).unwrap_or(BTreeMap::new());
 
-    let results_dir = ci.ktestrc.ci_output_dir.join(commit_id).read_dir();
-
-    if let Ok(results_dir) = results_dir {
-        for d in results_dir
-            .filter_map(|i| i.ok())
-            .filter(|i| ci.tests_matching.is_match(&i.file_name().to_string_lossy())) {
-            if let Some(r) = read_test_result(&d) {
-                results.insert(d.file_name().into_string().unwrap(), r);
-            }
-        }
-    }
-
-    results
+    filter_results(results, &ci.tests_matching)
 }
 
 struct CommitResults {
