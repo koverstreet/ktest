@@ -1,7 +1,5 @@
+use std::collections::BTreeMap;
 use std::fmt::Write;
-use std::fs::File;
-use std::io::Read;
-use std::path::Path;
 use regex::Regex;
 extern crate cgi;
 extern crate querystring;
@@ -11,79 +9,6 @@ use lib::*;
 
 const COMMIT_FILTER:    &str = include_str!("../commit-filter");
 const STYLESHEET:       &str = "bootstrap.min.css";
-
-fn read_file(f: &Path) -> Option<String> {
-    let mut ret = String::new();
-    let mut file = File::open(f).ok()?;
-    file.read_to_string(&mut ret).ok()?;
-    Some(ret)
-}
-
-#[derive(PartialEq)]
-enum TestStatus {
-    InProgress,
-    Passed,
-    Failed,
-    NotRun,
-    NotStarted,
-    Unknown,
-}
-
-impl TestStatus {
-    fn from_str(status: &str) -> TestStatus {
-        if status.is_empty() {
-            TestStatus::InProgress
-        } else if status.contains("IN PROGRESS") {
-            TestStatus::InProgress
-        } else if status.contains("PASSED") {
-            TestStatus::Passed
-        } else if status.contains("FAILED") {
-            TestStatus::Failed
-        } else if status.contains("NOTRUN") {
-            TestStatus::NotRun
-        } else if status.contains("NOT STARTED") {
-            TestStatus::NotStarted
-        } else {
-            TestStatus::Unknown
-        }
-    }
-
-    fn to_str(&self) -> &'static str {
-        match self {
-            TestStatus::InProgress  => "In progress",
-            TestStatus::Passed      => "Passed",
-            TestStatus::Failed      => "Failed",
-            TestStatus::NotRun      => "Not run",
-            TestStatus::NotStarted  => "Not started",
-            TestStatus::Unknown     => "Unknown",
-        }
-    }
-
-    fn table_class(&self) -> &'static str {
-        match self {
-            TestStatus::InProgress  => "table-secondary",
-            TestStatus::Passed      => "table-success",
-            TestStatus::Failed      => "table-danger",
-            TestStatus::NotRun      => "table-secondary",
-            TestStatus::NotStarted  => "table-secondary",
-            TestStatus::Unknown     => "table-secondary",
-        }
-    }
-}
-
-struct TestResult {
-    name:           String,
-    status:         TestStatus,
-    duration:       usize,
-}
-
-fn read_test_result(testdir: &std::fs::DirEntry) -> Option<TestResult> {
-    Some(TestResult {
-        name:       testdir.file_name().into_string().unwrap(),
-        status:     TestStatus::from_str(&read_file(&testdir.path().join("status"))?),
-        duration:   read_file(&testdir.path().join("duration")).unwrap_or("0".to_string()).parse().unwrap_or(0),
-    })
-}
 
 struct Ci {
     ktestrc:            Ktestrc,
@@ -96,31 +21,33 @@ struct Ci {
     tests_matching:     Regex,
 }
 
-fn __commit_get_results(ci: &Ci, commit_id: &String) -> Vec<TestResult> {
-    let r = ci.ktestrc.ci_output_dir.join(commit_id).read_dir();
+fn commitdir_get_results_filtered(ci: &Ci, commit_id: &String) -> TestResultsMap {
+    let mut results = BTreeMap::new();
 
-    if let Ok(r) = r {
-        let mut dirents: Vec<_> = r.filter_map(|i| i.ok())
-            .filter(|i| ci.tests_matching.is_match(&i.file_name().to_string_lossy()))
-            .collect();
+    let results_dir = ci.ktestrc.ci_output_dir.join(commit_id).read_dir();
 
-        dirents.sort_by_key(|x| x.file_name());
-
-        dirents.iter().map(|x| read_test_result(x)).filter_map(|i| i).collect()
-    } else {
-        Vec::new()
+    if let Ok(results_dir) = results_dir {
+        for d in results_dir
+            .filter_map(|i| i.ok())
+            .filter(|i| ci.tests_matching.is_match(&i.file_name().to_string_lossy())) {
+            if let Some(r) = read_test_result(&d) {
+                results.insert(d.file_name().into_string().unwrap(), r);
+            }
+        }
     }
+
+    results
 }
 
 struct CommitResults {
     id:             String,
     message:        String,
-    tests:          Vec<TestResult>
+    tests:          TestResultsMap,
 }
 
 fn commit_get_results(ci: &Ci, commit: &git2::Commit) -> CommitResults {
     let id = commit.id().to_string();
-    let tests = __commit_get_results(ci, &id);
+    let tests = commitdir_get_results_filtered(ci, &id);
 
     CommitResults {
         id:         id,
@@ -227,13 +154,13 @@ fn ci_log(ci: &Ci) -> cgi::Response {
                     nr_empty = 0;
                 }
 
-                fn count(r: &Vec<TestResult>, t: TestStatus) -> usize {
-                    r.iter().filter(|x| x.status == t).count()
+                fn count(r: &TestResultsMap, t: TestStatus) -> usize {
+                    r.iter().filter(|x| x.1.status == t).count()
                 }
 
                 let subject_len = r.message.find('\n').unwrap_or(r.message.len());
 
-                let duration: usize = r.tests.iter().map(|x| x.duration).sum();
+                let duration: usize = r.tests.iter().map(|x| x.1.duration).sum();
 
                 writeln!(&mut out, "<tr>").unwrap();
                 writeln!(&mut out, "<td> <a href=\"{}?branch={}&commit={}\">{}</a> </td>",
@@ -263,25 +190,24 @@ fn ci_log(ci: &Ci) -> cgi::Response {
 
         let mut nr_empty = 0;
         for r in &commits {
-            if !r.tests.is_empty() {
+            if let Some(t) = r.tests.first_key_value() {
                 if nr_empty != 0 {
                     writeln!(&mut out, "<tr> <td> ({} untested commits) </td> </tr>", nr_empty).unwrap();
                     nr_empty = 0;
                 }
 
                 let subject_len = r.message.find('\n').unwrap_or(r.message.len());
-                let t = &r.tests[0];
 
-                writeln!(&mut out, "<tr class={}>", t.status.table_class()).unwrap();
+                writeln!(&mut out, "<tr class={}>", t.1.status.table_class()).unwrap();
                 writeln!(&mut out, "<td> <a href=\"{}?branch={}&commit={}\">{}</a> </td>",
                          ci.script_name, branch,
                          r.id, &r.id.as_str()[..14]).unwrap();
                 writeln!(&mut out, "<td> {} </td>", &r.message[..subject_len]).unwrap();
-                writeln!(&mut out, "<td> {} </td>", t.status.to_str()).unwrap();
-                writeln!(&mut out, "<td> {}s </td>", t.duration).unwrap();
-                writeln!(&mut out, "<td> <a href=c/{}/{}/log.br>        log                 </a> </td>", &r.id, t.name).unwrap();
-                writeln!(&mut out, "<td> <a href=c/{}/{}/full_log.br>   full log            </a> </td>", &r.id, t.name).unwrap();
-                writeln!(&mut out, "<td> <a href=c/{}/{}>		        output directory    </a> </td>", &r.id, t.name).unwrap();
+                writeln!(&mut out, "<td> {} </td>", t.1.status.to_str()).unwrap();
+                writeln!(&mut out, "<td> {}s </td>", t.1.duration).unwrap();
+                writeln!(&mut out, "<td> <a href=c/{}/{}/log.br>        log                 </a> </td>", &r.id, t.0).unwrap();
+                writeln!(&mut out, "<td> <a href=c/{}/{}/full_log.br>   full log            </a> </td>", &r.id, t.0).unwrap();
+                writeln!(&mut out, "<td> <a href=c/{}/{}>		        output directory    </a> </td>", &r.id, t.0).unwrap();
                 writeln!(&mut out, "</tr>").unwrap();
             } else {
                 nr_empty += 1;
@@ -322,18 +248,18 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
 
     writeln!(&mut out, "<table class=\"table\">").unwrap();
 
-    for result in __commit_get_results(ci, &commit_id) {
+    for (name, result) in commitdir_get_results_filtered(ci, &commit_id) {
         writeln!(&mut out, "<tr class={}>", result.status.table_class()).unwrap();
-        writeln!(&mut out, "<td> {} </td>", result.name).unwrap();
+        writeln!(&mut out, "<td> {} </td>", name).unwrap();
         writeln!(&mut out, "<td> {} </td>", result.status.to_str()).unwrap();
         writeln!(&mut out, "<td> {}s </td>", result.duration).unwrap();
-        writeln!(&mut out, "<td> <a href=c/{}/{}/log.br>        log                 </a> </td>", &commit_id, result.name).unwrap();
-        writeln!(&mut out, "<td> <a href=c/{}/{}/full_log.br>   full log            </a> </td>", &commit_id, result.name).unwrap();
-        writeln!(&mut out, "<td> <a href=c/{}/{}>		        output directory    </a> </td>", &commit_id, result.name).unwrap();
+        writeln!(&mut out, "<td> <a href=c/{}/{}/log.br>        log                 </a> </td>", &commit_id, name).unwrap();
+        writeln!(&mut out, "<td> <a href=c/{}/{}/full_log.br>   full log            </a> </td>", &commit_id, name).unwrap();
+        writeln!(&mut out, "<td> <a href=c/{}/{}>		        output directory    </a> </td>", &commit_id, name).unwrap();
 
         if let Some(branch) = &ci.branch {
             writeln!(&mut out, "<td> <a href={}?branch={}&test=^{}$> git log        </a> </td>",
-                     ci.script_name, &branch, result.name).unwrap();
+                     ci.script_name, &branch, name).unwrap();
         }
 
         writeln!(&mut out, "</tr>").unwrap();

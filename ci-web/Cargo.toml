@@ -7,6 +7,10 @@ edition = "2021"
 name = "get-test-job"
 path = "src/get-test-job.rs"
 
+[[bin]]
+name = "gen-commit-summary"
+path = "src/gen-commit-summary.rs"
+
 #[workspace]
 #members = ["get-test-job", "ci-cgi"]
 
@@ -23,3 +27,4 @@ serde_derive = "1.0.145"
 regex = "1"
 memoize = "0.3.1"
 glob = "0.3.0"
+clap = { version = "4.0.32", features = ["derive"] }
