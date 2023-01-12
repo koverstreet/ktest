@@ -1,4 +1,5 @@
 extern crate libc;
+use std::collections::BTreeMap;
 use std::fs::{OpenOptions, create_dir_all};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -6,7 +7,7 @@ use std::process;
 use std::time::SystemTime;
 use memoize::memoize;
 mod lib;
-use lib::{Ktestrc, read_lines, ktestrc_read, git_get_commit};
+use lib::*;
 
 use multimap::MultiMap;
 use die::die;
@@ -28,12 +29,8 @@ fn get_subtests(test_path: PathBuf) -> Vec<String> {
         .collect()
 }
 
-fn lockfile_exists(rc: &Ktestrc, commit: &str, test_path: &Path, subtest: &str, create: bool) -> bool {
-    let subtest = subtest.replace("/", ".");
-    let test_name = test_path.file_stem().unwrap().to_string_lossy();
-    let lockfile = rc.ci_output_dir.join(commit)
-        .join(format!("{}.{}", test_name, subtest))
-        .join("status");
+fn lockfile_exists(rc: &Ktestrc, commit: &str, test_name: &str, create: bool) -> bool {
+    let lockfile = rc.ci_output_dir.join(commit).join(test_name).join("status");
 
     let timeout = std::time::Duration::from_secs(3600);
     let metadata = std::fs::metadata(&lockfile);
@@ -87,13 +84,19 @@ struct TestJob {
     subtests:   Vec<String>,
 }
 
+fn subtest_full_name(test_path: &Path, subtest: &String) -> String {
+    format!("{}.{}",
+            test_path.file_stem().unwrap().to_string_lossy(),
+            subtest.replace("/", "."))
+}
+
 fn branch_get_next_test_job(rc: &Ktestrc, repo: &git2::Repository,
-                            branch: &str, test_path: &PathBuf) -> Option<TestJob> {
+                            branch: &str, test_path: &Path) -> Option<TestJob> {
     let mut ret =  TestJob {
         branch:     branch.to_string(),
         commit:     String::new(),
         age:        0,
-        test:       test_path.clone(),
+        test:       test_path.to_path_buf(),
         subtests:   Vec::new(),
     };
 
@@ -118,8 +121,13 @@ fn branch_get_next_test_job(rc: &Ktestrc, repo: &git2::Repository,
         let commit = commit.id().to_string();
         ret.commit = commit.clone();
 
+        let results = commitdir_get_results_toml(rc, &commit).unwrap_or(BTreeMap::new());
+
         for subtest in subtests.iter() {
-            if !lockfile_exists(rc, &commit, &test_path, subtest, false) {
+            let full_subtest_name = subtest_full_name(test_path, &subtest);
+
+            if results.get(&full_subtest_name).is_none() &&
+               !lockfile_exists(rc, &commit, &full_subtest_name, false) {
                 ret.subtests.push(subtest.to_string());
                 if ret.subtests.len() > 20 {
                     break;
@@ -162,7 +170,8 @@ fn get_best_test_job(rc: &Ktestrc, repo: &git2::Repository,
 
 fn create_job_lockfiles(rc: &Ktestrc, mut job: TestJob) -> Option<TestJob> {
     job.subtests = job.subtests.iter()
-        .filter(|i| lockfile_exists(rc, &job.commit, &Path::new(&job.test), &i, true))
+        .filter(|i| lockfile_exists(rc, &job.commit,
+                                    &subtest_full_name(&Path::new(&job.test), &i), true))
         .map(|i| i.to_string())
         .collect();
 
