@@ -97,6 +97,22 @@ antagonist_switch_crc()
     done
 }
 
+antagonist_cat_sysfs_debugfs()
+{
+    set +o errexit
+    set +o pipefail
+
+    while true; do
+	cd /sys/fs/bcachefs
+	cat `find -type f` &> /dev/null || true
+
+	cd /sys/kernel/debug/bcachefs
+	cat `ls */*` &> /dev/null || true
+
+	sleep 5
+    done
+}
+
 bcachefs_antagonist()
 {
     #setup_tracing
@@ -120,6 +136,7 @@ bcachefs_antagonist()
     antagonist_shrink &
     antagonist_sync &
     antagonist_trigger_gc &
+    antagonist_cat_sysfs_debugfs &
     #antagonist_switch_str_hash &
 }
 
