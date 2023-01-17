@@ -238,7 +238,7 @@ cmd_run()
 	exit 1
     fi
 
-    ktest_test=$1
+    ktest_test=$(realpath "$1")
     shift
     ktest_testargs="$@"
 
