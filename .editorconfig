@@ -1,0 +1,4 @@
+[*.{ktest,sh}]
+indent_style = spaces
+indent_size = 4
+tab_width = 8
