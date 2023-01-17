@@ -1,3 +1,4 @@
+#!/bin/usr/env bash
 
 . "$ktest_dir/lib/util.sh"
 . "$ktest_dir/lib/parse-test.sh"

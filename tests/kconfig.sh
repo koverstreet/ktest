@@ -1,4 +1,4 @@
-
+#!/usr/bin/env bash
 
 have_kvmguest=0
 have_virtio=0

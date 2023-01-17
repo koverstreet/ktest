@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # Basic libs for ktest tests:
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../lib/common.sh
