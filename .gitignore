@@ -2,7 +2,15 @@
 *.o
 cscope*
 tags
+ktest-out
 *.tags
 lwip-connect
 qemu-wrapper
 get-test-job
+tests/bcachefs/bcachefs-tools
+tests/bcachefs/linuxquota
+tests/xfstests
+
+!.gitignore
+!.editorconfig
+!.shellcheckrc
