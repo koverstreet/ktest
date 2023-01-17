@@ -14,8 +14,7 @@ if [[ ! -v ktest_verbose ]]; then
     # virtio-scsi-pci semes to be buggy: reading the superblock on the root
     # filesystem randomly returns zeroes
     #ktest_storage_bus=virtio-scsi-pci
-    ktest_storage_bus=ahci
-
+    ktest_storage_bus=virtio-blk
     ktest_images=()
     ktest_scratch_devs=()
     ktest_make_install=()
@@ -128,6 +127,10 @@ config-scratch-devs()
     ktest_scratch_devs+=("$1")
 }
 
+config-scratch-slowdevs()
+{
+	ktest_scratch_slowdevs+=("$1")
+}
 config-pmem-devs()
 {
     ktest_pmem_devs+=("$1")
@@ -259,6 +262,7 @@ main()
 	    echo "ktest_storage_bus=$ktest_storage_bus"
 	    echo "ktest_images=(${ktest_images[@]})"
 	    echo "ktest_scratch_devs=(${ktest_scratch_devs[@]})"
+	    echo "ktest_scratch_slowdevs=(${ktest_scratch_slowdevs[@]})"
 	    echo "ktest_make_install=(${ktest_make_install[@]})"
 	    echo "ktest_kernel_config_require=(${ktest_kernel_config_require[@]})"
 	    echo "ktest_qemu_append=(${ktest_qemu_append[@]})"

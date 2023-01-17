@@ -128,6 +128,7 @@ case $ktest_storage_bus in
 	require-kernel-config SCSI_VIRTIO
 	;;
     virtio-blk)
+	require-kernel-config BLK_DEV
 	require-kernel-config VIRTIO_BLK
 	;;
     ahci)
