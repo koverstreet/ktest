@@ -285,8 +285,18 @@ start_vm()
     ln -s "$ktest_tmp" "$ktest_out/vm"
 
     local kernelargs=()
+
+    case $ktest_storage_bus in
+	virtio-blk)
+	    ktest_root_dev="/dev/vda"
+	    ;;
+	*)
+	    ktest_root_dev="/dev/sda"
+	    ;;
+    esac
+
+    kernelargs+=(root=$ktest_root_dev rw log_buf_len=8M)
     kernelargs+=(mitigations=off)
-    kernelargs+=(root=/dev/sda rw log_buf_len=8M)
     kernelargs+=("ktest.dir=$ktest_dir")
     kernelargs+=(ktest.env=$(readlink -f "$ktest_out/vm/env"))
     [[ $ktest_kgdb = 1 ]]	&& kernelargs+=(kgdboc=ttyS0,115200 nokaslr)
@@ -380,7 +390,7 @@ start_vm()
 		qemu_cmd+=(-device ide-hd,bus=hba.$disknr,drive=disk$disknr)
 		;;
 	    virtio-blk)
-		qemu_cmd+=(-device virtio-blk-device,drive=disk$disknr,bootindex=$disknr)
+		qemu_cmd+=(-device virtio-blk-pci,drive=disk$disknr)
 		;;
 	    *)
 		qemu_cmd+=(-device scsi-hd,bus=hba.0,drive=disk$disknr)
@@ -408,6 +418,15 @@ start_vm()
 	truncate -s "$size" "$file"
 
 	qemu_disk file="$file",cache=unsafe
+    done
+
+    for size in "${ktest_scratch_slowdevs[@]}"; do
+	local file="$ktest_out/vm/dev-$disknr"
+
+	truncate -s "$size" "$file"
+
+	# slow device, 300 kiops and 100MB/s
+	qemu_disk file="$file",iops=300,bps=$((100*1024**2))
     done
 
     for size in "${ktest_pmem_devs[@]}"; do

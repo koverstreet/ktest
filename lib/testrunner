@@ -48,7 +48,7 @@ echo "|/bin/cp --sparse=always /dev/stdin $ktest_out/core.%e.PID%p.SIG%s.TIME%t"
 ulimit -c unlimited
 
 # Virtual block device tweaks
-echo none | tee /sys/block/sd*/queue/scheduler >/dev/null 2>&1 || true
+echo none | tee /sys/block/[vs]d*/queue/scheduler >/dev/null 2>&1 || true
 
 # Check if we are running the crashdump kernel
 if [[ -s /proc/vmcore ]]; then
@@ -61,7 +61,7 @@ fi
 # If debugging crash dumps, add "console=hvc0" to the append line
 # below:
 if [[ $ktest_crashdump = 1 ]]; then
-    kexec -p /host/$ktest_kernel_binary/vmlinuz --append="root=/dev/sda rw maxcpus=1" || true
+    kexec -p /host/$ktest_kernel_binary/vmlinuz --append="root=$ktest_root_dev rw maxcpus=1" || true
 fi
 
 NR_REBOOTS=0

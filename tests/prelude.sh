@@ -14,8 +14,7 @@ if [[ ! -v ktest_verbose ]]; then
     # virtio-scsi-pci semes to be buggy: reading the superblock on the root
     # filesystem randomly returns zeroes
     #ktest_storage_bus=virtio-scsi-pci
-    ktest_storage_bus=ahci
-
+    ktest_storage_bus=virtio-blk
     ktest_images=()
 
     ktest_scratch_dev=()
