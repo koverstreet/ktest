@@ -53,7 +53,7 @@ pub enum TestStatus {
 }
 
 impl TestStatus {
-    pub fn from_str(status: &str) -> TestStatus {
+    fn from_str(status: &str) -> TestStatus {
         if status.is_empty() {
             TestStatus::InProgress
         } else if status.contains("IN PROGRESS") {
@@ -107,7 +107,7 @@ pub struct TestResults {
     pub d:          TestResultsMap
 }
 
-pub fn read_test_result(testdir: &std::fs::DirEntry) -> Option<TestResult> {
+fn read_test_result(testdir: &std::fs::DirEntry) -> Option<TestResult> {
     Some(TestResult {
         status:     TestStatus::from_str(&read_to_string(&testdir.path().join("status")).ok()?),
         duration:   read_to_string(&testdir.path().join("duration")).unwrap_or("0".to_string()).parse().unwrap_or(0),

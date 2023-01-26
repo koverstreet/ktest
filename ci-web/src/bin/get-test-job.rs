@@ -6,8 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::time::SystemTime;
 use memoize::memoize;
-mod lib;
-use lib::*;
+use ci_cgi::{Ktestrc, ktestrc_read, read_lines, git_get_commit, commitdir_get_results_toml};
 
 use multimap::MultiMap;
 use die::die;

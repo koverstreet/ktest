@@ -1,15 +1,7 @@
 [package]
-name = "ci-cgi"
+name = "ci_cgi"
 version = "0.1.0"
 edition = "2021"
-
-[[bin]]
-name = "get-test-job"
-path = "src/get-test-job.rs"
-
-[[bin]]
-name = "gen-commit-summary"
-path = "src/gen-commit-summary.rs"
 
 #[workspace]
 #members = ["get-test-job", "ci-cgi"]

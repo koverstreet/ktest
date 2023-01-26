@@ -4,10 +4,9 @@ use regex::Regex;
 extern crate cgi;
 extern crate querystring;
 
-mod lib;
-use lib::*;
+use ci_cgi::{Ktestrc, ktestrc_read, TestResultsMap, TestStatus, read_lines, commitdir_get_results_toml, git_get_commit};
 
-const COMMIT_FILTER:    &str = include_str!("../commit-filter");
+const COMMIT_FILTER:    &str = include_str!("../../commit-filter");
 const STYLESHEET:       &str = "bootstrap.min.css";
 
 fn filter_results(r: TestResultsMap, tests_matching: &Regex) -> TestResultsMap {

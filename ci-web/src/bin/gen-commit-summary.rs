@@ -1,6 +1,5 @@
 use std::process;
-mod lib;
-use lib::{ktestrc_read, commitdir_get_results, TestResults};
+use ci_cgi::{ktestrc_read, commitdir_get_results, TestResults};
 use clap::Parser;
 use toml;
 
