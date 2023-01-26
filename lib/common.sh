@@ -1,7 +1,6 @@
 
 set -o nounset
 set -o errtrace
-set -o errtrace
 set -o pipefail
 
 trap 'echo "Error $? from: $BASH_COMMAND, exiting" >&2' ERR
