@@ -1,17 +1,9 @@
 use std::collections::BTreeMap;
-use std::fs::File;
 use std::fs::read_to_string;
-use std::io::{self, BufRead};
 use std::error::Error;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use serde_derive::{Serialize, Deserialize};
 use toml;
-
-pub fn read_lines<P>(filename: P) -> io::Result<io::Lines<io::BufReader<File>>>
-where P: AsRef<Path>, {
-    let file = File::open(filename)?;
-    Ok(io::BufReader::new(file).lines())
-}
 
 pub fn git_get_commit(repo: &git2::Repository, reference: String) -> Result<git2::Commit, git2::Error> {
     let r = repo.revparse_single(&reference);
@@ -29,15 +21,37 @@ pub fn git_get_commit(repo: &git2::Repository, reference: String) -> Result<git2
 }
 
 #[derive(Deserialize)]
+pub struct KtestrcTestGroup {
+    pub max_commits:        usize,
+    pub priority:           usize,
+    pub tests:              Vec<PathBuf>,
+}
+
+#[derive(Deserialize)]
+pub struct KtestrcBranch {
+    pub remote:             String,
+    pub branch:             Option<String>,
+    pub tests:              Vec<String>,
+}
+
+#[derive(Deserialize)]
 pub struct Ktestrc {
-    pub ci_linux_repo:       PathBuf,
-    pub ci_output_dir:       PathBuf,
-    pub ci_branches_to_test: PathBuf,
+    pub linux_repo:         PathBuf,
+    pub output_dir:         PathBuf,
+    pub ktest_dir:          PathBuf,
+    pub test_group:         BTreeMap<String, KtestrcTestGroup>,
+    pub branch:             BTreeMap<String, KtestrcBranch>,
 }
 
 pub fn ktestrc_read() -> Result<Ktestrc, Box<dyn Error>> {
     let config = read_to_string("/etc/ktest-ci.toml")?;
-    let ktestrc: Ktestrc = toml::from_str(&config)?;
+    let mut ktestrc: Ktestrc = toml::from_str(&config)?;
+
+    for (branch, branchconfig) in ktestrc.branch.iter_mut() {
+        if branchconfig.branch.is_none() {
+            branchconfig.branch = Some(branch.to_string());
+        }
+    }
 
     Ok(ktestrc)
 }
@@ -117,7 +131,7 @@ fn read_test_result(testdir: &std::fs::DirEntry) -> Option<TestResult> {
 pub fn commitdir_get_results(ktestrc: &Ktestrc, commit_id: &String) -> TestResultsMap {
     let mut results = BTreeMap::new();
 
-    let results_dir = ktestrc.ci_output_dir.join(commit_id).read_dir();
+    let results_dir = ktestrc.output_dir.join(commit_id).read_dir();
 
     if let Ok(results_dir) = results_dir {
         for d in results_dir.filter_map(|i| i.ok()) {
@@ -131,7 +145,7 @@ pub fn commitdir_get_results(ktestrc: &Ktestrc, commit_id: &String) -> TestResul
 }
 
 pub fn commitdir_get_results_toml(ktestrc: &Ktestrc, commit_id: &String) -> Result<TestResultsMap, Box<dyn Error>> {
-    let toml = read_to_string(ktestrc.ci_output_dir.join(commit_id.to_owned() + ".toml"))?;
+    let toml = read_to_string(ktestrc.output_dir.join(commit_id.to_owned() + ".toml"))?;
     let r: TestResults = toml::from_str(&toml)?;
     Ok(r.d)
 }

@@ -4,7 +4,7 @@ use regex::Regex;
 extern crate cgi;
 extern crate querystring;
 
-use ci_cgi::{Ktestrc, ktestrc_read, TestResultsMap, TestStatus, read_lines, commitdir_get_results_toml, git_get_commit};
+use ci_cgi::{Ktestrc, ktestrc_read, TestResultsMap, TestStatus, commitdir_get_results_toml, git_get_commit};
 
 const COMMIT_FILTER:    &str = include_str!("../../commit-filter");
 const STYLESHEET:       &str = "bootstrap.min.css";
@@ -276,22 +276,7 @@ fn ci_list_branches(ci: &Ci) -> cgi::Response {
     writeln!(&mut out, "<body>").unwrap();
     writeln!(&mut out, "<table class=\"table\">").unwrap();
 
-    let lines = read_lines(&ci.ktestrc.ci_branches_to_test);
-    if let Err(e) = lines {
-        return error_response(format!("error opening ci_branches_to_test {:?}: {}", ci.ktestrc.ci_branches_to_test, e));
-    }
-    let lines = lines.unwrap();
-
-    let branches: std::collections::HashSet<_> = lines
-        .filter_map(|i| i.ok())
-        .map(|i| if let Some(w) = i.split_whitespace().nth(0) { Some(String::from(w)) } else { None })
-        .filter_map(|i| i)
-        .collect();
-
-    let mut branches: Vec<_> = branches.iter().collect();
-    branches.sort();
-
-    for b in branches {
+    for (b, _) in &ci.ktestrc.branch {
         writeln!(&mut out, "<tr> <th> <a href={}?branch={}>{}</a> </th> </tr>", ci.script_name, b, b).unwrap();
     }
 
@@ -325,14 +310,14 @@ cgi::cgi_main! {|request: cgi::Request| -> cgi::Response {
     }
     let ktestrc = ktestrc.unwrap();
 
-    if !ktestrc.ci_output_dir.exists() {
+    if !ktestrc.output_dir.exists() {
         return error_response(format!("required file missing: JOBSERVER_OUTPUT_DIR (got {:?})",
-                                      ktestrc.ci_output_dir));
+                                      ktestrc.output_dir));
     }
 
-    let repo = git2::Repository::open(&ktestrc.ci_linux_repo);
+    let repo = git2::Repository::open(&ktestrc.linux_repo);
     if let Err(e) = repo {
-        return error_response(format!("error opening repository {:?}: {}", ktestrc.ci_linux_repo, e));
+        return error_response(format!("error opening repository {:?}: {}", ktestrc.linux_repo, e));
     }
     let repo = repo.unwrap();
 
