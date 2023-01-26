@@ -23,6 +23,6 @@ fn main() {
 
     let file_contents = toml::to_string(&results).unwrap();
 
-    let commit_summary_fname = ktestrc.ci_output_dir.join(args.commit + ".toml");
+    let commit_summary_fname = ktestrc.output_dir.join(args.commit + ".toml");
     std::fs::write(commit_summary_fname, file_contents).unwrap();
 }
