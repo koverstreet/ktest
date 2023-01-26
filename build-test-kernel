@@ -271,6 +271,11 @@ cmd_config()
     do_make nconfig
 }
 
+cmd_faddr2line()
+{
+    ./scripts/faddr2line "$ktest_kernel_build/vmlinux" $@
+}
+
 cmd_help()
 {
     usage
