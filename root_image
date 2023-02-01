@@ -71,7 +71,7 @@ parse_arch "$ktest_arch"
 
 mkdir -p "$(dirname "$ktest_image")"
 
-PACKAGES=(kexec-tools less psmisc openssh-server		\
+PACKAGES=(kexec-tools less psmisc openssh-server curl		\
     build-essential make gcc g++				\
     autoconf automake autopoint bison				\
     pkg-config libtool-bin					\
@@ -220,6 +220,11 @@ update_packages()
     _chroot "$MNT" apt-get -qq upgrade
     _chroot "$MNT" apt-get -qq install --no-install-recommends "${PACKAGES[@]}"
     rm -f "$MNT/var/cache/apt/archives/*.deb"
+
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > "$MNT"/tmp/rustup.sh
+    chmod 755 "$MNT"/tmp/rustup.sh
+
+    _chroot "$MNT" /tmp/rustup.sh -y
 }
 
 trim_image()
