@@ -8,7 +8,7 @@ edition = "2021"
 
 [dependencies]
 cgi = "0.6"
-git2 = "0.14"
+git2 = "0.16"
 querystring = "1.1.0"
 multimap = "0.8.3"
 die = "0.2.0"
