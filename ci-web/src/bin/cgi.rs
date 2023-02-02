@@ -330,6 +330,11 @@ cgi::cgi_main! {|request: cgi::Request| -> cgi::Response {
                                       ktestrc.ci_output_dir));
     }
 
+    unsafe {
+        git2::opts::set_verify_owner_validation(false)
+            .expect("set_verify_owner_validation should never fail");
+    }
+
     let repo = git2::Repository::open(&ktestrc.ci_linux_repo);
     if let Err(e) = repo {
         return error_response(format!("error opening repository {:?}: {}", ktestrc.ci_linux_repo, e));
