@@ -53,7 +53,7 @@ echo none | tee /sys/block/[vs]d*/queue/scheduler >/dev/null 2>&1 || true
 for DISK in /dev/vd*; do
     name=$(basename "$DISK")
     id=${name#"vd"}
-    ln -s "$name" "/dev/sd$id"
+    cp "$DISK" "/dev/sd$id"
 done
 
 # Check if we are running the crashdump kernel
