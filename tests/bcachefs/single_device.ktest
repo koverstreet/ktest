@@ -957,6 +957,8 @@ test_offline_resize()
     check_counters /dev/sdb
 }
 
+require-kernel-config BLK_DEV_DM
+
 test_offline_resize_lv()
 {
     set_watchdog 60
