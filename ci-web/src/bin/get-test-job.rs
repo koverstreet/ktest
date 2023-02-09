@@ -1,5 +1,6 @@
 extern crate libc;
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs::{OpenOptions, create_dir_all};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -181,14 +182,15 @@ fn create_job_lockfiles(rc: &Ktestrc, mut job: TestJob) -> Option<TestJob> {
 
 fn fetch_remotes_locked(rc: &Ktestrc, repo: &git2::Repository) -> Result<(), git2::Error> {
     for (branch, branchconfig) in &rc.branch {
-        let remote_branch = branchconfig.branch.as_ref().unwrap();
+        let fetch = branchconfig.fetch
+            .split_whitespace()
+            .map(|i| OsStr::new(i));
 
         let status = std::process::Command::new("git")
             .arg("-C")
             .arg(&rc.linux_repo)
             .arg("fetch")
-            .arg(branchconfig.remote.as_str())
-            .arg(remote_branch)
+            .args(fetch)
             .status()
             .expect(&format!("failed to execute fetch"));
         if !status.success() {

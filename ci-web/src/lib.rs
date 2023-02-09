@@ -29,8 +29,7 @@ pub struct KtestrcTestGroup {
 
 #[derive(Deserialize)]
 pub struct KtestrcBranch {
-    pub remote:             String,
-    pub branch:             Option<String>,
+    pub fetch:              String,
     pub tests:              Vec<String>,
 }
 
@@ -45,13 +44,7 @@ pub struct Ktestrc {
 
 pub fn ktestrc_read() -> Result<Ktestrc, Box<dyn Error>> {
     let config = read_to_string("/etc/ktest-ci.toml")?;
-    let mut ktestrc: Ktestrc = toml::from_str(&config)?;
-
-    for (branch, branchconfig) in ktestrc.branch.iter_mut() {
-        if branchconfig.branch.is_none() {
-            branchconfig.branch = Some(branch.to_string());
-        }
-    }
+    let ktestrc: Ktestrc = toml::from_str(&config)?;
 
     Ok(ktestrc)
 }
