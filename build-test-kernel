@@ -19,6 +19,7 @@ ktest_kernel_source="."	# dir of kernel source
 			#       set with: -k <path>
 			#       defaults: current directory
 ktest_njobs=$(nproc)
+ktest_precise=false
 
 COVERAGE=""		# doing code coverage?
 MAKEARGS=()
@@ -56,10 +57,13 @@ fi
 CMD="$1"
 shift
 
-while getopts "k:c:h${ktest_args}" arg; do
+while getopts "k:Pc:h${ktest_args}" arg; do
     case $arg in
 	k)
 	    ktest_kernel_source="$OPTARG"
+	    ;;
+	P)
+	    ktest_precise=true
 	    ;;
 	c)
 	    if [[ ! -d $OPTARG ]]; then
@@ -173,6 +177,11 @@ build_kernel()
 {
     rm -rf "$ktest_kernel_binary"
     mkdir -p "$ktest_kernel_binary"
+    local kconfig="$ktest_kernel_build/.config"
+
+    if $ktest_precise && [[ -f "$kconfig" ]]; then
+	mv "$kconfig" "$kconfig".bak
+    fi
 
     new_config
 
@@ -187,6 +196,11 @@ build_kernel()
     for opt in "${ktest_kernel_config_require[@]}"; do
 	[[ -n $opt ]] && kernel_opt check "$opt"
     done
+
+    # Preserve timestamp if config didn't change:
+    if $ktest_precise && [[ -f "$kconfig".bak ]] && diff -q "$kconfig" "$kconfig".bak; then
+	mv "$kconfig".bak "$kconfig"
+    fi
 
     case $KERNEL_ARCH in
 	mips)
