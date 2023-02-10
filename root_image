@@ -76,7 +76,6 @@ PACKAGES=(kexec-tools less psmisc openssh-server curl		\
     autoconf automake autopoint bison				\
     pkg-config libtool-bin					\
     gdb strace linux-perf trace-cmd blktrace sysstat iotop htop	\
-    latencytop							\
     hdparm mdadm lvm2						\
     btrfs-progs jfsutils nilfs-tools f2fs-tools			\
     bc attr gawk acl rsync git python3-docutils			\
