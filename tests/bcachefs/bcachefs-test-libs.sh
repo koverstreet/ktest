@@ -107,7 +107,7 @@ antagonist_cat_sysfs_debugfs()
 	cat `find -type f` &> /dev/null || true
 
 	cd /sys/kernel/debug/bcachefs
-	cat `ls */*` &> /dev/null || true
+	cat `ls */* 2>/dev/null` &> /dev/null || true
 
 	sleep 5
     done
