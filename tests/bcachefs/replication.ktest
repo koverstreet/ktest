@@ -738,7 +738,10 @@ test_replace_replica()
     mount -t bcachefs -o degraded /dev/sdd /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    # We expect more btree_path_upgrade_fail events than usual in this test,
+    # due to the way the btree node rewrite path works and the fact that we're
+    # rewriting every btree node
+    check_counters /dev/sdb 4
 }
 
 test_key_type_error()

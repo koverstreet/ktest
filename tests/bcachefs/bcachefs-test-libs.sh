@@ -140,28 +140,37 @@ bcachefs_antagonist()
     #antagonist_switch_str_hash &
 }
 
-check_one_counter()
-{
-    local nr_commits=$1
-    local fail=$2
-    local nr_fail=$3
-
-    if (( $nr_fail * 10 > $nr_commits )); then
-	echo "Too many $fail events: $nr_fail"
-	echo "Transaction commits: $nr_commits"
-	exit 1
-    fi
-}
-
 check_counters()
 {
     local dev=$1
     local nr_commits=$(bcachefs show-super -f counters $dev|awk '/transaction_commit/ {print $2}')
+    local ratio=10
+    local ret=0
 
-    bcachefs show-super -f counters $dev|grep -E '(fail|restart)'|grep -v path_relock_fail|
-	while read -r line; do
-	    check_one_counter $nr_commits $line
-	done
+    [[ $# -ge 2 ]] && ratio=$2
+
+    local max_fail=$((nr_commits / ratio))
+
+    counters=$(bcachefs show-super -f counters $dev|grep -E '(fail|restart|blocked)'|grep -v path_relock_fail)
+
+    while IFS= read -r line; do
+	linea=($line)
+
+	local event="${linea[0]}"
+	local nr="${linea[1]}"
+
+	if (( nr > max_fail )); then
+	    echo "Too many $event: $nr"
+	    ret=1
+	fi
+    done <<< "$counters"
+
+    if [[ $ret = 1 ]]; then
+	echo "Max failed events:   $max_fail"
+	echo "Transaction commits: $nr_commits"
+    fi
+
+    return $ret
 }
 
 fill_device()
