@@ -34,6 +34,6 @@ run_test()
 {
     dmesg -n 4
     cd "$ktest_dir/tests/blktests"
-    echo 'TEST_DEVS=(/dev/sdb)' > config
+    echo 'TEST_DEVS=(${ktest_scratch_dev[0]})' > config
     ./check "$@"
 }

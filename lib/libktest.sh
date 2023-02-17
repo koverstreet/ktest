@@ -402,7 +402,7 @@ start_vm()
 	qemu_disk file="$file",snapshot=on,cache.no-flush=on,cache.direct=$ktest_dio
     done
 
-    for size in "${ktest_scratch_devs[@]}"; do
+    for size in "${ktest_scratch_dev_sizes[@]}"; do
 	local file="$ktest_out/vm/dev-$disknr"
 
 	truncate -s "$size" "$file"

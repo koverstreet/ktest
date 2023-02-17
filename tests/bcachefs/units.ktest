@@ -24,10 +24,10 @@ run_test()
 
     bcachefs format				\
 	--errors=panic				\
-	/dev/sdb >/dev/null
+	${ktest_scratch_dev[0]} >/dev/null
 	#--bucket=$btree_node_size		\
 	#--btree_node_size=$btree_node_size	\
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     ln -sf /sys/fs/bcachefs/*/perf_test p
 
     for i in $@; do

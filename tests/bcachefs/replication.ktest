@@ -22,10 +22,12 @@ test_recovery()
 	--discard				\
 	--bucket=64k				\
 	--block_size=4k				\
-	/dev/sd[bcd]
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}			\
+	${ktest_scratch_dev[2]}
 
     for i in `seq 0 20`; do
-	mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+	mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
 
 	#run_fio_randrw
 	fio --eta=always			\
@@ -48,48 +50,53 @@ test_recovery()
 	umount /mnt
     done
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_multimount()
 {
     set_watchdog 10
     bcachefs format				\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 
     mkdir -p /mnt/1 /mnt/2
-    mount -t bcachefs /dev/sdb /mnt/1
-    mount -t bcachefs /dev/sdb /mnt/2
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt/1
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt/2
 
     umount /mnt/1
     umount /mnt/2
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_twodevices()
 {
     run_basic_fio_test				\
-	/dev/sdb /dev/sdc /dev/sdd
+	${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
 }
 
 test_largebuckets()
 {
     set_watchdog 30
-    run_quiet "" bcachefs format -f --bucket=8M /dev/sd[bcd]
+    run_quiet "" bcachefs format -f --bucket=8M	\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}			\
+	${ktest_scratch_dev[2]}
 
-    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
     dd if=/dev/zero of=/mnt/foo bs=8M count=1024 oflag=direct
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_replicas()
 {
     run_basic_fio_test				\
 	--replicas=2				\
-	/dev/sd[bcd]
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}			\
+	${ktest_scratch_dev[2]}
 }
 
 test_replicas_variable_buckets()
@@ -97,18 +104,18 @@ test_replicas_variable_buckets()
     set_watchdog 1200
     run_quiet "" bcachefs format -f			\
 	--replicas=2					\
-	--bucket=32k	/dev/sdb			\
-	--bucket=64k	/dev/sdc			\
-	--bucket=128k	/dev/sdd			\
-	--bucket=128k	/dev/sde			\
-	--bucket=128k	/dev/sdf
+	--bucket=32k	${ktest_scratch_dev[0]}		\
+	--bucket=64k	${ktest_scratch_dev[1]}		\
+	--bucket=128k	${ktest_scratch_dev[2]}		\
+	--bucket=128k	${ktest_scratch_dev[3]}		\
+	--bucket=128k	${ktest_scratch_dev[4]}
 
-    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf /mnt
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
     fs_mark -v -n 20000 -s 4096 -k -S 0 -D 1000 -N 100000 -d /mnt -t 60
     df -h /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 d_test_copygc_torture()
@@ -118,10 +125,12 @@ d_test_copygc_torture()
     bcachefs_antagonist
     set_watchdog 600
 
-    run_quiet "" bcachefs format -f		\
-	"$@" /dev/sd[bcd]
+    run_quiet "" bcachefs format -f "$@"	\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}			\
+	${ktest_scratch_dev[2]}
 
-    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
     #enable_memory_faults
 
     fio						\
@@ -161,7 +170,7 @@ d_test_copygc_torture()
     #disable_memory_faults
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 do_remove_test()
@@ -172,9 +181,11 @@ do_remove_test()
 
     run_quiet "" bcachefs format		\
 	--replicas=2				\
-	/dev/sd[bcd]
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}			\
+	${ktest_scratch_dev[2]}
 
-    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
 
     local fioout="$ktest_out/fio-out"
     run_fio_randrw >"$fioout" 2>&1 &
@@ -183,25 +194,25 @@ do_remove_test()
     sleep 1
 
     if [[ $offline = 1 ]]; then
-	echo -n "offlining /dev/sdb... "
-	bcachefs device offline --force	/dev/sdb
+	echo -n "offlining ${ktest_scratch_dev[0]}... "
+	bcachefs device offline --force	${ktest_scratch_dev[0]}
 	echo "done"
     fi
 
     if [[ $evacuate = 1 ]]; then
-	echo -n "evacuating /dev/sdb... "
-	bcachefs device evacuate	/dev/sdb
+	echo -n "evacuating ${ktest_scratch_dev[0]}... "
+	bcachefs device evacuate	${ktest_scratch_dev[0]}
 	echo "done"
     fi
 
     bcachefs fs usage -h /mnt
 
-    echo -n "removing /dev/sdb... "
+    echo -n "removing ${ktest_scratch_dev[0]}... "
     if [[ $evacuate = 1 ]]; then
-	#bcachefs device remove		/dev/sdb
+	#bcachefs device remove		${ktest_scratch_dev[0]}
 	bcachefs device remove		0 /mnt
     else
-	#bcachefs device remove --force	/dev/sdb
+	#bcachefs device remove --force	${ktest_scratch_dev[0]}
 	bcachefs device remove --force	0 /mnt
     fi
     echo "done"
@@ -214,10 +225,10 @@ do_remove_test()
     bcachefs fs usage -h /mnt
     umount /mnt
 
-    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_device_remove_offline()
@@ -248,17 +259,17 @@ test_device_add()
     run_quiet "" bcachefs format		\
 	--block_size=4k				\
 	--no_initialize				\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     run_fio_randrw >"$ktest_out/fio-out" 2>&1 &
     local fiopid=$!
 
     sleep 1
 
-    echo -n "adding /dev/sdc... "
-    bcachefs device add /mnt /dev/sdc
+    echo -n "adding ${ktest_scratch_dev[1]}... "
+    bcachefs device add /mnt ${ktest_scratch_dev[1]}
     echo "done"
 
     if ! wait $fiopid; then
@@ -267,12 +278,12 @@ test_device_add()
     fi
 
     umount /mnt
-    bcachefs fsck -n /dev/sdb /dev/sdc
+    bcachefs fsck -n ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
 
-    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_device_add_label()
@@ -281,13 +292,13 @@ test_device_add_label()
     # Caught bugs:
     #   - label was not set correctly; set to dev-0 label instead of new one.
 
-    bcachefs format -L test_add_label --label=foo /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
-    bcachefs device add --label=bar /mnt /dev/sdc
+    bcachefs format -L test_add_label --label=foo ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    bcachefs device add --label=bar /mnt ${ktest_scratch_dev[1]}
     expect_sysfs dev-1 label bar
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_device_add_label_compound()
@@ -299,13 +310,13 @@ test_device_add_label_compound()
 
     set_watchdog 30
 
-    bcachefs format -L test_add_compound_label --label=hdd /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
-    bcachefs device add --label=foo.bar /mnt /dev/sdc
+    bcachefs format -L test_add_compound_label --label=hdd ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    bcachefs device add --label=foo.bar /mnt ${ktest_scratch_dev[1]}
     expect_sysfs dev-1 label foo.bar
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_device_set_state()
@@ -314,9 +325,11 @@ test_device_set_state()
 
     run_quiet "" bcachefs format		\
 	--replicas=2				\
-	/dev/sd[bcd]
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}			\
+	${ktest_scratch_dev[2]}
 
-    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
 
     run_fio_randrw >"$ktest_out/fio-out" 2>&1 &
     local fiopid=$!
@@ -325,10 +338,10 @@ test_device_set_state()
 
     for state in ro failed spare; do
 	echo "setting state $state"
-	bcachefs device set-state --force $state    /dev/sdc
+	bcachefs device set-state --force $state    ${ktest_scratch_dev[1]}
 
 	echo "setting state rw"
-	#bcachefs device set-state	  rw /dev/sdc
+	#bcachefs device set-state	  rw ${ktest_scratch_dev[1]}
 	bcachefs device set-state	  rw 1 /mnt
     done
 
@@ -339,7 +352,7 @@ test_device_set_state()
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_device_ro()
@@ -348,9 +361,11 @@ test_device_ro()
 
     run_quiet "" bcachefs format		\
 	--btree_node_size=128k			\
-	/dev/sd[bcd]
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}			\
+	${ktest_scratch_dev[2]}
 
-    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
 
     local fioout="$ktest_out/fio-out"
     run_fio_randrw >"$fioout" 2>&1 &
@@ -358,7 +373,7 @@ test_device_ro()
 
     sleep 4
 
-    bcachefs device set-state ro /dev/sdc
+    bcachefs device set-state ro ${ktest_scratch_dev[1]}
 
     if ! wait $fiopid; then
 	cat "$fioout"
@@ -367,10 +382,10 @@ test_device_ro()
 
     umount /mnt
 
-    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_device_set_state_offline()
@@ -378,9 +393,11 @@ test_device_set_state_offline()
     set_watchdog 120
     run_quiet "" bcachefs format		\
 	--replicas=2				\
-	/dev/sd[bcd]
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}			\
+	${ktest_scratch_dev[2]}
 
-    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
 
     local fioout="$ktest_out/fio-out"
     run_fio_randrw >"$fioout" 2>&1 &
@@ -388,7 +405,7 @@ test_device_set_state_offline()
 
     sleep 1
 
-    bcachefs device set-state --force	    ro /dev/sdc
+    bcachefs device set-state --force	    ro ${ktest_scratch_dev[1]}
 
     if ! wait $fiopid; then
 	cat "$fioout"
@@ -397,13 +414,13 @@ test_device_set_state_offline()
 
     umount /mnt
 
-    bcachefs device set-state --offline	    rw /dev/sdc
+    bcachefs device set-state --offline	    rw ${ktest_scratch_dev[1]}
 
-    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
-    cat /sys/block/sdc/bcachefs/state
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
+    cat /sys/block/[sv]dc/bcachefs/state
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_device_readd()
@@ -411,9 +428,10 @@ test_device_readd()
     set_watchdog 120
     run_quiet "" bcachefs format		\
 	--replicas=2				\
-	/dev/sd[bc]
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}	
 
-    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
 
     local fioout="$ktest_out/fio-out"
     run_fio_randrw >"$fioout" 2>&1 &
@@ -421,12 +439,12 @@ test_device_readd()
 
     sleep 1
 
-    echo -n "offlining /dev/sdb... "
-    bcachefs device offline --force	/dev/sdb
+    echo -n "offlining ${ktest_scratch_dev[0]}... "
+    bcachefs device offline --force	${ktest_scratch_dev[0]}
     echo "done"
 
-    echo -n "onlining /dev/sdb... "
-    bcachefs device online /dev/sdb
+    echo -n "onlining ${ktest_scratch_dev[0]}... "
+    bcachefs device online ${ktest_scratch_dev[0]}
     echo "done"
 
     if ! wait $fiopid; then
@@ -436,10 +454,10 @@ test_device_readd()
 
     umount /mnt
 
-    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_device_repeated_add_remove()
@@ -450,22 +468,22 @@ test_device_repeated_add_remove()
 
     set_watchdog 120
 
-    bcachefs format -L test_device_repeated_add_remove --label=hdd /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    bcachefs format -L test_device_repeated_add_remove --label=hdd ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     for ii in {1..10}; do
         echo "add-remove run #$ii ----------------------------------------------------"
         echo "bcachefs device add"
-        bcachefs device add /mnt /dev/sdc
+        bcachefs device add /mnt ${ktest_scratch_dev[1]}
         echo "bcachefs device evacuate"
-        bcachefs device evacuate /dev/sdc
+        bcachefs device evacuate ${ktest_scratch_dev[1]}
         echo "bcachefs device remove"
-        bcachefs device remove /dev/sdc
+        bcachefs device remove ${ktest_scratch_dev[1]}
     done
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 do_replicas_errors_test()
@@ -476,13 +494,13 @@ do_replicas_errors_test()
     echo 1 > /sys/module/bcachefs/parameters/verify_all_btree_replicas
     #bcachefs_antagonist
 
-    mdadm -B /dev/md0 -lfaulty -n1 /dev/sdc
+    mdadm -B /dev/md0 -lfaulty -n1 ${ktest_scratch_dev[1]}
 
     run_quiet "" bcachefs format		\
 	--replicas=2				\
-	/dev/md0 /dev/sdb
+	/dev/md0 ${ktest_scratch_dev[0]}
 
-    mount -t bcachefs -o degraded /dev/sdb:/dev/md0 /mnt
+    mount -t bcachefs -o degraded ${ktest_scratch_dev[0]}:/dev/md0 /mnt
 
     mdadm -G /dev/md0 -p$error_type
 
@@ -495,12 +513,12 @@ do_replicas_errors_test()
     umount /mnt
     mdadm --stop /dev/md0
 
-    #bcachefs fsck -n /dev/sdb /dev/sdc
+    #bcachefs fsck -n ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
 
-    mount -t bcachefs -o fsck /dev/sdb:/dev/sdc /mnt
+    mount -t bcachefs -o fsck ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_replicas_write_errors()
@@ -520,10 +538,12 @@ test_cmd_fs_usage()
     run_quiet "" bcachefs format		\
 	--replicas=2				\
 	--bucket=128k				\
-	/dev/sd[bcd]
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}			\
+	${ktest_scratch_dev[2]}
 
     echo -n "mounting... "
-    mount -t bcachefs -o verbose /dev/sdb:/dev/sdc:/dev/sdd /mnt
+    mount -t bcachefs -o verbose ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
     echo done
 
     echo "Before writing:"
@@ -542,20 +562,22 @@ test_cmd_fs_usage()
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_rereplicate()
 {
     set_watchdog 60
     run_quiet "" bcachefs format		\
-	/dev/sd[bcd]
-    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}			\
+	${ktest_scratch_dev[2]}
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
 
     dd if=/dev/zero of=/mnt/test bs=1M count=1024 oflag=direct
 
     umount /mnt
-    mount -t bcachefs -o metadata_replicas=2,data_replicas=2 /dev/sdb:/dev/sdc:/dev/sdd /mnt
+    mount -t bcachefs -o metadata_replicas=2,data_replicas=2 ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
 
     #echo 2 > /sys/fs/bcachefs/*/options/data_replicas
     #echo 2 > /sys/fs/bcachefs/*/options/metadata_replicas
@@ -565,10 +587,10 @@ test_rereplicate()
     bcachefs fs usage -h /mnt
     umount /mnt
 
-    mount -t bcachefs -o degraded /dev/sdb:/dev/sdc /mnt
+    mount -t bcachefs -o degraded ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 disabled_test_device_add_faults()
@@ -577,13 +599,13 @@ disabled_test_device_add_faults()
 
     run_quiet "" bcachefs format		\
 	--errors=remount-ro			\
-	/dev/sdb
-    mount /dev/sdb /mnt
+	${ktest_scratch_dev[0]}
+    mount ${ktest_scratch_dev[0]} /mnt
 
     device_add_fault_fn()
     {
 	set_faults "$1 enable"
-	! bcachefs device add /mnt /dev/sdc
+	! bcachefs device add /mnt ${ktest_scratch_dev[1]}
     }
 
     run_fault_injection_test bcachefs:add			device_add_fault_fn
@@ -591,7 +613,7 @@ disabled_test_device_add_faults()
     run_fault_injection_test bcachefs:bch_fs_init:alloc_start	device_add_fault_fn
     run_fault_injection_test bcachefs:bch_fs_init:read_super	device_add_fault_fn
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_striping()
@@ -602,14 +624,15 @@ test_striping()
     if false; then
 	run_quiet "" bcachefs format		\
 	    --replicas=2			\
-	    /dev/sd[bc]
+	    ${ktest_scratch_dev[0]}		\
+	    ${ktest_scratch_dev[1]}
 
-	mount -t bcachefs /dev/sdb:/dev/sdc /mnt
+	mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
 
 	dd if=/dev/zero of=/mnt/test0 bs=1M count=1024 oflag=direct
 	bcachefs fs usage -h /mnt
 
-	bcachefs device add /mnt /dev/sdd
+	bcachefs device add /mnt ${ktest_scratch_dev[2]}
 
 	dd if=/dev/zero of=/mnt/test1 bs=1M count=1024 oflag=direct
     else
@@ -618,15 +641,17 @@ test_striping()
 	    --replicas=2			\
 	    --label cache			\
 	    --durability=1			\
-	    --bucket=8M /dev/sd[b]		\
+	    --bucket=8M				\
+	    ${ktest_scratch_dev[0]}		\
 	    --label hdd				\
 	    --durability=2			\
-	    --bucket=8M /dev/sd[cd]		\
+	    ${ktest_scratch_dev[1]}		\
+	    ${ktest_scratch_dev[2]}		\
 	    --foreground_target=cache		\
 	    --background_target=hdd		\
 	    --promote_target=cache
 
-	mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd /mnt
+	mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
 
 	dd if=/dev/zero of=/mnt/test0 bs=1M count=1024 oflag=direct
     fi
@@ -635,16 +660,17 @@ test_striping()
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 disabled_change_replicas()
 {
     run_quiet "" bcachefs format		\
 	--replicas=2				\
-	/dev/sd[bc]
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}
 
-    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
 
     (
 	cd /sys/fs/bcachefs/*
@@ -667,16 +693,17 @@ disabled_change_replicas()
     kill %1
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 disabled_change_replicas2()
 {
     run_quiet "" bcachefs format		\
 	--replicas=2				\
-	/dev/sd[bc]
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}
 
-    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
 
     local opt=/sys/fs/bcachefs/*/options/data_replicas
     while true; do
@@ -689,7 +716,7 @@ disabled_change_replicas2()
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_replicas_gc()
@@ -701,8 +728,8 @@ test_replicas_gc()
 
     run_quiet "" bcachefs format -f		\
 	--replicas=2				\
-	/dev/sd[bcdef]
-    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
+	${ktest_scratch_dev[@]}	
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
 
     mount -t bcachefs $devs /mnt
 
@@ -716,58 +743,58 @@ test_replicas_gc()
     mount -t bcachefs -o fix_errors,erasure_code $devs /mnt
     umount /mnt
 
-    bcachefs fsck /dev/sd[bcdef]
+    bcachefs fsck ${ktest_scratch_dev[@]}
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_replace_replica()
 {
     set_watchdog 60
 
-    bcachefs format --replicas=2 /dev/sd[bc]
-    mount -t bcachefs -o degraded /dev/sdb /mnt
+    bcachefs format --replicas=2 ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    mount -t bcachefs -o degraded ${ktest_scratch_dev[0]} /mnt
 
-    bcachefs device add -f /mnt /dev/sdd
+    bcachefs device add -f /mnt ${ktest_scratch_dev[2]}
 
-    bcachefs device set-state --force failed /dev/sdc
+    bcachefs device set-state --force failed ${ktest_scratch_dev[1]}
 
     bcachefs data rereplicate /mnt
 
     umount /mnt
 
-    mount -t bcachefs -o degraded /dev/sdd /mnt
+    mount -t bcachefs -o degraded ${ktest_scratch_dev[2]} /mnt
     umount /mnt
 
     # We expect more btree_path_upgrade_fail events than usual in this test,
     # due to the way the btree node rewrite path works and the fact that we're
     # rewriting every btree node
-    check_counters /dev/sdb 4
+    check_counters ${ktest_scratch_dev[0]} 4
 }
 
 test_key_type_error()
 {
     set_watchdog 20
 
-    bcachefs format --replicas=2 /dev/sd[bc]
+    bcachefs format --replicas=2 ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
 
-    mount -t bcachefs /dev/sdb:/dev/sdc /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
     bcachefs setattr --data_replicas=1 /mnt
-    bcachefs setattr --foreground_target=sdc /mnt
+    bcachefs setattr --foreground_target=$(basename ${ktest_scratch_dev[1]}) /mnt
 
     dd if=/dev/zero of=/mnt/foo bs=64k count=8 oflag=direct
 
     umount /mnt
-    mount -t bcachefs -o very_degraded /dev/sdb /mnt
+    mount -t bcachefs -o very_degraded ${ktest_scratch_dev[0]} /mnt
 
-    bcachefs device remove --force /dev/sdc
+    bcachefs device remove --force ${ktest_scratch_dev[1]}
 
     # should fail:
     ! dd if=/mnt/foo of=/dev/null bs=64k count=1 iflag=direct
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 main "$@"

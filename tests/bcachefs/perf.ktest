@@ -28,15 +28,15 @@ perf_mkfs()
 	--btree_node_size=$btree_node_size	\
 	--no_initialize				\
 	--version=11				\
-	/dev/sdb
-    mount -t bcachefs -o version_upgrade /dev/sdb /mnt
-    bcachefs device resize-journal /dev/sdb 1G
+	${ktest_scratch_dev[0]}
+    mount -t bcachefs -o version_upgrade ${ktest_scratch_dev[0]} /mnt
+    bcachefs device resize-journal ${ktest_scratch_dev[0]} 1G
     sleep 1
-    bcachefs device resize-journal /dev/sdb 2G
+    bcachefs device resize-journal ${ktest_scratch_dev[0]} 2G
     sleep 1
-    bcachefs device resize-journal /dev/sdb 3G
+    bcachefs device resize-journal ${ktest_scratch_dev[0]} 3G
     sleep 1
-    bcachefs device resize-journal /dev/sdb 4G
+    bcachefs device resize-journal ${ktest_scratch_dev[0]} 4G
     ln -sf /sys/fs/bcachefs/*/perf_test p
 }
 

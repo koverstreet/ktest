@@ -22,8 +22,8 @@ test_ec_small()
 	--errors=panic				\
 	--erasure_code				\
 	--replicas=2				\
-	/dev/sd[bcdef]
-    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
+	"${ktest_scratch_dev[@]}"
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
 
     mount -t bcachefs $devs /mnt
 
@@ -36,16 +36,16 @@ test_ec_small()
     df -h /mnt
     umount /mnt
 
-    bcachefs fsck -n /dev/sd[bcdef]
+    bcachefs fsck -n "${ktest_scratch_dev[@]}"
 
     # test remount:
     echo "Testing remount"
     mount -t bcachefs -o fsck $devs /mnt
     umount /mnt
 
-    bcachefs fsck /dev/sd[bcdef]
+    bcachefs fsck -n "${ktest_scratch_dev[@]}"
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_ec_umount()
@@ -56,8 +56,8 @@ test_ec_umount()
 	--errors=panic				\
 	--erasure_code				\
 	--replicas=2				\
-	/dev/sd[bcdef]
-    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
+	"${ktest_scratch_dev[@]}"
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
 
     for i in $(seq 1 10); do
 	mount -t bcachefs $devs /mnt
@@ -66,7 +66,7 @@ test_ec_umount()
 	umount /mnt
     done
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 do_ec_test()
@@ -80,8 +80,8 @@ do_ec_test()
 	--erasure_code				\
 	"$@"					\
 	--replicas=2				\
-	/dev/sd[bcdef]
-    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
+	"${ktest_scratch_dev[@]}"
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
 
     mount -t bcachefs $devs /mnt
 
@@ -93,7 +93,7 @@ do_ec_test()
 
     bcachefs fs usage -h /mnt
     umount /mnt
-    bcachefs fsck -n /dev/sd[bcdef]
+    bcachefs fsck -n "${ktest_scratch_dev[@]}"
 
     # test remount:
     echo "Testing remount"
@@ -101,7 +101,7 @@ do_ec_test()
     cat /mnt/fiotest > /dev/null
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_ec()
@@ -133,13 +133,18 @@ test_ec_mixed_tiers()
 	--erasure_code				\
 	--compression=lz4			\
 	--replicas=2				\
-	--label dup /dev/sd[bc] 		\
-	--label tri /dev/sd[def] 		\
+	--label dup				\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}			\
+	--label tri				\
+	${ktest_scratch_dev[2]}			\
+	${ktest_scratch_dev[3]}			\
+	${ktest_scratch_dev[4]}			\
 	--foreground_target=dup			\
 	--promote_target=dup			\
 	--background_target=tri
-    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
 
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
     mount -t bcachefs $devs /mnt
 
     #enable_memory_faults
@@ -155,9 +160,9 @@ test_ec_mixed_tiers()
     mount -t bcachefs -o fsck $devs /mnt
     umount /mnt
 
-    bcachefs fsck /dev/sd[bcdef]
+    bcachefs fsck -n "${ktest_scratch_dev[@]}"
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_ec_gc()
@@ -169,9 +174,9 @@ test_ec_gc()
     run_quiet "" bcachefs format -f		\
 	--errors=continue			\
 	--replicas=2				\
-	/dev/sd[bcdef]
-    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf
+	"${ktest_scratch_dev[@]}"
 
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
     mount -t bcachefs -o erasure_code $devs /mnt
 
     fill_device /mnt/fiotest
@@ -205,9 +210,9 @@ test_ec_gc()
     mount -t bcachefs -o fix_errors,erasure_code $devs /mnt
     umount /mnt
 
-    bcachefs fsck /dev/sd[bcdef]
+    bcachefs fsck "${ktest_scratch_dev[@]}"
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 do_remove_test()
@@ -221,9 +226,9 @@ do_remove_test()
 	--errors=panic				\
 	--erasure_code				\
 	--replicas=2				\
-	/dev/sd[bcdef]
+	"${ktest_scratch_dev[@]}"
 
-    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf /mnt
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
 
     local fioout="$ktest_out/fio-out"
     run_fio_randrw >"$fioout" 2>&1 &
@@ -232,22 +237,22 @@ do_remove_test()
     sleep 1
 
     if [[ $offline = 1 ]]; then
-	echo -n "offlining /dev/sdb... "
-	bcachefs device offline --force	/dev/sdb
+	echo -n "offlining ${ktest_scratch_dev[0]}... "
+	bcachefs device offline --force	${ktest_scratch_dev[0]}
 	echo "done"
     fi
 
     if [[ $evacuate = 1 ]]; then
-	echo -n "evacuating /dev/sdb... "
-	bcachefs device evacuate	/dev/sdb
+	echo -n "evacuating ${ktest_scratch_dev[0]}... "
+	bcachefs device evacuate	${ktest_scratch_dev[0]}
 	echo "done"
     fi
 
-    echo -n "removing /dev/sdb... "
+    echo -n "removing ${ktest_scratch_dev[0]}... "
     if [[ $evacuate = 1 ]]; then
-	bcachefs device remove		/dev/sdb
+	bcachefs device remove		${ktest_scratch_dev[0]}
     else
-	bcachefs device remove --force	/dev/sdb
+	bcachefs device remove --force	${ktest_scratch_dev[0]}
     fi
     echo "done"
 
@@ -258,10 +263,10 @@ do_remove_test()
 
     umount /mnt
 
-    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf /mnt
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 d_test_device_remove_offline()

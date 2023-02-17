@@ -17,23 +17,23 @@ test_stress_ng()
     set_watchdog 300
     setup_tracing 'bcachefs:*'
 
-    run_quiet "" bcachefs format --no_initialize --version=11 -f /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format --no_initialize --version=11 -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     cd /mnt
     stress-ng  -v -t 60 --class filesystem --all 1 || true
     stress-ng  -v -t 60 --class filesystem --all 2 || true
     cd /root
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_punch()
 {
     set_watchdog 10
 
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     xfs_io -f /mnt/foo -c "pwrite -S 0x55 0 16384"
     xfs_io -f /mnt/foo -c "fsync"
@@ -42,26 +42,26 @@ test_punch()
     md5sum /mnt/foo
     umount /mnt
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     md5sum /mnt/foo
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_remount_ro_rw()
 {
     set_watchdog 10
 
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     mount -o remount,ro /mnt
     mount -o remount,rw /mnt
     touch /mnt/foo
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_extent_merge2()
@@ -69,25 +69,25 @@ test_extent_merge2()
     set_watchdog 10
     echo 1 > /sys/module/bcachefs/parameters/debug_check_iterators
 
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     fallocate -o    0 -l 4096 /mnt/foo
     fallocate -o 4096 -l 4096 /mnt/foo
 
     umount /mnt
-    bcachefs fsck -n /dev/sdb
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_reflink2()
 {
     set_watchdog 10
     bcachefs_antagonist
-    run_quiet "" bcachefs format /dev/sdb
+    run_quiet "" bcachefs format ${ktest_scratch_dev[0]}
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     dd if=/dev/urandom of=/mnt/foo bs=16k count=1 oflag=direct
     cp --reflink /mnt/foo /mnt/foo2
@@ -114,14 +114,14 @@ test_reflink2()
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_reflink()
 {
     set_watchdog 10
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     run_fio_randrw --filesize=1000M &
 
@@ -146,7 +146,7 @@ test_reflink()
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_fio_raw()
@@ -160,7 +160,7 @@ test_fio_raw()
 	--iodepth_batch=16			\
 	--direct=1				\
 	--numjobs=1				\
-	--filename=/dev/sdb		    	\
+	--filename=${ktest_scratch_dev[0]}		    	\
 	--name=randread				\
 	--rw=randread				\
 	--size=40G				\
@@ -170,29 +170,29 @@ test_fio_raw()
 test_rewrite_old_nodes()
 {
     set_watchdog 60
-    run_quiet "" bcachefs format -f --no_initialize --version=10 /dev/sdb
+    run_quiet "" bcachefs format -f --no_initialize --version=10 ${ktest_scratch_dev[0]}
 
-    bcachefs show-super /dev/sdb
+    bcachefs show-super ${ktest_scratch_dev[0]}
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     dd if=/dev/zero of=/mnt/foo bs=4k count=65536 oflag=direct
     umount /mnt
 
-    bcachefs show-super /dev/sdb
+    bcachefs show-super ${ktest_scratch_dev[0]}
 
-    bcachefs fsck /dev/sdb
+    bcachefs fsck ${ktest_scratch_dev[0]}
 
-    bcachefs show-super /dev/sdb
+    bcachefs show-super ${ktest_scratch_dev[0]}
 
-    mount -t bcachefs -o version_upgrade /dev/sdb /mnt
+    mount -t bcachefs -o version_upgrade ${ktest_scratch_dev[0]} /mnt
     bcachefs data job rewrite_old_nodes /mnt
     umount /mnt
 
-    bcachefs fsck /dev/sdb
+    bcachefs fsck ${ktest_scratch_dev[0]}
 
-    bcachefs show-super /dev/sdb
+    bcachefs show-super ${ktest_scratch_dev[0]}
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_merge_torture_flakey()
@@ -201,7 +201,7 @@ test_merge_torture_flakey()
     local loops=$((($ktest_priority + 1) * 3))
     local n=40M
 
-    mdadm -B /dev/md0 -lfaulty -n1 /dev/sdb
+    mdadm -B /dev/md0 -lfaulty -n1 ${ktest_scratch_dev[0]}
 
     run_quiet "" bcachefs format -f --btree_node_size=32k --errors=panic /dev/md0
 
@@ -236,7 +236,7 @@ test_merge_torture_flakey()
 
     mdadm --stop /dev/md0
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 # Disabled, because currently OOMs
@@ -247,10 +247,10 @@ d_test_merge_torture()
     local loops=$((($ktest_priority + 1) * 3))
     local n=10M
 
-    run_quiet "" bcachefs format -f --errors=panic --btree_node_size=8k --no_initialize /dev/sdb
+    run_quiet "" bcachefs format -f --errors=panic --btree_node_size=8k --no_initialize ${ktest_scratch_dev[0]}
 
     for i in `seq 0 $loops`; do
-	mount -t bcachefs -o fsck /dev/sdb /mnt
+	mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
 
 	echo "loop: $i"
 	echo rand_insert	$n 1	> /sys/fs/bcachefs/*/perf_test
@@ -268,8 +268,8 @@ d_test_merge_torture()
 test_make_files()
 {
     set_watchdog 30
-    run_quiet "" bcachefs format -f /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     echo 3 > /proc/sys/vm/drop_caches
     free -m
@@ -283,48 +283,48 @@ test_make_files()
     free -m
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_journal_resize()
 {
     set_watchdog 30
-    run_quiet "" bcachefs format -f /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     run_fio_randrw --filesize=2G &
 
     sleep 4
-    bcachefs device resize-journal /dev/sdb 1G
+    bcachefs device resize-journal ${ktest_scratch_dev[0]} 1G
 
     wait
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_drop_alloc()
 {
     set_watchdog 120
-    run_quiet "" bcachefs format -f /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     run_fio_randrw --filesize=2G
     umount /mnt
 
-    mount -t bcachefs -o reconstruct_alloc,fsck,fix_errors /dev/sdb /mnt
+    mount -t bcachefs -o reconstruct_alloc,fsck,fix_errors ${ktest_scratch_dev[0]} /mnt
     umount /mnt
 
-    bcachefs fsck -n /dev/sdb
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_reflink_inline_data()
 {
     set_watchdog 30
-    run_quiet "" bcachefs format -f /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     dd if=/dev/urandom of=/root/foo bs=256 count=1
     cp		    /root/foo /mnt/foo1
@@ -334,21 +334,21 @@ test_reflink_inline_data()
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_split_compressed()
 {
     set_watchdog 30
-    run_quiet "" bcachefs format --compression=zstd /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format --compression=zstd ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     # Test that splitting of compressed extents is working correctly:
     dd if=/dev/zero of=/mnt/foo bs=128k	    count=1 oflag=direct
     dd if=/dev/urandom of=/mnt/foo bs=4k    count=1 seek=1 oflag=direct conv=notrunc
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_fcollapse()
@@ -356,8 +356,8 @@ test_fcollapse()
     set_watchdog 30
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	/dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+	${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     dd if=/dev/zero of=/mnt/foo bs=4k count=4 oflag=direct
 
@@ -375,14 +375,14 @@ test_fcollapse()
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_finsert()
 {
     set_watchdog 30
-    run_quiet "" bcachefs format /dev/sdb
-    mount -t bcachefs -o fsck /dev/sdb /mnt
+    run_quiet "" bcachefs format ${ktest_scratch_dev[0]}
+    mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
 
     dd if=/dev/zero of=/mnt/foo bs=64k count=1 oflag=direct
 
@@ -391,15 +391,15 @@ test_finsert()
     xfs_io -c "finsert 1024 1024" /mnt/foo
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_key_merge()
 {
     set_watchdog 30
-    run_quiet "" bcachefs format --data_checksum=none /dev/sdb
+    run_quiet "" bcachefs format --data_checksum=none ${ktest_scratch_dev[0]}
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     dd if=/dev/zero of=/mnt/foo bs=8k count=128 oflag=direct
 
@@ -409,15 +409,15 @@ test_key_merge()
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_key_merge_csum()
 {
     set_watchdog 30
-    run_quiet "" bcachefs format --data_checksum=crc32c /dev/sdb
+    run_quiet "" bcachefs format --data_checksum=crc32c ${ktest_scratch_dev[0]}
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     dd if=/dev/urandom of=/mnt/foo bs=8k count=128 oflag=direct
 
@@ -429,39 +429,39 @@ test_key_merge_csum()
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_reconstruct_alloc()
 {
     set_watchdog 120
-    run_quiet "" bcachefs format --btree_node_size=16k /dev/sdb
+    run_quiet "" bcachefs format --btree_node_size=16k ${ktest_scratch_dev[0]}
 
-    mount -t bcachefs -o reconstruct_alloc,fix_errors,fsck /dev/sdb /mnt
+    mount -t bcachefs -o reconstruct_alloc,fix_errors,fsck ${ktest_scratch_dev[0]} /mnt
 
     umount /mnt
-    bcachefs fsck -n /dev/sdb
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     run_fio_randrw
     umount /mnt
 
     echo "Running fsck --reconstruct_alloc"
-    fsck.bcachefs -ny --reconstruct_alloc /dev/sdb  && rc=$? || rc=$? 
+    fsck.bcachefs -ny --reconstruct_alloc ${ktest_scratch_dev[0]}  && rc=$? || rc=$? 
     if (( $rc != 0 && $rc != 1 )); then
 	echo "Bad exit status from fsck: $rc"
 	exit 1
     fi
 
     echo "Mounting with -o reconstruct_alloc"
-    mount -t bcachefs -o reconstruct_alloc,fix_errors,fsck /dev/sdb /mnt
+    mount -t bcachefs -o reconstruct_alloc,fix_errors,fsck ${ktest_scratch_dev[0]} /mnt
     umount /mnt
 
-    bcachefs fsck -n /dev/sdb
-    mount -t bcachefs -o fsck /dev/sdb /mnt
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
+    mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_recovery()
@@ -471,10 +471,10 @@ test_recovery()
 	--errors=panic				\
 	--encrypted --no_passphrase		\
 	--bucket=8k				\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 
     for i in `seq 0 1`; do
-	mount -t bcachefs /dev/sdb /mnt
+	mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
 	dd if=/dev/zero of=/mnt/foo bs=4k count=8 oflag=direct
 
@@ -501,39 +501,39 @@ test_recovery()
 	umount /mnt
     done
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_lz4_zeros()
 {
     set_watchdog 30
-    run_quiet "" bcachefs format -f --errors=panic --compression=lz4 --data_checksum=none --bucket=2M /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic --compression=lz4 --data_checksum=none --bucket=2M ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     dd if=/dev/zero of=/mnt/foo bs=1M count=10
     # XXX check disk space used
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_lz4_incompressible()
 {
     set_watchdog 120
-    run_quiet "" bcachefs format -f --errors=panic --compression=lz4 --data_checksum=none --bucket=2M /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic --compression=lz4 --data_checksum=none --bucket=2M ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     dd if=/dev/urandom of=/mnt/foo || true
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_lz4()
 {
     run_basic_fio_test				\
 	--compression=lz4			\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 }
 
 test_lz4_buffered()
@@ -544,8 +544,8 @@ test_lz4_buffered()
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	--compression=lz4			\
-	/dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+	${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     echo starting copy
     cp -rx / /mnt/foo
@@ -558,21 +558,21 @@ test_lz4_buffered()
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_gzip()
 {
     run_basic_fio_test				\
 	--compression=gzip			\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 }
 
 test_zstd()
 {
     run_basic_fio_test				\
 	--compression=zstd			\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 }
 
 disabled_test_background_compression()
@@ -580,12 +580,12 @@ disabled_test_background_compression()
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	--background_compression=zstd	    	\
-	/dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+	${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     echo zstd > /sys/fs/bcachefs/*/options/background_compression
     run_fio_randrw
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_compress_no_checksum()
@@ -594,7 +594,7 @@ test_compress_no_checksum()
 	--compression=lz4			\
 	--metadata_checksum=none	    	\
 	--data_checksum=none			\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 }
 
 test_no_checksum()
@@ -602,7 +602,7 @@ test_no_checksum()
     run_basic_fio_test				\
 	--metadata_checksum=none		\
 	--data_checksum=none			\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 }
 
 test_crc32c()
@@ -610,7 +610,7 @@ test_crc32c()
     run_basic_fio_test				\
 	--metadata_checksum=crc32c		\
 	--data_checksum=crc32c			\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 }
 
 test_crc64()
@@ -618,31 +618,31 @@ test_crc64()
     run_basic_fio_test				\
 	--metadata_checksum=crc64		\
 	--data_checksum=crc64			\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 }
 
 test_crypto_locked_mnt()
 {
-    echo foo|bcachefs format --encrypted /dev/sdb
-    echo foo|bcachefs unlock -k session /dev/sdb
-    mount -t bcachefs -o verbose /dev/sdb /mnt
+    echo foo|bcachefs format --encrypted ${ktest_scratch_dev[0]}
+    echo foo|bcachefs unlock -k session ${ktest_scratch_dev[0]}
+    mount -t bcachefs -o verbose ${ktest_scratch_dev[0]} /mnt
     umount /mnt
-    bcachefs fsck /dev/sdb
+    bcachefs fsck ${ktest_scratch_dev[0]}
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_crypto()
 {
     run_basic_fio_test				\
 	--encrypted --no_passphrase		\
-	/dev/sdb
-    mount -t bcachefs -o fsck /dev/sdb /mnt
+	${ktest_scratch_dev[0]}
+    mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
     umount /mnt
     bcachefs fsck				\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_crypto_lz4()
@@ -650,7 +650,7 @@ test_crypto_lz4()
     run_basic_fio_test				\
 	--encrypted --no_passphrase		\
 	--compression=lz4			\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 }
 
 run_copygc_torture()
@@ -664,9 +664,9 @@ run_copygc_torture()
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	--data_checksum=none			\
-	"$@" /dev/sdb
+	"$@" ${ktest_scratch_dev[0]}
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     fill_device /mnt/fiotest
 
@@ -695,9 +695,9 @@ run_copygc_torture()
     expect_sysfs cache cached_data	0
 
     umount /mnt
-    bcachefs fsck -n /dev/sdb
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_copygc_torture()
@@ -720,7 +720,7 @@ test_small_buckets()
 {
     run_basic_fio_test				\
 	--bucket=32k				\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 }
 
 # Gets stuck due to only having 512 buckets
@@ -729,7 +729,7 @@ test_large_buckets()
     run_basic_fio_test				\
 	--bucket=8M				\
 	--data_checksum=none			\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 }
 
 test_small_nodes()
@@ -737,19 +737,19 @@ test_small_nodes()
     run_basic_fio_test				\
 	--bucket=256k				\
 	--btree_node_size=4k			\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 }
 
 d_test_crypto_passphrase()
 {
     bcachefs_antagonist
 
-    echo ""|bcachefs format -f --encrypted /dev/sdb
-    echo ""|bcachefs unlock /dev/sdb
+    echo ""|bcachefs format -f --encrypted ${ktest_scratch_dev[0]}
+    echo ""|bcachefs unlock ${ktest_scratch_dev[0]}
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     umount /mnt
-    bcachefs fsck /dev/sdb
+    bcachefs fsck ${ktest_scratch_dev[0]}
 }
 
 test_partial_overwritten_extents()
@@ -759,8 +759,8 @@ test_partial_overwritten_extents()
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	--encrypted --no_passphrase		\
-	/dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+	${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     dd if=/dev/urandom	of=/mnt/foo  bs=32k  count=1 skip=0 oflag=direct
     dd if=/mnt/foo	of=/dev/null bs=4k   count=8 skip=0 iflag=direct
@@ -779,7 +779,7 @@ test_partial_overwritten_extents()
     dd if=/mnt/baz	of=/dev/null bs=4k   count=8 skip=0 iflag=direct > /dev/null
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 # test the xattr interface for per-inode IO options:
@@ -788,8 +788,8 @@ test_xattr()
     set_watchdog 10
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	/dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+	${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     mkdir /mnt/foo
     setfattr -n bcachefs.compression -v lz4 /mnt/foo
@@ -809,7 +809,7 @@ test_xattr()
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_quota()
@@ -819,8 +819,8 @@ test_quota()
 
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	/dev/sdb
-    mount -t bcachefs -o usrquota,grpquota,prjquota /dev/sdb /mnt
+	${ktest_scratch_dev[0]}
+    mount -t bcachefs -o usrquota,grpquota,prjquota ${ktest_scratch_dev[0]} /mnt
 
     loops=$((($ktest_priority + 1) * 4))
 
@@ -829,7 +829,7 @@ test_quota()
     rm /mnt/fiotest
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 # test nfs exports:
@@ -843,8 +843,8 @@ test_nfs()
 
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	/dev/sdb
-    mount -t bcachefs /dev/sdb /export2
+	${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /export2
 
     echo "/export1  *(ro,insecure,all_squash,no_subtree_check)" >> /etc/exports
     echo "/export2  *(ro,insecure,all_squash,no_subtree_check)" >> /etc/exports
@@ -853,7 +853,7 @@ test_nfs()
 
     umount /export2
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 # We should get this working at some point:
@@ -876,8 +876,8 @@ d_test_suspend()
 
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	/dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+	${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     if false; then
 	run_dbench
@@ -886,7 +886,7 @@ d_test_suspend()
 	run_stress
     fi
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_journal_torture()
@@ -896,9 +896,9 @@ test_journal_torture()
 
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     #enable_memory_faults
 
     echo 1 > /sys/fs/bcachefs/*/options/journal_flush_delay
@@ -908,7 +908,7 @@ test_journal_torture()
     #disable_memory_faults
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_online_resize()
@@ -919,17 +919,17 @@ test_online_resize()
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	--fs_size=1G				\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     df -h /mnt
-    bcachefs device resize /dev/sdb
+    bcachefs device resize ${ktest_scratch_dev[0]}
     df -h /mnt
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_offline_resize()
@@ -940,21 +940,21 @@ test_offline_resize()
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	--fs_size=1G				\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     df -h /mnt
     cat /proc/mounts
 
     umount /mnt
 
-    bcachefs device resize /dev/sdb
+    bcachefs device resize ${ktest_scratch_dev[0]}
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     df -h /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 require-kernel-config BLK_DEV_DM
@@ -962,8 +962,8 @@ require-kernel-config BLK_DEV_DM
 test_offline_resize_lv()
 {
     set_watchdog 60
-    pvcreate /dev/sdb
-    vgcreate vg /dev/sdb
+    pvcreate ${ktest_scratch_dev[0]}
+    vgcreate vg ${ktest_scratch_dev[0]}
     lvcreate -L 1G -n foo  vg
     dev=/dev/vg/foo
 
@@ -992,14 +992,14 @@ test_sysfs()
     set_watchdog 10
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	/dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+	${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     find -H /sys/fs/bcachefs/ -type f -perm -0400 -exec cat {} \; > /dev/null
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_debugfs()
@@ -1007,8 +1007,8 @@ test_debugfs()
     set_watchdog 30
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	/dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+	${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     dd if=/dev/zero of=/mnt/test1 bs=1k count=10240 oflag=direct
     dd if=/dev/zero of=/mnt/test2 bs=1k count=10240 oflag=direct
@@ -1017,7 +1017,7 @@ test_debugfs()
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_set_option()
@@ -1025,28 +1025,28 @@ test_set_option()
     set_watchdog 10
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 
-    mount -t bcachefs /dev/sdb /mnt
-    bcachefs set-option --compression=zstd /dev/sdb
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    bcachefs set-option --compression=zstd ${ktest_scratch_dev[0]}
     cat /sys/fs/bcachefs/*/options/compression
     umount /mnt
 
-    bcachefs set-option --compression=lz4 /dev/sdb
+    bcachefs set-option --compression=lz4 ${ktest_scratch_dev[0]}
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     cat /sys/fs/bcachefs/*/options/compression
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 disabled_test_swapfile()
 {
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	/dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+	${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     fallocate -l 1G /mnt/swapfile
     mkswap  /mnt/swapfile
@@ -1064,11 +1064,11 @@ migrate_from_fs()
     local fstype=$1
 
     if [[ $fstype = ext4 ]]; then
-	run_quiet "" mkfs.$fstype -F /dev/sdb
-	mount -t $fstype -o user_xattr /dev/sdb /mnt
+	run_quiet "" mkfs.$fstype -F ${ktest_scratch_dev[0]}
+	mount -t $fstype -o user_xattr ${ktest_scratch_dev[0]} /mnt
     else
-	run_quiet "" mkfs.$fstype -f /dev/sdb
-	mount -t $fstype /dev/sdb /mnt
+	run_quiet "" mkfs.$fstype -f ${ktest_scratch_dev[0]}
+	mount -t $fstype ${ktest_scratch_dev[0]} /mnt
     fi
 
     cp -a /usr /mnt
@@ -1088,7 +1088,7 @@ migrate_from_fs()
 
     if true; then
 	mkdir -p /mnt2
-	mount -t bcachefs -o noexcl,nochanges,sb=$offset /dev/sdb /mnt2
+	mount -t bcachefs -o noexcl,nochanges,sb=$offset ${ktest_scratch_dev[0]} /mnt2
 
 	rsync	--archive			\
 	    --acls				\
@@ -1104,19 +1104,19 @@ migrate_from_fs()
     fi
 
     umount /mnt
-    fsck.$fstype -n /dev/sdb
+    fsck.$fstype -n ${ktest_scratch_dev[0]}
 
-    mount -t bcachefs -o sb=$offset /dev/sdb /mnt
+    mount -t bcachefs -o sb=$offset ${ktest_scratch_dev[0]} /mnt
     umount /mnt
 
     echo "Creating default superblock"
-    bcachefs migrate-superblock -d /dev/sdb -o $offset
+    bcachefs migrate-superblock -d ${ktest_scratch_dev[0]} -o $offset
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     rm /mnt/old_migrated_filesystem
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_migrate_from_ext4()
@@ -1148,10 +1148,10 @@ d_test_init_faults()
 
     run_quiet "" bcachefs format -f		\
 	--errors=remount-ro			\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 
     # put some data on the filesystem
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     run_fio_randrw
     # dbench would be better, create a directory structure
@@ -1163,7 +1163,7 @@ d_test_init_faults()
     {
 	set_faults "$1 enable"
 	# should fail:
-	! mount -t bcachefs -o verbose /dev/sdb /mnt
+	! mount -t bcachefs -o verbose ${ktest_scratch_dev[0]} /mnt
     }
 
     run_fault_injection_test bcachefs:bch_fs_init   init_fault_fn
@@ -1177,11 +1177,11 @@ d_test_meta_write_faults()
 
     run_quiet "" bcachefs format -f		\
 	--errors=remount-ro			\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 
     meta_write_fault_fn()
     {
-	mount -t bcachefs /dev/sdb /mnt
+	mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 	(sleep 2; set_faults "$1 enable") &
 
 	# Should fail due to read only cache set
@@ -1199,8 +1199,8 @@ test_long_name()
     set_watchdog 20
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	/dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+	${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     local i=1
     local n="1"
@@ -1212,7 +1212,7 @@ test_long_name()
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_many_files()
@@ -1220,8 +1220,8 @@ test_many_files()
     set_watchdog 60
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	/dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+	${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     for i in {1..1000}; do
 	touch /mnt/$i
@@ -1229,10 +1229,10 @@ test_many_files()
 
     umount /mnt
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 disabled_test_invalid_keys()
@@ -1241,8 +1241,8 @@ disabled_test_invalid_keys()
 
     run_quiet "" bcachefs format -f		\
 	--errors=continue			\
-	/dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+	${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     for i in {1..1000}; do
 	touch /mnt/$i
@@ -1250,7 +1250,7 @@ disabled_test_invalid_keys()
 
     umount /mnt
 
-    mount -t bcachefs -o fix_errors /dev/sdb /mnt
+    mount -t bcachefs -o fix_errors ${ktest_scratch_dev[0]} /mnt
     umount /mnt
 
     echo 0 > /sys/module/bcachefs/parameters/inject_invalid_keys
@@ -1263,16 +1263,16 @@ test_buffered_reads()
 	--errors=panic				\
 	--bucket=8M				\
 	--data_checksum=none			\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     dd if=/dev/zero of=/mnt/foo bs=1M oflag=direct 2>/dev/null || true
 
     time dd if=/mnt/foo of=/dev/null bs=1M count=1024
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_small_fs()
@@ -1282,9 +1282,9 @@ test_small_fs()
 	--errors=panic				\
 	--bucket=4k				\
 	--fs_size=512k				\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     df -h /mnt
 
     dd if=/dev/zero of=/mnt/foo bs=4k oflag=direct 2>/dev/null || true
@@ -1292,7 +1292,7 @@ test_small_fs()
     df -h /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_small_torture()
@@ -1306,10 +1306,10 @@ test_small_fsck()
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	--fs_size=1M				\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 
     for i in {1..100}; do
-	bcachefs fsck /dev/sdb
+	bcachefs fsck ${ktest_scratch_dev[0]}
     done
 }
 
@@ -1319,19 +1319,19 @@ test_gc()
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	--compression=lz4			\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     antagonist_trigger_gc &
     run_fio_randrw
 
     umount /mnt
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_attr_inherit()
@@ -1339,9 +1339,9 @@ test_attr_inherit()
     set_watchdog 60
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     mkdir /mnt/foo
     mkdir /mnt/bar
@@ -1365,7 +1365,7 @@ test_attr_inherit()
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_setattr()
@@ -1373,9 +1373,9 @@ test_setattr()
     set_watchdog 60
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	/dev/sdb
+	${ktest_scratch_dev[0]}
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     mkdir /mnt/foo
     touch /mnt/foo/bar
@@ -1386,17 +1386,17 @@ test_setattr()
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_mount_twice()
 {
     set_watchdog 60
     mkdir -p /mnt/1 /mnt/2
-    #run_quiet "" bcachefs format -f /dev/sdb
-    mkfs.ext2 /dev/sdb
-    mount -t ext2 /dev/sdb /mnt/1
-    mount -t ext2 /dev/sdb /mnt/2
+    #run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mkfs.ext2 ${ktest_scratch_dev[0]}
+    mount -t ext2 ${ktest_scratch_dev[0]} /mnt/1
+    mount -t ext2 ${ktest_scratch_dev[0]} /mnt/2
 
     umount /mnt/1
     umount /mnt/2
@@ -1405,22 +1405,22 @@ test_mount_twice()
 test_dump()
 {
     set_watchdog 60
-    run_quiet "" bcachefs format /dev/sdb
+    run_quiet "" bcachefs format ${ktest_scratch_dev[0]}
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     touch /mnt/a
     touch /mnt/b
     umount /mnt
-    bcachefs dump -o /tmp/sdb.qcow2 /dev/sdb
+    bcachefs dump -o /tmp/sdb.qcow2 ${ktest_scratch_dev[0]}
 }
 
 test_kill_btree_node()
 {
     set_watchdog 240
-    run_quiet "" bcachefs format --errors=panic /dev/sdb
+    run_quiet "" bcachefs format --errors=panic ${ktest_scratch_dev[0]}
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     cp -a /usr /mnt
     umount /mnt
 
@@ -1431,20 +1431,20 @@ test_kill_btree_node()
 
 	[[ $btree = freespace ]] && index=0
 
-	bcachefs kill_btree_node -b $btree -i $index /dev/sdb
+	bcachefs kill_btree_node -b $btree -i $index ${ktest_scratch_dev[0]}
 
 	echo "Running fsck"
 	# How to assert exit status equals something specific with -o errexit?
-	mount -t bcachefs -o fsck,fix_errors,verbose /dev/sdb /mnt
+	mount -t bcachefs -o fsck,fix_errors,verbose ${ktest_scratch_dev[0]} /mnt
 	umount /mnt
-	#bcachefs fsck -y /dev/sdb || true
+	#bcachefs fsck -y ${ktest_scratch_dev[0]} || true
 
 	echo
 	echo "Running fsck again; should be clean"
-	bcachefs fsck -y /dev/sdb || true
+	bcachefs fsck -y ${ktest_scratch_dev[0]} || true
     done
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 main "$@"

@@ -18,8 +18,8 @@ test_nfs()
 
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	/dev/sdb
-    mount -t bcachefs /dev/sdb /export2
+	${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /export2
 
     echo "/export1  *(rw,insecure,no_root_squash,no_subtree_check)" >> /etc/exports
     echo "/export2  *(rw,insecure,no_root_squash,no_subtree_check)" >> /etc/exports

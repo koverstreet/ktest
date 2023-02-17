@@ -40,9 +40,9 @@ array_setup()
 	--errors=panic				\
 	--erasure_code				\
 	--replicas=3				\
-	/dev/sd[bcdefghijk]
-    devs=/dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf:/dev/sdg:/dev/sdh:/dev/sdi:/dev/sdj:/dev/sdk
-    mount -t bcachefs $devs /mnt
+	${ktest_scratch_dev[@]}
+
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
 }
 
 array_teardown()
@@ -67,7 +67,7 @@ test_iscsi()
     run_quiet "" iscsiadm -m discovery -t sendtargets -p 127.0.0.1
     run_quiet "" iscsiadm -m node --login
 
-    run_fio_randrw --filename=/dev/sdl
+    run_fio_randrw --filename=${ktest_scratch_dev[10]}
 
     run_quiet "" iscsiadm -m node --logout
     run_quiet "" targetcli /iscsi delete iqn.2018-05.world.srv:dlp.target01

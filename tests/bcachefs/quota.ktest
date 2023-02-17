@@ -13,11 +13,11 @@ require-make linuxquota
 
 test_usrquota_twodevices()
 {
-    bcachefs format				\
-	--errors=panic		\
-	/dev/sd[bc] >/dev/null
+    run_quiet "" bcachefs format		\
+	--errors=panic				\
+	${ktest_scratch_dev[@]}
 
-    mount -t bcachefs -o usrquota,grpquota,prjquota /dev/sdc:/dev/sdb /mnt
+    mount -t bcachefs -o usrquota,grpquota,prjquota ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
 
     repquota -s /mnt
 
@@ -44,14 +44,14 @@ test_usrquota_twodevices()
 test_usrquota()
 {
     if false; then
-	mkfs.xfs /dev/sdb
+	mkfs.xfs ${ktest_scratch_dev[0]}
     else
 	bcachefs format				\
-	    --errors=panic		\
-	    /dev/sdb >/dev/null
+	    --errors=panic			\
+	    ${ktest_scratch_dev[0]} >/dev/null
     fi
 
-    mount -t bcachefs -o usrquota,grpquota,prjquota /dev/sdb /mnt
+    mount -t bcachefs -o usrquota,grpquota,prjquota ${ktest_scratch_dev[0]} /mnt
 
     repquota -s /mnt
 
@@ -78,14 +78,14 @@ test_usrquota()
 test_grpquota()
 {
     if false; then
-	mkfs.xfs /dev/sdb
+	mkfs.xfs ${ktest_scratch_dev[0]}
     else
-	bcachefs format				\
-	    --errors=panic		\
-	    /dev/sdb /dev/sdc >/dev/null
+	run_quiet "" bcachefs format		\
+	    --errors=panic			\
+	    ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} >/dev/null
     fi
 
-    mount -t bcachefs -o usrquota,grpquota,prjquota /dev/sdb:/dev/sdc /mnt
+    mount -t bcachefs -o usrquota,grpquota,prjquota ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
 
     setquota -g root 256M 512M 64 128 /mnt
     #setquota -t 60 60 /mnt
@@ -101,11 +101,11 @@ test_grpquota()
 
 test_prjquota()
 {
-    bcachefs format		\
-	--errors=panic		\
-	/dev/sdb >/dev/null
+   run_quiet ""  bcachefs format	\
+	--errors=panic			\
+	${ktest_scratch_dev[0]} >/dev/null
 
-    mount -t bcachefs -o usrquota,grpquota,prjquota /dev/sdb /mnt
+    mount -t bcachefs -o usrquota,grpquota,prjquota ${ktest_scratch_dev[0]} /mnt
 
     repquota -vP  /mnt
     mkdir /mnt/q1
@@ -135,11 +135,11 @@ test_prjquota()
 
 test_prjquota_multidevices()
 {
-    bcachefs format			\
-	--errors=panic		\
-	/dev/sd[bc] >/dev/null
+    run_quiet "" bcachefs format	\
+	--errors=panic			\
+	${ktest_scratch_dev[@]}
 
-    mount -t bcachefs -o usrquota,grpquota,prjquota /dev/sdb:/dev/sdc /mnt
+    mount -t bcachefs -o usrquota,grpquota,prjquota ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
 
     repquota -vP  /mnt
     mkdir /mnt/q1

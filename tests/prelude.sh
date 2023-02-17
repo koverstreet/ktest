@@ -17,14 +17,26 @@ if [[ ! -v ktest_verbose ]]; then
     ktest_storage_bus=ahci
 
     ktest_images=()
-    ktest_scratch_devs=()
+
+    ktest_scratch_dev=()
+    ktest_scratch_dev_sizes=()
+    ktest_scratch_dev_count=0
+
     ktest_make_install=()
     ktest_kernel_config_require=()
     ktest_qemu_append=()
 
-    NEXT_SCRATCH_DEV="b"
     BUILD_ON_HOST=""
 fi
+
+case $ktest_storage_bus in
+    virtio-blk)
+        ktest_dev_prefix="vd"
+        ;;
+    *)
+        ktest_dev_prefix="sd"
+        ;;
+esac
 
 require-git()
 {
@@ -118,7 +130,12 @@ require-kernel-append()
 
 config-scratch-devs()
 {
-    ktest_scratch_devs+=("$1")
+    local chars=( {b..z} )
+
+    ktest_scratch_dev+=("/dev/${ktest_dev_prefix}${chars[$ktest_scratch_dev_count]}")
+    ktest_scratch_dev_count=$((ktest_scratch_dev_count + 1))
+
+    ktest_scratch_dev_sizes+=("$1")
 }
 
 config-pmem-devs()
@@ -251,7 +268,7 @@ main()
 	    echo "ktest_kernel_append=(${ktest_kernel_append[@]})"
 	    echo "ktest_storage_bus=$ktest_storage_bus"
 	    echo "ktest_images=(${ktest_images[@]})"
-	    echo "ktest_scratch_devs=(${ktest_scratch_devs[@]})"
+	    echo "ktest_scratch_dev_sizes=(${ktest_scratch_dev_sizes[@]})"
 	    echo "ktest_make_install=(${ktest_make_install[@]})"
 	    echo "ktest_kernel_config_require=(${ktest_kernel_config_require[@]})"
 	    echo "ktest_qemu_append=(${ktest_qemu_append[@]})"

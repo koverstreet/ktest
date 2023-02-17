@@ -41,8 +41,8 @@ run_fio()
 
 run_mdtest()
 {
-    wipefs -a /dev/sd[bcde]
-    mdadm --create --force -n4 -l$1 /dev/md0 /dev/sd[bcde]
+    wipefs -a "${ktest_scratch_dev[@]}"
+    mdadm --create --force -n4 -l$1 /dev/md0 "${ktest_scratch_dev[@]}"
 
     run_fio /dev/md0
 

@@ -1,3 +1,4 @@
+#!/bin/bash
 # xfstests wrapper:
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/test-libs.sh
@@ -32,8 +33,8 @@ run_xfstests()
     shift
 
     if [[ ! -f /xfstests-init-done ]]; then
-	mkswap /dev/sde
-	swapon /dev/sde
+	mkswap ${ktest_scratch_dev[3]}
+	swapon ${ktest_scratch_dev[3]}
 
 	useradd -m fsgqa
 	useradd fsgqa2
@@ -45,28 +46,28 @@ run_xfstests()
 
 	rm -rf /ktest-out/xfstests
 
-	wipefs -af /dev/sdb
-	mkfs.$FSTYP $MKFS_OPTIONS -q /dev/sdb
+	wipefs -af ${ktest_scratch_dev[0]}
+	mkfs.$FSTYP $MKFS_OPTIONS -q ${ktest_scratch_dev[0]}
 
 	touch /xfstests-init-done
     fi
 
     # mkfs.xfs 5.19 requires these variables to be exported into its
     # environment to allow sub-300MB filesystems for fstests.
-    export TEST_DEV=/dev/sdb
+    export TEST_DEV=${ktest_scratch_dev[0]}
     export TEST_DIR=/mnt/test
     cat << EOF > /ktest/tests/xfstests/local.config
-TEST_DEV=$TEST_DEV
+TEST_DEV=${ktest_scratch_dev[0]}
 TEST_DIR=$TEST_DIR
-SCRATCH_DEV=/dev/sdc
+SCRATCH_DEV=${ktest_scratch_dev[1]}
 SCRATCH_MNT=/mnt/scratch
-LOGWRITES_DEV=/dev/sdd
+LOGWRITES_DEV=${ktest_scratch_dev[2]}
 RESULT_BASE=/ktest-out/xfstests
 LOGGER_PROG=true
 EOF
 
     export MKFS_OPTIONS
-    mount -t $FSTYP /dev/sdb /mnt/test
+    mount -t $FSTYP ${ktest_scratch_dev[0]} /mnt/test
 
     cd "$ktest_dir/tests/xfstests"
     ./check "$@"

@@ -16,7 +16,7 @@ modprobe scsi_debug dev_size_mb=1024
 stride=8192
 
 for i in `seq 0 $stride 4194304`; do
-    hdparm --please-destroy-my-drive --trim-sector-ranges $i:$stride /dev/sdb > /dev/null 2> /dev/null
+    hdparm --please-destroy-my-drive --trim-sector-ranges $i:$stride ${ktest_scratch_dev[0]} > /dev/null 2> /dev/null
 done
 
 echo "TEST SUCCESSFUL"

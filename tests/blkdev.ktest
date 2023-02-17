@@ -29,10 +29,10 @@ run_fio()
 
 test_block_simple()
 {
-    #run_fio /dev/sdb
+    #run_fio ${ktest_scratch_dev[0]}
 
-    mkfs.ext4 /dev/sdb
-    mount /dev/sdb /mnt
+    mkfs.ext4 ${ktest_scratch_dev[0]}
+    mount ${ktest_scratch_dev[0]} /mnt
     run_fio /mnt/foo --size=1G
     umount /mnt
 }

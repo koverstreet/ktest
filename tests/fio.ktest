@@ -8,7 +8,7 @@ config-timeout 7200
 
 test_buffered_reads()
 {
-    blockdev --setra 0 /dev/sdb
+    blockdev --setra 0 ${ktest_scratch_dev[0]}
     fio --eta=always				\
 	--exitall_on_error=1			\
 	--randrepeat=0				\

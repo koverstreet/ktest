@@ -23,10 +23,10 @@ run_test_faults()
 	echo "TESTING FAULT $id"
 
 	echo "Registering sdb"
-	echo /dev/sdb > /sys/fs/bcache/register || true
+	echo ${ktest_scratch_dev[0]} > /sys/fs/bcache/register || true
 
 	echo "Registering sdc"
-	echo /dev/sdc > /sys/fs/bcache/register || true
+	echo ${ktest_scratch_dev[1]} > /sys/fs/bcache/register || true
 
 	sleep 2
 	echo "class $fault disable" > $control

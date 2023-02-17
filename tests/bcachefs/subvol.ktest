@@ -11,8 +11,8 @@ test_snapshots_simple()
 
     bcachefs_antagonist
 
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     pushd /mnt
     for i in `seq 0 $NR_SNAPS`; do
@@ -23,14 +23,14 @@ test_snapshots_simple()
 
     umount /mnt
     sleep 0.2
-    bcachefs fsck -n /dev/sdb
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
     exit
 
     for i in `seq 0 $NR_SNAPS|sort -r`; do
 	umount /mnt
 	sleep 0.2
-	bcachefs fsck -n /dev/sdb
-	mount -t bcachefs /dev/sdb /mnt
+	bcachefs fsck -n ${ktest_scratch_dev[0]}
+	mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
 	echo "deleting snap-$i"
 	bcachefs subvolume delete /mnt/snap-$i
@@ -39,18 +39,18 @@ test_snapshots_simple()
 
     umount /mnt
     sleep 0.2
-    mount -t bcachefs -o fsck /dev/sdb /mnt
+    mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_files_many()
 {
     #bcachefs_antagonist
 
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     for i in $(seq 0 1000001); do
        	echo $i > /mnt/$i 
@@ -58,18 +58,18 @@ test_files_many()
 
     umount /mnt
     sleep 0.2
-    time mount -t bcachefs -o fsck /dev/sdb /mnt
+    time mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 d_test_snapshots_many()
 {
     #bcachefs_antagonist
 
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     cd /mnt
 
@@ -80,10 +80,10 @@ d_test_snapshots_many()
 
     umount /mnt
     sleep 0.2
-    mount -t bcachefs -o fsck /dev/sdb /mnt
+    mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_dbench()
@@ -93,8 +93,8 @@ test_dbench()
 
     NR_SNAPS=10
 
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     (
 	cd /mnt
@@ -117,18 +117,18 @@ test_dbench()
 
     umount /mnt
     sleep 0.2
-    #bcachefs fsck -n /dev/sdb
-    mount -t bcachefs -o fsck /dev/sdb /mnt
+    #bcachefs fsck -n ${ktest_scratch_dev[0]}
+    mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
     df -h /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_reflink()
 {
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     pushd /mnt
     cp -a /usr .
@@ -138,13 +138,13 @@ test_reflink()
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 d_test_finsert()
 {
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     pushd /mnt
     dd if=/dev/zero of=foo bs=1M count=8 oflag=direct
@@ -154,7 +154,7 @@ d_test_finsert()
 
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 d_test_snapshots_fio()
@@ -162,8 +162,8 @@ d_test_snapshots_fio()
     # so wait doesn't hang
     [[ $(jobs -p) != "" ]] && kill $(jobs -p)
 
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     fallocate -l500M /mnt/fiotest
 
@@ -222,7 +222,7 @@ d_test_snapshots_fio()
     for i in `seq 0 10|sort -r`; do
 	umount /mnt
 	sleep 0.1
-	mount -t bcachefs -o fsck /dev/sdb /mnt
+	mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
 
 	echo "deleting snap-$i"
 	cd /mnt
@@ -234,17 +234,17 @@ d_test_snapshots_fio()
     umount /mnt
 
     sleep 0.1
-    mount -t bcachefs -o fsck /dev/sdb /mnt
+    mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
     df -h /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_subvol_create()
 {
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/subvolume_1
 
     touch /mnt/foo
@@ -252,43 +252,43 @@ test_subvol_create()
 
     umount /mnt
 
-    bcachefs fsck -n /dev/sdb
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_subvol_delete()
 {
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/subvolume_1
     rm -rf /mnt/subvolume_1
 
     umount /mnt
 
-    bcachefs fsck -n /dev/sdb
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_subvol_snapshot_create()
 {
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
 
     umount /mnt
 
-    bcachefs fsck -n /dev/sdb
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_subvol_snapshot_create_ro()
 {
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot -r /mnt/subvolume_1 /mnt/snapshot_1
 
@@ -296,30 +296,30 @@ test_subvol_snapshot_create_ro()
 
     umount /mnt
 
-    bcachefs fsck -n /dev/sdb
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_subvol_snapshot_delete()
 {
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
     bcachefs subvolume delete /mnt/snapshot_1
 
     umount /mnt
 
-    bcachefs fsck -n /dev/sdb
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_subvol_snapshot_delete_create()
 {
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
     bcachefs subvolume delete /mnt/snapshot_1
@@ -327,75 +327,75 @@ test_subvol_snapshot_delete_create()
 
     umount /mnt
 
-    bcachefs fsck -n /dev/sdb
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 d_test_subvol_snapshot_rm()
 {
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
     rm -r /mnt/snapshot_1
 
     umount /mnt
 
-    bcachefs fsck -n /dev/sdb
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 # Create a subvolume, then snapshot the parent subvolume, then move the child
 # subvolume:
 test_mkdir_mv_snapshot()
 {
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     mkdir /mnt/dir1
     bcachefs subvolume snapshot /mnt/ /mnt/snap1
     mv /mnt/dir1 /mnt/dir2
     umount /mnt
 
-    bcachefs fsck -n /dev/sdb
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_subvol_mv_snapshot()
 {
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/sub1
     bcachefs subvolume snapshot /mnt/ /mnt/snap1
     mv /mnt/sub1 /mnt/sub2
     umount /mnt
 
-    bcachefs fsck -n /dev/sdb
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 # Test moving a subvol to another subvol
 test_subvol_mv_subvol()
 {
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/sub1
     bcachefs subvolume create /mnt/sub2
     mv /mnt/sub1 /mnt/sub2
     umount /mnt
 
-    bcachefs fsck -n /dev/sdb
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_subvol_snapshot_reuse_snapshot_name()
 {
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
     bcachefs subvolume delete /mnt/snapshot_1
@@ -403,15 +403,15 @@ test_subvol_snapshot_reuse_snapshot_name()
 
     umount /mnt
 
-    bcachefs fsck -n /dev/sdb
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_subvol_delete_snapshot_of_deleted_subvol()
 {
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
     rm -rf /mnt/subvolume_1
@@ -419,30 +419,30 @@ test_subvol_delete_snapshot_of_deleted_subvol()
 
     umount /mnt
 
-    bcachefs fsck -n /dev/sdb
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_subvol_snapshot_delete_repeat()
 {
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     for i in $(seq 1 64); do
         bcachefs subvolume snapshot /mnt/$i
         bcachefs subvolume delete /mnt/$i
     done
     umount /mnt
 
-    bcachefs fsck -n /dev/sdb
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_subvol_snapshot_delete_fio()
 {
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     for i in $(seq 1 10); do
 	#run_fio_randrw --filesize=500M --bs=4k
@@ -452,20 +452,20 @@ test_subvol_snapshot_delete_fio()
 
     for i in $(seq 1 10); do
 	umount /mnt
-	bcachefs fsck -n /dev/sdb
-	mount -t bcachefs -o fsck /dev/sdb /mnt
+	bcachefs fsck -n ${ktest_scratch_dev[0]}
+	mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
     done
 
     umount /mnt
-    bcachefs fsck -n /dev/sdb
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_snapshot_copygc()
 {
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     for i in $(seq 1 4); do
 	run_fio_randrw --filesize=1000M --loops=4 --bs=4k
@@ -475,13 +475,13 @@ test_snapshot_copygc()
     bcachefs fs usage -h /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_snapshot_many_overwrite()
 {
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     for i in $(seq 1 100); do
 	echo foo > /mnt/test
@@ -491,13 +491,13 @@ test_snapshot_many_overwrite()
     bcachefs fs usage -h /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_snapshot_prjquota()
 {
-    run_quiet "" bcachefs format -f --errors=panic --prjquota /dev/sdb
-    mount -t bcachefs /dev/sdb /mnt
+    run_quiet "" bcachefs format -f --errors=panic --prjquota ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     echo foo > /mnt/test
     bcachefs subvolume snapshot /mnt/snap.$i
@@ -505,10 +505,10 @@ test_snapshot_prjquota()
     bcachefs fs usage -h /mnt
     umount /mnt
 
-    mount -t bcachefs /dev/sdb /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     umount /mnt
 
-    check_counters /dev/sdb
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 main "$@"
