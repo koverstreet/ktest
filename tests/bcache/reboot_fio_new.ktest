@@ -19,7 +19,7 @@ fio_pass()
 	# Our default working directory (/cdrom) is not writable,
 	# fio wants to write files when verify_dump is set, so
 	# change to a different directory.
-	cd $LOGDIR
+	cd $ktest_out
 
 	for dev in $DEVICES; do
 	    fio --eta=always - <<-ZZ &

@@ -32,3 +32,5 @@ test_main()
     run_fio
     stop_bcache
 }
+
+main "$@"

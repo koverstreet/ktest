@@ -27,3 +27,5 @@ test_main()
     run_bcache_stress
     stop_bcache
 }
+
+main "$@"

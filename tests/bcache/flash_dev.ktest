@@ -16,7 +16,6 @@ config-timeout $(stress_timeout)
 
 test_main()
 {
-    echo 1 > /sys/module/bcache/parameters/debug_check_bkeys
     setup_tracing 'bcache:*'
 
     setup_bcache
@@ -28,3 +27,5 @@ test_main()
 
     stop_bcache
 }
+
+main "$@"

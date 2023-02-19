@@ -4,11 +4,15 @@
 #
 
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/../test-libs.sh
-require-build-deb bcache-tools
+
+require-git http://evilpiepirate.org/git/bcache-tools.git
+require-make bcache-tools
 
 require-kernel-config MD
 require-kernel-config BCACHE,BCACHE_DEBUG
 require-kernel-config AUTOFS_FS
+
+config-mem 2G
 
 require-make ../../ltp-fsx/
 
@@ -229,7 +233,7 @@ stop_bcache()
 
 cache_set_settings()
 {
-    for dir in $(ls -d /sys/fs/bcache/*-*-*); do
+    for dir in /sys/fs/bcache/*-*-*; do
 	true
 	#echo panic > $dir/errors
 
@@ -265,8 +269,10 @@ cache_set_settings()
 
 cached_dev_settings()
 {
-    for dir in $(ls -d /sys/fs/bcache/*-*-*/bdev*); do
-	echo 1 > $dir/writeback_rate_p_term_inverse
+    for dir in /sys/fs/bcache/*-*-*/bdev*; do
+	if [[ -d $dir ]]; then
+	    echo 1 > $dir/writeback_rate_p_term_inverse
+	fi
     done
 }
 
@@ -448,7 +454,7 @@ run_fio()
         # Our default working directory (/cdrom) is not writable,
         # fio wants to write files when verify_dump is set, so
         # change to a different directory.
-        cd $LOGDIR
+        cd $ktest_out
 
         for dev in $DEVICES; do
             fio --eta=always            \
