@@ -11,6 +11,7 @@ ktest_dir=$(dirname "$(readlink -f "$0")")
 debootstrap=$ktest_dir/debootstrap/debootstrap
 
 . "$ktest_dir/lib/util.sh"
+. "$ktest_dir/lib/common.sh"
 
 if [[ $(id -u) != 0 ]] ; then
     echo this script must be run as root
@@ -72,6 +73,7 @@ parse_arch "$ktest_arch"
 mkdir -p "$(dirname "$ktest_image")"
 
 PACKAGES=(kexec-tools less psmisc openssh-server curl		\
+    pciutils							\
     build-essential make gcc g++				\
     autoconf automake autopoint bison				\
     pkg-config libtool-bin					\
@@ -213,6 +215,8 @@ ZZ
 
 update_packages()
 {
+    # systemd... !?
+    mkdir -p "$MNT"/run/user/0
     cp /etc/resolv.conf "$MNT/etc/resolv.conf"
     _chroot "$MNT" mount -t proc none /proc
     _chroot "$MNT" apt-get -qq update
