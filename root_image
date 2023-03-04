@@ -151,7 +151,7 @@ export LANG=C
 
 _chroot()
 {
-    PATH=/usr/sbin:/usr/bin:/sbin:/bin chroot "$@"
+    PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/env chroot "$@"
 }
 
 update_files()
