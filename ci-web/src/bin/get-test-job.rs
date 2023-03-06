@@ -6,7 +6,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::time::SystemTime;
-use ci_cgi::{Ktestrc, ktestrc_read, git_get_commit, commitdir_get_results_toml};
+use ci_cgi::{Ktestrc, KtestrcTestGroup, ktestrc_read, git_get_commit, commitdir_get_results_toml};
 use die::die;
 use file_lock::{FileLock, FileOptions};
 use memoize::memoize;
@@ -77,9 +77,32 @@ struct TestJob {
     branch:     String,
     commit:     String,
     age:        usize,
+    priority:   usize,
     test:       PathBuf,
     subtests:   Vec<String>,
 }
+
+fn testjob_weight(j: &TestJob) -> usize {
+    j.age + j.priority
+}
+
+use std::cmp::Ordering;
+
+impl Ord for TestJob {
+    fn cmp(&self, other: &Self) -> Ordering {
+        testjob_weight(self).cmp(&testjob_weight(other))
+    }
+}
+
+impl PartialOrd for TestJob {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
+}
+
+impl PartialEq for TestJob {
+    fn eq(&self, other: &Self) -> bool { self.cmp(other) == Ordering::Equal }
+}
+
+impl Eq for TestJob {}
 
 fn subtest_full_name(test_path: &Path, subtest: &String) -> String {
     format!("{}.{}",
@@ -89,13 +112,14 @@ fn subtest_full_name(test_path: &Path, subtest: &String) -> String {
 
 fn branch_get_next_test_job(rc: &Ktestrc, repo: &git2::Repository,
                             branch: &str,
-                            test_path: &Path,
-                            nr_commits: usize) -> Option<TestJob> {
+                            test_group: &KtestrcTestGroup,
+                            test_path: &Path) -> Option<TestJob> {
     let test_path = rc.ktest_dir.join("tests").join(test_path);
     let mut ret =  TestJob {
         branch:     branch.to_string(),
         commit:     String::new(),
         age:        0,
+        priority:   test_group.priority,
         test:       test_path.to_path_buf(),
         subtests:   Vec::new(),
     };
@@ -140,7 +164,7 @@ fn branch_get_next_test_job(rc: &Ktestrc, repo: &git2::Repository,
         }
 
         ret.age += 1;
-        if ret.age > nr_commits {
+        if ret.age > test_group.max_commits {
             break;
         }
     }
@@ -149,25 +173,12 @@ fn branch_get_next_test_job(rc: &Ktestrc, repo: &git2::Repository,
 }
 
 fn get_best_test_job(rc: &Ktestrc, repo: &git2::Repository) -> Option<TestJob> {
-    let mut ret: Option<TestJob> = None;
-
-    for (branch, branchconfig) in &rc.branch {
-        for testgroup in branchconfig.tests.iter().filter_map(|i| rc.test_group.get(i)) {
-            for test in &testgroup.tests {
-                let job = branch_get_next_test_job(rc, repo, &branch,
-                        &test, testgroup.max_commits);
-
-                let ret_age = ret.as_ref().map_or(std::usize::MAX, |x| x.age);
-                let job_age = job.as_ref().map_or(std::usize::MAX, |x| x.age);
-
-                if job_age < ret_age {
-                    ret = job;
-                }
-            }
-        }
-    }
-
-    ret
+    rc.branch.iter()
+        .flat_map(move |(branch, branchconfig)| branchconfig.tests.iter()
+            .filter_map(|i| rc.test_group.get(i)).map(move |testgroup| (branch, testgroup)))
+        .flat_map(move |(branch, testgroup)| testgroup.tests.iter()
+            .filter_map(move |test| branch_get_next_test_job(rc, repo, &branch, &testgroup, &test)))
+        .min()
 }
 
 fn create_job_lockfiles(rc: &Ktestrc, mut job: TestJob) -> Option<TestJob> {
