@@ -4,7 +4,7 @@ set -o nounset
 set -o errexit
 set -o errtrace
 
-ktest_verbose=0
+ktest_verbose=1
 
 KTEST_DIR=$(dirname "$(readlink -e "$0")")/..
 JOBSERVER_LINUX_REPO=ssh://$JOBSERVER/$JOBSERVER_HOME/linux
@@ -115,7 +115,7 @@ while (( ${#SUBTESTS[@]} )); do
 
     $KTEST_DIR/lib/supervisor -T 1200 -f "$FULL_LOG" -S -F	\
 	-b $TEST_NAME -o ktest-out/out				\
-	-- build-test-kernel run -P $TEST_PATH ${SUBTESTS[@]} > /dev/null &
+	-- build-test-kernel run -P $TEST_PATH ${SUBTESTS[@]} &
     wait
 
     SUBTESTS_REMAINING=()
