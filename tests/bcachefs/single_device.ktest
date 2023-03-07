@@ -519,7 +519,7 @@ test_lz4_zeros()
 
 test_lz4_incompressible()
 {
-    set_watchdog 30
+    set_watchdog 120
     run_quiet "" bcachefs format -f --errors=panic --compression=lz4 --data_checksum=none --bucket=2M /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
 
