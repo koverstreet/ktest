@@ -1,3 +1,4 @@
+#!/bin/bash
 #
 # Library with some functions for writing block layer tests using the
 # ktest framework.
@@ -12,13 +13,17 @@ config-mem 2G
 # setup_tracing tracepoint_glob
 setup_tracing()
 {
-    echo > /sys/kernel/debug/tracing/trace
-    echo 8 > /sys/kernel/debug/tracing/buffer_size_kb
-    echo $@ > /sys/kernel/debug/tracing/set_event
-    echo trace_printk > /sys/kernel/debug/tracing/trace_options
-    echo 1 > /proc/sys/kernel/ftrace_dump_on_oops
-    echo 1 > /sys/kernel/debug/tracing/options/overwrite
-    echo 1 > /sys/kernel/debug/tracing/tracing_on
+    local t=/sys/kernel/tracing
+
+    echo		> "$t"/trace
+    echo 8192		> "$t"/buffer_size_kb
+    echo $@		> "$t"/set_event
+    echo trace_printk	> "$t"/trace_options
+    #echo stacktrace	> "$t"/trace_options
+    echo 1		> "$t"/options/overwrite
+    echo 1		> "$t"/tracing_on
+
+    echo 1		> /proc/sys/kernel/ftrace_dump_on_oops
 }
 
 # Fault injection
@@ -27,7 +32,9 @@ set_faults()
 {
     f=/sys/kernel/debug/dynamic_fault/control
 
-    [[ -f $f ]] && echo "$@" > $f
+    if [[ -f $f ]]; then
+	echo "$@" > $f
+    fi
 }
 
 enable_memory_faults()

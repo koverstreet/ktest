@@ -1,3 +1,4 @@
+#!/bin/bash
 #
 # Library with some functions for writing bcachefs tests using the
 # ktest framework.
@@ -115,11 +116,15 @@ antagonist_cat_sysfs_debugfs()
 
 bcachefs_antagonist()
 {
-    #setup_tracing
-    #setup_tracing 'bcachefs:*'
+    # Enable all bcachefs tracepoints - good for test coverage
+    setup_tracing 'bcachefs:*'
+
+    # Or alternately, only enable events check_counters will want to dump:
+    #local ev=/sys/kernel/tracing/events/bcachefs/
+    #echo 1|tee "$ev"/*fail*/enable "$ev"/*restart*/enable "$ev"/*blocked*/enable
+
     #echo 1 > /sys/module/bcachefs/parameters/expensive_debug_checks
     #echo 1 > /sys/module/bcachefs/parameters/debug_check_iterators
-    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
     #echo 1 > /sys/module/bcachefs/parameters/debug_check_btree_accounting
     #echo 1 > /sys/module/bcachefs/parameters/test_alloc_startup
     #echo 1 > /sys/module/bcachefs/parameters/test_restart_gc
@@ -143,7 +148,7 @@ bcachefs_antagonist()
 check_counters()
 {
     local dev=$1
-    local nr_commits=$(bcachefs show-super -f counters $dev|awk '/transaction_commit/ {print $2}')
+    local nr_commits=$(bcachefs show-super -f counters "$dev"|awk '/transaction_commit/ {print $2}')
     local ratio=10
     local ret=0
 
@@ -151,7 +156,7 @@ check_counters()
 
     local max_fail=$((nr_commits / ratio))
 
-    counters=$(bcachefs show-super -f counters $dev|grep -E '(fail|restart|blocked)'|grep -v path_relock_fail)
+    local counters=$(bcachefs show-super -f counters "$dev"|grep -E '(fail|restart|blocked)'|grep -v path_relock_fail)
 
     while IFS= read -r line; do
 	linea=($line)
@@ -161,6 +166,7 @@ check_counters()
 
 	if (( nr > max_fail )); then
 	    echo "Too many $event: $nr"
+	    grep "$event" /sys/kernel/tracing/trace|head -n50
 	    ret=1
 	fi
     done <<< "$counters"
@@ -178,7 +184,7 @@ fill_device()
     local filename=$1
 
     fio						\
-	--filename=$filename			\
+	--filename="$filename"			\
 	--ioengine=sync				\
 	--name=write				\
 	--rw=write				\
@@ -197,7 +203,6 @@ run_fio_base()
 	--iodepth_batch=16			\
 	--direct=1				\
 	--numjobs=1				\
-	--verify=crc32c				\
 	--verify_fatal=1			\
 	--filename=/mnt/fiotest		    	\
 	"$@"
@@ -205,7 +210,7 @@ run_fio_base()
 
 run_fio()
 {
-    local loops=$((($ktest_priority + 1) * 4))
+    local loops=$(((ktest_priority + 1) * 4))
 
     fio --eta=always				\
 	--exitall_on_error=1			\
@@ -214,7 +219,7 @@ run_fio()
 	--iodepth_batch=16			\
 	--direct=1				\
 	--numjobs=1				\
-	--verify=crc32c				\
+	--verify=meta				\
 	--verify_fatal=1			\
 	--buffer_compress_percentage=30		\
 	--filename=/mnt/fiotest		    	\
@@ -233,10 +238,13 @@ run_fio_randrw()
 	"$@"
 }
 
-run_basic_fio_test()
+run_basic_fio_test_counter_threshold()
 {
     set_watchdog 1200
     local devs=()
+
+    local ratio=$1
+    shift
 
     for i in "$@"; do
 	[[ ${i:0:1} != - ]] && devs+=($i)
@@ -246,7 +254,7 @@ run_basic_fio_test()
 
     run_quiet "" bcachefs format -f --discard --no_initialize "$@"
 
-    mount -t bcachefs -o fsck $(join_by : "${devs[@]}") /mnt
+    mount -t bcachefs -o fsck "$(join_by : "${devs[@]}")" /mnt
 
     #enable_memory_faults
     run_fio_randrw
@@ -261,7 +269,12 @@ run_basic_fio_test()
 
     bcachefs fsck -n "${devs[@]}"
 
-    check_counters ${devs[0]}
+    check_counters "${devs[0]}" "$ratio"
+}
+
+run_basic_fio_test()
+{
+    run_basic_fio_test_counter_threshold 10 "$@"
 }
 
 require-kernel-config DEBUG_FS

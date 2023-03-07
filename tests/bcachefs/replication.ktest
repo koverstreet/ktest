@@ -135,6 +135,7 @@ d_test_copygc_torture()
 
     for i in $(seq 1 $loops); do
 	run_fio_base				\
+	    --verify=meta			\
 	    --buffer_compress_percentage=50	\
 						\
 	    --name=randwrite			\
