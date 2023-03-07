@@ -3,7 +3,7 @@ set -o nounset
 set -o errtrace
 set -o pipefail
 
-trap 'echo "Error $? from: $BASH_COMMAND, exiting" >&2' ERR
+trap 'echo "Error $? at $BASH_SOURCE $LINENO from: $BASH_COMMAND, exiting"' ERR
 
 ktest_tmp=${ktest_tmp:-""}
 ktest_exit()
