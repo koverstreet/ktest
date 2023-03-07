@@ -13,8 +13,6 @@ require-kernel-config BCACHEFS_POSIX_ACL
 require-kernel-config BCACHEFS_QUOTA
 require-kernel-config QUOTA
 
-config-cpus 24
-
 run_tests()
 {
     #echo trace_printk > /sys/kernel/debug/tracing/trace_options
