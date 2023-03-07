@@ -44,6 +44,7 @@ usage()
     ktest_usage_run_opts
     echo "      -k <dir>        kernel source dir"
     echo "      -c <dir>        enable coverage for this dir (only valid without -K)"
+    echo "      -M <arg>        Extra arguments to be passed to make when building the kernel"
     echo
     ktest_usage_post
 }
@@ -57,7 +58,7 @@ fi
 CMD="$1"
 shift
 
-while getopts "k:Pc:h${ktest_args}" arg; do
+while getopts "k:Pc:M:h${ktest_args}" arg; do
     case $arg in
 	k)
 	    ktest_kernel_source="$OPTARG"
@@ -78,6 +79,10 @@ while getopts "k:Pc:h${ktest_args}" arg; do
 	    MAKEARGS+=("GCOV_PROFILE_$OPTARG=y")
 	    COVERAGE=1
 	    ;;
+	M)
+	    MAKEARGS+=("$OPTARG")
+	    ;;
+
 	h)
 	    usage
 	    exit 0
