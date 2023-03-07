@@ -108,14 +108,7 @@ require-kernel-config()
 
 require-qemu-append()
 {
-    local OLDIFS=$IFS
-    IFS=','
-
-    for i in $1; do
-	ktest_kernel_config_require+=("$i")
-    done
-
-    IFS=$OLDIFS
+    ktest_qemu_append+=("$@")
 }
 
 require-kernel-append()
