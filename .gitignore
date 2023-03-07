@@ -4,9 +4,12 @@ cscope*
 tags
 ktest-out
 *.tags
-lwip-connect
-qemu-wrapper
-get-test-job
+
+lib/lwip-connect
+lib/supervisor
+
+ltp-fsx/ltp-fsx
+
 tests/bcachefs/bcachefs-tools
 tests/bcachefs/linuxquota
 tests/xfstests
