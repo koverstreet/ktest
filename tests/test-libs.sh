@@ -23,7 +23,7 @@ setup_tracing()
     echo 1		> "$t"/options/overwrite
     echo 1		> "$t"/tracing_on
 
-    echo 1		> /proc/sys/kernel/ftrace_dump_on_oops
+    #echo 1		> /proc/sys/kernel/ftrace_dump_on_oops
 }
 
 # Fault injection
