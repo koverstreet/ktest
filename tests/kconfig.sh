@@ -40,6 +40,7 @@ case $ktest_arch in
 	;;
     aarch64)
 	require-kernel-config PCI_HOST_GENERIC
+	require-kernel-config RTC_DRV_PL031
 
 	have_virtio=1
 
