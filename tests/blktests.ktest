@@ -13,6 +13,7 @@ require-kernel-config BLK_DEV
 require-kernel-config BLK_DEV_NULL_BLK=m
 require-kernel-config BLK_DEV_LOOP
 require-kernel-config BLK_DEV_NBD
+require-kernel-config BLK_DEV_SR
 
 require-kernel-config BLK_DEV_NVME
 require-kernel-config NVME_TARGET
@@ -27,7 +28,7 @@ config-timeout $(stress_timeout)
 
 list_tests()
 {
-    (cd "$ktest_dir/tests/blktests/tests"; echo */???)
+    (cd $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/blktests/tests; echo */???)
 }
 
 run_test()
@@ -37,3 +38,5 @@ run_test()
     echo 'TEST_DEVS=(${ktest_scratch_dev[0]})' > config
     ./check "$@"
 }
+
+main "$@"
