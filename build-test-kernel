@@ -192,6 +192,8 @@ build_kernel()
 
     log_verbose "kernel_config_require: ${ktest_kernel_config_require[@]}"
 
+    MAKEARGS+=("LOCALVERSION=-ktest")
+
     for opt in "${ktest_kernel_config_require[@]}"; do
 	[[ -n $opt ]] && kernel_opt set "$opt"
     done

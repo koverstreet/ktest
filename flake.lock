@@ -1,0 +1,69 @@
+{
+  "nodes": {
+    "buildRoot": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1,
+        "narHash": "sha256-yRWqg3j6K5NcRHcioFRRrFovfHlh3rIPiN2tdq/9TUs=",
+        "path": "dummy-kernel-build",
+        "type": "path"
+      },
+      "original": {
+        "path": "dummy-kernel-build",
+        "type": "path"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1678241273,
+        "narHash": "sha256-S4JTbik1zDBJYmJCF2o2oli9XYeQym4PgllTe4Z1NcA=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "0f118b14add28b924f1aa05010a3252d93135b7d",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "buildRoot": "buildRoot",
+        "nixpkgs": "nixpkgs",
+        "src": "src",
+        "utils": "utils"
+      }
+    },
+    "src": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-o8+xKpZYB4R1g4Z3agA6x65oZajSkSSf9obOHnZSz+k=",
+        "type": "file",
+        "url": "https://evilpiepirate.org/git/bcachefs.git"
+      },
+      "original": {
+        "type": "file",
+        "url": "https://evilpiepirate.org/git/bcachefs.git"
+      }
+    },
+    "utils": {
+      "locked": {
+        "lastModified": 1676283394,
+        "narHash": "sha256-XX2f9c3iySLCw54rJ/CZs+ZK6IQy7GXNY4nSOyu2QG4=",
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "rev": "3db36a8b464d0c4532ba1c7dda728f4576d6d073",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "type": "github"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
