@@ -11,6 +11,7 @@ require-make bcachefs-tools
 
 require-kernel-config BCACHEFS_FS
 require-kernel-config BCACHEFS_DEBUG
+require-kernel-config TRANSPARENT_HUGEPAGE
 
 if [[ $ktest_arch = x86_64 ]]; then
     require-kernel-config CRYPTO_CRC32C_INTEL
