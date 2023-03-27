@@ -10,6 +10,7 @@ require-kernel-config XFS_POSIX_ACL
 require-kernel-config XFS_RT XFS_ONLINE_SCRUB
 #require-kernel-config XFS_DEBUG
 require-kernel-config QUOTA
+require-kernel-config TRANSPARENT_HUGEPAGE
 
 run_tests()
 {
