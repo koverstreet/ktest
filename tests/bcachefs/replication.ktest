@@ -179,6 +179,8 @@ do_remove_test()
     offline=$1
     evacuate=$2
 
+    setup_tracing 'bcachefs:*'
+
     run_quiet "" bcachefs format		\
 	--replicas=2				\
 	${ktest_scratch_dev[0]}			\
