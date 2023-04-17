@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/test-libs.sh
+
+config-timeout $(stress_timeout)
+
+#require-kernel-append nomem_profiling
+
+test_bench()
+{
+    cat > /root/bench.c <<-ZZ
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/mman.h>
+
+int madvise_test(long in1, long in2)
+{
+    return madvise((void*)in1, (size_t)in2, 25);
+}
+
+int main(int argc, char    *argv[])
+{
+    long in1 = 0, in2 = 0;
+    int res;
+
+    if (argc > 1) {
+        in1 = atol(argv[1]);
+        if (argc > 2) {
+            in2 = atol(argv[2]);
+        }
+    }
+    res = madvise_test(in1, in2);
+    printf("madvise_test(%ld, %ld) returned %d\n", in1, in2, res);
+
+    return res;
+}
+ZZ
+
+    gcc -o /root/bench /root/bench.c
+
+    time /root/bench 2
+    perf record -- /root/bench 2
+    perf report --sort=symbol|head -n60|cut -b1-50 || true
+}
+
+main "$@"
