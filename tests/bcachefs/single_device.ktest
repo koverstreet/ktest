@@ -79,6 +79,8 @@ test_extent_merge2()
     bcachefs fsck -n ${ktest_scratch_dev[0]}
 
     check_counters ${ktest_scratch_dev[0]}
+
+    echo 0 > /sys/module/bcachefs/parameters/debug_check_iterators
 }
 
 test_reflink2()
