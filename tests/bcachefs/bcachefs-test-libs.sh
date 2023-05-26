@@ -167,7 +167,10 @@ check_counters()
 
 	if (( nr > max_fail )); then
 	    echo "Too many $event: $nr"
-	    grep "$event" /sys/kernel/tracing/trace|head -n50
+	    # Insert 0 byte seperators at the beginning of each trace event,
+	    # then grep in null separator mode to print full output of
+	    # multiline trace events:
+	    sed -e '/ \[[0-9]\{3\}\]/ i\\x00' /sys/kernel/tracing/trace|grep -z "$event"|head -n500
 	    ret=1
 	fi
     done <<< "$counters"
