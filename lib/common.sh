@@ -11,7 +11,7 @@ ktest_exit()
     local children=$(jobs -rp)
     if [[ -n $children ]]; then
 	kill -9 $children >& /dev/null
-	wait $(jobs -rp) >& /dev/null
+	wait $(jobs -rp) >& /dev/null || true
     fi
 
     [[ -n $ktest_tmp ]] && rm -rf "$ktest_tmp"
