@@ -13,15 +13,15 @@ require-kernel-config BCACHEFS_TESTS
 require-kernel-config BCACHEFS_DEBUG=n
 require-kernel-config BCACHEFS_DEBUG_TRANSACTIONS=n
 require-kernel-config BCACHEFS_QUOTA=n
-require-kernel-config BCACHEFS_LOCK_TIME_STATS=n
-require-kernel-config BCACHEFS_NO_LATENCY_ACCT
+require-kernel-config BCACHEFS_LOCK_TIME_STATS=y
+require-kernel-config BCACHEFS_NO_LATENCY_ACCT=n
 require-kernel-config LATENCYTOP
 
 if [[ $ktest_arch = x86 ]]; then
     require-kernel-config CRYPTO_CRC32C_INTEL
 fi
 
-btree_node_size=512k
+btree_node_size=64k
 t=12
 
 config-mem	    16G
@@ -90,7 +90,7 @@ test_rand_insert_multi()
     #perf record -a --
     echo rand_insert_multi		$n 1	> p
     #perf report --sort=symbol|head -n60
-    umount /mnt
+    #umount /mnt
 }
 
 test_perf_rand_insert_multi()

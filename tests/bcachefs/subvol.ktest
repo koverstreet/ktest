@@ -511,4 +511,44 @@ test_snapshot_prjquota()
     check_counters ${ktest_scratch_dev[0]}
 }
 
+snapshot_rw_fio()
+{
+    fio --eta=always				\
+	--exitall_on_error=1			\
+	--ioengine=libaio			\
+	--iodepth=64				\
+	--iodepth_batch=16			\
+	--direct=1				\
+	--numjobs=1				\
+	--verify=meta				\
+	--verify_fatal=1			\
+	--filename=$1				\
+	--filesize=1G				\
+	--name=randrw				\
+	--rw=randrw				\
+	--bsrange=4k-1M
+}
+
+test_snapshot_rw()
+{
+    run_quiet "" bcachefs format -f --errors=panic --prjquota ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    bcachefs subvolume snapshot /mnt/snap-1
+    bcachefs subvolume snapshot /mnt/snap-2
+
+    snapshot_rw_fio /mnt/fiotest &
+    snapshot_rw_fio /mnt/snap-1/fiotest &
+    snapshot_rw_fio /mnt/snap-2/fiotest &
+    wait
+
+    exit
+    umount /mnt
+
+    mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
+    umount /mnt
+
+    check_counters ${ktest_scratch_dev[0]}
+}
+
 main "$@"

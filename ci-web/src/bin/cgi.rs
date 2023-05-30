@@ -4,7 +4,7 @@ use regex::Regex;
 extern crate cgi;
 extern crate querystring;
 
-use ci_cgi::{Ktestrc, ktestrc_read, TestResultsMap, TestStatus, commitdir_get_results_toml, git_get_commit};
+use ci_cgi::{Ktestrc, ktestrc_read, TestResultsMap, TestStatus, commitdir_get_results, git_get_commit};
 
 const COMMIT_FILTER:    &str = include_str!("../../commit-filter");
 const STYLESHEET:       &str = "bootstrap.min.css";
@@ -28,7 +28,7 @@ struct Ci {
 }
 
 fn commitdir_get_results_filtered(ci: &Ci, commit_id: &String) -> TestResultsMap {
-    let results = commitdir_get_results_toml(&ci.ktestrc, commit_id).unwrap_or(BTreeMap::new());
+    let results = commitdir_get_results(&ci.ktestrc, commit_id).unwrap_or(BTreeMap::new());
 
     filter_results(results, &ci.tests_matching)
 }

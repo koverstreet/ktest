@@ -172,7 +172,7 @@ test_ec_gc()
     bcachefs_antagonist
 
     run_quiet "" bcachefs format -f		\
-	--errors=continue			\
+	--errors=panic				\
 	--replicas=2				\
 	"${ktest_scratch_dev[@]}"
 

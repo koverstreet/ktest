@@ -4,7 +4,10 @@
 
 config-timeout $(stress_timeout)
 
-#require-kernel-append nomem_profiling
+require-kernel-config MEM_ALLOC_PROFILING
+require-kernel-config MEM_ALLOC_PROFILING_DEBUG=n
+
+#require-kernel-append sysctl.vm.mem_profiling=0
 
 test_bench()
 {

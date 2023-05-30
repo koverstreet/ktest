@@ -23,7 +23,7 @@ test_stress_ng()
     stress-ng  -v -t 60 --class filesystem --all 1 || true
     stress-ng  -v -t 60 --class filesystem --all 2 || true
     cd /root
-    umount /mnt
+    #umount /mnt
 
     check_counters ${ktest_scratch_dev[0]}
 }
@@ -133,7 +133,7 @@ test_reflink()
 
     for i in `seq 0 10`; do
 	sleep 0.5
-	cp --reflink /mnt/fiotest /mnt/fiotest2
+	strace cp --reflink /mnt/fiotest /mnt/fiotest2
 	rm /mnt/fiotest2
     done
 
@@ -225,6 +225,8 @@ test_merge_torture_flakey()
 	umount /mnt
 	mdadm -G /dev/md0 -pnone
 
+	bcachefs fsck -ny /dev/md0
+
 	mount -t bcachefs -o fsck /dev/md0 /mnt
 
 	echo seq_delete		$n 1	> /sys/fs/bcachefs/*/perf_test &
@@ -234,6 +236,8 @@ test_merge_torture_flakey()
 
 	umount /mnt
 	mdadm -G /dev/md0 -pnone
+
+	bcachefs fsck -ny /dev/md0
     done
 
     mdadm --stop /dev/md0
@@ -1447,6 +1451,59 @@ test_kill_btree_node()
     done
 
     check_counters ${ktest_scratch_dev[0]}
+}
+
+test_make_image()
+{
+    set_watchdog 240
+    run_quiet "" bcachefs format --errors=panic --version=11 --no_initialize ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    cp -a /usr /mnt
+    umount /mnt
+}
+
+test_fio_crashing()
+{
+cat > /root/fio_config <<EOF
+[global]
+ioengine=libaio
+bs=4k
+directory=/mnt
+filesize=1G
+size=9999T
+continue_on_error=write
+ignore_error=EIO,ENOSPC:EIO
+error_dump=0
+
+[stress_dio_aio_activity]
+create_on_open=1
+fallocate=none
+iodepth=128
+direct=1
+buffered=0
+numjobs=4
+rw=randwrite
+runtime=40
+time_based
+
+[stress_mmap_activity]
+ioengine=mmap
+create_on_open=0
+fallocate=1
+fdatasync=40960
+filesize=8M
+size=9999T
+numjobs=4
+rw=randwrite
+runtime=40
+time_based
+
+EOF
+    run_quiet "" bcachefs format --no_initialize --version=11 -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    fio /root/fio_config
+    umount /mnt
 }
 
 main "$@"
