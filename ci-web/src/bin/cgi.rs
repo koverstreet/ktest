@@ -163,9 +163,9 @@ fn ci_log(ci: &Ci) -> cgi::Response {
                 writeln!(&mut out, "<td> {} </td>", &r.message[..subject_len]).unwrap();
                 writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::Passed)).unwrap();
                 writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::Failed)).unwrap();
-                writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::NotStarted)).unwrap();
-                writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::NotRun)).unwrap();
-                writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::InProgress)).unwrap();
+                writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::Notstarted)).unwrap();
+                writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::Notrun)).unwrap();
+                writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::Inprogress)).unwrap();
                 writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::Unknown)).unwrap();
                 writeln!(&mut out, "<td> {} </td>", r.tests.len()).unwrap();
                 writeln!(&mut out, "<td> {}s </td>", duration).unwrap();
