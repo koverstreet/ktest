@@ -154,7 +154,7 @@ fn ci_log(ci: &Ci) -> cgi::Response {
 
                 let subject_len = r.message.find('\n').unwrap_or(r.message.len());
 
-                let duration: usize = r.tests.iter().map(|x| x.1.duration).sum();
+                let duration: u64 = r.tests.iter().map(|x| x.1.duration).sum();
 
                 writeln!(&mut out, "<tr>").unwrap();
                 writeln!(&mut out, "<td> <a href=\"{}?branch={}&commit={}\">{}</a> </td>",

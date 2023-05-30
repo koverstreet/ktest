@@ -1,7 +1,6 @@
 use std::process;
-use ci_cgi::{ktestrc_read, commitdir_get_results, TestResults};
+use ci_cgi::{ktestrc_read, commit_update_results_from_fs};
 use clap::Parser;
-use toml;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -19,10 +18,5 @@ fn main() {
     }
     let ktestrc = ktestrc.unwrap();
 
-    let results = TestResults { d: commitdir_get_results(&ktestrc, &args.commit) };
-
-    let file_contents = toml::to_string(&results).unwrap();
-
-    let commit_summary_fname = ktestrc.output_dir.join(args.commit + ".toml");
-    std::fs::write(commit_summary_fname, file_contents).unwrap();
+    commit_update_results_from_fs(&ktestrc, &args.commit);
 }
