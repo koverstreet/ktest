@@ -140,14 +140,13 @@ fn commitdir_get_results_fs(ktestrc: &Ktestrc, commit_id: &String) -> TestResult
     results
 }
 
-pub fn commitdir_get_results_toml(ktestrc: &Ktestrc, commit_id: &String) -> Result<TestResultsMap, Box<dyn Error>> {
+fn commit_get_results_toml(ktestrc: &Ktestrc, commit_id: &String) -> Result<TestResultsMap, Box<dyn Error>> {
     let toml = read_to_string(ktestrc.output_dir.join(commit_id.to_owned() + ".toml"))?;
     let r: TestResults = toml::from_str(&toml)?;
     Ok(r.d)
 }
 
-fn results_to_toml(ktestrc: &Ktestrc, commit_id: &String, results: &TestResults)
-{
+fn results_to_toml(ktestrc: &Ktestrc, commit_id: &String, results: &TestResults) {
     let file_contents = toml::to_string(&results).unwrap();
 
     let commit_summary_fname = ktestrc.output_dir.join(commit_id.clone() + ".toml");
@@ -206,8 +205,7 @@ fn results_to_capnp(ktestrc: &Ktestrc, commit_id: &String, results_in: &TestResu
     Ok(())
 }
 
-pub fn commit_update_results_from_fs(ktestrc: &Ktestrc, commit_id: &String)
-{
+pub fn commit_update_results_from_fs(ktestrc: &Ktestrc, commit_id: &String) {
     let results = TestResults { d: commitdir_get_results_fs(&ktestrc, commit_id) };
 
     results_to_toml(ktestrc, commit_id, &results);
@@ -215,7 +213,7 @@ pub fn commit_update_results_from_fs(ktestrc: &Ktestrc, commit_id: &String)
         .map_err(|e| eprintln!("error generating capnp: {}", e)).ok();
 }
 
-pub fn commit_get_results_capnp(ktestrc: &Ktestrc, commit_id: &String) -> Result<TestResultsMap, Box<dyn Error>> {
+fn commit_get_results_capnp(ktestrc: &Ktestrc, commit_id: &String) -> Result<TestResultsMap, Box<dyn Error>> {
     let f = std::fs::read(ktestrc.output_dir.join(commit_id.to_owned() + ".capnp"))?;
 
     let message_reader = serialize::read_message_from_flat_slice(&mut &f[..], capnp::message::ReaderOptions::new())?;
@@ -233,4 +231,8 @@ pub fn commit_get_results_capnp(ktestrc: &Ktestrc, commit_id: &String) -> Result
     }
 
     Ok(results)
+}
+
+pub fn commitdir_get_results(ktestrc: &Ktestrc, commit_id: &String) -> Result<TestResultsMap, Box<dyn Error>> {
+    commit_get_results_capnp(ktestrc, commit_id)
 }

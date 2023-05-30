@@ -6,7 +6,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::time::SystemTime;
-use ci_cgi::{Ktestrc, KtestrcTestGroup, ktestrc_read, git_get_commit, commitdir_get_results_toml};
+use ci_cgi::{Ktestrc, KtestrcTestGroup, ktestrc_read, git_get_commit, commitdir_get_results};
 use die::die;
 use file_lock::{FileLock, FileOptions};
 use memoize::memoize;
@@ -145,7 +145,7 @@ fn branch_get_next_test_job(rc: &Ktestrc, repo: &git2::Repository,
         let commit = commit.id().to_string();
         ret.commit = commit.clone();
 
-        let results = commitdir_get_results_toml(rc, &commit).unwrap_or(BTreeMap::new());
+        let results = commitdir_get_results(rc, &commit).unwrap_or(BTreeMap::new());
 
         for subtest in subtests.iter() {
             let full_subtest_name = subtest_full_name(&test_path, &subtest);
