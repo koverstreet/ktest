@@ -271,6 +271,26 @@ test_subvol_delete()
     check_counters ${ktest_scratch_dev[0]}
 }
 
+test_subvol_create_delete()
+{
+    bcachefs_antagonist
+
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    bcachefs subvolume create /mnt/foo
+    dd if=/dev/zero of=/mnt/foo/bar bs=100M count=1 oflag=direct
+
+    bcachefs subvolume delete /mnt/foo
+
+    bcachefs subvolume create /mnt/foo
+    dd if=/dev/zero of=/mnt/foo/bar bs=100M count=1 oflag=direct
+
+    umount /mnt
+
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
+}
+
 test_subvol_snapshot_create()
 {
     run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
