@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs::{OpenOptions, create_dir_all};
 use std::io::ErrorKind;
+use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::time::SystemTime;
@@ -10,6 +11,7 @@ use ci_cgi::{Ktestrc, KtestrcTestGroup, ktestrc_read, git_get_commit, commitdir_
 use die::die;
 use file_lock::{FileLock, FileOptions};
 use memoize::memoize;
+use anyhow;
 
 #[memoize]
 fn get_subtests(test_path: PathBuf) -> Vec<String> {
@@ -225,7 +227,7 @@ fn fetch_remotes_locked(rc: &Ktestrc, repo: &git2::Repository) -> Result<(), git
     Ok(())
 }
 
-fn fetch_remotes(rc: &Ktestrc, repo: &git2::Repository) -> Result<(), git2::Error> {
+fn fetch_remotes(rc: &Ktestrc, repo: &git2::Repository) -> anyhow::Result<()> {
     let lockfile = ".git_fetch.lock";
 
     let metadata = std::fs::metadata(&lockfile);
@@ -239,12 +241,10 @@ fn fetch_remotes(rc: &Ktestrc, repo: &git2::Repository) -> Result<(), git2::Erro
         }
     }
 
-    let filelock = FileLock::lock(lockfile, false, FileOptions::new().create(true).write(true));
-    if filelock.is_ok() {
-        fetch_remotes_locked(rc, repo)
-    } else {
-        Ok(())
-    }
+    let mut filelock = FileLock::lock(lockfile, false, FileOptions::new().create(true).write(true))?;
+    fetch_remotes_locked(rc, repo)?;
+    filelock.file.write_all(b"ok")?; /* update lockfile mtime */
+    Ok(())
 }
 
 fn main() {

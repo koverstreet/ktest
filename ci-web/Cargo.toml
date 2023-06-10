@@ -23,6 +23,7 @@ glob = "0.3.0"
 clap = { version = "4.0.32", features = ["derive"] }
 file-lock = "2.1.6"
 capnp = "0.17.0"
+anyhow = "1.0.71"
 
 [build-dependencies]
 capnpc = "*"
