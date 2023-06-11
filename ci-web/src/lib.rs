@@ -1,12 +1,14 @@
 use std::collections::BTreeMap;
 use std::fs::read_to_string;
 use std::fs::File;
-use std::error::Error;
+use std::io::prelude::*;
 use std::path::PathBuf;
 use serde_derive::Deserialize;
 use toml;
+use anyhow;
 
 pub mod testresult_capnp;
+pub mod worker_capnp;
 
 pub fn git_get_commit(repo: &git2::Repository, reference: String) -> Result<git2::Commit, git2::Error> {
     let r = repo.revparse_single(&reference);
@@ -25,8 +27,8 @@ pub fn git_get_commit(repo: &git2::Repository, reference: String) -> Result<git2
 
 #[derive(Deserialize)]
 pub struct KtestrcTestGroup {
-    pub max_commits:        usize,
-    pub priority:           usize,
+    pub max_commits:        u64,
+    pub priority:           u64,
     pub tests:              Vec<PathBuf>,
 }
 
@@ -45,7 +47,7 @@ pub struct Ktestrc {
     pub branch:             BTreeMap<String, KtestrcBranch>,
 }
 
-pub fn ktestrc_read() -> Result<Ktestrc, Box<dyn Error>> {
+pub fn ktestrc_read() -> anyhow::Result<Ktestrc> {
     let config = read_to_string("/etc/ktest-ci.toml")?;
     let ktestrc: Ktestrc = toml::from_str(&config)?;
 
@@ -130,7 +132,7 @@ fn commitdir_get_results_fs(ktestrc: &Ktestrc, commit_id: &String) -> TestResult
 use testresult_capnp::test_results;
 use capnp::serialize;
 
-fn results_to_capnp(ktestrc: &Ktestrc, commit_id: &String, results_in: &TestResultsMap) -> Result<(), Box<dyn Error>> {
+fn results_to_capnp(ktestrc: &Ktestrc, commit_id: &String, results_in: &TestResultsMap) -> anyhow::Result<()> {
     let mut message = capnp::message::Builder::new_default();
     let results = message.init_root::<test_results::Builder>();
     let mut result_list = results.init_entries(results_in.len().try_into().unwrap());
@@ -162,7 +164,7 @@ pub fn commit_update_results_from_fs(ktestrc: &Ktestrc, commit_id: &String) {
         .map_err(|e| eprintln!("error generating capnp: {}", e)).ok();
 }
 
-fn commit_get_results_capnp(ktestrc: &Ktestrc, commit_id: &String) -> Result<TestResultsMap, Box<dyn Error>> {
+pub fn commitdir_get_results(ktestrc: &Ktestrc, commit_id: &String) -> anyhow::Result<TestResultsMap> {
     let f = std::fs::read(ktestrc.output_dir.join(commit_id.to_owned() + ".capnp"))?;
 
     let message_reader = serialize::read_message_from_flat_slice(&mut &f[..], capnp::message::ReaderOptions::new())?;
@@ -182,6 +184,89 @@ fn commit_get_results_capnp(ktestrc: &Ktestrc, commit_id: &String) -> Result<Tes
     Ok(results)
 }
 
-pub fn commitdir_get_results(ktestrc: &Ktestrc, commit_id: &String) -> Result<TestResultsMap, Box<dyn Error>> {
-    commit_get_results_capnp(ktestrc, commit_id)
+use chrono::{DateTime, TimeZone, Utc};
+
+#[derive(Debug)]
+pub struct Worker {
+    pub hostname:       String,
+    pub workdir:        String,
+    pub starttime:      DateTime<Utc>,
+    pub branch:         String,
+    pub age:            u64,
+    pub commit:	        String,
+    pub tests:          String,
+}
+
+pub type Workers = Vec<Worker>;
+
+use worker_capnp::workers;
+
+fn workers_parse(f: Vec<u8>) -> anyhow::Result<Workers> {
+    let message_reader = serialize::read_message_from_flat_slice(&mut &f[..], capnp::message::ReaderOptions::new())?;
+    let entries = message_reader.get_root::<workers::Reader>()?
+        .get_entries()?;
+
+    let workers = entries.iter().map(|e| Worker {
+        hostname:   e.get_hostname().unwrap_or("").to_string(),
+        workdir:    e.get_workdir().unwrap_or("").to_string(),
+        starttime:  Utc.timestamp_opt(e.get_starttime(), 0).unwrap(),
+        branch:     e.get_branch().unwrap_or("").to_string(),
+        commit:     e.get_commit().unwrap_or("").to_string(),
+        age:        e.get_age(),
+        tests:      e.get_tests().unwrap_or("").to_string(),
+    }).collect();
+
+    Ok(workers)
+}
+
+pub fn workers_get(ktestrc: &Ktestrc) -> anyhow::Result<Workers> {
+    let f = std::fs::read(ktestrc.output_dir.join("workers.capnp"))?;
+
+    workers_parse(f)
+}
+
+use file_lock::{FileLock, FileOptions};
+
+pub fn workers_update(ktestrc: &Ktestrc, n: Worker) -> Option<()> {
+    let fname = ktestrc.output_dir.join("workers.capnp");
+    let foptions = FileOptions::new().read(true).write(true).append(false).create(true);
+
+    let mut filelock = FileLock::lock(fname, true, foptions)
+        .map_err(|e| eprintln!("error locking workers: {}", e)).ok()?;
+
+    let mut f = Vec::new();
+    filelock.file.read_to_end(&mut f).ok()?;
+
+    let mut workers: Workers  = workers_parse(f)
+        .map_err(|e| eprintln!("error parsing workers: {}", e))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|w| w.hostname != n.hostname || w.workdir != n.workdir)
+        .collect();
+
+    workers.push(n);
+
+    let mut message = capnp::message::Builder::new_default();
+    let workers_message = message.init_root::<workers::Builder>();
+    let mut workers_list = workers_message.init_entries(workers.len().try_into().unwrap());
+
+    for (idx, src) in workers.iter().enumerate() {
+        let mut dst = workers_list.reborrow().get(idx.try_into().unwrap());
+
+        dst.set_hostname(&src.hostname);
+        dst.set_workdir(&src.workdir);
+        dst.set_starttime(src.starttime.timestamp());
+        dst.set_branch(&src.branch);
+        dst.set_commit(&src.commit);
+        dst.set_age(src.age);
+        dst.set_tests(&src.tests);
+    }
+
+    filelock.file.set_len(0).ok()?;
+    filelock.file.rewind().ok()?;
+
+    serialize::write_message(&mut filelock.file, &message)
+        .map_err(|e| eprintln!("error writing workers: {}", e)).ok()?;
+
+    Some(())
 }

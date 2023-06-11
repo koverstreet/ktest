@@ -8,10 +8,13 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::time::SystemTime;
 use ci_cgi::{Ktestrc, KtestrcTestGroup, ktestrc_read, git_get_commit, commitdir_get_results};
+use ci_cgi::{Worker, workers_update};
 use die::die;
 use file_lock::{FileLock, FileOptions};
 use memoize::memoize;
 use anyhow;
+use clap::Parser;
+use chrono::Utc;
 
 #[memoize]
 fn get_subtests(test_path: PathBuf) -> Vec<String> {
@@ -78,13 +81,13 @@ fn lockfile_exists(rc: &Ktestrc, commit: &str, test_name: &str, create: bool) ->
 struct TestJob {
     branch:     String,
     commit:     String,
-    age:        usize,
-    priority:   usize,
+    age:        u64,
+    priority:   u64,
     test:       PathBuf,
     subtests:   Vec<String>,
 }
 
-fn testjob_weight(j: &TestJob) -> usize {
+fn testjob_weight(j: &TestJob) -> u64 {
     j.age + j.priority
 }
 
@@ -193,6 +196,21 @@ fn create_job_lockfiles(rc: &Ktestrc, mut job: TestJob) -> Option<TestJob> {
     if !job.subtests.is_empty() { Some(job) } else { None }
 }
 
+fn get_and_lock_job(rc: &Ktestrc, repo: &git2::Repository) -> Option<TestJob> {
+    loop {
+        let job = get_best_test_job(rc, repo);
+
+        if job.is_none() {
+            return job;
+        }
+
+        let job = create_job_lockfiles(rc, job.unwrap());
+        if job.is_some() {
+            return job;
+        }
+    }
+}
+
 fn fetch_remotes_locked(rc: &Ktestrc, repo: &git2::Repository) -> Result<(), git2::Error> {
     for (branch, branchconfig) in &rc.branch {
         let fetch = branchconfig.fetch
@@ -247,7 +265,19 @@ fn fetch_remotes(rc: &Ktestrc, repo: &git2::Repository) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(short, long)]
+    dry_run:    bool,
+
+    hostname:   String,
+    workdir:    String,
+}
+
 fn main() {
+    let args = Args::parse();
+
     let ktestrc = ktestrc_read();
     if let Err(e) = ktestrc {
         eprintln!("could not read config; {}", e);
@@ -264,25 +294,27 @@ fn main() {
     let repo = repo.unwrap();
 
     fetch_remotes(&ktestrc, &repo)
-        .map_err(|e| die!("error fetching remotes: {}", e)).ok();
+        .map_err(|e| eprintln!("error fetching remotes: {}", e)).ok();
 
-    let mut job: Option<TestJob>;
+    let job = if !args.dry_run {
+        get_and_lock_job(&ktestrc, &repo)
+    } else {
+        get_best_test_job(&ktestrc, &repo)
+    };
 
-    loop {
-        job = get_best_test_job(&ktestrc, &repo);
+    if let Some(job) = job {
+        let tests = job.test.into_os_string().into_string().unwrap() + " " + &job.subtests.join(" ");
 
-        if job.is_none() {
-            break;
-        }
+        workers_update(&ktestrc, Worker {
+            hostname:   args.hostname,
+            workdir:    args.workdir,
+            starttime:  Utc::now(),
+            branch:     job.branch.clone(),
+            age:        job.age,
+            commit:     job.commit.clone(),
+            tests:      tests.clone(),
+        });
 
-        job = create_job_lockfiles(&ktestrc, job.unwrap());
-        if let Some(job) = job {
-            print!("{} {} {}", job.branch, job.commit, job.test.display());
-            for t in job.subtests {
-                print!(" {}", t);
-            }
-            println!("");
-            break;
-        }
+        println!("TEST_JOB {} {} {}", job.branch, job.commit, tests);
     }
 }

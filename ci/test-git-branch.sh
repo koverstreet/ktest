@@ -15,6 +15,8 @@ KTEST_DIR=$(dirname "$(readlink -e "$0")")/..
 source <(ssh $JOBSERVER cat .ktestrc)
 
 JOBSERVER_LINUX_REPO=ssh://$JOBSERVER/$JOBSERVER_HOME/linux
+HOSTNAME=$(hostname)
+WORKDIR=$(basename $(pwd))
 
 ssh() {
     (
@@ -156,13 +158,17 @@ while true; do
     echo "Getting test job"
 
     while true; do
-	TEST_JOB=( $(ssh $JOBSERVER get-test-job) )
+	TEST_JOB=( $(ssh $JOBSERVER get-test-job $HOSTNAME $WORKDIR) )
 
-	[[ ${#TEST_JOB[@]} != 0 ]] && break
+	echo "${TEST_JOB[@]}"
+
+	[[ ${#TEST_JOB[@]} != 0 && ${TEST_JOB[0]} == TEST_JOB ]] && break
 
 	sleep 10
     done
 
+    TEST_JOB=("${TEST_JOB[@]:1}")
     echo "Got job ${TEST_JOB[@]}"
+
     (run_test_job "${TEST_JOB[@]}") || sleep 10
 done

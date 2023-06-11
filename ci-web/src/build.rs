@@ -6,4 +6,10 @@ fn main() {
         .file("src/testresult.capnp")
         .run()
         .expect("compiling schema");
+
+    capnpc::CompilerCommand::new()
+        .output_path(".")
+        .file("src/worker.capnp")
+        .run()
+        .expect("compiling schema");
 }

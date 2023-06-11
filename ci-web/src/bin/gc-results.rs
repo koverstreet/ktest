@@ -14,7 +14,8 @@ struct Args {
 
 fn branch_get_commits(repo: &git2::Repository,
                       branch: &str,
-                      max_commits: usize) -> Vec<String> {
+                      max_commits: u64) -> Vec<String> {
+    let max_commits = max_commits.try_into().unwrap();
     let mut walk = repo.revwalk().unwrap();
     let reference = git_get_commit(&repo, branch.to_string());
     if reference.is_err() {

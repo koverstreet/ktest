@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use regex::Regex;
+use chrono::Duration;
 extern crate cgi;
 extern crate querystring;
 
-use ci_cgi::{Ktestrc, ktestrc_read, TestResultsMap, TestStatus, commitdir_get_results, git_get_commit};
+use ci_cgi::{Ktestrc, ktestrc_read, TestResultsMap, TestStatus, commitdir_get_results, git_get_commit, workers_get};
 
 const COMMIT_FILTER:    &str = include_str!("../../commit-filter");
 const STYLESHEET:       &str = "bootstrap.min.css";
@@ -266,7 +267,54 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
     cgi::html_response(200, out)
 }
 
-fn ci_list_branches(ci: &Ci) -> cgi::Response {
+fn ci_list_branches(ci: &Ci, out: &mut String) {
+    writeln!(out, "<div> <table class=\"table\">").unwrap();
+
+    for (b, _) in &ci.ktestrc.branch {
+        writeln!(out, "<tr> <th> <a href={}?branch={}>{}</a> </th> </tr>", ci.script_name, b, b).unwrap();
+    }
+
+    writeln!(out, "</table> </div>").unwrap();
+}
+
+fn ci_worker_status(ci: &Ci, out: &mut String) -> Option<()>{
+    use chrono::prelude::Utc;
+
+    let workers = workers_get(&ci.ktestrc).ok()?;
+
+    writeln!(out, "<div> <table class=\"table\">").unwrap();
+
+    writeln!(out, "<tr>").unwrap();
+    writeln!(out, "<th> Host.workdir   </th>").unwrap();
+    writeln!(out, "<th> Commit         </th>").unwrap();
+    writeln!(out, "<th> Tests          </th>").unwrap();
+    writeln!(out, "<th> Elapsed time   </th>").unwrap();
+    writeln!(out, "</tr>").unwrap();
+
+    let now = Utc::now();
+    let ktest_dir = ci.ktestrc.ktest_dir.clone().into_os_string().into_string().unwrap() + "/";
+
+    for w in workers {
+        let elapsed = (now - w.starttime).max(Duration::zero());
+        let tests = w.tests.strip_prefix(&ktest_dir).unwrap_or(&w.tests);
+
+        writeln!(out, "<tr>").unwrap();
+        writeln!(out, "<td> {}.{}           </td>", w.hostname, w.workdir).unwrap();
+        writeln!(out, "<td> {}~{}           </td>", w.branch, w.age).unwrap();
+        writeln!(out, "<td> {}              </td>", tests).unwrap();
+        writeln!(out, "<td> {}:{:02}:{:02}  </td>",
+            elapsed.num_hours(),
+            elapsed.num_minutes() % 60,
+            elapsed.num_seconds() % 60).unwrap();
+        writeln!(out, "</tr>").unwrap();
+    }
+
+    writeln!(out, "</table> </div>").unwrap();
+
+    Some(())
+}
+
+fn ci_home(ci: &Ci) -> cgi::Response {
     let mut out = String::new();
 
     writeln!(&mut out, "<!DOCTYPE HTML>").unwrap();
@@ -274,16 +322,14 @@ fn ci_list_branches(ci: &Ci) -> cgi::Response {
     writeln!(&mut out, "<link href=\"{}\" rel=\"stylesheet\">", ci.stylesheet).unwrap();
 
     writeln!(&mut out, "<body>").unwrap();
-    writeln!(&mut out, "<table class=\"table\">").unwrap();
 
-    for (b, _) in &ci.ktestrc.branch {
-        writeln!(&mut out, "<tr> <th> <a href={}?branch={}>{}</a> </th> </tr>", ci.script_name, b, b).unwrap();
-    }
+    ci_list_branches(ci, &mut out);
 
-    writeln!(&mut out, "</table>").unwrap();
-    writeln!(&mut out, "</div>").unwrap();
+    ci_worker_status(ci, &mut out);
+
     writeln!(&mut out, "</body>").unwrap();
     writeln!(&mut out, "</html>").unwrap();
+
     cgi::html_response(200, out)
 }
 
@@ -348,6 +394,6 @@ cgi::cgi_main! {|request: cgi::Request| -> cgi::Response {
     } else if ci.branch.is_some() {
         ci_log(&ci)
     } else {
-        ci_list_branches(&ci)
+        ci_home(&ci)
     }
 } }
