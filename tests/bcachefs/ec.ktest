@@ -76,7 +76,6 @@ do_ec_test()
     bcachefs_antagonist
 
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	--erasure_code				\
 	"$@"					\
 	--replicas=2				\
@@ -169,28 +168,32 @@ test_ec_gc()
 {
     set_watchdog 1200
 
-    bcachefs_antagonist
+    local loops=$((($ktest_priority + 1) * 4))
 
+    # We need errors=panic since we're ignoring errors from fio:
     run_quiet "" bcachefs format -f		\
-	--errors=continue			\
+	--errors=panic				\
 	--replicas=2				\
 	"${ktest_scratch_dev[@]}"
 
     devs="$(join_by : "${ktest_scratch_dev[@]}")"
     mount -t bcachefs -o erasure_code $devs /mnt
 
+    bcachefs_antagonist
+
     fill_device /mnt/fiotest
 
-    local loops=$((($ktest_priority + 1) * 4))
-    for i in $(seq 1 $loops); do
+    # Writing with a small block size will increase the size of our metadata,
+    # meaning we'll eventually see -ENOSPC even though ideally we shouldn't
+    # since we're overwriting
+    # When we do, truncate to free up some space and keep going:
+    for i in $(seq 0 $loops); do
 	run_fio_base				\
-	    --buffer_compress_percentage=50	\
-						\
 	    --name=randwrite			\
 	    --stonewall				\
 	    --rw=randwrite			\
-	    --loops=$loops			\
-	    --bsrange=4k-4k
+	    --size=20G				\
+	    --bsrange=4k-4k || true
 
 	cur_size=$(stat -c '%s' /mnt/fiotest)
 	new_size=$(($cur_size - 1048576))
@@ -199,18 +202,14 @@ test_ec_gc()
 	truncate --size=$new_size /mnt/fiotest
     done
 
-    echo 1 > /sys/fs/bcachefs/*/internal/trigger_gc
-    echo unmounting
-    exit
-
     bcachefs fs usage -h /mnt
     umount /mnt
 
-    # test remount:
-    mount -t bcachefs -o fix_errors,erasure_code $devs /mnt
-    umount /mnt
+    bcachefs fsck -n "${ktest_scratch_dev[@]}"
 
-    bcachefs fsck "${ktest_scratch_dev[@]}"
+    # test remount:
+    mount -t bcachefs $devs /mnt
+    umount /mnt
 
     check_counters ${ktest_scratch_dev[0]}
 }
@@ -223,7 +222,6 @@ do_remove_test()
     set_watchdog 60
 
     run_quiet "" bcachefs format		\
-	--errors=panic				\
 	--erasure_code				\
 	--replicas=2				\
 	"${ktest_scratch_dev[@]}"

@@ -672,7 +672,7 @@ run_copygc_torture()
 
     fill_device /mnt/fiotest
 
-    for i in $(seq 1 $loops); do
+    for i in $(seq 0 $loops); do
 	run_fio_base				\
 	    --buffer_compress_percentage=50	\
 						\
