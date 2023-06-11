@@ -40,7 +40,9 @@ git_fetch()
 
 	while true; do
 	    git fetch ssh://$JOBSERVER/$JOBSERVER_HOME/$repo $@
-	    (($? == 0)) && break
+	    ret=$?
+	    (($ret == 0)) && break
+	    echo "git fetch returned $ret"
 	    sleep 1
 	done
     )
@@ -160,5 +162,6 @@ while true; do
 	sleep 10
     done
 
+    echo "Got job ${TEST_JOB[@]}"
     (run_test_job "${TEST_JOB[@]}") || sleep 10
 done
