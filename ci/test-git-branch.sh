@@ -44,6 +44,7 @@ git_fetch()
 	    git fetch ssh://$JOBSERVER/$JOBSERVER_HOME/$repo $@
 	    ret=$?
 	    (($ret == 0)) && break
+	    (($ret == 1)) && exit 1
 	    (($ret == 128)) && exit 1
 	    echo "git fetch returned $ret"
 	    sleep 1
