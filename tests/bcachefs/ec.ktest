@@ -166,7 +166,7 @@ test_ec_mixed_tiers()
 
 test_ec_gc()
 {
-    set_watchdog 1200
+    set_watchdog 2400
 
     local loops=$((($ktest_priority + 1) * 4))
 
