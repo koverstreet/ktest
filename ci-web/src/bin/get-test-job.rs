@@ -9,6 +9,7 @@ use std::process;
 use std::time::SystemTime;
 use ci_cgi::{Ktestrc, KtestrcTestGroup, ktestrc_read, git_get_commit, commitdir_get_results};
 use ci_cgi::{Worker, workers_update};
+use ci_cgi::TestResultsMap;
 use die::die;
 use file_lock::{FileLock, FileOptions};
 use memoize::memoize;
@@ -115,6 +116,20 @@ fn subtest_full_name(test_path: &Path, subtest: &String) -> String {
             subtest.replace("/", "."))
 }
 
+fn have_result(results: &TestResultsMap, subtest: &str) -> bool {
+    use ci_cgi::TestStatus;
+
+    let r = results.get(subtest);
+    if let Some(r) = r {
+        let elapsed = Utc::now() - r.starttime;
+        let timeout = chrono::Duration::minutes(30);
+
+        r.status != TestStatus::Inprogress || elapsed < timeout
+    } else {
+        false
+    }
+}
+
 fn branch_get_next_test_job(rc: &Ktestrc, repo: &git2::Repository,
                             branch: &str,
                             test_group: &KtestrcTestGroup,
@@ -155,7 +170,7 @@ fn branch_get_next_test_job(rc: &Ktestrc, repo: &git2::Repository,
         for subtest in subtests.iter() {
             let full_subtest_name = subtest_full_name(&test_path, &subtest);
 
-            if results.get(&full_subtest_name).is_none() &&
+            if !have_result(&results, &full_subtest_name) &&
                !lockfile_exists(rc, &commit, &full_subtest_name, false) {
                 ret.subtests.push(subtest.to_string());
                 if ret.subtests.len() > 20 {

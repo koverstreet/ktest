@@ -101,6 +101,7 @@ impl TestStatus {
 #[derive(Copy, Clone)]
 pub struct TestResult {
     pub status:     TestStatus,
+    pub starttime:  DateTime<Utc>,
     pub duration:   u64,
 }
 
@@ -108,8 +109,13 @@ pub type TestResultsMap = BTreeMap<String, TestResult>;
 
 fn commitdir_get_results_fs(ktestrc: &Ktestrc, commit_id: &String) -> TestResultsMap {
     fn read_test_result(testdir: &std::fs::DirEntry) -> Option<TestResult> {
+        let mut f = File::open(&testdir.path().join("status")).ok()?;
+        let mut status = String::new();
+        f.read_to_string(&mut status).ok()?;
+
         Some(TestResult {
-            status:     TestStatus::from_str(&read_to_string(&testdir.path().join("status")).ok()?),
+            status:     TestStatus::from_str(&status),
+            starttime:  f.metadata().ok()?.modified().ok()?.into(),
             duration:   read_to_string(&testdir.path().join("duration")).unwrap_or("0".to_string()).parse().unwrap_or(0),
         })
     }
@@ -175,6 +181,7 @@ pub fn commitdir_get_results(ktestrc: &Ktestrc, commit_id: &String) -> anyhow::R
     for e in entries {
         let r = TestResult {
             status:     e.get_status()?,
+            starttime:  Utc.timestamp_opt(e.get_starttime(), 0).unwrap(),
             duration:   e.get_duration()
         };
 

@@ -2,6 +2,7 @@
 
 struct TestResult {
     name @0:		Text;
+    starttime @3:	Int64;
     duration @1:	UInt64;
     status @2:		Status;
     enum Status {
