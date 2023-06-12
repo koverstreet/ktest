@@ -331,5 +331,15 @@ fn main() {
         });
 
         println!("TEST_JOB {} {} {}", job.branch, job.commit, tests);
+    } else {
+        workers_update(&ktestrc, Worker {
+            hostname:   args.hostname,
+            workdir:    args.workdir,
+            starttime:  Utc::now(),
+            branch:     "".to_string(),
+            age:        0,
+            commit:     "".to_string(),
+            tests:      "".to_string(),
+        });
     }
 }
