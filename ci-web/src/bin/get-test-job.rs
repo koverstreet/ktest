@@ -240,14 +240,9 @@ fn fetch_remotes_locked(rc: &Ktestrc, repo: &git2::Repository) -> Result<(), git
             .status()
             .expect(&format!("failed to execute fetch"));
         if !status.success() {
-            die!("fetch error");
+            eprintln!("fetch error: {}", status);
+            return Ok(());
         }
-
-        /*
-        repo.remote_anonymous(branchconfig.remote.as_str())?
-            .download(&[&remote_branch], None)
-            .map_err(|e| { eprintln!("download error: {}", e); e})?;
-        */
 
         let fetch_head = repo.revparse_single("FETCH_HEAD")
             .map_err(|e| { eprintln!("error parsing FETCH_HEAD: {}", e); e})?
@@ -267,7 +262,7 @@ fn fetch_remotes(rc: &Ktestrc, repo: &git2::Repository) -> anyhow::Result<()> {
     if let Ok(metadata) = metadata {
         let elapsed = metadata.modified().unwrap()
             .elapsed()
-            .unwrap_or(std::time::Duration::from_secs(0));
+            .unwrap_or_default();
 
         if elapsed < std::time::Duration::from_secs(30) {
             return Ok(());
@@ -308,8 +303,7 @@ fn main() {
     }
     let repo = repo.unwrap();
 
-    fetch_remotes(&ktestrc, &repo)
-        .map_err(|e| eprintln!("error fetching remotes: {}", e)).ok();
+    fetch_remotes(&ktestrc, &repo).ok();
 
     let job = if !args.dry_run {
         get_and_lock_job(&ktestrc, &repo)

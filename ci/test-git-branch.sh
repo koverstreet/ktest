@@ -161,8 +161,6 @@ while true; do
     while true; do
 	TEST_JOB=( $(ssh $JOBSERVER get-test-job $HOSTNAME $WORKDIR) )
 
-	echo "${TEST_JOB[@]}"
-
 	[[ ${#TEST_JOB[@]} != 0 && ${TEST_JOB[0]} == TEST_JOB ]] && break
 
 	sleep 10
