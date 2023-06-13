@@ -292,11 +292,11 @@ fn ci_worker_status(ci: &Ci, out: &mut String) -> Option<()>{
     writeln!(out, "</tr>").unwrap();
 
     let now = Utc::now();
-    let ktest_dir = ci.ktestrc.ktest_dir.clone().into_os_string().into_string().unwrap() + "/";
+    let tests_dir = ci.ktestrc.ktest_dir.clone().into_os_string().into_string().unwrap() + "/tests/";
 
     for w in workers {
         let elapsed = (now - w.starttime).max(Duration::zero());
-        let tests = w.tests.strip_prefix(&ktest_dir).unwrap_or(&w.tests);
+        let tests = w.tests.strip_prefix(&tests_dir).unwrap_or(&w.tests);
 
         writeln!(out, "<tr>").unwrap();
         writeln!(out, "<td> {}.{}           </td>", w.hostname, w.workdir).unwrap();
