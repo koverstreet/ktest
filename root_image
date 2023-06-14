@@ -20,6 +20,7 @@ fi
 
 checkdep fallocate util-linux
 checkdep mkfs.ext4 e2fsprogs
+checkdep curl 
 
 IMAGE_SIZE="10G"
 MIRROR=https://deb.debian.org/debian/
