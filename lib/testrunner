@@ -118,7 +118,7 @@ copy_to_host()
 	    dst=$ktest_out/gcov.$i
 
 	    if [[ ! -d $dst ]]; then
-		cp -dR $gcov_dir "$dst"
+		cp -dR $gcov_dir/$ktest_kernel_build "$dst"
 		break
 	    fi
 	done
