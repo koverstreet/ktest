@@ -5,6 +5,7 @@ set -o errexit
 set -o errtrace
 
 ktest_verbose=1
+ktest_verbosearg=""
 ktest_once=false
 
 KTEST_DIR=$(dirname "$(readlink -e "$0")")/..
@@ -26,6 +27,7 @@ while getopts "ovh" arg; do
 	    ;;
 	v)
 	    ktest_verbose=true
+	    ktest_verbosearg=-v
 	    ;;
 	h)
 	    usage
@@ -196,7 +198,7 @@ while true; do
     echo "Getting test job"
 
     while true; do
-	TEST_JOB=( $(ssh $JOBSERVER get-test-job $HOSTNAME $WORKDIR) )
+	TEST_JOB=( $(ssh $JOBSERVER get-test-job $ktest_verbosearg $HOSTNAME $WORKDIR) )
 
 	[[ ${#TEST_JOB[@]} != 0 && ${TEST_JOB[0]} == TEST_JOB ]] && break
 

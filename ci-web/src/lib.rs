@@ -98,7 +98,7 @@ impl TestStatus {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct TestResult {
     pub status:     TestStatus,
     pub starttime:  DateTime<Utc>,

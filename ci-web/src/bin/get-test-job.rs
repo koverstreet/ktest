@@ -23,7 +23,7 @@ fn get_subtests(test_path: PathBuf) -> Vec<String> {
     let output = std::process::Command::new(&test_path)
         .arg("list-tests")
         .output()
-        .expect(&format!("failed to execute process {:?} ", test_path))
+        .expect(&format!("failed to execute process {:?} ", &test_path))
         .stdout;
     let output = String::from_utf8_lossy(&output);
 
@@ -80,6 +80,7 @@ fn lockfile_exists(rc: &Ktestrc, commit: &str, test_name: &str, create: bool) ->
     }
 }
 
+#[derive(Debug)]
 struct TestJob {
     branch:     String,
     commit:     String,
@@ -131,7 +132,7 @@ fn have_result(results: &TestResultsMap, subtest: &str) -> bool {
     }
 }
 
-fn branch_get_next_test_job(rc: &Ktestrc, repo: &git2::Repository,
+fn branch_get_next_test_job(args: &Args, rc: &Ktestrc, repo: &git2::Repository,
                             branch: &str,
                             test_group: &KtestrcTestGroup,
                             test_path: &Path) -> Option<TestJob> {
@@ -147,6 +148,9 @@ fn branch_get_next_test_job(rc: &Ktestrc, repo: &git2::Repository,
 
     let subtests = get_subtests(test_path.clone());
 
+    if args.verbose { eprintln!("looking for tests to run for branch {} test {:?} subtests {:?}",
+        branch, test_path, subtests) }
+
     let mut walk = repo.revwalk().unwrap();
     let reference = git_get_commit(&repo, branch.to_string());
     if reference.is_err() {
@@ -160,13 +164,19 @@ fn branch_get_next_test_job(rc: &Ktestrc, repo: &git2::Repository,
         return None;
     }
 
-    for commit in walk
+    for (age, commit) in walk
             .filter_map(|i| i.ok())
-            .filter_map(|i| repo.find_commit(i).ok()) {
+            .filter_map(|i| repo.find_commit(i).ok())
+            .take(test_group.max_commits as usize)
+            .enumerate() {
         let commit = commit.id().to_string();
         ret.commit = commit.clone();
+        ret.age = age as u64;
 
         let results = commitdir_get_results(rc, &commit).unwrap_or(BTreeMap::new());
+
+        if args.verbose { eprintln!("at commit {} age {}\nresults {:?}",
+            &commit, age, results) }
 
         for subtest in subtests.iter() {
             let full_subtest_name = subtest_full_name(&test_path, &subtest);
@@ -181,24 +191,20 @@ fn branch_get_next_test_job(rc: &Ktestrc, repo: &git2::Repository,
         }
 
         if !ret.subtests.is_empty() {
+            if args.verbose { eprintln!("possible job: {:?}", ret) }
             return Some(ret);
-        }
-
-        ret.age += 1;
-        if ret.age >= test_group.max_commits {
-            break;
         }
     }
 
     None
 }
 
-fn get_best_test_job(rc: &Ktestrc, repo: &git2::Repository) -> Option<TestJob> {
+fn get_best_test_job(args: &Args, rc: &Ktestrc, repo: &git2::Repository) -> Option<TestJob> {
     rc.branch.iter()
         .flat_map(move |(branch, branchconfig)| branchconfig.tests.iter()
             .filter_map(|i| rc.test_group.get(i)).map(move |testgroup| (branch, testgroup)))
         .flat_map(move |(branch, testgroup)| testgroup.tests.iter()
-            .filter_map(move |test| branch_get_next_test_job(rc, repo, &branch, &testgroup, &test)))
+            .filter_map(move |test| branch_get_next_test_job(args, rc, repo, &branch, &testgroup, &test)))
         .min()
 }
 
@@ -212,9 +218,9 @@ fn create_job_lockfiles(rc: &Ktestrc, mut job: TestJob) -> Option<TestJob> {
     if !job.subtests.is_empty() { Some(job) } else { None }
 }
 
-fn get_and_lock_job(rc: &Ktestrc, repo: &git2::Repository) -> Option<TestJob> {
+fn get_and_lock_job(args: &Args, rc: &Ktestrc, repo: &git2::Repository) -> Option<TestJob> {
     loop {
-        let job = get_best_test_job(rc, repo);
+        let job = get_best_test_job(args, rc, repo);
 
         if job.is_none() {
             return job;
@@ -272,8 +278,11 @@ fn fetch_remotes(rc: &Ktestrc, repo: &git2::Repository) -> anyhow::Result<()> {
     }
 
     let mut filelock = FileLock::lock(lockfile, false, FileOptions::new().create(true).write(true))?;
-    eprintln!("fetching remotes");
+
+    eprint!("Fetching remotes...");
     fetch_remotes_locked(rc, repo)?;
+    eprintln!(" done");
+
     filelock.file.write_all(b"ok")?; /* update lockfile mtime */
     Ok(())
 }
@@ -283,6 +292,9 @@ fn fetch_remotes(rc: &Ktestrc, repo: &git2::Repository) -> anyhow::Result<()> {
 struct Args {
     #[arg(short, long)]
     dry_run:    bool,
+
+    #[arg(short, long)]
+    verbose:    bool,
 
     hostname:   String,
     workdir:    String,
@@ -309,9 +321,9 @@ fn main() {
     fetch_remotes(&ktestrc, &repo).ok();
 
     let job = if !args.dry_run {
-        get_and_lock_job(&ktestrc, &repo)
+        get_and_lock_job(&args, &ktestrc, &repo)
     } else {
-        get_best_test_job(&ktestrc, &repo)
+        get_best_test_job(&args, &ktestrc, &repo)
     };
 
     if let Some(job) = job {
