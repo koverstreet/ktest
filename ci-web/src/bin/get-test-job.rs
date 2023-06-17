@@ -6,6 +6,7 @@ use std::io::ErrorKind;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 use std::process;
+use std::process::Stdio;
 use std::time::SystemTime;
 use ci_cgi::{Ktestrc, KtestrcTestGroup, ktestrc_read, git_get_commit, commitdir_get_results};
 use ci_cgi::{Worker, workers_update};
@@ -226,38 +227,39 @@ fn get_and_lock_job(rc: &Ktestrc, repo: &git2::Repository) -> Option<TestJob> {
     }
 }
 
-fn fetch_remotes_locked(rc: &Ktestrc, repo: &git2::Repository) -> Result<(), git2::Error> {
-    for (branch, branchconfig) in &rc.branch {
-        let fetch = branchconfig.fetch
-            .split_whitespace()
-            .map(|i| OsStr::new(i));
+fn fetch_remotes(rc: &Ktestrc, repo: &git2::Repository) -> anyhow::Result<()> {
+    fn fetch_remotes_locked(rc: &Ktestrc, repo: &git2::Repository) -> Result<(), git2::Error> {
+        for (branch, branchconfig) in &rc.branch {
+            let fetch = branchconfig.fetch
+                .split_whitespace()
+                .map(|i| OsStr::new(i));
 
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&rc.linux_repo)
-            .arg("fetch")
-            .args(fetch)
-            .status()
-            .expect(&format!("failed to execute fetch"));
-        if !status.success() {
-            eprintln!("fetch error: {}", status);
-            return Ok(());
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&rc.linux_repo)
+                .arg("fetch")
+                .args(fetch)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .status()
+                .expect(&format!("failed to execute fetch"));
+            if !status.success() {
+                eprintln!("fetch error: {}", status);
+                return Ok(());
+            }
+
+            let fetch_head = repo.revparse_single("FETCH_HEAD")
+                .map_err(|e| { eprintln!("error parsing FETCH_HEAD: {}", e); e})?
+                .peel_to_commit()
+                .map_err(|e| { eprintln!("error getting FETCH_HEAD: {}", e); e})?;
+
+            repo.branch(branch, &fetch_head, true)?;
         }
 
-        let fetch_head = repo.revparse_single("FETCH_HEAD")
-            .map_err(|e| { eprintln!("error parsing FETCH_HEAD: {}", e); e})?
-            .peel_to_commit()
-            .map_err(|e| { eprintln!("error getting FETCH_HEAD: {}", e); e})?;
-
-        repo.branch(branch, &fetch_head, true)?;
+        Ok(())
     }
 
-    Ok(())
-}
-
-fn fetch_remotes(rc: &Ktestrc, repo: &git2::Repository) -> anyhow::Result<()> {
     let lockfile = ".git_fetch.lock";
-
     let metadata = std::fs::metadata(&lockfile);
     if let Ok(metadata) = metadata {
         let elapsed = metadata.modified().unwrap()
@@ -270,6 +272,7 @@ fn fetch_remotes(rc: &Ktestrc, repo: &git2::Repository) -> anyhow::Result<()> {
     }
 
     let mut filelock = FileLock::lock(lockfile, false, FileOptions::new().create(true).write(true))?;
+    eprintln!("fetching remotes");
     fetch_remotes_locked(rc, repo)?;
     filelock.file.write_all(b"ok")?; /* update lockfile mtime */
     Ok(())
@@ -314,6 +317,8 @@ fn main() {
     if let Some(job) = job {
         let tests = job.test.into_os_string().into_string().unwrap() + " " + &job.subtests.join(" ");
 
+        println!("TEST_JOB {} {} {}", job.branch, job.commit, tests);
+
         workers_update(&ktestrc, Worker {
             hostname:   args.hostname,
             workdir:    args.workdir,
@@ -323,8 +328,6 @@ fn main() {
             commit:     job.commit.clone(),
             tests:      tests.clone(),
         });
-
-        println!("TEST_JOB {} {} {}", job.branch, job.commit, tests);
     } else {
         workers_update(&ktestrc, Worker {
             hostname:   args.hostname,
