@@ -4,7 +4,7 @@
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../lib/common.sh
 
 if [[ ! -v ktest_verbose ]]; then
-    ktest_verbose=0
+    ktest_verbose=false
     ktest_priority=0
     ktest_cpus=$(nproc)
     ktest_mem=""

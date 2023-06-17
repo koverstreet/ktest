@@ -60,9 +60,9 @@ fi
 
 # If debugging crash dumps, add "console=hvc0" to the append line
 # below:
-if [[ $ktest_crashdump = 1 ]]; then
-    kexec -p /host/$ktest_kernel_binary/vmlinuz --append="root=$ktest_root_dev rw maxcpus=1" || true
-fi
+#if $ktest_crashdump; then
+#    kexec -p /host/$ktest_kernel_binary/vmlinuz --append="root=$ktest_root_dev rw maxcpus=1" || true
+#fi
 
 NR_REBOOTS=0
 EXPECTED_REBOOT=0
@@ -177,8 +177,8 @@ while [[ $ret = 0 ]]; do
     /host/$ktest_test run-tests $ktest_tests
     ret=$?
     pkill -P $$ >/dev/null || true
-    [[ $ret != 0 ]]	    && break
-    [[ $ktest_loop = 1 ]]   || break
+    [[ $ret != 0 ]]	&& break
+    $ktest_loop		|| break
 
     iterations=$((iterations + 1))
     echo "SUCCESSFUL ITERATIONS $iterations"

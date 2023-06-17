@@ -4,7 +4,7 @@ set -o nounset
 set -o errexit
 set -o errtrace
 
-ktest_verbose=1
+ktest_verbose=false
 ktest_verbosearg=""
 ktest_once=false
 

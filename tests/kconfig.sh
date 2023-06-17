@@ -197,7 +197,7 @@ require-kernel-config NETWORK_FILESYSTEMS
 require-kernel-config 9P_FS
 
 # Crash dumps
-#if [[ $ktest_crashdump = 1 ]]; then
+#if $ktest_crashdump; then
 #    require-kernel-config KEXEC
 #    require-kernel-config CRASH_DUMP
 #    require-kernel-config RELOCATABLE

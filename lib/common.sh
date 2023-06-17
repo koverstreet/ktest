@@ -29,7 +29,7 @@ get_tmpdir()
 
 log_verbose()
 {
-    if [[ $ktest_verbose != 0 ]]; then
+    if $ktest_verbose; then
 	echo "$@"
     fi
 }
@@ -39,7 +39,12 @@ run_quiet()
     local msg=$1
     shift
 
-    if [[ $ktest_verbose = 0 ]]; then
+    if $ktest_verbose; then
+	if [[ -n $msg ]]; then
+	    echo "$msg:"
+	fi
+	"$@"
+    else
 	if [[ -n $msg ]]; then
 	    echo -n "$msg... "
 	fi
@@ -61,11 +66,6 @@ run_quiet()
 	if [[ -n $msg ]]; then
 	    echo done
 	fi
-    else
-	if [[ -n $msg ]]; then
-	    echo "$msg:"
-	fi
-	"$@"
     fi
 }
 

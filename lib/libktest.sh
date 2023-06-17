@@ -15,14 +15,14 @@ ktest_root_image=""	# virtual machine root filesystem
 ktest_out="./ktest-out"	# dir for test output (logs, code coverage, etc.)
 
 ktest_priority=0	# hint for how long test should run
-ktest_interactive=0     # if set to 1, timeout is ignored completely
+ktest_interactive=false	# if set to true, timeout is ignored completely
                         #       sets with: -I
 ktest_exit_on_success=0	# if true, exit on success, not failure or timeout
 ktest_failfast=false
-ktest_loop=0
-ktest_verbose=0		# if false, append quiet to kernel commad line
-ktest_crashdump=0
-ktest_kgdb=0
+ktest_loop=false
+ktest_verbose=false	# if false, append quiet to kernel commad line
+ktest_crashdump=false
+ktest_kgdb=false
 ktest_ssh_port=0
 ktest_networking=user
 ktest_dio=off
@@ -57,7 +57,7 @@ parse_ktest_arg()
 	    ktest_priority=$OPTARG
 	    ;;
 	I)
-	    ktest_interactive=1
+	    ktest_interactive=true
 	    ;;
 	S)
 	    ktest_exit_on_success=1
@@ -66,10 +66,10 @@ parse_ktest_arg()
 	    ktest_failfast=true
 	    ;;
 	L)
-	    ktest_loop=1
+	    ktest_loop=true
 	    ;;
 	v)
-	    ktest_verbose=1
+	    ktest_verbose=true
 	    ;;
 	x)
 	    set -x
@@ -90,10 +90,10 @@ parse_args_post()
     ktest_out=$(readlink -f "$ktest_out")
     ktest_kernel_binary="$ktest_out/kernel.$ktest_arch"
 
-    if [[ $ktest_interactive = 1 ]]; then
-	ktest_kgdb=1
+    if $ktest_interactive; then
+	ktest_kgdb=true
     else
-	ktest_crashdump=1
+	ktest_crashdump=true
     fi
 
     if [[ $ktest_nice != 0 ]]; then
@@ -158,8 +158,8 @@ ktest_run()
 
 ktest_boot()
 {
-    ktest_interactive=1
-    ktest_kgdb=1
+    ktest_interactive=true
+    ktest_kgdb=true
 
     ktest_run "$ktest_dir/boot.ktest" "$@"
 }
@@ -299,9 +299,9 @@ start_vm()
     kernelargs+=(mitigations=off)
     kernelargs+=("ktest.dir=$ktest_dir")
     kernelargs+=(ktest.env=$(readlink -f "$ktest_out/vm/env"))
-    [[ $ktest_kgdb = 1 ]]	&& kernelargs+=(kgdboc=ttyS0,115200 nokaslr)
-    [[ $ktest_verbose = 0 ]]	&& kernelargs+=(quiet systemd.show_status=0 systemd.log-target=null)
-    [[ $ktest_crashdump = 1 ]]	&& kernelargs+=(crashkernel=128M)
+    $ktest_kgdb		&& kernelargs+=(kgdboc=ttyS0,115200 nokaslr)
+    $ktest_verbose	|| kernelargs+=(quiet systemd.show_status=0 systemd.log-target=null)
+    $ktest_crashdump	&& kernelargs+=(crashkernel=128M)
 
     kernelargs+=("${ktest_kernel_append[@]}")
 
