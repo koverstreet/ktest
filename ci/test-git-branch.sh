@@ -185,6 +185,7 @@ run_test_job() {
 	    scp $LCOV $JOBSERVER:$OUTPUT
 
 	    ssh $JOBSERVER "(cd $OUTPUT; touch lcov-stale)"
+	    ssh $JOBSERVER "update-lcov $COMMIT"
 	fi
 
 	ssh $JOBSERVER gen-commit-summary $COMMIT
