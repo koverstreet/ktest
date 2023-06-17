@@ -279,6 +279,7 @@ main()
 	    echo "ktest_mem=$ktest_mem"
 	    echo "ktest_timeout=$ktest_timeout"
 	    echo "ktest_kernel_append=(${ktest_kernel_append[@]})"
+	    echo "ktest_kernel_make_append=(${ktest_kernel_make_append[@]})"
 	    echo "ktest_storage_bus=$ktest_storage_bus"
 	    echo "ktest_images=(${ktest_images[@]})"
 	    echo "ktest_scratch_dev_sizes=(${ktest_scratch_dev_sizes[@]})"
