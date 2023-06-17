@@ -184,8 +184,7 @@ run_test_job() {
 
 	    scp $LCOV $JOBSERVER:$OUTPUT
 
-	    ssh $JOBSERVER "(cd $OUTPUT; lcov --quiet --output-file lcov.info lcov.partial.*)"
-	    ssh $JOBSERVER "(cd $OUTPUT; genhtml --output-directory lcov lcov.info)"
+	    ssh $JOBSERVER "(cd $OUTPUT; touch lcov-stale)"
 	fi
 
 	ssh $JOBSERVER gen-commit-summary $COMMIT

@@ -277,3 +277,62 @@ pub fn workers_update(ktestrc: &Ktestrc, n: Worker) -> Option<()> {
 
     Some(())
 }
+
+pub fn update_lcov(rc: &Ktestrc, commit_id: &String) -> Option<()> {
+    let commit_dir = rc.output_dir.join(commit_id);
+
+    if !std::fs::remove_file(commit_dir.join("lcov-stale")).is_ok() { return Some(()); }
+
+    let mut args = Vec::new();
+
+    for d in std::fs::read_dir(&commit_dir).ok()?
+        .filter_map(|d| d.ok())
+        .filter_map(|d| d.file_name().into_string().ok())
+        .filter(|d| d.starts_with("lcov.partial.")) {
+        args.push("--add-tracefile".to_string());
+        args.push(d);
+    }
+
+    let status = std::process::Command::new("lcov")
+        .current_dir(&commit_dir)
+        .arg("--quiet")
+        .arg("--output-file")
+        .arg("lcov.info")
+        .args(args)
+        .status()
+        .expect(&format!("failed to execute lcov"));
+    if !status.success() {
+        eprintln!("lcov error: {}", status);
+        return Some(());
+    }
+
+    let lockfile = "/home/testdashboard/linux-1-lock";
+    let filelock = FileLock::lock(lockfile, true, FileOptions::new().create(true).write(true)).ok()?;
+
+    let status = std::process::Command::new("git")
+        .current_dir("/home/testdashboard/linux-1")
+        .arg("checkout")
+        .arg("-f")
+        .arg(commit_id)
+        .status()
+        .expect(&format!("failed to execute genhtml"));
+    if !status.success() {
+        eprintln!("git checkout error: {}", status);
+        return Some(());
+    }
+
+    let status = std::process::Command::new("genhtml")
+        .current_dir("/home/testdashboard/linux-1")
+        .arg("--output-directory")
+        .arg(commit_dir.join("lcov"))
+        .arg(commit_dir.join("lcov.info"))
+        .status()
+        .expect(&format!("failed to execute genhtml"));
+    if !status.success() {
+        eprintln!("genhtml error: {}", status);
+        return Some(());
+    }
+
+    drop(filelock);
+    Some(())
+}

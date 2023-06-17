@@ -5,7 +5,7 @@ use chrono::Duration;
 extern crate cgi;
 extern crate querystring;
 
-use ci_cgi::{Ktestrc, ktestrc_read, TestResultsMap, TestStatus, commitdir_get_results, git_get_commit, workers_get};
+use ci_cgi::{Ktestrc, ktestrc_read, TestResultsMap, TestStatus, commitdir_get_results, git_get_commit, workers_get, update_lcov};
 
 const COMMIT_FILTER:    &str = include_str!("../../commit-filter");
 const STYLESHEET:       &str = "bootstrap.min.css";
@@ -226,6 +226,7 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
         return error_response(format!("commit not found"));
     }
     let commit = commit.unwrap();
+    let commit_id = commit.id().to_string(); // normalize
 
     let message = commit.message().unwrap();
     let subject_len = message.find('\n').unwrap_or(message.len());
@@ -238,6 +239,12 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
     writeln!(&mut out, "<div class=\"container\">").unwrap();
 
     writeln!(&mut out, "<h3><th>{}</th></h3>", &message[..subject_len]).unwrap();
+
+    update_lcov(&ci.ktestrc, &commit_id);
+
+    if ci.ktestrc.output_dir.join(&commit_id).join("lcov").exists() {
+        writeln!(&mut out, "<p> <a href=c/{}/lcov> Code coverage </a> </p>", &commit_id).unwrap();
+    }
 
     out.push_str(COMMIT_FILTER);
 
