@@ -283,21 +283,32 @@ pub fn update_lcov(rc: &Ktestrc, commit_id: &String) -> Option<()> {
 
     if !std::fs::remove_file(commit_dir.join("lcov-stale")).is_ok() { return Some(()); }
 
+    let lockfile = "/home/testdashboard/linux-1-lock";
+    let filelock = FileLock::lock(lockfile, true, FileOptions::new().create(true).write(true)).ok()?;
+
     let mut args = Vec::new();
 
-    for d in std::fs::read_dir(&commit_dir).ok()?
+    let new_lcov: Vec<_> = std::fs::read_dir(&commit_dir).ok()?
         .filter_map(|d| d.ok())
         .filter_map(|d| d.file_name().into_string().ok())
-        .filter(|d| d.starts_with("lcov.partial.")) {
+        .filter(|d| d.starts_with("lcov.partial."))
+        .collect();
+
+    for d in &new_lcov {
         args.push("--add-tracefile".to_string());
-        args.push(d);
+        args.push(d.clone());
+    }
+
+    if commit_dir.join("lcov.info").exists() {
+        args.push("--add-tracefile".to_string());
+        args.push("lcov.info".to_string());
     }
 
     let status = std::process::Command::new("lcov")
         .current_dir(&commit_dir)
         .arg("--quiet")
         .arg("--output-file")
-        .arg("lcov.info")
+        .arg("lcov.info.new")
         .args(args)
         .status()
         .expect(&format!("failed to execute lcov"));
@@ -306,8 +317,9 @@ pub fn update_lcov(rc: &Ktestrc, commit_id: &String) -> Option<()> {
         return Some(());
     }
 
-    let lockfile = "/home/testdashboard/linux-1-lock";
-    let filelock = FileLock::lock(lockfile, true, FileOptions::new().create(true).write(true)).ok()?;
+    std::fs::rename(commit_dir.join("lcov.info.new"), commit_dir.join("lcov.info")).ok()?;
+
+    for d in &new_lcov { std::fs::remove_file(commit_dir.join(d)).ok(); }
 
     let status = std::process::Command::new("git")
         .current_dir("/home/testdashboard/linux-1")
