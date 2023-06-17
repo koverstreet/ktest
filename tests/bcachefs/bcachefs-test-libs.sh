@@ -44,11 +44,13 @@ expect_sysfs()
 antagonist_shrink()
 {
     while true; do
-	for file in $(find /sys/fs/bcachefs -name prune_cache); do
-	    echo 1000000 > $file > /dev/null 2>&1 || true
+	find /sys/fs/bcachefs -name prune_cache|{
+	    while read f; do
+		echo 1000000 > $f > /dev/null 2>&1 || true
+	    done
+	}
 
-	done
-	sleep 0.5
+	sleep 5
     done
 }
 
