@@ -130,6 +130,7 @@ do_make()
 	--directory="$ktest_kernel_source"    	\
 	O="$ktest_kernel_build"			\
 	INSTALL_MOD_PATH="$ktest_kernel_binary"	\
+	"${ktest_kernel_make_append[@]}"	\
 	"${MAKEARGS[@]}"			\
 	"$@"
 }

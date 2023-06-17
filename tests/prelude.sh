@@ -10,6 +10,7 @@ if [[ ! -v ktest_verbose ]]; then
     ktest_mem=""
     ktest_timeout=""
     ktest_kernel_append=()
+    ktest_kernel_make_append=()
 
     # virtio-scsi-pci semes to be buggy: reading the superblock on the root
     # filesystem randomly returns zeroes
@@ -125,6 +126,19 @@ require-qemu-append()
 require-kernel-append()
 {
     ktest_kernel_append+=("$1")
+}
+
+require-kernel-make-append()
+{
+    ktest_kernel_make_append+=("$1")
+}
+
+require-gcov()
+{
+    local dir=$(echo "${1%/}"|tr / _)
+
+    require-kernel-make-append "GCOV_PROFILE_$dir=y"
+    require-kernel-config GCOV_KERNEL
 }
 
 config-scratch-devs()
