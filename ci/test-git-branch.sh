@@ -108,6 +108,8 @@ run_test_job()
     make -C "$KTEST_DIR/lib" supervisor
 
     while (( ${#SUBTESTS[@]} )); do
+	rm -rf ktest-out/gcov.*
+
 	FULL_LOG=$TEST_NAME.$(hostname).$(date -Iseconds).log
 
 	for t in ${SUBTESTS[@]}; do
@@ -148,6 +150,19 @@ run_test_job()
 	echo "Sending results to jobserver"
 	(cd ktest-out/out; tar --create --file - *)|
 	    ssh $JOBSERVER "(cd $OUTPUT; tar --extract --file -)"
+
+	if [[ -d ktest-out/gcov.0 ]]; then
+	    echo "Sending gcov results to jobserver"
+
+	    LCOV=ktest-out/out/lcov.partial.$TEST_NAME.$(hostname).$(date -Iseconds)
+	    lcov --capture --quiet --directory ktest-out/gcov.0 --output-file $LCOV
+	    sed -i -e "s_$(pwd)/__" $LCOV
+
+	    scp $LCOV $JOBSERVER:$OUTPUT
+
+	    ssh $JOBSERVER "(cd $OUTPUT; lcov --quiet --output-file lcov.info lcov.partial.*)"
+	    ssh $JOBSERVER "(cd $OUTPUT; genhtml --output-directory lcov lcov.info)"
+	fi
 
 	ssh $JOBSERVER gen-commit-summary $COMMIT
 
