@@ -184,7 +184,7 @@ fn branch_get_next_test_job(rc: &Ktestrc, repo: &git2::Repository,
         }
 
         ret.age += 1;
-        if ret.age > test_group.max_commits {
+        if ret.age >= test_group.max_commits {
             break;
         }
     }
