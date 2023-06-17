@@ -4,13 +4,38 @@ set -o nounset
 set -o errexit
 set -o errtrace
 
-JOBSERVER=$1
-
 ktest_verbose=1
+ktest_once=false
 
 KTEST_DIR=$(dirname "$(readlink -e "$0")")/..
 
 . $KTEST_DIR/lib/common.sh
+
+usage() {
+    echo "test-git-branch.sh: Connect to CI jobserver, run tests, upload results"
+    echo "Usage: test-git-branch.sh [options] JOBSERVER"
+    echo "      -o              run one test"
+    echo "      -v              verbose"
+    echo "      -h              display this help and exit"
+}
+
+while getopts "ovh" arg; do
+    case $arg in
+	o)
+	    ktest_once=true
+	    ;;
+	v)
+	    ktest_verbose=true
+	    ;;
+	h)
+	    usage
+	    exit 0
+	    ;;
+    esac
+done
+shift $(( OPTIND - 1 ))
+
+JOBSERVER=$1
 
 source <(ssh $JOBSERVER cat .ktestrc)
 
@@ -32,8 +57,7 @@ ssh() {
     )
 }
 
-git_fetch()
-{
+git_fetch() {
     local repo=$1
     shift
 
@@ -52,8 +76,7 @@ git_fetch()
     )
 }
 
-sync_git_repos()
-{
+sync_git_repos() {
     local repo
 
     for repo in ${JOBSERVER_GIT_REPOS[@]}; do
@@ -61,8 +84,7 @@ sync_git_repos()
     done
 }
 
-run_test_job()
-{
+run_test_job() {
     BRANCH="$1"
     COMMIT="$2"
     TEST_PATH="$3"
@@ -185,4 +207,6 @@ while true; do
     echo "Got job ${TEST_JOB[@]}"
 
     (run_test_job "${TEST_JOB[@]}") || sleep 10
+
+    $ktest_once && break
 done
