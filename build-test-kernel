@@ -154,12 +154,11 @@ kernel_opt()
     local opt=$2
     local kconfig="$ktest_kernel_build/.config"
     local config_tool="$ktest_kernel_source/scripts/config"
+    local val=y
 
     if [[ $opt =~ = ]]; then
-	local val=${opt: -1}
-	opt="${opt%=?}"
-    else
-	local val=y
+	local val=${opt#*=}
+	opt="${opt%=*}"
     fi
 
     case $cmd in
