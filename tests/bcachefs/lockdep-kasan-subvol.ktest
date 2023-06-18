@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/../test-libs.sh
+
+require-kernel-config PROVE_LOCKING
+require-kernel-config LOCKDEP_BITS=20
+require-kernel-config LOCKDEP_CHAINS_BITS=20
+require-kernel-config DEBUG_ATOMIC_SLEEP
+require-kernel-config KASAN
+require-kernel-config PREEMPT
+require-kernel-config DEBUG_PREEMPT
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/subvol.ktest
