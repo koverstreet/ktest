@@ -7,7 +7,9 @@
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/prelude.sh
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/kconfig.sh
 
-config-mem 2G
+config-mem 4G
+
+(($ktest_cpus > 16)) && ktest_cpus=16
 
 # Usage:
 # setup_tracing tracepoint_glob
