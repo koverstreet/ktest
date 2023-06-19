@@ -14,6 +14,9 @@ require-kernel-config XFS_ONLINE_REPAIR
 require-kernel-config QUOTA
 require-kernel-config TRANSPARENT_HUGEPAGE
 
+[[ ! -v MKFS_OPTIONS ]] && export MKFS_OPTIONS="-m reflink=1,rmapbt=1 -i sparse=1,nrext64=1"
+export FSTYP=xfs
+
 run_tests()
 {
     if [[ ! -f /xfsprogs-init-done ]]; then
@@ -22,8 +25,7 @@ run_tests()
 	touch /xfsprogs-init-done
     fi
 
-    export MKFS_OPTIONS="-m reflink=1,rmapbt=1 -i sparse=1,nrext64=1"
-    run_xfstests xfs "$@"
+    run_xfstests "$@"
 }
 
 main "$@"

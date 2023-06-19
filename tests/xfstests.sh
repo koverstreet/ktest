@@ -24,14 +24,19 @@ config-timeout 7200
 
 list_tests()
 {
-    (cd $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/xfstests/tests; echo generic/???)
+    pushd $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/xfstests > /dev/null
+
+    for g in generic shared "$FSTYP"; do
+	[[ ! -f tests/$g/group.list ]] && continue
+	grep -hE '[0-9][0-9][0-9] .*(auto|dangerous)' tests/$g/group.list|
+	    sed -e "s/ .*//" -e "s/^/$g\//"
+    done
+
+    popd > /dev/null
 }
 
 run_xfstests()
 {
-    export FSTYP="$1"
-    shift
-
     if [[ ! -f /xfstests-init-done ]]; then
 	mkswap ${ktest_scratch_dev[3]}
 	swapon ${ktest_scratch_dev[3]}

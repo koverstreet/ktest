@@ -13,16 +13,14 @@ require-kernel-config BCACHEFS_POSIX_ACL
 require-kernel-config BCACHEFS_QUOTA
 require-kernel-config QUOTA
 
+[[ ! -v MKFS_OPTIONS ]] && export MKFS_OPTIONS="--encrypted --no_passphrase"
+export FSTYP=bcachefs
+
 run_tests()
 {
-    #echo trace_printk > /sys/kernel/debug/tracing/trace_options
     setup_tracing 'bcachefs:*'
-
     bcachefs_antagonist
-
-    export MKFS_OPTIONS="--encrypted --no_passphrase"
-
-    run_xfstests bcachefs "$@"
+    run_xfstests "$@"
 }
 
 main "$@"
