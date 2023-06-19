@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/xfstests.sh
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../xfstests.sh
 
 require-git https://git.kernel.org/pub/scm/linux/kernel/git/djwong/xfsprogs-dev.git xfsprogs
 
