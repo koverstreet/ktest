@@ -322,8 +322,10 @@ start_vm()
 	    ;;
     esac
 
+    local maxmem=$(awk '/MemTotal/ {printf "%dG\n", $2/1024/1024}' /proc/meminfo 2>/dev/null) || maxmem="1T"
+
     qemu_cmd+=(								\
-	-m		"$ktest_mem,slots=8,maxmem=1T"			\
+	-m		"$ktest_mem,slots=8,maxmem=$maxmem"		\
 	-smp		"$ktest_cpus"					\
 	-kernel		"$ktest_kernel_binary/vmlinuz"			\
 	-append		"$(join_by " " ${kernelargs[@]})"		\
