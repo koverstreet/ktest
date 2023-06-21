@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/../test-libs.sh
+
+require-kernel-config PREEMPT
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/ec.ktest
