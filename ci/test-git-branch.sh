@@ -116,7 +116,7 @@ run_test_job() {
     run_quiet "Syncing git repos" sync_git_repos
 
     run_quiet "Fetching $COMMIT" git_fetch linux $COMMIT
-    run_quiet "Checking out $COMMIT" git checkout FETCH_HEAD
+    run_quiet "Checking out $COMMIT" git checkout -f FETCH_HEAD
 
     rm -rf ktest-out/out
     mkdir -p ktest-out/out
@@ -201,6 +201,8 @@ while true; do
 	TEST_JOB=( $(ssh $JOBSERVER get-test-job $ktest_verbosearg $HOSTNAME $WORKDIR) )
 
 	[[ ${#TEST_JOB[@]} != 0 && ${TEST_JOB[0]} == TEST_JOB ]] && break
+
+	$ktest_once && exit 1
 
 	sleep 10
     done
