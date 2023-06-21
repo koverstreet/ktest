@@ -263,7 +263,7 @@ cmd_run()
     shift
     ktest_testargs="$@"
 
-    echo Running test $(basename "$ktest_test") on $(hostname) at $(pwd)
+    echo Running test $(basename "$ktest_test") on $(uname -n) at $(pwd)
     parse_test_deps "$ktest_test"
 
     if [[ -n $COVERAGE ]]; then
