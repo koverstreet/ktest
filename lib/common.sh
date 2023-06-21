@@ -189,32 +189,29 @@ parse_arch()
     fi
 }
 
-checkdep()
-{
+find_command() {
+    command -v $1 >/dev/null 2>&1
+}
+
+checkdep() {
     local dep=$1
     local package=$dep
-
     [[ $# -ge 2 ]] && package=$2
 
-    local found=0
-
-    if [[ ${dep:0:1} = / ]]; then
-	# absolute path
-	[[ -e $dep ]] && found=1
+    if find_command "$dep"; then
+	return
     else
-	which "$dep" > /dev/null 2>&1 && found=1
+	echo "$dep" not found!
     fi
 
-    if [[ $found = 0 ]]; then
-	echo -n "$dep not found"
-
-	if which apt-get > /dev/null 2>&1 && \
-	    which sudo > /dev/null 2>&1; then
-		    echo ", installing $package:"
-		    sudo apt-get -qq install --no-install-recommends "$package"
-		else
-		    echo ", please install"
-		    exit 1
-	fi
+    if find_command sudo && find_command apt-get ; then
+	echo "  installing $package:"
+	sudo apt-get -qq install --no-install-recommends "$package"
+    elif find_command sudo && find_command pacman ; then
+	echo "  installing $package:"
+	sudo pacman -S --noconfirm "$package"
+    else
+	echo "  please install"
+	exit 1
     fi
 }
