@@ -118,6 +118,8 @@ run_test_job() {
     run_quiet "Fetching $COMMIT" git_fetch linux $COMMIT
     run_quiet "Checking out $COMMIT" git checkout -f FETCH_HEAD
 
+    [[ $(git rev-parse HEAD) != $COMMIT ]] && exit 1
+
     rm -rf ktest-out/out
     mkdir -p ktest-out/out
 
