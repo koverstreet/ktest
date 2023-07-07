@@ -577,7 +577,7 @@ test_zstd()
 	${ktest_scratch_dev[0]}
 }
 
-disabled_test_background_compression()
+test_background_compression()
 {
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
@@ -588,6 +588,7 @@ disabled_test_background_compression()
     run_fio_randrw
 
     check_counters ${ktest_scratch_dev[0]}
+    umount /mnt
 }
 
 test_compress_no_checksum()
