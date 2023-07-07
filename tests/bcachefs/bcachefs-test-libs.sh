@@ -10,7 +10,11 @@ require-git http://evilpiepirate.org/git/bcachefs-tools.git
 require-make bcachefs-tools
 
 require-kernel-config BCACHEFS_FS
-require-kernel-config BCACHEFS_DEBUG
+
+if [[ ! -v NO_BCACHEFS_DEBUG ]]; then
+    require-kernel-config BCACHEFS_DEBUG
+fi
+
 require-kernel-config TRANSPARENT_HUGEPAGE
 
 if [[ $ktest_arch = x86_64 ]]; then
