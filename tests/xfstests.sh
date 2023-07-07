@@ -5,6 +5,10 @@
 
 require-git https://git.kernel.org/pub/scm/fs/xfs/xfstests-dev.git xfstests
 
+# disable io_uring - io_uring is currently broken w.r.t. unmounting, we get
+# spurious umount failures with -EBUSY
+export ac_cv_header_liburing_h=no
+
 require-kernel-config FAULT_INJECTION,FAULT_INJECTION_DEBUG_FS,FAIL_MAKE_REQUEST
 require-kernel-config MD,BLK_DEV_DM,DM_FLAKEY,DM_SNAPSHOT,DM_LOG_WRITES
 require-kernel-config DM_THIN_PROVISIONING
