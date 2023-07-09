@@ -186,7 +186,7 @@ test_rewrite_old_nodes()
 
     bcachefs show-super ${ktest_scratch_dev[0]}
 
-    mount -t bcachefs -o version_upgrade ${ktest_scratch_dev[0]} /mnt
+    mount -t bcachefs -o version_upgrade=incompatible ${ktest_scratch_dev[0]} /mnt
     bcachefs data job rewrite_old_nodes /mnt
     umount /mnt
 
