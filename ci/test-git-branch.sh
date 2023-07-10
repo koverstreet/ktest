@@ -120,7 +120,10 @@ run_test_job() {
 
     [[ $(git rev-parse HEAD) != $COMMIT ]] && exit 1
 
-    rm -rf ktest-out/out
+    for i in ktest-out/*; do
+	[[ $i != ktest-out/kernel* ]] && rm -rf $i
+    done
+
     mkdir -p ktest-out/out
 
     # Mark tests as not run:
