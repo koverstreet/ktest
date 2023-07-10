@@ -9,6 +9,7 @@ if [[ ! -v ktest_verbose ]]; then
     ktest_cpus=$(nproc)
     ktest_mem=""
     ktest_timeout=""
+    ktest_timeout_multiplier=1
     ktest_kernel_append=()
     ktest_kernel_make_append=()
 
@@ -180,6 +181,11 @@ config-timeout()
     ktest_timeout=$n
 }
 
+config-timeout-multiplier()
+{
+    ktest_timeout_multiplier=$(($ktest_timeout_multiplier * $1))
+}
+
 config-arch()
 {
     ktest_arch=$1
@@ -187,7 +193,7 @@ config-arch()
 
 set_watchdog()
 {
-    echo WATCHDOG $1
+    echo WATCHDOG $(($ktest_timeout_multiplier * $1))
 }
 
 run_test()
@@ -277,7 +283,7 @@ main()
 	    echo "ktest_arch=$ktest_arch"
 	    echo "ktest_cpus=$ktest_cpus"
 	    echo "ktest_mem=$ktest_mem"
-	    echo "ktest_timeout=$ktest_timeout"
+	    echo "ktest_timeout=$((ktest_timeout * ktest_timeout_multiplier))"
 	    echo "ktest_kernel_append=(${ktest_kernel_append[@]})"
 	    echo "ktest_kernel_make_append=(${ktest_kernel_make_append[@]})"
 	    echo "ktest_storage_bus=$ktest_storage_bus"

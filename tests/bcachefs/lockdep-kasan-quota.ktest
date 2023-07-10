@@ -2,6 +2,8 @@
 
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/../test-libs.sh
 
+config-timeout-multiplier 3
+
 require-kernel-config PROVE_LOCKING
 require-kernel-config LOCKDEP_BITS=20
 require-kernel-config LOCKDEP_CHAINS_BITS=20
