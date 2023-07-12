@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../test-libs.sh
+
+require-git http://evilpiepirate.org/git/bcachefs-tools.git
+require-make bcachefs-tools
+
+require-kernel-config BCACHEFS_FS=m
+
+if [[ ! -v NO_BCACHEFS_DEBUG ]]; then
+    require-kernel-config BCACHEFS_DEBUG
+fi
+
+config-timeout 30
+
+config-scratch-devs 4G
+
+test_mount()
+{
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    umount /mnt
+}
+
+main "$@"
+
