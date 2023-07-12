@@ -723,10 +723,11 @@ disabled_change_replicas2()
 
 test_replicas_gc()
 {
+    local p=/sys/module/bcachefs/parameters/force_reconstruct_read
+
     set_watchdog 60
 
-    echo 1 > /sys/module/bcachefs/parameters/force_reconstruct_read
-    #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
+    [[ -f $p ]] && echo 1 > $p
 
     run_quiet "" bcachefs format -f		\
 	--replicas=2				\
@@ -748,6 +749,8 @@ test_replicas_gc()
     bcachefs fsck ${ktest_scratch_dev[@]}
 
     check_counters ${ktest_scratch_dev[0]}
+
+    [[ -f $p ]] && echo 0 > $p
 }
 
 test_replace_replica()

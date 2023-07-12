@@ -66,8 +66,9 @@ test_remount_ro_rw()
 
 test_extent_merge2()
 {
+    local p=/sys/module/bcachefs/parameters/debug_check_iterators
+
     set_watchdog 10
-    echo 1 > /sys/module/bcachefs/parameters/debug_check_iterators
 
     run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
@@ -80,7 +81,7 @@ test_extent_merge2()
 
     check_counters ${ktest_scratch_dev[0]}
 
-    echo 0 > /sys/module/bcachefs/parameters/debug_check_iterators
+    [[ -f $p ]] && echo 0 > p
 }
 
 test_reflink2()
