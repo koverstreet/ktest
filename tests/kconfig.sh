@@ -263,3 +263,5 @@ require-kernel-config DEBUG_KERNEL
 
 # expensive, doesn't catch that much
 # require-kernel-config DEBUG_PAGEALLOC
+
+require-kernel-append kasan.fault=panic
