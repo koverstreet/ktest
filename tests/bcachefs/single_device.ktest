@@ -82,6 +82,7 @@ test_extent_merge2()
     check_counters ${ktest_scratch_dev[0]}
 
     [[ -f $p ]] && echo 0 > p
+    true
 }
 
 test_reflink2()

@@ -493,8 +493,8 @@ do_replicas_errors_test()
     set_watchdog 180
     error_type=$1
 
-    echo 1 > /sys/module/bcachefs/parameters/verify_all_btree_replicas
-    #bcachefs_antagonist
+    local p=/sys/module/bcachefs/parameters/verify_all_btree_replicas
+    [[ -f $p ]] && echo 1 > $p
 
     mdadm -B /dev/md0 -lfaulty -n1 ${ktest_scratch_dev[1]}
 
@@ -521,6 +521,9 @@ do_replicas_errors_test()
     umount /mnt
 
     check_counters ${ktest_scratch_dev[0]}
+
+    [[ -f $p ]] && echo 0 > $p
+    true
 }
 
 test_replicas_write_errors()
@@ -751,6 +754,7 @@ test_replicas_gc()
     check_counters ${ktest_scratch_dev[0]}
 
     [[ -f $p ]] && echo 0 > $p
+    true
 }
 
 test_replace_replica()
