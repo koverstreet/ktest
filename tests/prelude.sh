@@ -250,7 +250,7 @@ run_tests()
 	    $ktest_failfast  && break
 	    [[ $# = 1 ]] && break
 
-	    for mnt in $(awk '{print $2}' /proc/mounts|grep ^/mnt|sort -r); do
+	    awk '{print $2}' /proc/mounts | grep ^/mnt | sort -r 2>/dev/null | while read -r mnt; do
 		while [[ -n $(fuser -k -M -m $mnt) ]]; do
 		    sleep 1
 		done
