@@ -193,7 +193,9 @@ config-arch()
 
 set_watchdog()
 {
-    echo WATCHDOG $(($ktest_timeout_multiplier * $1))
+    ktest_timeout=$(($ktest_timeout_multiplier * $1))
+
+    echo WATCHDOG $ktest_timeout
 }
 
 run_test()
