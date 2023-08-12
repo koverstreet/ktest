@@ -17,16 +17,13 @@ config-scratch-devs 8G
 
 btree_node_size=8k
 
-run_test()
+run_test_inner()
 {
-    echo 1 > /sys/module/bcachefs/parameters/expensive_debug_checks
-    echo 1 > /sys/module/bcachefs/parameters/key_merging_disabled
-
-    bcachefs format				\
+    run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	${ktest_scratch_dev[0]} >/dev/null
-	#--bucket=$btree_node_size		\
-	#--btree_node_size=$btree_node_size	\
+	--bucket=$btree_node_size		\
+	--btree_node_size=$btree_node_size	\
+	${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     ln -sf /sys/fs/bcachefs/*/perf_test p
 
@@ -35,6 +32,17 @@ run_test()
     done
 
     umount /mnt
+}
+
+run_test()
+{
+    echo 1 > /sys/module/bcachefs/parameters/expensive_debug_checks
+
+    echo 1 > /sys/module/bcachefs/parameters/key_merging_disabled
+    run_test_inner
+
+    echo 0 > /sys/module/bcachefs/parameters/key_merging_disabled
+    run_test_inner
 }
 
 list_tests()
