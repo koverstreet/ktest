@@ -2,7 +2,7 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
 
-config-scratch-devs 4G
+config-scratch-devs 16G
 config-scratch-devs 4G
 
 test_snapshots_simple()
@@ -529,6 +529,138 @@ test_snapshot_prjquota()
     umount /mnt
 
     check_counters ${ktest_scratch_dev[0]}
+}
+
+md5sum_file()
+{
+    md5sum $1|cut -d\  -f1
+}
+
+check_snapshot_md5sum()
+{
+    local i=$1
+    local sum=/mnt/fiotest.sum.$i
+
+    echo "checking $sum"
+
+    if [[ ! $(<$sum) = $(md5sum_file /mnt/snap.$i/fiotest) ]]; then
+	echo "md5sums do not match for $sum and /mnt/snap.$i/fiotest"
+	echo $(<$sum)
+	md5sum_file /mnt/snap.$i/fiotest
+	return 1
+    fi
+}
+
+check_snapshot_md5sums()
+{
+    local snap
+    for snap in $(set +o pipefail; set +o errtrace; set +o errexit; ls /mnt|grep '^snap.'); do
+	echo "about to check $snap"
+
+	check_snapshot_md5sum ${snap##snap.}
+    done
+}
+
+run_snapshot_fio()
+{
+    local filename=$1
+    shift
+
+    fio --exitall_on_error=1		\
+	--minimal			\
+	--randrepeat=1			\
+	--ioengine=libaio		\
+	--iodepth=64			\
+	--iodepth_batch=16		\
+	--direct=1			\
+	--numjobs=1			\
+	--thread			\
+	--verify=meta			\
+	--verify_fatal=1		\
+	--overwrite=1			\
+	--filesize=500M			\
+	--io_size=200M			\
+	--bsrange=4k-64k		\
+	--name=randrw			\
+	--stats=0			\
+	--disable_bw=1			\
+	--rw=randrw			\
+	--filename=$filename		\
+	"$@"
+}
+
+test_snapshot_sums()
+{
+    run_quiet "" bcachefs format -f --errors=panic --prjquota ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    local i
+    for i in $(seq 0 0); do
+	run_snapshot_fio /mnt/fiotest
+
+	md5sum_file /mnt/fiotest > /mnt/fiotest.sum.$i
+
+	echo "creating snapshot $i"
+        bcachefs subvolume snapshot /mnt/snap.$i
+    done
+
+    check_snapshot_md5sums
+
+    local snap
+    for snap in $(echo /mnt/snap.*|sort -R); do
+	umount /mnt
+	mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
+
+	bcachefs subvolume delete $snap
+
+	check_snapshot_md5sums
+    done
+
+    umount /mnt
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
+}
+
+test_snapshot_rw()
+{
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    bcachefs device resize-journal ${ktest_scratch_dev[0]} 4G
+
+    local i
+    for i in $(seq 0 20); do
+	[[ -f /mnt/fiotest ]] &&
+	run_snapshot_fio /mnt/fiotest --verify_only=1
+	run_snapshot_fio /mnt/fiotest
+
+	echo "creating snapshot $i"
+        bcachefs subvolume snapshot /mnt/snap.$i
+	md5sum_file /mnt/snap.$i/fiotest > /mnt/fiotest.sum.$i
+
+	for snap in /mnt/snap.*; do
+	    local j=${snap##/mnt/snap.}
+	    check_snapshot_md5sum $j
+
+	    run_snapshot_fio /mnt/snap.$j/fiotest --verify_only=1
+	    run_snapshot_fio /mnt/snap.$j/fiotest
+	    md5sum_file /mnt/snap.$j/fiotest > /mnt/fiotest.sum.$j
+	done
+    done
+
+    check_snapshot_md5sums
+
+    local snap
+    for snap in $(echo /mnt/snap.*|sort -R); do
+	umount /mnt
+	mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
+
+	bcachefs subvolume delete $snap
+	sleep 1
+
+	check_snapshot_md5sums
+    done
+
+    umount /mnt
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
 }
 
 main "$@"
