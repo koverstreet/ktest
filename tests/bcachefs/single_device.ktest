@@ -87,6 +87,32 @@ test_extent_merge2()
     true
 }
 
+test_extent_repair_overlapping()
+{
+    set_watchdog 10
+
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    truncate -s1M /mnt/foo
+    inum=$(ls -li /mnt/foo|cut -d\  -f1)
+
+    bcachefs subvolume snapshot /mnt/snap.0
+    bcachefs subvolume snapshot /mnt/snap.1
+
+    ln -sf /sys/fs/bcachefs/*/perf_test p
+    echo test_extent_create_overlapping $inum 1 > p
+    umount /mnt
+
+    mount -t bcachefs -o fsck,fix_errors ${ktest_scratch_dev[0]} /mnt
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+
+    check_counters ${ktest_scratch_dev[0]}
+}
+
 test_reflink2()
 {
     set_watchdog 10
