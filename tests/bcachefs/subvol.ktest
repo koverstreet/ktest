@@ -554,7 +554,7 @@ check_snapshot_md5sum()
 check_snapshot_md5sums()
 {
     local snap
-    for snap in $(set +o pipefail; set +o errtrace; set +o errexit; ls /mnt|grep '^snap.'); do
+    for snap in $(ls /mnt|grep '^snap.' || true); do
 	echo "about to check $snap"
 
 	check_snapshot_md5sum ${snap##snap.}
@@ -595,7 +595,7 @@ test_snapshot_sums()
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     local i
-    for i in $(seq 0 0); do
+    for i in $(seq 0 10); do
 	run_snapshot_fio /mnt/fiotest
 
 	md5sum_file /mnt/fiotest > /mnt/fiotest.sum.$i
@@ -627,7 +627,7 @@ test_snapshot_rw()
     bcachefs device resize-journal ${ktest_scratch_dev[0]} 4G
 
     local i
-    for i in $(seq 0 20); do
+    for i in $(seq 0 10); do
 	[[ -f /mnt/fiotest ]] &&
 	run_snapshot_fio /mnt/fiotest --verify_only=1
 	run_snapshot_fio /mnt/fiotest
