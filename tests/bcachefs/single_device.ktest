@@ -70,6 +70,8 @@ test_extent_merge2()
 
     set_watchdog 10
 
+    [[ -f $p ]] && echo 1 > p
+
     run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
