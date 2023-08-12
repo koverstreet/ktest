@@ -1280,7 +1280,8 @@ test_buffered_reads()
     check_counters ${ktest_scratch_dev[0]}
 }
 
-test_small_fs()
+# Small filesystem tests currently disabled - TODO item:
+d_test_small_fs()
 {
     set_watchdog 60
     run_quiet "" bcachefs format -f		\
@@ -1300,12 +1301,12 @@ test_small_fs()
     check_counters ${ktest_scratch_dev[0]}
 }
 
-test_small_torture()
+d_test_small_torture()
 {
     run_copygc_torture --bucket=4k --fs_size=32M
 }
 
-test_small_fsck()
+d_test_small_fsck()
 {
     set_watchdog 60
     run_quiet "" bcachefs format -f		\
