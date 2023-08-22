@@ -117,6 +117,9 @@ PACKAGES+=(cryptsetup)
 # weird block layer crap
 PACKAGES+=(multipath-tools sg3-utils srptools)
 
+# ZFS support
+PACKAGES+=("linux-headers-$DEBIAN_ARCH" dkms zfsutils-linux zfs-dkms)
+
 # suspend testing:
 # [[ $KERNEL_ARCH = x86 ]] && PACKAGES+=(uswsusp)
 
