@@ -151,10 +151,14 @@ export DEBCONF_NONINTERACTIVE_SEEN=true
 export LC_ALL=C
 export LANGUAGE=C
 export LANG=C
+# We compute it here to avoid on hosts systems (e.g. NixOS)
+# that does not possess `chroot` in the isolated `PATH`
+# to fail miserably.
+export CHROOT=$(which chroot)
 
 _chroot()
 {
-    PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/env chroot "$@"
+    PATH=/usr/sbin:/usr/bin:/sbin:/bin "$CHROOT" "$@"
 }
 
 update_files()
