@@ -296,6 +296,7 @@ cmd_create()
 	--arch="$DEBIAN_ARCH"				\
 	--exclude=$(join_by , "${EXCLUDE[@]}")		\
 	--foreign					\
+	--components='main,contrib,non-free,bullseye-backports' \
 	bullseye "$MNT" "$MIRROR"
 
     _chroot "$MNT" /debootstrap/debootstrap --second-stage
