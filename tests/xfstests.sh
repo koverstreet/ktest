@@ -9,12 +9,15 @@ require-git https://git.kernel.org/pub/scm/fs/xfs/xfstests-dev.git xfstests
 # spurious umount failures with -EBUSY
 export ac_cv_header_liburing_h=no
 
+require-kernel-config BSD_PROCESS_ACCT
 require-kernel-config FAULT_INJECTION,FAULT_INJECTION_DEBUG_FS,FAIL_MAKE_REQUEST
 require-kernel-config MD,BLK_DEV_DM,DM_FLAKEY,DM_SNAPSHOT,DM_LOG_WRITES
 require-kernel-config DM_THIN_PROVISIONING
+require-kernel-config DM_ZERO
 require-kernel-config BLK_DEV,BLK_DEV_LOOP
 require-kernel-config SCSI_DEBUG=m
 require-kernel-config USER_NS
+require-kernel-config OVERLAY_FS
 
 # 038,048,312 require > 10G
 config-scratch-devs 14G
