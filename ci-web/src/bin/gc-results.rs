@@ -58,6 +58,11 @@ fn result_is_live(commits: &HashSet<String>, d: &DirEntry) -> bool {
     let d = d.file_name().into_string().ok();
 
     if let Some(d) = d {
+        /* If it's not actually a commit, don't delete it: */
+        if d.len() < 40 {
+            return true;
+        }
+
         commits.contains(&d[..40].to_string())
     } else {
         false
