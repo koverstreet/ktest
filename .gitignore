@@ -4,6 +4,7 @@ cscope*
 tags
 ktest-out
 *.tags
+cross.conf
 
 lib/lwip-connect
 lib/supervisor
