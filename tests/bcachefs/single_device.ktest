@@ -654,6 +654,15 @@ test_crc64()
 	${ktest_scratch_dev[0]}
 }
 
+test_xxhash()
+{
+    run_basic_fio_test                         \
+       --metadata_checksum=xxhash              \
+       --data_checksum=xxhash                  \
+       ${ktest_scratch_dev[0]}
+}
+
+
 test_crypto_locked_mnt()
 {
     echo foo|bcachefs format --encrypted ${ktest_scratch_dev[0]}
