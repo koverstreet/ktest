@@ -85,6 +85,7 @@ parse_ktest_arg()
 
 parse_args_post()
 {
+    [ -z ${ktest_arch:+x} ] && ktest_arch=$(uname -m)
     parse_arch "$ktest_arch"
 
     ktest_out=$(readlink -f "$ktest_out")
@@ -306,12 +307,15 @@ start_vm()
     kernelargs+=("${ktest_kernel_append[@]}")
 
     local qemu_cmd=("$QEMU_BIN" -nodefaults -nographic)
+    local accel=kvm
+    local cputype=host
+    [[ $(uname -m) == $ktest_arch ]] || accel=tcg && cputype=max
     case $ktest_arch in
 	x86|x86_64)
-	    qemu_cmd+=(-cpu host -machine type=q35,accel=kvm,nvdimm=on)
+	    qemu_cmd+=(-cpu $cputype -machine type=q35,accel=$accel,nvdimm=on)
 	    ;;
 	aarch64)
-	    qemu_cmd+=(-cpu host -machine type=virt,gic-version=max,accel=kvm)
+	    qemu_cmd+=(-cpu $cputype -machine type=virt,gic-version=max,accel=$accel)
 	    ;;
 	mips)
 	    qemu_cmd+=(-cpu 24Kf -machine malta)

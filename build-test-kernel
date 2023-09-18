@@ -107,7 +107,7 @@ ktest_kernel_source=$(readlink -e "$ktest_kernel_source")
 ktest_kernel_build="$ktest_out/kernel_build.$ktest_arch"
 mkdir -p "$ktest_kernel_build"
 
-if [[ -n $CROSS_COMPILE ]]; then
+if [[ -z ${CROSS_COMPILE:+x} ]]; then
     checkdep "$ARCH_TRIPLE-gcc" "gcc-$ARCH_TRIPLE"
 fi
 

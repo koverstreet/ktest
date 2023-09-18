@@ -80,9 +80,6 @@ join_by()
     echo "$*"
 }
 
-ktest_arch=$(uname -m)
-CROSS_COMPILE=""
-
 parse_arch()
 {
     case $1 in
@@ -191,6 +188,14 @@ parse_arch()
     if [[ $ktest_arch != $(uname -m) ]]; then
 	CROSS_COMPILE=1
     fi
+
+    export DEBIAN_ARCH
+    export MIRROR
+    export ARCH_TRIPLE
+    export KERNEL_ARCH
+    export QEMU_PACKAGE
+    export QEMU_BIN
+    export ktest_arch
 }
 
 find_command() {

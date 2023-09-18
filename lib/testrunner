@@ -20,6 +20,10 @@ ktest_out="/host/$ktest_out"
 ln -sf $ktest_dir /ktest
 ln -sf $ktest_out /ktest-out
 
+. /ktest/lib/common.sh
+
+parse_arch $(uname -m)
+
 # Some home directories are in weird places:
 mkdir -p $(dirname $home)
 ln -sf /host/$home $home
@@ -92,7 +96,11 @@ for i in "${ktest_make_install[@]}"; do
     if [[ -f configure && ! -f Makefile ]]; then
 	run_quiet "configure $(basename $i)" ./configure
     fi
-    run_quiet "building $(basename $i)" make -j $ktest_cpus
+    #this won't make me popular - compiling bcachefs tools with rust support on a emulated machine is too heavy to be useful, so omit it:
+    rustcompile="" && [[ "$(systemd-detect-virt)" == "qemu" ]] && rustcompile="NO_RUST=1"
+    #bcachefs tools sometimes seems to use compiled files from previous runs, even if other architecture, so clean out:
+    [ "bcachefs-tools" == "$(basename $i)" ] && [ "$(objdump -f bcachefs.o | grep architecture | cut -d' ' -f 2)" == "$(objdump -f /bin/bash | grep architecture | cut -d' ' -f 2)" ] || make clean
+    run_quiet "building $(basename $i)" make $rustcompile -j $ktest_cpus
     run_quiet "installing $(basename $i)" make -j $ktest_cpus install
     popd > /dev/null
 done
