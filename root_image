@@ -45,6 +45,7 @@ if [[ $# = 0 ]]; then
 fi
 
 ktest_image=""
+ktest_arch="$(uname -m)"
 CMD="cmd_$1"
 shift
 
@@ -100,7 +101,7 @@ PACKAGES+=(libudev-dev libldap2-dev)
 PACKAGES+=(acct bsdextrautils xfsprogs xfslibs-dev quota libcap2-bin)
 PACKAGES+=(libattr1-dev libaio-dev libgdbm-dev libacl1-dev gettext)
 PACKAGES+=(libssl-dev libgdbm-dev libgdbm-compat-dev liburing-dev)
-PACKAGES+=(duperemove thin-provisioning-tools fsverity)
+PACKAGES+=(duperemove fsverity)
 
 # xfsprogs:
 PACKAGES+=(libinih-dev)
@@ -123,10 +124,9 @@ PACKAGES+=("linux-headers-generic")
 # DKMS needs to cross-compile the module,
 # against a different kernel on a different CPUarchitecture.
 # this has to cause errors
-[ $CROSS_COMPILE == 1 ] || PACKAGES+=(dkms zfsutils-linux zfs-dkms)
+[ -z ${CROSS_COMPILE:-0} ] || PACKAGES+=(dkms zfsutils-linux zfs-dkms)
 
-# suspend testing:
-# [[ $KERNEL_ARCH = x86 ]] && PACKAGES+=(uswsusp)
+
 
 EXCLUDE=(dmidecode nano rsyslog logrotate cron		\
     iptables nfacct					\
@@ -241,6 +241,7 @@ update_packages()
     chmod 755 "$MNT"/tmp/rustup.sh
 
     _chroot "$MNT" /tmp/rustup.sh -y
+    echo 'export PATH="$HOME/.cargo/bin:$PATH"' > $MNT/etc/profile.d/rustup.sh
 }
 
 trim_image()
@@ -304,10 +305,10 @@ cmd_create()
 	--arch="$DEBIAN_ARCH"				\
 	--exclude=$(join_by , "${EXCLUDE[@]}")		\
 	--foreign					\
-	--components='main,contrib,non-free,bullseye-backports' \
-	bullseye "$MNT" "$MIRROR"
+	--components='main,contrib,non-free' \
+	trixie "$MNT" "$MIRROR"
 
-    [ ${CROSS_COMPILE} == 1 ] && cp $(which qemu-${ktest_arch}) ${MNT}$(which qemu-${ktest_arch})
+    [ ${CROSS_COMPILE:-0} == 1 ] && cp $(which qemu-${ktest_arch}) ${MNT}$(which qemu-${ktest_arch})
     _chroot "$MNT" /debootstrap/debootstrap --second-stage
     _chroot "$MNT" dpkg --configure -a
 

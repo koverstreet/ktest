@@ -121,10 +121,8 @@ run_ktest()
 
 do_make()
 {
-    if [[ -n $CROSS_COMPILE ]]; then
-	export ARCH="$KERNEL_ARCH"
-	export CROSS_COMPILE="$ARCH_TRIPLE-"
-    fi
+	local ARCH="$KERNEL_ARCH"
+	local CROSS_COMPILE="$ARCH_TRIPLE-"
 
     make --jobs="$ktest_njobs"			\
 	--directory="$ktest_kernel_source"    	\
@@ -192,7 +190,7 @@ build_kernel()
 
     log_verbose "kernel_config_require: ${ktest_kernel_config_require[@]}"
 
-    MAKEARGS+=("LOCALVERSION=-ktest")
+    MAKEARGS+=("LOCALVERSION=-ktest" ARCH="$KERNEL_ARCH" CROSS_COMPILE="$ARCH_TRIPLE-")
 
     for opt in "${ktest_kernel_config_require[@]}"; do
 	[[ -n $opt ]] && kernel_opt set "$opt"
