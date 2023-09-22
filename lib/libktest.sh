@@ -223,7 +223,7 @@ ktest_kgdb()
 
 ktest_mon()
 {
-    exec socat UNIX-CONNECT:"$ktest_out/vm/on" STDIO
+    exec socat UNIX-CONNECT:"$ktest_out/vm/mon" STDIO
     exec nc "$ktest_out/vm/mon"
 }
 
@@ -314,7 +314,7 @@ start_vm()
 	x86|x86_64)
 	    qemu_cmd+=(-cpu $cputype -machine type=q35,accel=$accel,nvdimm=on)
 	    ;;
-	aarch64)
+	aarch64|arm)
 	    qemu_cmd+=(-cpu $cputype -machine type=virt,gic-version=max,accel=$accel)
 	    ;;
 	mips)
@@ -336,7 +336,7 @@ start_vm()
     [[ $BITS == 32 ]] &&  memconfig="3G" && ktest_cpus=$((min($ktest_cpus,4)))
 
     qemu_cmd+=(								\
-	-m		"$ktest_mem,slots=8,maxmem=$maxmem"		\
+	-m		"$memconfig"					\
 	-smp		"$ktest_cpus"					\
 	-kernel		"$ktest_kernel_binary/vmlinuz"			\
 	-append		"$(join_by " " ${kernelargs[@]})"		\
@@ -349,6 +349,8 @@ start_vm()
 	-device		virtio-rng-pci					\
 	-virtfs		local,path=/,mount_tag=host,security_model=none,multidevs=remap	\
     )
+
+
 
     if [[ -f $ktest_kernel_binary/initramfs ]]; then
 	qemu_cmd+=(-initrd 	"$ktest_kernel_binary/initramfs")
