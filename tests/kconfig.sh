@@ -12,6 +12,7 @@ case $ktest_arch in
 	require-kernel-config MCORE2	# optimize for core2
 	require-kernel-config IO_DELAY_0XED
 	require-kernel-config 64BIT=n
+	require-kernel-config COMPAT_32BIT_TIME
 	require-kernel-config ACPI	# way slower without it, do not know why
 	require-kernel-config UNWINDER_FRAME_POINTER
 	require-kernel-config HARDLOCKUP_DETECTOR
@@ -40,9 +41,29 @@ case $ktest_arch in
 
 	require-kernel-append console=hvc0
 	;;
+    arm)
+	require-kernel-config ARCH_VIRT
+	require-kernel-config SMP
+	require-kernel-config VFP
+	require-kernel-config NEON
+	require-kernel-config ARM_LPAE
+	require-kernel-config MMU
+	require-kernel-config HAVE_PCI
+	require-kernel-config PCI_HOST_GENERIC
+	require-kernel-config ARM_AMBA
+	require-kernel-config COMPAT_32BIT_TIME
+	require-kernel-config RTC_DRV_PL031
+
+	have_virtio=1
+
+	require-kernel-append console=hvc0
+	;;
     aarch64)
 	require-kernel-config PCI_HOST_GENERIC
 	require-kernel-config RTC_DRV_PL031
+	require-kernel-config COMPAT_32BIT_TIME
+	require-kernel-config IOMMU_SUPPORT
+	require-kernel-config PARAVIRT
 
 	have_virtio=1
 
@@ -70,7 +91,7 @@ case $ktest_arch in
 	require-kernel-append console=hvc0
 	;;
     *)
-	echo "Kernel architecture not supported by kconfig.sh"
+	echo "Kernel architecture $ktest_arch not supported by kconfig.sh"
 	exit 1
 	;;
 esac
@@ -94,8 +115,6 @@ require-kernel-config BINFMT_ELF
 require-kernel-config BINFMT_SCRIPT
 
 require-kernel-config COMPACTION	# virtfs doesn't do well without it
-
-require-kernel-config PROC_KCORE	# XXX Needed?
 
 require-kernel-config TTY
 require-kernel-config VT

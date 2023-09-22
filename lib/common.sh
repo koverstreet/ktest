@@ -116,6 +116,17 @@ parse_arch()
 	    QEMU_PACKAGE=qemu-system-arm
 	    QEMU_BIN=qemu-system-aarch64
 	    ;;
+	armhf|armv7|armv7l|arm)
+	    ktest_arch=arm
+	    DEBIAN_ARCH=armhf
+	    ARCH_TRIPLE=${ARCH_TRIPLE_ARMV7}
+
+	    KERNEL_ARCH=arm
+	    BITS=32
+
+	    QEMU_PACKAGE=qemu-system-arm
+	    QEMU_BIN=qemu-system-arm
+	    ;;
 	mips)
 	    DEBIAN_ARCH=mips
 	    ARCH_TRIPLE=mips-linux-gnu
