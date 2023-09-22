@@ -139,7 +139,7 @@ new_config()
     local config_tool="$ktest_kernel_source/scripts/config"
 
     if [[ ! -f $kconfig ]]; then
-	do_make allnoconfig
+	do_make ARCH="$KERNEL_ARCH" CROSS_COMPILE="$ARCH_TRIPLE-" allnoconfig
 
 	# Really undefine everything:
 	sed -i -e 's/\(CONFIG_.*\)=.*/# \1 is not set/' "$kconfig"
@@ -186,17 +186,17 @@ build_kernel()
 	mv "$kconfig" "$kconfig".bak
     fi
 
+    MAKEARGS+=("LOCALVERSION=-ktest" ARCH="$KERNEL_ARCH" CROSS_COMPILE="$ARCH_TRIPLE-")
+
     new_config
 
     log_verbose "kernel_config_require: ${ktest_kernel_config_require[@]}"
-
-    MAKEARGS+=("LOCALVERSION=-ktest" ARCH="$KERNEL_ARCH" CROSS_COMPILE="$ARCH_TRIPLE-")
 
     for opt in "${ktest_kernel_config_require[@]}"; do
 	[[ -n $opt ]] && kernel_opt set "$opt"
     done
 
-    do_make olddefconfig
+    do_make ARCH="$KERNEL_ARCH" CROSS_COMPILE="$ARCH_TRIPLE-" olddefconfig
 
     for opt in "${ktest_kernel_config_require[@]}"; do
 	[[ -n $opt ]] && kernel_opt check "$opt"
@@ -209,10 +209,10 @@ build_kernel()
 
     case $KERNEL_ARCH in
 	mips)
-	    do_make -k vmlinuz
+	    do_make $MAKEARGS -k vmlinuz
 	    ;;
 	*)
-	    do_make -k
+	    do_make $MAKEARGS -k
 	    ;;
     esac
 
@@ -221,6 +221,9 @@ build_kernel()
     case $ktest_arch in
 	x86*)
 	    install -m0644 "$BOOT/bzImage"	"$ktest_kernel_binary/vmlinuz"
+	    ;;
+	arm)
+	    install -m0644 "$BOOT/zImage"	"$ktest_kernel_binary/vmlinuz"
 	    ;;
 	aarch64)
 	    install -m0644 "$BOOT/Image"	"$ktest_kernel_binary/vmlinuz"
@@ -281,13 +284,13 @@ cmd_boot()
 cmd_oldconfig()
 {
     new_config
-    do_make oldconfig
+    do_make ARCH="$KERNEL_ARCH" CROSS_COMPILE="$ARCH_TRIPLE-" oldconfig
 }
 
 cmd_config()
 {
     new_config
-    do_make nconfig
+    do_make ARCH="$KERNEL_ARCH" CROSS_COMPILE="$ARCH_TRIPLE-" nconfig
 }
 
 cmd_faddr2line()
