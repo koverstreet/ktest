@@ -55,7 +55,6 @@ case $ktest_arch in
 	require-kernel-config RTC_DRV_PL031
 
 	have_virtio=1
-	have_kvmguest=1
 
 	require-kernel-append console=hvc0
 	;;
@@ -63,9 +62,9 @@ case $ktest_arch in
 	require-kernel-config PCI_HOST_GENERIC
 	require-kernel-config RTC_DRV_PL031
 	require-kernel-config COMPAT_32BIT_TIME
+	require-kernel-config IOMMU_SUPPORT
 
 	have_virtio=1
-	have_kvmguest=1
 
 	require-kernel-append console=hvc0
 	;;
