@@ -50,22 +50,7 @@ test_recovery()
 	umount /mnt
     done
 
-    check_counters ${ktest_scratch_dev[0]}
-}
-
-test_multimount()
-{
-    set_watchdog 10
-    bcachefs format				\
-	${ktest_scratch_dev[0]}
-
-    mkdir -p /mnt/1 /mnt/2
-    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt/1
-    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt/2
-
-    umount /mnt/1
-    umount /mnt/2
-
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
     check_counters ${ktest_scratch_dev[0]}
 }
 
@@ -87,6 +72,7 @@ test_largebuckets()
     dd if=/dev/zero of=/mnt/foo bs=8M count=1024 oflag=direct
     umount /mnt
 
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
     check_counters ${ktest_scratch_dev[0]}
 }
 
@@ -115,10 +101,11 @@ test_replicas_variable_buckets()
     df -h /mnt
     umount /mnt
 
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]} ${ktest_scratch_dev[3]} ${ktest_scratch_dev[4]}
     check_counters ${ktest_scratch_dev[0]}
 }
 
-d_test_copygc_torture()
+test_copygc_torture()
 {
     loops=$((($ktest_priority + 1) * 4))
 
@@ -126,6 +113,7 @@ d_test_copygc_torture()
     set_watchdog 600
 
     run_quiet "" bcachefs format -f "$@"	\
+	--encrypted --no_passphrase		\
 	${ktest_scratch_dev[0]}			\
 	${ktest_scratch_dev[1]}			\
 	${ktest_scratch_dev[2]}
@@ -170,6 +158,7 @@ d_test_copygc_torture()
     #disable_memory_faults
     umount /mnt
 
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
     check_counters ${ktest_scratch_dev[0]}
 }
 
@@ -205,6 +194,10 @@ do_remove_test()
 	echo -n "evacuating ${ktest_scratch_dev[0]}... "
 	bcachefs device evacuate	${ktest_scratch_dev[0]}
 	echo "done"
+
+	echo -n "evacuating ${ktest_scratch_dev[0]}... "
+	bcachefs device evacuate	${ktest_scratch_dev[0]}
+	echo "done"
     fi
 
     bcachefs fs usage -h /mnt
@@ -230,6 +223,7 @@ do_remove_test()
     mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
     umount /mnt
 
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
     check_counters ${ktest_scratch_dev[0]}
 }
 
@@ -285,6 +279,7 @@ test_device_add()
     mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
     umount /mnt
 
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
     check_counters ${ktest_scratch_dev[0]}
 }
 
@@ -300,6 +295,7 @@ test_device_add_label()
     expect_sysfs dev-1 label bar
     umount /mnt
 
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
     check_counters ${ktest_scratch_dev[0]}
 }
 
@@ -318,6 +314,7 @@ test_device_add_label_compound()
     expect_sysfs dev-1 label foo.bar
     umount /mnt
 
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
     check_counters ${ktest_scratch_dev[0]}
 }
 
@@ -354,6 +351,7 @@ test_device_set_state()
 
     umount /mnt
 
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
     check_counters ${ktest_scratch_dev[0]}
 }
 
@@ -387,6 +385,7 @@ test_device_ro()
     mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
     umount /mnt
 
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
     check_counters ${ktest_scratch_dev[0]}
 }
 
@@ -422,6 +421,7 @@ test_device_set_state_offline()
     cat /sys/block/[sv]dc/bcachefs/state
     umount /mnt
 
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
     check_counters ${ktest_scratch_dev[0]}
 }
 
@@ -459,6 +459,7 @@ test_device_readd()
     mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
     umount /mnt
 
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
     check_counters ${ktest_scratch_dev[0]}
 }
 
@@ -485,6 +486,7 @@ test_device_repeated_add_remove()
 
     umount /mnt
 
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
     check_counters ${ktest_scratch_dev[0]}
 }
 
@@ -515,11 +517,7 @@ do_replicas_errors_test()
     umount /mnt
     mdadm --stop /dev/md0
 
-    #bcachefs fsck -n ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
-
-    mount -t bcachefs -o fsck ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
-    umount /mnt
-
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
     check_counters ${ktest_scratch_dev[0]}
 
     [[ -f $p ]] && echo 0 > $p
@@ -567,6 +565,7 @@ test_cmd_fs_usage()
 
     umount /mnt
 
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
     check_counters ${ktest_scratch_dev[0]}
 }
 
@@ -595,6 +594,7 @@ test_rereplicate()
     mount -t bcachefs -o degraded ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
     umount /mnt
 
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
     check_counters ${ktest_scratch_dev[0]}
 }
 
@@ -721,6 +721,7 @@ disabled_change_replicas2()
 
     umount /mnt
 
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
     check_counters ${ktest_scratch_dev[0]}
 }
 
@@ -749,8 +750,7 @@ test_replicas_gc()
     mount -t bcachefs -o fix_errors,erasure_code $devs /mnt
     umount /mnt
 
-    bcachefs fsck ${ktest_scratch_dev[@]}
-
+    bcachefs fsck -ny ${ktest_scratch_dev[@]}
     check_counters ${ktest_scratch_dev[0]}
 
     [[ -f $p ]] && echo 0 > $p
@@ -803,6 +803,7 @@ test_key_type_error()
 
     umount /mnt
 
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
     check_counters ${ktest_scratch_dev[0]}
 }
 

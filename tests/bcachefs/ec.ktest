@@ -43,8 +43,7 @@ test_ec_small()
     mount -t bcachefs -o fsck $devs /mnt
     umount /mnt
 
-    bcachefs fsck -n "${ktest_scratch_dev[@]}"
-
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
     check_counters ${ktest_scratch_dev[0]}
 }
 
@@ -66,6 +65,7 @@ test_ec_umount()
 	umount /mnt
     done
 
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
     check_counters ${ktest_scratch_dev[0]}
 }
 
@@ -100,6 +100,7 @@ do_ec_test()
     cat /mnt/fiotest > /dev/null
     umount /mnt
 
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
     check_counters ${ktest_scratch_dev[0]}
 }
 
@@ -159,8 +160,7 @@ test_ec_mixed_tiers()
     mount -t bcachefs -o fsck $devs /mnt
     umount /mnt
 
-    bcachefs fsck -n "${ktest_scratch_dev[@]}"
-
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
     check_counters ${ktest_scratch_dev[0]}
 }
 
@@ -211,6 +211,7 @@ test_ec_gc()
     mount -t bcachefs $devs /mnt
     umount /mnt
 
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
     check_counters ${ktest_scratch_dev[0]}
 }
 
@@ -264,6 +265,7 @@ do_remove_test()
     mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
     umount /mnt
 
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
     check_counters ${ktest_scratch_dev[0]}
 }
 

@@ -277,8 +277,7 @@ run_basic_fio_test_counter_threshold()
     #mount -t bcachefs -o fsck $(join_by : "${devs[@]}") /mnt
     #umount /mnt
 
-    bcachefs fsck -n "${devs[@]}"
-
+    bcachefs fsck -ny "${devs[@]}"
     check_counters "${devs[0]}" "$ratio"
 }
 
