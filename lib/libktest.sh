@@ -317,12 +317,14 @@ start_vm()
 	aarch64|arm)
 	    qemu_cmd+=(-cpu $cputype -machine type=virt,gic-version=max,accel=$accel)
 	    ;;
-	mips)
-	    qemu_cmd+=(-cpu 24Kf -machine malta)
-	    ktest_cpus=1
+	ppc64)
+	    qemu_cmd+=(-cpu power9)
 	    ;;
-	mips64)
-	    qemu_cmd+=(-cpu MIPS64R2-generic -machine malta)
+	sparc64)
+	    qemu_cmd+=(-cpu default)
+	    ;;
+	riscv64)
+	    qemu_cmd+=(-cpu any)
 	    ;;
     esac
 
