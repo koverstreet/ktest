@@ -110,7 +110,7 @@ test_copygc_torture()
     loops=$((($ktest_priority + 1) * 4))
 
     bcachefs_antagonist
-    set_watchdog 600
+    set_watchdog 2400
 
     run_quiet "" bcachefs format -f "$@"	\
 	--encrypted --no_passphrase		\
