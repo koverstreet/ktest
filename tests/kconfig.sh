@@ -68,24 +68,29 @@ case $ktest_arch in
 
 	require-kernel-append console=hvc0
 	;;
-    powerpc)
-	require-kernel-config ADVANCED_OPTIONS
+    ppc64)
+	require-kernel-config PPC64
 
-	have_kvmguest=1
 	have_virtio=1
-	have_suspend=1
 
 	require-kernel-append console=hvc0
 	;;
-    mips)
-	require-kernel-config MIPS_MALTA
-	require-kernel-config CPU_MIPS${BITS}_R2
-	require-kernel-config CPU_BIG_ENDIAN=y
-	require-kernel-config CPU_LITTLE_ENDIAN=n
-	require-kernel-config 32BIT
+    sparc64)
+	require-kernel-config 64BIT
+	require-kernel-config SMP
+	require-kernel-config VIRTIO_MENU
+	require-kernel-config PCI
 
 	have_virtio=1
-	ktest_storage_bus=piix4-ide
+
+	require-kernel-append console=hvc0
+	;;
+    riscv64)
+	require-kernel-config SOC_VIRT
+	require-kernel-config VIRTIO_MENU
+	require-kernel-config PCI
+
+	have_virtio=1
 
 	require-kernel-append console=hvc0
 	;;
