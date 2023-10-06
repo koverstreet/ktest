@@ -68,8 +68,14 @@ case $ktest_arch in
 
 	require-kernel-append console=hvc0
 	;;
+
     ppc64)
 	require-kernel-config PPC64
+	require-kernel-config PPC_BOOK3E_64
+	require-kernel-config PPC_QEMU_E500
+	require-kernel-config E6500_CPU
+	require-kernel-config SMP
+	require-kernel-config KVM_GUEST
 
 	have_virtio=1
 
@@ -78,7 +84,6 @@ case $ktest_arch in
     sparc64)
 	require-kernel-config 64BIT
 	require-kernel-config SMP
-	require-kernel-config VIRTIO_MENU
 	require-kernel-config PCI
 
 	have_virtio=1
@@ -89,6 +94,17 @@ case $ktest_arch in
 	require-kernel-config SOC_VIRT
 	require-kernel-config VIRTIO_MENU
 	require-kernel-config PCI
+
+	have_virtio=1
+
+	require-kernel-append console=hvc0
+	;;
+    s390x)
+	require-kernel-config S390_GUEST
+	require-kernel-config MARCH_Z13
+	require-kernel-config CMM
+	require-kernel-config PCI
+	require-kernel-config DCSSBLK
 
 	have_virtio=1
 
@@ -182,13 +198,15 @@ require-kernel-config PCI
 require-kernel-config HW_RANDOM
 
 # Clock:
+if [[ ! $ktest_arch == *"s390"* ]]; then
 require-kernel-config RTC_CLASS
 require-kernel-config RTC_HCTOSYS
-
+fi
 # Console:
+if [[ ! $ktest_arch == *"s390"* ]]; then
 require-kernel-config SERIAL_8250	# XXX can probably drop
 require-kernel-config SERIAL_8250_CONSOLE
-
+fi
 # Block devices:
 require-kernel-config SCSI
 require-kernel-config SCSI_LOWLEVEL	# what's this for?
@@ -229,8 +247,10 @@ require-kernel-config 9P_FS
 #fi
 
 # KGDB:
+if [[ ! $ktest_arch == *"s390"* ]]; then
 require-kernel-config KGDB
 require-kernel-config KGDB_SERIAL_CONSOLE
+fi
 require-kernel-config VMAP_STACK=n
 require-kernel-config RANDOMIZE_BASE=n
 require-kernel-config RANDOMIZE_MEMORY=n
@@ -253,7 +273,9 @@ require-kernel-config FUNCTION_TRACER
 #require-kernel-config ENABLE_DEFAULT_TRACERS
 
 require-kernel-config PANIC_ON_OOPS
+if [[ ! $ktest_arch == *"s390"* ]]; then
 require-kernel-config SOFTLOCKUP_DETECTOR
+fi
 require-kernel-config DETECT_HUNG_TASK
 #require-kernel-config DEFAULT_HUNG_TASK_TIMEOUT=30
 require-kernel-config WQ_WATCHDOG

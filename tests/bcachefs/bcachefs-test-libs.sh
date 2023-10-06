@@ -15,7 +15,11 @@ if [[ ! -v NO_BCACHEFS_DEBUG ]]; then
     require-kernel-config BCACHEFS_DEBUG
 fi
 
+if [[ ! $ktest_arch == ppc64 ]]; then
+
 require-kernel-config TRANSPARENT_HUGEPAGE
+
+fi
 
 if [[ $ktest_arch = x86_64 ]]; then
     require-kernel-config CRYPTO_CRC32C_INTEL
