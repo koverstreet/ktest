@@ -318,13 +318,17 @@ start_vm()
 	    qemu_cmd+=(-cpu $cputype -machine type=virt,gic-version=max,accel=$accel)
 	    ;;
 	ppc64)
-	    qemu_cmd+=(-cpu power9)
+	    qemu_cmd+=(-machine ppce500 -cpu e6500 -accel tcg)
+	    ;;
+	s390x)
+	    qemu_cmd+=(-cpu max -machine s390-ccw-virtio -accel tcg)
 	    ;;
 	sparc64)
-	    qemu_cmd+=(-cpu default)
+	    qemu_cmd+=(-machine sun4u -accel tcg)
+	    ktest_cpus=1; #sparc64 currently supports only 1 cpu
 	    ;;
 	riscv64)
-	    qemu_cmd+=(-cpu any)
+	    qemu_cmd+=(-machine virt -cpu rv64 -accel tcg)
 	    ;;
     esac
 

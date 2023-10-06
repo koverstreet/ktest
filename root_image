@@ -34,9 +34,66 @@ usage()
     echo
     echo "options:"
     echo "  -h			Display this help and exit"
-    echo "  -a <arch>		Architecture for vm image (x86_64,armhf,i386,aarch64,sparc64,ppc64,riscv64)"
+    echo "  -a <arch>		Architecture for vm (x86_64,armhf,i386,aarch64,sparc64,s390x,ppc64,riscv64)"
     echo "  -m <mirror>		Debian mirror"
     echo '  -i <image>		Image to create/update, defaults to /var/lib/ktest/root.$arch'
+}
+
+intervene()
+{
+	local yn="N";
+	echo "Installing $2 failed: both binary install and $1";
+	echo "You can start a shell to check whether any dependency issues can be fixed"
+	echo "if you do, and exit the shell, it is assumed to be fixed and installing will continue"
+	read -p "Do you wish to start a shell to investigate? (y/N)" yn
+	case $yn in
+		[Yy]* )
+			_chroot "$MNT" /tmpbuild/executer.sh /bin/bash;
+		;;
+		* ) return 1;;
+	esac
+}
+
+install_fix_deps()
+{
+	trap 'echo "Could not install packages! please revert to the included torrent file to download a working root image"; umount $MNT/tmpbuild; umount_image; rm "$ktest_image"' EXIT
+	#get necessary certificates / pgp keyrings to work with unofficial and outdated snapshots
+	_chroot "$MNT" apt-get -qq install debian-ports-archive-keyring ca-certificates
+	#disable unwanted checks - we know the snapshots are not valid
+	echo "Acquire::Check-Valid-Until false;" > $MNT/etc/apt/apt.conf.d/10-nocheckvalid
+	#create a sources.list with more options to work around missing packages
+	echo 'deb [trusted=yes] http://deb.debian.org/debian-ports unstable main non-free' > $MNT/etc/apt/sources.list
+	echo 'deb-src [trusted=yes] http://deb.debian.org/debian-ports unstable main non-free' >> $MNT/etc/apt/sources.list
+	echo 'deb [trusted=yes] http://deb.debian.org/debian-ports unreleased main non-free' >> $MNT/etc/apt/sources.list
+	echo 'deb-src [trusted=yes] http://deb.debian.org/debian-ports unreleased main non-free' >> $MNT/etc/apt/sources.list
+	for i in "${SID_SNAPSHOTS[@]}"; do
+	echo "deb [trusted=yes] https://snapshot.debian.org/archive/debian-ports/$i sid main" >> $MNT/etc/apt/sources.list
+	echo "deb-src [trusted=yes] https://snapshot.debian.org/archive/debian-ports/$i sid main" >> $MNT/etc/apt/sources.list
+	done
+	echo "deb-src http://deb.debian.org/debian unstable main contrib non-free" >> $MNT/etc/apt/sources.list
+	touch $MNT/etc/passwd
+	touch $MNT/etc/shadow
+	_chroot "$MNT" apt-get -qq --allow-unauthenticated --allow-insecure-repositories update --fix-missing
+	_chroot "$MNT" apt-get -qq --allow-unauthenticated upgrade
+	_chroot "$MNT" apt-get -qq install -f
+	_chroot "$MNT" apt-get -qq install build-essential
+	#if we can install them all at once, do so, otherwise, try one by one
+	_chroot "$MNT" apt-get -qq install -m --allow-unauthenticated --no-install-recommends "${PACKAGES[@]}" || for i in "${PACKAGES[@]}"; do
+		if [[ ! $(_chroot "$MNT" apt-cache show $i | grep Version) == "" ]]; then
+		_chroot "$MNT" apt-get -qq install --allow-unauthenticated --no-install-recommends $i && continue;
+		fi
+		#installing binary failed.  Try to install from source.  Do it in a tmpfs folder so the image doesn't get overwhelmed:
+		mkdir ${MNT}/tmpbuild;
+		mount -t tmpfs none ${MNT}/tmpbuild;
+		echo '#!/bin/bash' > "$MNT"/tmpbuild/executer.sh
+		echo 'cd /tmpbuild/; $@' >> "$MNT"/tmpbuild/executer.sh
+		chmod ago+x "$MNT"/tmpbuild/executer.sh
+		_chroot "$MNT" /tmpbuild/executer.sh apt-get -qq build-dep --allow-unauthenticated --no-install-recommends $i || intervene install-deps $i;
+		_chroot "$MNT" /tmpbuild/executer.sh apt-get -qq -b source --allow-unauthenticated $i || intervene build $i;
+		[ -f "${MNT}/tmpbuild/${i}*.deb" ] && _chroot "$MNT" apt-get -qq install /tmpbuild/${i}*.deb;
+		umount ${MNT}/tmpbuild;
+		rmdir ${MNT}/tmpbuild;
+	done
 }
 
 if [[ $# = 0 ]]; then
@@ -130,7 +187,7 @@ PACKAGES+=("linux-headers-generic")
 # [[ $KERNEL_ARCH = x86 ]] && PACKAGES+=(uswsusp)
 
 EXCLUDE=(dmidecode nano rsyslog logrotate cron		\
-    iptables nfacct					\
+    iptables nfacct vim-tiny				\
     debconf-i18n info gnupg libpam-systemd)
 
 SYSTEMD_MASK=(dev-hvc0.device				\
@@ -233,11 +290,14 @@ update_packages()
     mkdir -p "$MNT"/run/user/0
     cp /etc/resolv.conf "$MNT/etc/resolv.conf"
     _chroot "$MNT" mount -t proc none /proc
-    [[ $MIRROR == *"debian-ports"* ]] && _chroot "$MNT" apt-get -qq install debian-ports-archive-keyring
+    if [[ $MIRROR == *"debian-ports"* ]]; then
+	install_fix_deps
+    else
     _chroot "$MNT" apt-get -qq --allow-unauthenticated --allow-insecure-repositories update --fix-missing
     _chroot "$MNT" apt-get -qq --allow-unauthenticated upgrade
     _chroot "$MNT" apt-get -qq install -f
     _chroot "$MNT" apt-get -qq install -m --allow-unauthenticated --no-install-recommends "${PACKAGES[@]}"
+    fi
     rm -f "$MNT/var/cache/apt/archives/*.deb"
 
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > "$MNT"/tmp/rustup.sh
@@ -293,11 +353,11 @@ cmd_create()
 	echo "$ktest_image already exists"
 	exit 1
     fi
-
+    set -o xtrace
     (cd "$ktest_dir"; git submodule update --init debootstrap)
 
     MNT=$(mktemp --tmpdir -d $(basename "$0")-XXXXXXXXXX)
-    trap 'umount_image; rm "$ktest_image"' EXIT
+    trap '/bin/bash; umount_image; rm "$ktest_image"' EXIT
 
     fallocate -l "$IMAGE_SIZE" "$ktest_image"
     mkfs.ext4 -F "$ktest_image"
@@ -308,9 +368,7 @@ cmd_create()
 
     if [[ $MIRROR == *"debian-ports"* ]]; then
 	debian_release="sid" #unofficial ports don't have named releases
-        wget https://www.ports.debian.org/archive_$(date +%Y).key
-	gpg --import archive_$(date +%Y).key
-	rm archive_$(date +%Y).key
+	echo ""
 	echo "WARNING: $ktest_arch is unsupported, using SID release for packages"
 	echo "*******************************************************************"
 	echo "PLEASE NOTE: this often has dependency problems between packages, "
@@ -330,12 +388,9 @@ cmd_create()
 	--components='main,contrib,non-free' \
 	$debian_release "$MNT" "$MIRROR"
 
-<<<<<<< HEAD
-    [[ ${CROSS_COMPILE+x} ]] && cp $(which qemu-${ktest_arch}) ${MNT}$(which qemu-${ktest_arch})
-=======
     statichelper=$(which qemu-${ktest_arch}) || statichelper=$(which qemu-${ktest_arch}-static)
-    [ ${CROSS_COMPILE:-0} == 1 ] && cp $statichelper ${MNT}$statichelper
->>>>>>> cd06c42 (Ktest: re-introduce foreign unsupported architectures)
+    [[ ${CROSS_COMPILE+x} ]] && cp ${statichelper} ${MNT}${statichelper}
+
     _chroot "$MNT" /debootstrap/debootstrap --second-stage
     _chroot "$MNT" dpkg --configure -a
     update_packages
