@@ -28,7 +28,11 @@ else
     require-kernel-config BCACHEFS_NO_LATENCY_ACCT=y
 fi
 
+if [[ ! $ktest_arch == ppc64 ]]; then
+
 require-kernel-config TRANSPARENT_HUGEPAGE
+
+fi
 
 if [[ $ktest_arch = x86_64 ]]; then
     require-kernel-config CRYPTO_CRC32C_INTEL

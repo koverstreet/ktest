@@ -132,6 +132,17 @@ parse_arch()
 	    QEMU_PACKAGE=qemu-system-arm
 	    QEMU_BIN=qemu-system-arm
 	    ;;
+	s390x)
+	    DEBIAN_ARCH=s390x
+	    ARCH_TRIPLE=${ARCH_TRIPLE_S390X}
+	    RUST_TRIPLE=s390x-unknown-linux-gnu
+
+	    KERNEL_ARCH=s390
+	    BITS=64
+
+	    QEMU_PACKAGE=qemu-system-s390x
+	    QEMU_BIN=qemu-system-s390x
+	    ;;
 	riscv64)
 	    DEBIAN_ARCH=riscv64
 	    ARCH_TRIPLE=${ARCH_TRIPLE_RISCV64}
