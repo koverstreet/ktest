@@ -89,8 +89,11 @@ install_fix_deps()
 		echo 'cd /tmpbuild/; $@' >> "$MNT"/tmpbuild/executer.sh
 		chmod ago+x "$MNT"/tmpbuild/executer.sh
 		_chroot "$MNT" /tmpbuild/executer.sh apt-get -qq build-dep --allow-unauthenticated --no-install-recommends $i || intervene install-deps $i;
-		_chroot "$MNT" /tmpbuild/executer.sh apt-get -qq -b source --allow-unauthenticated $i || intervene build $i;
-		[ -f "${MNT}/tmpbuild/${i}*.deb" ] && _chroot "$MNT" apt-get -qq install /tmpbuild/${i}*.deb;
+		#in case the intervention also installed it, continue:
+		if [[ $(_chroot "$MNT" dpkg -l | grep "^ii  $i") == "" ]]; then
+			_chroot "$MNT" /tmpbuild/executer.sh apt-get -qq -b source --allow-unauthenticated $i || intervene build $i;
+			[ -f "${MNT}/tmpbuild/${i}*.deb" ] && _chroot "$MNT" apt-get -qq install /tmpbuild/${i}*.deb;
+		fi
 		umount ${MNT}/tmpbuild;
 		rmdir ${MNT}/tmpbuild;
 	done
@@ -286,25 +289,32 @@ ZZ
 
 update_packages()
 {
+    NO_RUSTUP=0
     # systemd... !?
     mkdir -p "$MNT"/run/user/0
     cp /etc/resolv.conf "$MNT/etc/resolv.conf"
+
+    [[ $(curl -qq -I "https://static.rust-lang.org/rustup/${RUST_TRIPLE}/rustup-init" 2>/dev/null | grep "HTTP/2 200") == "" ]] && NO_RUSTUP=1
+    [ $NO_RUSTUP ] && PACKAGES+=(rustc rustc-dbgsym rustfmt rustfmt-dbgsym) #don't do rustup on unsupported architectures, just try from debian repositories
+
     _chroot "$MNT" mount -t proc none /proc
     if [[ $MIRROR == *"debian-ports"* ]]; then
 	install_fix_deps
     else
-    _chroot "$MNT" apt-get -qq --allow-unauthenticated --allow-insecure-repositories update --fix-missing
-    _chroot "$MNT" apt-get -qq --allow-unauthenticated upgrade
-    _chroot "$MNT" apt-get -qq install -f
-    _chroot "$MNT" apt-get -qq install -m --allow-unauthenticated --no-install-recommends "${PACKAGES[@]}"
+	_chroot "$MNT" apt-get -qq --allow-unauthenticated --allow-insecure-repositories update --fix-missing
+    	_chroot "$MNT" apt-get -qq --allow-unauthenticated upgrade
+    	_chroot "$MNT" apt-get -qq install -f
+    	_chroot "$MNT" apt-get -qq install -m --allow-unauthenticated --no-install-recommends "${PACKAGES[@]}"
     fi
     rm -f "$MNT/var/cache/apt/archives/*.deb"
 
+    if [ ! $NO_RUSTUP ]; then
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > "$MNT"/tmp/rustup.sh
     chmod 755 "$MNT"/tmp/rustup.sh
 
     _chroot "$MNT" /tmp/rustup.sh --default-host $RUST_TRIPLE -y
     echo 'export PATH="$HOME/.cargo/bin:$PATH"' > $MNT/etc/profile.d/rustup.sh
+    fi;
 }
 
 trim_image()
@@ -353,7 +363,6 @@ cmd_create()
 	echo "$ktest_image already exists"
 	exit 1
     fi
-    set -o xtrace
     (cd "$ktest_dir"; git submodule update --init debootstrap)
 
     MNT=$(mktemp --tmpdir -d $(basename "$0")-XXXXXXXXXX)
