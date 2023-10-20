@@ -95,3 +95,12 @@ stress_timeout()
 {
     echo $((($ktest_priority + 3) * 600))
 }
+
+call_base_test()
+{
+    fname=$(basename ${BASH_SOURCE[2]})
+    fname=${fname#$1-}
+    shift
+
+    . $(dirname $(readlink -e ${BASH_SOURCE[2]}))/$fname
+}
