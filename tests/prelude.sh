@@ -14,9 +14,9 @@ if [[ ! -v ktest_verbose ]]; then
     ktest_kernel_make_append=()
 
     # virtio-scsi-pci semes to be buggy: reading the superblock on the root
-    # filesystem randomly returns zeroes
-    #ktest_storage_bus=virtio-scsi-pci
-    ktest_storage_bus=virtio-blk
+    # filesystem randomly returns zeroes.  nonetherless, it's the most supported architecture (for now)
+    ktest_storage_bus=virtio-scsi-pci
+    #ktest_storage_bus=virtio-blk
     ktest_images=()
 
     ktest_scratch_dev=()

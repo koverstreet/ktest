@@ -88,6 +88,7 @@ parse_arch()
 	    DEBIAN_ARCH=i386
 	    ARCH_TRIPLE=${ARCH_TRIPLE_X86}
 	    RUST_TRIPLE=i686-unknown-linux-gnu
+	    DEBIAN_INCLUDE_HEADERS=i386-linux-gnu
 
 	    KERNEL_ARCH=x86
 	    BITS=32
@@ -100,6 +101,7 @@ parse_arch()
 	    DEBIAN_ARCH=amd64
 	    ARCH_TRIPLE=${ARCH_TRIPLE_X86_64}
 	    RUST_TRIPLE=x86_64-unknown-linux-gnu
+	    DEBIAN_INCLUDE_HEADERS=x86_64-linux-gnu
 
 	    KERNEL_ARCH=x86
 	    BITS=64
@@ -112,6 +114,7 @@ parse_arch()
 	    DEBIAN_ARCH=arm64
 	    ARCH_TRIPLE=${ARCH_TRIPLE_ARM64}
 	    RUST_TRIPLE=aarch64-unknown-linux-gnu
+	    DEBIAN_INCLUDE_HEADERS=aarch64-linux-gnu
 
 	    KERNEL_ARCH=arm64
 	    BITS=64
@@ -124,6 +127,7 @@ parse_arch()
 	    DEBIAN_ARCH=armhf
 	    ARCH_TRIPLE=${ARCH_TRIPLE_ARMV7}
 	    RUST_TRIPLE=armv7-unknown-linux-gnueabihf
+	    DEBIAN_INCLUDE_HEADERS=arm-linux-gnueabihf
 
 	    KERNEL_ARCH=arm
 	    BITS=32
@@ -135,6 +139,7 @@ parse_arch()
 	    DEBIAN_ARCH=s390x
 	    ARCH_TRIPLE=${ARCH_TRIPLE_S390X}
 	    RUST_TRIPLE=s390x-unknown-linux-gnu
+	    DEBIAN_INCLUDE_HEADERS=s390x-linux-gnu
 
 	    KERNEL_ARCH=s390
 	    BITS=64
@@ -143,10 +148,15 @@ parse_arch()
 	    QEMU_BIN=qemu-system-s390x
 	    ;;
 	riscv64)
+	    ktest_arch=riscv64
 	    DEBIAN_ARCH=riscv64
 	    ARCH_TRIPLE=${ARCH_TRIPLE_RISCV64}
+#TODO: risc-v is being promoted out of "unsupported backports and moved into main debian architectures.
+#it is currently not yet supported in trixie, but it might still be - or might not - we don't know.
+#it IS impossible to use the current mirror, but maybe another solution comes up when riscv64's support status is clear.
 	    MIRROR=http://deb.debian.org/debian-ports
 	    RUST_TRIPLE=riscv64gc-unknown-linux-gnu
+	    DEBIAN_INCLUDE_HEADERS=riscv64gc-linux-gnu
 
 	    KERNEL_ARCH=riscv
 	    BITS=64
@@ -155,10 +165,12 @@ parse_arch()
 	    QEMU_BIN=qemu-system-riscv64
 	    ;;
 	sparc64)
+            ktest_arch=sparc64
 	    DEBIAN_ARCH=sparc64
 	    ARCH_TRIPLE=${ARCH_TRIPLE_SPARC64}
 	    MIRROR=http://deb.debian.org/debian-ports
 	    RUST_TRIPLE=sparc64-unknown-linux-gnu
+	    DEBIAN_INCLUDE_HEADERS=sparc64-linux-gnu
 
 	    KERNEL_ARCH=sparc
 	    BITS=64
@@ -170,9 +182,9 @@ parse_arch()
 	    ktest_arch=ppc64
 	    DEBIAN_ARCH=ppc64
 	    MIRROR=http://deb.debian.org/debian-ports
-
 	    ARCH_TRIPLE=${ARCH_TRIPLE_PPC64}
 	    RUST_TRIPLE=powerpc64-unknown-linux-gnu
+	    DEBIAN_INCLUDE_HEADERS=powerpc64-linux-gnu
 
 	    KERNEL_ARCH=powerpc
 	    BITS=64

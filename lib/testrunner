@@ -97,9 +97,10 @@ for i in "${ktest_make_install[@]}"; do
 	run_quiet "configure $(basename $i)" ./configure
     fi
     #bcachefs tools sometimes seems to use compiled files from previous runs, even if other architecture, so clean out:
-    [ "bcachefs-tools" == "$(basename $i)" ] && [ "$(objdump -f bcachefs.o | grep architecture | cut -d' ' -f 2)" == "$(objdump -f /bin/bash | grep architecture | cut -d' ' -f 2)" ] || make clean & rm -rf "rust-src/targets/*"
+    [ "bcachefs-tools" == "$(basename $i)" ] && [ "$(objdump -f libbcachefs.a | grep architecture | cut -d' ' -f 2)" == "$(objdump -f /bin/bash | grep architecture | cut -d' ' -f 2)" ] || make clean & rm -rf "rust-src/targets/*"
     run_quiet "building $(basename $i)" make -j $ktest_cpus
     run_quiet "installing $(basename $i)" make -j $ktest_cpus install
+    [ "bcachefs-tools" == "$(basename $i)" ] && echo $ktest_arch > .precompiled
     popd > /dev/null
 done
 

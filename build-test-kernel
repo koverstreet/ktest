@@ -224,6 +224,9 @@ build_kernel()
 	ppc64)
 	    install -m0644 "$BOOT/zImage"	"$ktest_kernel_binary/vmlinuz"
 	    ;;
+	sparc64)
+	    install -m0644 "$BOOT/image"	"$ktest_kernel_binary/vmlinuz"
+	    ;;
 	*)
 	    if [ -f "$BOOT/Image" ]; then
 		 install -m0644 "$BOOT/Image"	"$ktest_kernel_binary/vmlinuz"

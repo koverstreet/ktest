@@ -258,10 +258,42 @@ get_unused_port()
 	| shuf | head -n1
 }
 
+#cross compiling bcachefs is a delicate operation,
+#so run it in a separate shell
+#for now, we're only building libbcachefs.a,
+#which compiles 90% of the C code.
+#if the operation completes successfully, a .crossarch is made indicating the cross compile has been completed.
+#at the next invocation, if .crossarch is still what it should be, there's no need to recompile again.
+
+try_construct_cross_bcachefs()
+(
+     cd ${ktest_dir}/tests/bcachefs/bcachefs-tools/
+     make clean
+     rm -rf rust-src/target/release
+     rootpath=${ktest_out}/vm/cross-user
+     make CC=${ARCH_TRIPLE}-gcc EXTRA_CFLAGS="-I/${rootpath}/usr/include/ -I/${rootpath}/usr/include/${DEBIAN_INCLUDE_HEADERS}/ -ffile-prefix-map=${rootpath}=/" -j $ktest_cpus libbcachefs.a && echo ${ktest_arch} > .crossarch
+     find -name "*.d" -exec sed -i "s/${rootpath//\//\\\/}/\//g" {} \;
+)
+
+# try to mount the root image via fuse,
+# this way the debian target headers can be included instead of the host OS
+# if anything fails, target will need to fall back to target qemu compile,
+# which is a lot slower, obviously
+
+premake_cross_bcachefs()
+{
+     [ "$(cat $ktest_dir/tests/bcachefs/bcachefs-tools/.crossarch)" == "$ktest_arch" ] && return 0;
+     which fuse2fs > /dev/null 2>&1 || return -1;
+     mkdir $ktest_out/vm/cross-user || return -2;
+     fuse2fs -o ro $ktest_root_image $ktest_out/vm/cross-user || return -3;
+     try_construct_cross_bcachefs
+     umount $ktest_out/vm/cross-user;
+     return 0;
+}
+
 start_vm()
 {
     log_verbose "ktest_arch=$ktest_arch"
-
     checkdep $QEMU_BIN $QEMU_PACKAGE
     check_root_image_exists
 
@@ -306,52 +338,68 @@ start_vm()
 
     kernelargs+=("${ktest_kernel_append[@]}")
 
-    local qemu_cmd=("$QEMU_BIN" -nodefaults -nographic)
-    local accel=kvm
-    local cputype=host
-    [[ "${CROSS_COMPILE:-0}" == "1" ]] && accel=tcg && cputype=max
+    local qemu_cmd=("$QEMU_BIN" -nodefaults -nographic);
+    local accel=kvm;
+    local cputype=host;
+    if [[ "${CROSS_COMPILE:-0}" == "1" ]]; then
+	accel=tcg;
+	cputype=max;
+        premake_cross_bcachefs
+        local err=$?
+        [ $err != 0 ] && echo "Error precompiling $err. compiling native in qemu if needed";
+    fi
+    local pciBus="";
     case $ktest_arch in
 	x86|x86_64)
 	    qemu_cmd+=(-cpu $cputype -machine type=q35,accel=$accel,nvdimm=on)
+	    qemu_network_driver="virtio-net-pci"
 	    ;;
 	aarch64|arm)
 	    qemu_cmd+=(-cpu $cputype -machine type=virt,gic-version=max,accel=$accel)
+	    qemu_network_driver="virtio-net-pci"
 	    ;;
 	ppc64)
 	    qemu_cmd+=(-machine ppce500 -cpu e6500 -accel tcg)
+	    qemu_network_driver="virtio-net-pci"
 	    ;;
 	s390x)
 	    qemu_cmd+=(-cpu max -machine s390-ccw-virtio -accel tcg)
+	    qemu_network_driver="virtio"
 	    ;;
 	sparc64)
 	    qemu_cmd+=(-machine sun4u -accel tcg)
 	    ktest_cpus=1; #sparc64 currently supports only 1 cpu
+            pciBus=",bus=pciB"
+	    qemu_network_driver="virtio-net-pci"
 	    ;;
 	riscv64)
 	    qemu_cmd+=(-machine virt -cpu rv64 -accel tcg)
+	    qemu_network_driver="virtio-net-pci"
 	    ;;
     esac
 
     local maxmem=$(awk '/MemTotal/ {printf "%dG\n", $2/1024/1024}' /proc/meminfo 2>/dev/null) || maxmem="1T"
     local memconfig="$ktest_mem,slots=8,maxmem=$maxmem"
 
-    [ $BITS == 32 ] &&  memconfig="3G" && ktest_cpus=4 #do not be fancy on 32-bit hardware.  if it works, it's fine
+    [ $BITS == 32 ] &&  memconfig="3G" && ktest_cpus=$((min($ktest_cpus,4))) #do not be fancy on 32-bit hardware.  if it works, it's fine
 
     qemu_cmd+=(								\
 	-m		"$memconfig"					\
 	-smp		"$ktest_cpus"					\
 	-kernel		"$ktest_kernel_binary/vmlinuz"			\
 	-append		"$(join_by " " ${kernelargs[@]})"		\
-	-device		virtio-serial					\
+	-device		pci-bridge,chassis_nr=2,addr=2,id=vfiob$pciBus	\
+	-device		virtio-serial-pci,bus=vfiob,addr=1			\
 	-chardev	stdio,id=console				\
 	-device		virtconsole,chardev=console			\
+	-device		virtio-rng-pci,bus=vfiob,addr=3			\
 	-serial		"unix:$ktest_out/vm/kgdb,server,nowait"		\
 	-monitor	"unix:$ktest_out/vm/mon,server,nowait"		\
 	-gdb		"unix:$ktest_out/vm/gdb,server,nowait"		\
-	-device		virtio-rng-pci					\
-	-virtfs		local,path=/,mount_tag=host,security_model=none,multidevs=remap	\
+	-fsdev		local,path=/,security_model=none,id=host_dev,multidevs=remap \
+	-device		virtio-9p-pci,bus=vfiob,addr=4,fsdev=host_dev,mount_tag=host \
     )
-
+#	-virtfs		local,path=/,mount_tag=host,security_model=none,multidevs=remap	\
 
 
     if [[ -f $ktest_kernel_binary/initramfs ]]; then
@@ -362,9 +410,8 @@ start_vm()
 	user)
 	    ktest_ssh_port=$(get_unused_port)
 	    echo $ktest_ssh_port > "$ktest_out/vm/ssh_port"
-
 	    qemu_cmd+=( \
-		-nic    user,model=virtio,hostfwd=tcp:127.0.0.1:$ktest_ssh_port-:22	\
+		-nic    user,model=${qemu_network_driver},hostfwd=tcp:127.0.0.1:$ktest_ssh_port-:22	\
 	    )
 	    ;;
 	vde)
@@ -393,7 +440,7 @@ start_vm()
 	virtio-blk)
 	    ;;
 	*)
-	    qemu_cmd+=(-device $ktest_storage_bus,id=hba)
+	    qemu_cmd+=(-device $ktest_storage_bus$pciBus,id=hba)
 	    ;;
     esac
 
@@ -407,7 +454,7 @@ start_vm()
 		qemu_cmd+=(-device ide-hd,bus=hba.$disknr,drive=disk$disknr)
 		;;
 	    virtio-blk)
-		qemu_cmd+=(-device virtio-blk-pci,drive=disk$disknr)
+		qemu_cmd+=(-device virtio-blk-pci$pciBus,drive=disk$disknr)
 		;;
 	    *)
 		qemu_cmd+=(-device scsi-hd,bus=hba.0,drive=disk$disknr)
