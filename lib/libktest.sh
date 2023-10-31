@@ -269,7 +269,7 @@ try_construct_cross_bcachefs()
 (
      cd ${ktest_dir}/tests/bcachefs/bcachefs-tools/
      make clean
-     rm -rf rust-src/target/release
+     cargo clean --manifest-path=rust-src/Cargo.toml || true
      rootpath=${ktest_out}/vm/cross-user
      make CC=${ARCH_TRIPLE}-gcc EXTRA_CFLAGS="-I/${rootpath}/usr/include/ -I/${rootpath}/usr/include/${DEBIAN_INCLUDE_HEADERS}/ -ffile-prefix-map=${rootpath}=/" -j $ktest_cpus libbcachefs.a && echo ${ktest_arch} > .crossarch
      find -name "*.d" -exec sed -i "s/${rootpath//\//\\\/}/\//g" {} \;
@@ -318,7 +318,6 @@ start_vm()
     ln -s "$ktest_tmp" "$ktest_out/vm"
 
     local kernelargs=()
-
     case $ktest_storage_bus in
 	virtio-blk)
 	    ktest_root_dev="/dev/vda"
@@ -328,7 +327,7 @@ start_vm()
 	    ;;
     esac
 
-    kernelargs+=(root=$ktest_root_dev rw log_buf_len=8M)
+    kernelargs+=(root=$ktest_root_dev rw log_buf_len=8M rootwait)
     kernelargs+=(mitigations=off)
     kernelargs+=("ktest.dir=$ktest_dir")
     kernelargs+=(ktest.env=$(readlink -f "$ktest_out/vm/env"))
