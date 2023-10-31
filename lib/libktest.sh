@@ -27,6 +27,7 @@ ktest_ssh_port=0
 ktest_networking=user
 ktest_dio=off
 ktest_nice=0
+ktest_arch=
 
 checkdep socat
 checkdep brotli
@@ -286,7 +287,6 @@ start_vm()
     ln -s "$ktest_tmp" "$ktest_out/vm"
 
     local kernelargs=()
-
     case $ktest_storage_bus in
 	virtio-blk)
 	    ktest_root_dev="/dev/vda"
@@ -296,7 +296,7 @@ start_vm()
 	    ;;
     esac
 
-    kernelargs+=(root=$ktest_root_dev rw log_buf_len=8M)
+    kernelargs+=(root=$ktest_root_dev rw log_buf_len=8M rootwait)
     kernelargs+=(mitigations=off)
     kernelargs+=("ktest.dir=$ktest_dir")
     kernelargs+=(ktest.env=$(readlink -f "$ktest_out/vm/env"))
@@ -339,7 +339,7 @@ start_vm()
     local memconfig="$ktest_mem,slots=8,maxmem=$maxmem"
 
     #do not be fancy on 32-bit hardware.  if it works, it's fine
-    [[ $BITS == 32 ]] &&  memconfig="3G" && ktest_cpus=$((min($ktest_cpus,4)))
+    [[ $BITS == 32 ]] &&  memconfig="3G" && ktest_cpus=$(($ktest_cpus > 4 ? 4 : $ktest_cpus))
 
     qemu_cmd+=(								\
 	-m		"$memconfig"					\

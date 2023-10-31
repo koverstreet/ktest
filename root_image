@@ -23,7 +23,8 @@ checkdep mkfs.ext4 e2fsprogs
 checkdep curl 
 
 IMAGE_SIZE="10G"
-MIRROR=https://deb.debian.org/debian/
+#http is preferred over https here: on emulated CPUs, the encryption simply isn't worth it
+MIRROR=http://deb.debian.org/debian/
 
 usage()
 {
@@ -44,11 +45,16 @@ intervene()
 	local yn="N";
 	echo "Installing $2 failed: both binary install and $1";
 	echo "You can start a shell to check whether any dependency issues can be fixed"
-	echo "if you do, and exit the shell, it is assumed to be fixed and installing will continue"
-	read -p "Do you wish to start a shell to investigate? (y/N)" yn
+	echo "if you do (y), and exit the shell, it is assumed to be fixed and installing will continue"
+	echo "if you don't, we give up."
+        echo "you can also choose to skip package installation (s), though this is not recommended"
+	read -p "Do you wish to start a shell to investigate? (y/s/N)" yn
 	case $yn in
 		[Yy]* )
 			_chroot "$MNT" /tmpbuild/executer.sh /bin/bash;
+		;;
+		[sS]* )
+			return 0;
 		;;
 		* ) return 1;;
 	esac
@@ -56,21 +62,26 @@ intervene()
 
 install_fix_deps()
 {
-	trap 'echo "Could not install packages! please revert to the included torrent file to download a working root image"; umount $MNT/tmpbuild; umount_image; rm "$ktest_image"' EXIT
+	trap 'echo "Could not install packages! consider switching to a supported architecture"; umount_image; rm "$ktest_image"' EXIT
+	#debian has a separate dist for "experimental" / broken packages, in debian-ports it is called "unreleased".
+	experimental_dist="experimental" && [[ ${MIRROR} == *"debian-ports"* ]] && experimental_dist=unreleased;
+        SNAPSHOT_MIRROR="https://snapshot.debian.org/archive/debian" && [[ ${MIRROR} == *"debian-ports"* ]] && SNAPSHOT_MIRROR+="-ports";
 	#get necessary certificates / pgp keyrings to work with unofficial and outdated snapshots
 	_chroot "$MNT" apt-get -qq install debian-ports-archive-keyring ca-certificates
 	#disable unwanted checks - we know the snapshots are not valid
 	echo "Acquire::Check-Valid-Until false;" > $MNT/etc/apt/apt.conf.d/10-nocheckvalid
 	#create a sources.list with more options to work around missing packages
-	echo 'deb [trusted=yes] http://deb.debian.org/debian-ports unstable main non-free' > $MNT/etc/apt/sources.list
-	echo 'deb-src [trusted=yes] http://deb.debian.org/debian-ports unstable main non-free' >> $MNT/etc/apt/sources.list
-	echo 'deb [trusted=yes] http://deb.debian.org/debian-ports unreleased main non-free' >> $MNT/etc/apt/sources.list
-	echo 'deb-src [trusted=yes] http://deb.debian.org/debian-ports unreleased main non-free' >> $MNT/etc/apt/sources.list
+	echo "deb [trusted=yes] $MIRROR sid main contrib" > $MNT/etc/apt/sources.list
+	echo "deb-src [trusted=yes] $MIRROR sid main contrib" >> $MNT/etc/apt/sources.list
+	echo "deb [trusted=yes] $MIRROR ${experimental_dist} main contrib" >> $MNT/etc/apt/sources.list
+	echo "deb-src [trusted=yes] $MIRROR ${experimental_dist} main contrib" >> $MNT/etc/apt/sources.list
+        #add snapshots specified in cross.conf
 	for i in "${SID_SNAPSHOTS[@]}"; do
-	echo "deb [trusted=yes] https://snapshot.debian.org/archive/debian-ports/$i sid main" >> $MNT/etc/apt/sources.list
-	echo "deb-src [trusted=yes] https://snapshot.debian.org/archive/debian-ports/$i sid main" >> $MNT/etc/apt/sources.list
+	echo "deb [trusted=yes] ${SNAPSHOT_MIRROR}/$i sid main" >> $MNT/etc/apt/sources.list
+	echo "deb-src [trusted=yes] ${SNAPSHOT_MIRROR}/$i sid main" >> $MNT/etc/apt/sources.list
 	done
-	echo "deb-src http://deb.debian.org/debian unstable main contrib non-free" >> $MNT/etc/apt/sources.list
+        #when working with debian-ports, add the general sources as a last hope ... there *may* be a package compiling for this archwe need
+	[[ ${MIRROR} == *"debian-ports"* ]] && echo "deb-src [trusted=yes] http://deb.debian.org/debian sid main contrib" >> $MNT/etc/apt/sources.list
 	touch $MNT/etc/passwd
 	touch $MNT/etc/shadow
 	_chroot "$MNT" apt-get -qq --allow-unauthenticated --allow-insecure-repositories update --fix-missing
@@ -83,7 +94,7 @@ install_fix_deps()
 		_chroot "$MNT" apt-get -qq install --allow-unauthenticated --no-install-recommends $i && continue;
 		fi
 		#installing binary failed.  Try to install from source.  Do it in a tmpfs folder so the image doesn't get overwhelmed:
-		mkdir ${MNT}/tmpbuild;
+		[[ ! -d ${MNT}/tmpbuild ]] && mkdir ${MNT}/tmpbuild;
 		mount -t tmpfs none ${MNT}/tmpbuild;
 		echo '#!/bin/bash' > "$MNT"/tmpbuild/executer.sh
 		echo 'cd /tmpbuild/; $@' >> "$MNT"/tmpbuild/executer.sh
@@ -289,16 +300,17 @@ ZZ
 
 update_packages()
 {
-    NO_RUSTUP=0
+    NO_RUSTUP=
     # systemd... !?
     mkdir -p "$MNT"/run/user/0
     cp /etc/resolv.conf "$MNT/etc/resolv.conf"
-
-    [[ $(curl -qq -I "https://static.rust-lang.org/rustup/${RUST_TRIPLE}/rustup-init" 2>/dev/null | grep "HTTP/2 200") == "" ]] && NO_RUSTUP=1
-    [ $NO_RUSTUP ] && PACKAGES+=(rustc rustc-dbgsym rustfmt rustfmt-dbgsym) #don't do rustup on unsupported architectures, just try from debian repositories
+    #don't do rustup on unsupported architectures, just try to install from debian repositories
+    [[ -z $(curl -qq -I "https://static.rust-lang.org/rustup/dist/${RUST_TRIPLE}/rustup-init" 2>/dev/null | grep "HTTP/2 200") ]] && NO_RUSTUP=1
+    [[ -n $NO_RUSTUP ]] && PACKAGES+=(rustc rustc-dbgsym rustfmt rustfmt-dbgsym)
 
     _chroot "$MNT" mount -t proc none /proc
-    if [[ $MIRROR == *"debian-ports"* ]]; then
+    _chroot "$MNT" mount -t devpts none /dev/pts
+    if [[ $MIRROR == *"debian-ports"* || $1 == "sid" ]]; then
 	install_fix_deps
     else
 	_chroot "$MNT" apt-get -qq --allow-unauthenticated --allow-insecure-repositories update --fix-missing
@@ -308,12 +320,12 @@ update_packages()
     fi
     rm -f "$MNT/var/cache/apt/archives/*.deb"
 
-    if [ ! $NO_RUSTUP ]; then
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > "$MNT"/tmp/rustup.sh
-    chmod 755 "$MNT"/tmp/rustup.sh
+    if [[ -z $NO_RUSTUP ]]; then
+	curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > "$MNT"/tmp/rustup.sh
+	chmod 755 "$MNT"/tmp/rustup.sh
 
-    _chroot "$MNT" /tmp/rustup.sh --default-host $RUST_TRIPLE -y
-    echo 'export PATH="$HOME/.cargo/bin:$PATH"' > $MNT/etc/profile.d/rustup.sh
+	_chroot "$MNT" /tmp/rustup.sh --default-host ${RUST_TRIPLE} -y
+	echo 'export PATH="$HOME/.cargo/bin:$PATH"' > $MNT/etc/profile.d/rustup.sh
     fi;
 }
 
@@ -349,7 +361,7 @@ cmd_update()
     cp "$ktest_image" "$ktest_image".new
     mount "$ktest_image".new "$MNT"
 
-    update_packages
+    update_packages none
     update_files
 
     umount_image
@@ -391,7 +403,7 @@ cmd_create()
     #fallback: if the architecture can't be found, try official sid:
     if [[ -z $(curl -qq -I "${MIRROR}/dists/${debian_release}/main/binary-${DEBIAN_ARCH}/Release" 2>/dev/null | grep "HTTP/2 200") ]]; then
 	echo "WARNING: $DEBIAN_ARCH $debian_release could not be found at ${MIRROR} (where it should be).  Falling back to standard sid"
-        MIRROR="https://deb.debian.org/debian/"
+        MIRROR="http://deb.debian.org/debian/"
 	debian_release=sid
     fi
 
@@ -404,12 +416,14 @@ cmd_create()
 	--components='main,contrib,non-free' \
 	$debian_release "$MNT" "$MIRROR"
 
-    statichelper=$(which qemu-${ktest_arch}) || statichelper=$(which qemu-${ktest_arch}-static)
-    [[ -n ${CROSS_COMPILE} ]] && cp $statichelper ${MNT}$statichelper
+    if [[ -n ${CROSS_COMPILE} ]]; then
+       statichelper=$(which qemu-${ktest_arch}) || statichelper=$(which qemu-${ktest_arch}-static)
+       cp ${statichelper} ${MNT}${statichelper}
+    fi
 
     _chroot "$MNT" /debootstrap/debootstrap --second-stage
     _chroot "$MNT" dpkg --configure -a
-    update_packages
+    update_packages $debian_release
     update_files
 
     umount_image

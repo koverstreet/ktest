@@ -188,8 +188,10 @@ parse_arch()
 
     if [[ $ktest_arch != $(uname -m) ]]; then
 	CROSS_COMPILE=1
+    else
+	CROSS_COMPILE=
     fi
-    #special case: x86_64 is able to run i386 code.  this isn't always the case for armv8 -> armv7 (cortex A35)
+    #special case: x86_64 is able to run i386 code. we can use KVM.
     [[ $DEBIAN_ARCH == "i386" && "$(uname -m)" == "x86_64" ]] && CROSS_COMPILE=
     export DEBIAN_ARCH
     export MIRROR
@@ -200,6 +202,7 @@ parse_arch()
     export ktest_arch
     export BITS
     export RUST_TRIPLE
+    export CROSS_COMPILE
 }
 
 find_command() {
