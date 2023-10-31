@@ -27,6 +27,7 @@ ktest_ssh_port=0
 ktest_networking=user
 ktest_dio=off
 ktest_nice=0
+ktest_arch=
 
 checkdep socat
 checkdep brotli
@@ -85,7 +86,7 @@ parse_ktest_arg()
 
 parse_args_post()
 {
-    [ -z ${ktest_arch:+x} ] && ktest_arch=$(uname -m)
+    [[ -z ${ktest_arch} ]] && ktest_arch=$(uname -m)
     parse_arch "$ktest_arch"
 
     ktest_out=$(readlink -f "$ktest_out")
@@ -286,7 +287,6 @@ start_vm()
     ln -s "$ktest_tmp" "$ktest_out/vm"
 
     local kernelargs=()
-
     case $ktest_storage_bus in
 	virtio-blk)
 	    ktest_root_dev="/dev/vda"
@@ -296,7 +296,7 @@ start_vm()
 	    ;;
     esac
 
-    kernelargs+=(root=$ktest_root_dev rw log_buf_len=8M)
+    kernelargs+=(root=$ktest_root_dev rw log_buf_len=8M rootwait)
     kernelargs+=(mitigations=off)
     kernelargs+=("ktest.dir=$ktest_dir")
     kernelargs+=(ktest.env=$(readlink -f "$ktest_out/vm/env"))
@@ -309,7 +309,7 @@ start_vm()
     local qemu_cmd=("$QEMU_BIN" -nodefaults -nographic)
     local accel=kvm
     local cputype=host
-    [[ ${CROSS_COMPILE+x} ]] && accel=tcg && cputype=max
+    [[ -n ${CROSS_COMPILE} ]] && accel=tcg && cputype=max
     case $ktest_arch in
 	x86|x86_64)
 	    qemu_cmd+=(-cpu $cputype -machine type=q35,accel=$accel,nvdimm=on)
@@ -334,8 +334,8 @@ start_vm()
 
     local maxmem=$(awk '/MemTotal/ {printf "%dG\n", $2/1024/1024}' /proc/meminfo 2>/dev/null) || maxmem="1T"
     local memconfig="$ktest_mem,slots=8,maxmem=$maxmem"
-
-    [ $BITS == 32 ] &&  memconfig="3G" && ktest_cpus=4 #do not be fancy on 32-bit hardware.  if it works, it's fine
+    #do not be fancy on 32-bit hardware.  if it works, it's fine
+    [[ $BITS == 32 ]] &&  memconfig="3G" && ktest_cpus=4
 
     qemu_cmd+=(								\
 	-m		"$memconfig"					\

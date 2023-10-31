@@ -4,8 +4,6 @@ have_kvmguest=0
 have_virtio=0
 have_suspend=0
 
-[ -z ${ktest_arch:+x} ] && ktest_arch=$(uname -m)
-
 case $ktest_arch in
     x86)
 	require-kernel-config SMP

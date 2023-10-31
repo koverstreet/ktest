@@ -184,7 +184,7 @@ PACKAGES+=("linux-headers-generic")
 # DKMS needs to cross-compile the module,
 # against a different kernel on a different CPUarchitecture.
 # this has to cause errors
-[[ ${CROSS_COMPILE+x} ]] || PACKAGES+=(dkms zfsutils-linux zfs-dkms)
+[[ -z ${CROSS_COMPILE} ]] && PACKAGES+=(dkms zfsutils-linux zfs-dkms)
 
 # suspend testing:
 # [[ $KERNEL_ARCH = x86 ]] && PACKAGES+=(uswsusp)
@@ -289,13 +289,13 @@ ZZ
 
 update_packages()
 {
-    NO_RUSTUP=0
+    NO_RUSTUP=
     # systemd... !?
     mkdir -p "$MNT"/run/user/0
     cp /etc/resolv.conf "$MNT/etc/resolv.conf"
-
-    [[ $(curl -qq -I "https://static.rust-lang.org/rustup/${RUST_TRIPLE}/rustup-init" 2>/dev/null | grep "HTTP/2 200") == "" ]] && NO_RUSTUP=1
-    [ $NO_RUSTUP ] && PACKAGES+=(rustc rustc-dbgsym rustfmt rustfmt-dbgsym) #don't do rustup on unsupported architectures, just try from debian repositories
+    #don't do rustup on unsupported architectures, just try to install from debian repositories
+    [[ -z $(curl -qq -I "https://static.rust-lang.org/rustup/dist/${RUST_TRIPLE}/rustup-init" 2>/dev/null | grep "HTTP/2 200") ]] && NO_RUSTUP=1
+    [[ -n $NO_RUSTUP ]] && PACKAGES+=(rustc rustc-dbgsym rustfmt rustfmt-dbgsym)
 
     _chroot "$MNT" mount -t proc none /proc
     if [[ $MIRROR == *"debian-ports"* ]]; then
@@ -308,12 +308,12 @@ update_packages()
     fi
     rm -f "$MNT/var/cache/apt/archives/*.deb"
 
-    if [ ! $NO_RUSTUP ]; then
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > "$MNT"/tmp/rustup.sh
-    chmod 755 "$MNT"/tmp/rustup.sh
+    if [[ -z $NO_RUSTUP ]]; then
+	curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > "$MNT"/tmp/rustup.sh
+	chmod 755 "$MNT"/tmp/rustup.sh
 
-    _chroot "$MNT" /tmp/rustup.sh --default-host $RUST_TRIPLE -y
-    echo 'export PATH="$HOME/.cargo/bin:$PATH"' > $MNT/etc/profile.d/rustup.sh
+	_chroot "$MNT" /tmp/rustup.sh --default-host ${RUST_TRIPLE} -y
+	echo 'export PATH="$HOME/.cargo/bin:$PATH"' > $MNT/etc/profile.d/rustup.sh
     fi;
 }
 
@@ -398,7 +398,7 @@ cmd_create()
 	$debian_release "$MNT" "$MIRROR"
 
     statichelper=$(which qemu-${ktest_arch}) || statichelper=$(which qemu-${ktest_arch}-static)
-    [[ ${CROSS_COMPILE+x} ]] && cp ${statichelper} ${MNT}${statichelper}
+    [[ -n ${CROSS_COMPILE} ]] && cp ${statichelper} ${MNT}${statichelper}
 
     _chroot "$MNT" /debootstrap/debootstrap --second-stage
     _chroot "$MNT" dpkg --configure -a
