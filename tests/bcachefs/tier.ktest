@@ -288,4 +288,40 @@ test_change_replicas()
     check_counters ${ktest_scratch_dev[0]}
 }
 
+test_concurrent_all_device_removal()
+{
+    set_watchdog 60
+
+    run_quiet "" bcachefs format \
+       --label=ssd.ssd1 ${ktest_scratch_dev[0]}                \
+       --label=ssd.ssd2 ${ktest_scratch_dev[1]}                \
+       --label=hdd.hdd1 ${ktest_scratch_dev[2]}                \
+       --label=hdd.hdd2 ${ktest_scratch_dev[3]}                \
+       --metadata_replicas=3 \
+       --data_replicas=3 \
+       --promote_target=ssd
+
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+
+    dd if=/dev/zero of=/mnt/foo bs=128M count=40 oflag=direct
+
+    # Fill cache
+    for i in 1 2 3 4; do cat /mnt/foo > /dev/null; done
+
+    bcachefs device remove ${ktest_scratch_dev[0]} &
+    bcachefs device remove ${ktest_scratch_dev[1]} &
+    bcachefs device remove ${ktest_scratch_dev[2]} &
+    bcachefs device remove ${ktest_scratch_dev[3]} &
+    wait
+
+    umount /mnt
+    bcachefs fsck -ny $(join_by " " "${ktest_scratch_dev[@]}")
+
+    # Test that no incufficient devices issues appears
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+    umount /mnt
+
+    check_counters ${ktest_scratch_dev[0]}
+}
+
 main $@
