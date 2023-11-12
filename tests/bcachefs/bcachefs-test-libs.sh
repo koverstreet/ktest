@@ -12,7 +12,12 @@ require-make bcachefs-tools
 require-kernel-config BCACHEFS_FS
 
 if [[ ! -v NO_BCACHEFS_DEBUG ]]; then
+    require-kernel-config BCACHEFS_DEBUG_TRANSACTIONS
     require-kernel-config BCACHEFS_DEBUG
+    require-kernel-config BCACHEFS_LOCK_TIME_STATS
+    require-kernel-config BCACHEFS_NO_LATENCY_ACCT=n
+else
+    require-kernel-config BCACHEFS_NO_LATENCY_ACCT=y
 fi
 
 require-kernel-config TRANSPARENT_HUGEPAGE
