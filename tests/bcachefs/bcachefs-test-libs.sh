@@ -5,8 +5,16 @@
 #
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../test-libs.sh
+bch_loc=$(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-tools
 
 require-git http://evilpiepirate.org/git/bcachefs-tools.git
+if [[ ! -f "${bch_loc}/.last_arch_for_compile" || "$(cat ${bch_loc}/.last_arch_for_compile)" != $ktest_arch ]]; then
+	make -C ${bch_loc} clean >/dev/null 2>&1;
+	rm -rf "${bch_loc}/rust-src/target/*";
+	find ${bch_loc} -name "*.o" -exec rm {} \;
+	find ${bch_loc} -name "*.a" -exec rm {} \;
+	echo $ktest_arch > ${bch_loc}/.last_arch_for_compile
+fi
 require-make bcachefs-tools
 
 require-kernel-config BCACHEFS_FS

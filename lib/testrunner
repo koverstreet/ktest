@@ -20,6 +20,10 @@ ktest_out="/host/$ktest_out"
 ln -sf $ktest_dir /ktest
 ln -sf $ktest_out /ktest-out
 
+. /ktest/lib/common.sh
+
+parse_arch $(uname -m)
+
 # Some home directories are in weird places:
 mkdir -p $(dirname $home)
 ln -sf /host/$home $home
