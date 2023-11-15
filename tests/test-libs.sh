@@ -7,7 +7,7 @@
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/prelude.sh
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/kconfig.sh
 
-config-mem 4G
+config-mem 8G
 
 (($ktest_cpus > 16)) && ktest_cpus=16
 
