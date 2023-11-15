@@ -88,6 +88,7 @@ parse_arch()
 	    ktest_arch=x86
 	    DEBIAN_ARCH=i386
 	    ARCH_TRIPLE=${ARCH_TRIPLE_X86}
+	    RUST_TRIPLE=i686-unknown-linux-gnu
 
 	    KERNEL_ARCH=x86
 	    BITS=32
@@ -99,6 +100,7 @@ parse_arch()
 	    ktest_arch=x86_64
 	    DEBIAN_ARCH=amd64
 	    ARCH_TRIPLE=${ARCH_TRIPLE_X86_64}
+	    RUST_TRIPLE=x86_64-unknown-linux-gnu
 
 	    KERNEL_ARCH=x86
 	    BITS=64
@@ -110,6 +112,7 @@ parse_arch()
 	    ktest_arch=aarch64
 	    DEBIAN_ARCH=arm64
 	    ARCH_TRIPLE=${ARCH_TRIPLE_ARM64}
+	    RUST_TRIPLE=aarch64-unknown-linux-gnu
 
 	    KERNEL_ARCH=arm64
 	    BITS=64
@@ -121,6 +124,7 @@ parse_arch()
 	    ktest_arch=arm
 	    DEBIAN_ARCH=armhf
 	    ARCH_TRIPLE=${ARCH_TRIPLE_ARMV7}
+	    RUST_TRIPLE=armv7-unknown-linux-gnueabihf
 
 	    KERNEL_ARCH=arm
 	    BITS=32
