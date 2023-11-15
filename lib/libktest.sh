@@ -309,7 +309,7 @@ start_vm()
     local qemu_cmd=("$QEMU_BIN" -nodefaults -nographic)
     local accel=kvm
     local cputype=host
-    [[ $(uname -m) == $ktest_arch ]] || accel=tcg && cputype=max
+    [[ -n ${CROSS_COMPILE} ]] && accel=tcg && cputype=max
     case $ktest_arch in
 	x86|x86_64)
 	    qemu_cmd+=(-cpu $cputype -machine type=q35,accel=$accel,nvdimm=on)
@@ -326,7 +326,14 @@ start_vm()
 	    ;;
     esac
 
+    #we assign 4GB of ram, but for gcc jobs on target, >512MiB / GCC job is recommended
+    (( $ktest_cpus > 8 )) && ktest_mem=8G
+
     local maxmem=$(awk '/MemTotal/ {printf "%dG\n", $2/1024/1024}' /proc/meminfo 2>/dev/null) || maxmem="1T"
+    local memconfig="$ktest_mem,slots=8,maxmem=$maxmem"
+
+    #do not be fancy on 32-bit hardware.  if it works, it's fine
+    [[ $BITS == 32 ]] &&  memconfig="3G" && ktest_cpus=$((min($ktest_cpus,4)))
 
     qemu_cmd+=(								\
 	-m		"$ktest_mem,slots=8,maxmem=$maxmem"		\

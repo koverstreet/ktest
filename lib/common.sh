@@ -84,7 +84,7 @@ parse_arch()
 {
     CROSS_COMPILE=
     case $1 in
-	x86|i386)
+	x86|i386|i686)
 	    ktest_arch=x86
 	    DEBIAN_ARCH=i386
 	    ARCH_TRIPLE=${ARCH_TRIPLE_X86}
@@ -93,7 +93,7 @@ parse_arch()
 	    BITS=32
 
 	    QEMU_PACKAGE=qemu-system-x86
-	    QEMU_BIN=qemu-system-x86_64
+	    QEMU_BIN=qemu-system-i386
 	    ;;
 	x86_64|amd64)
 	    ktest_arch=x86_64
@@ -189,7 +189,8 @@ parse_arch()
     if [[ $ktest_arch != $(uname -m) ]]; then
 	CROSS_COMPILE=1
     fi
-
+    #special case: x86_64 is able to run i386 code.  this isn't always the case for armv8 -> armv7 (cortex A35)
+    [[ $DEBIAN_ARCH == "i386" && "$(uname -m)" == "x86_64" ]] && CROSS_COMPILE=
     export DEBIAN_ARCH
     export MIRROR
     export ARCH_TRIPLE
@@ -197,6 +198,7 @@ parse_arch()
     export QEMU_PACKAGE
     export QEMU_BIN
     export ktest_arch
+    export BITS
 }
 
 find_command() {
