@@ -19,6 +19,8 @@ ktest_exit()
     fi
 
     [[ -n $ktest_tmp ]] && rm -rf "$ktest_tmp"
+    #umount overlayfs of bcachefs-tools if needed
+    [[ -n $ktest_tmp && $(grep bcachefs-tools-$ktest_arch /proc/mounts) ]] && umount $(grep bcachefs-tools-$ktest_arch /proc/mounts | cut -d' ' -f 2)
     true
 }
 

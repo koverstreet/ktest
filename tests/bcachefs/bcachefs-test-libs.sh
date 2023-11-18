@@ -7,16 +7,32 @@
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../test-libs.sh
 bch_loc=$(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-tools
 
-require-git http://evilpiepirate.org/git/bcachefs-tools.git
-if [[ ! -f "${bch_loc}/.last_arch_for_compile" || "$(cat ${bch_loc}/.last_arch_for_compile)" != $ktest_arch ]]; then
+declare -A ov_dirs=(["tmp"]="${bch_loc}/../.tmp-bcachefs-tools-overlay" \
+              ["diff"]="${bch_loc}/../.bcachefs-tools-overlay-${ktest_arch}" \
+              ["merge"]="${bch_loc}/../bcachefs-tools-${ktest_arch}")
+
+for dir_overlay in ${ov_dirs[@]}; do
+  if [[ ! -d ${dir_overlay} ]]; then mkdir -p ${dir_overlay}; fi
+done
+
+if [[ $(which fuse-overlayfs) && ! $(grep bcachefs-tools-$ktest_arch /proc/mounts) ]]; then
+	fuse-overlayfs -o lowerdir=${bch_loc},upperdir=${ov_dirs["diff"]},workdir=${ov_dirs["tmp"]} ${ov_dirs["merge"]}
+elif [[ ! $(grep bcachefs-tools-$ktest_arch /proc/mounts) ]]; then
+	rsync -av ${bch_loc}/ ${ov_dirs["merge"]}/
+fi
+
+bch_loc=$(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-tools-${ktest_arch}
+
+if [[ ! -f "${bch_loc}/.last_arch_for_compile" || "$(cat ${bch_loc}/.last_arch_for_compile)" != ${ktest_arch} ]]; then
 	make -C ${bch_loc} clean >/dev/null 2>&1;
 	rm -rf "${bch_loc}/rust-src/target/*";
 	find ${bch_loc} -name "*.o" -exec rm {} \;
 	find ${bch_loc} -name "*.a" -exec rm {} \;
 	echo $ktest_arch > ${bch_loc}/.last_arch_for_compile
 fi
-require-make bcachefs-tools
 
+require-git http://evilpiepirate.org/git/bcachefs-tools.git
+require-make bcachefs-tools-${ktest_arch}
 require-kernel-config BCACHEFS_FS
 
 if [[ ! -v NO_BCACHEFS_DEBUG ]]; then
