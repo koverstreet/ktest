@@ -10,6 +10,7 @@ case $ktest_arch in
 	require-kernel-config MCORE2	# optimize for core2
 	require-kernel-config IO_DELAY_0XED
 	require-kernel-config 64BIT=n
+	require-kernel-config COMPAT_32BIT_TIME
 	require-kernel-config ACPI	# way slower without it, do not know why
 	require-kernel-config UNWINDER_FRAME_POINTER
 	require-kernel-config HARDLOCKUP_DETECTOR
@@ -38,37 +39,78 @@ case $ktest_arch in
 
 	require-kernel-append console=hvc0
 	;;
-    aarch64)
+    arm)
+	require-kernel-config ARCH_VIRT
+	require-kernel-config SMP
+	require-kernel-config VFP
+	require-kernel-config NEON
+	require-kernel-config ARM_LPAE
+	require-kernel-config MMU
+	require-kernel-config HAVE_PCI
 	require-kernel-config PCI_HOST_GENERIC
+	require-kernel-config ARM_AMBA
+	require-kernel-config COMPAT_32BIT_TIME
 	require-kernel-config RTC_DRV_PL031
 
 	have_virtio=1
 
 	require-kernel-append console=hvc0
 	;;
-    powerpc)
-	require-kernel-config ADVANCED_OPTIONS
+    aarch64)
+	require-kernel-config PCI_HOST_GENERIC
+	require-kernel-config RTC_DRV_PL031
+	require-kernel-config COMPAT_32BIT_TIME
+	require-kernel-config IOMMU_SUPPORT
+	require-kernel-config PARAVIRT
 
-	have_kvmguest=1
 	have_virtio=1
-	have_suspend=1
 
 	require-kernel-append console=hvc0
 	;;
-    mips)
-	require-kernel-config MIPS_MALTA
-	require-kernel-config CPU_MIPS${BITS}_R2
-	require-kernel-config CPU_BIG_ENDIAN=y
-	require-kernel-config CPU_LITTLE_ENDIAN=n
-	require-kernel-config 32BIT
+
+    ppc64)
+	require-kernel-config PPC64
+	require-kernel-config PPC_BOOK3E_64
+	require-kernel-config PPC_QEMU_E500
+	require-kernel-config E6500_CPU
+	require-kernel-config SMP
+	require-kernel-config KVM_GUEST
 
 	have_virtio=1
-	ktest_storage_bus=piix4-ide
+
+	require-kernel-append console=hvc0
+	;;
+    sparc64)
+	require-kernel-config 64BIT
+	require-kernel-config SMP
+	require-kernel-config PCI
+
+	have_virtio=1
+
+	require-kernel-append console=hvc0
+	;;
+    riscv64)
+	require-kernel-config SOC_VIRT
+	require-kernel-config VIRTIO_MENU
+	require-kernel-config PCI
+
+	have_virtio=1
+
+	require-kernel-append console=hvc0
+	;;
+    s390x)
+	require-kernel-config S390_GUEST
+	require-kernel-config MARCH_Z13
+	require-kernel-config CMM
+	require-kernel-config PCI
+	require-kernel-config DCSSBLK
+
+	have_virtio=1
 
 	require-kernel-append console=hvc0
 	;;
     *)
-	echo "Kernel architecture not supported by kconfig.sh"
+	echo "Kernel architecture $ktest_arch not supported by kconfig.sh"
 	exit 1
 	;;
 esac
@@ -92,8 +134,6 @@ require-kernel-config BINFMT_ELF
 require-kernel-config BINFMT_SCRIPT
 
 require-kernel-config COMPACTION	# virtfs doesn't do well without it
-
-require-kernel-config PROC_KCORE	# XXX Needed?
 
 require-kernel-config TTY
 require-kernel-config VT
@@ -157,13 +197,15 @@ require-kernel-config PCI
 require-kernel-config HW_RANDOM
 
 # Clock:
+if [[ ! $ktest_arch == *"s390"* ]]; then
 require-kernel-config RTC_CLASS
 require-kernel-config RTC_HCTOSYS
-
+fi
 # Console:
+if [[ ! $ktest_arch == *"s390"* ]]; then
 require-kernel-config SERIAL_8250	# XXX can probably drop
 require-kernel-config SERIAL_8250_CONSOLE
-
+fi
 # Block devices:
 require-kernel-config SCSI
 require-kernel-config SCSI_LOWLEVEL	# what's this for?
@@ -204,8 +246,10 @@ require-kernel-config 9P_FS
 #fi
 
 # KGDB:
+if [[ ! $ktest_arch == *"s390"* ]]; then
 require-kernel-config KGDB
 require-kernel-config KGDB_SERIAL_CONSOLE
+fi
 require-kernel-config VMAP_STACK=n
 require-kernel-config RANDOMIZE_BASE=n
 require-kernel-config RANDOMIZE_MEMORY=n
@@ -228,7 +272,9 @@ require-kernel-config FUNCTION_TRACER
 #require-kernel-config ENABLE_DEFAULT_TRACERS
 
 require-kernel-config PANIC_ON_OOPS
+if [[ ! $ktest_arch == *"s390"* ]]; then
 require-kernel-config SOFTLOCKUP_DETECTOR
+fi
 require-kernel-config DETECT_HUNG_TASK
 #require-kernel-config DEFAULT_HUNG_TASK_TIMEOUT=30
 require-kernel-config WQ_WATCHDOG

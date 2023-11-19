@@ -27,6 +27,7 @@ ktest_ssh_port=0
 ktest_networking=user
 ktest_dio=off
 ktest_nice=0
+ktest_arch=
 
 checkdep socat
 checkdep brotli
@@ -85,6 +86,7 @@ parse_ktest_arg()
 
 parse_args_post()
 {
+    [[ -z ${ktest_arch} ]] && ktest_arch=$(uname -m)
     parse_arch "$ktest_arch"
 
     ktest_out=$(readlink -f "$ktest_out")
@@ -222,7 +224,7 @@ ktest_kgdb()
 
 ktest_mon()
 {
-    exec socat UNIX-CONNECT:"$ktest_out/vm/on" STDIO
+    exec socat UNIX-CONNECT:"$ktest_out/vm/mon" STDIO
     exec nc "$ktest_out/vm/mon"
 }
 
@@ -285,7 +287,6 @@ start_vm()
     ln -s "$ktest_tmp" "$ktest_out/vm"
 
     local kernelargs=()
-
     case $ktest_storage_bus in
 	virtio-blk)
 	    ktest_root_dev="/dev/vda"
@@ -295,7 +296,7 @@ start_vm()
 	    ;;
     esac
 
-    kernelargs+=(root=$ktest_root_dev rw log_buf_len=8M)
+    kernelargs+=(root=$ktest_root_dev rw log_buf_len=8M rootwait)
     kernelargs+=(mitigations=off)
     kernelargs+=("ktest.dir=$ktest_dir")
     kernelargs+=(ktest.env=$(readlink -f "$ktest_out/vm/env"))
@@ -306,26 +307,38 @@ start_vm()
     kernelargs+=("${ktest_kernel_append[@]}")
 
     local qemu_cmd=("$QEMU_BIN" -nodefaults -nographic)
+    local accel=kvm
+    local cputype=host
+    [[ -n ${CROSS_COMPILE} ]] && accel=tcg && cputype=max
     case $ktest_arch in
 	x86|x86_64)
-	    qemu_cmd+=(-cpu host -machine type=q35,accel=kvm,nvdimm=on)
+	    qemu_cmd+=(-cpu $cputype -machine type=q35,accel=$accel,nvdimm=on)
 	    ;;
-	aarch64)
-	    qemu_cmd+=(-cpu host -machine type=virt,gic-version=max,accel=kvm)
+	aarch64|arm)
+	    qemu_cmd+=(-cpu $cputype -machine type=virt,gic-version=max,accel=$accel)
 	    ;;
-	mips)
-	    qemu_cmd+=(-cpu 24Kf -machine malta)
-	    ktest_cpus=1
+	ppc64)
+	    qemu_cmd+=(-machine ppce500 -cpu e6500 -accel tcg)
 	    ;;
-	mips64)
-	    qemu_cmd+=(-cpu MIPS64R2-generic -machine malta)
+	s390x)
+	    qemu_cmd+=(-cpu max -machine s390-ccw-virtio -accel tcg)
+	    ;;
+	sparc64)
+	    qemu_cmd+=(-machine sun4u -accel tcg)
+	    ktest_cpus=1; #sparc64 currently supports only 1 cpu
+	    ;;
+	riscv64)
+	    qemu_cmd+=(-machine virt -cpu rv64 -accel tcg)
 	    ;;
     esac
 
     local maxmem=$(awk '/MemTotal/ {printf "%dG\n", $2/1024/1024}' /proc/meminfo 2>/dev/null) || maxmem="1T"
+    local memconfig="$ktest_mem,slots=8,maxmem=$maxmem"
+    #do not be fancy on 32-bit hardware.  if it works, it's fine
+    [[ $BITS == 32 ]] &&  memconfig="3G" && ktest_cpus=4
 
     qemu_cmd+=(								\
-	-m		"$ktest_mem,slots=8,maxmem=$maxmem"		\
+	-m		"$memconfig"					\
 	-smp		"$ktest_cpus"					\
 	-kernel		"$ktest_kernel_binary/vmlinuz"			\
 	-append		"$(join_by " " ${kernelargs[@]})"		\
@@ -338,6 +351,8 @@ start_vm()
 	-device		virtio-rng-pci					\
 	-virtfs		local,path=/,mount_tag=host,security_model=none,multidevs=remap	\
     )
+
+
 
     if [[ -f $ktest_kernel_binary/initramfs ]]; then
 	qemu_cmd+=(-initrd 	"$ktest_kernel_binary/initramfs")
@@ -438,7 +453,7 @@ start_vm()
 	qemu_pmem mem-path="$file",size=$size
     done
 
-    ulimit -n 65535
+    [ "$(ulimit)" == "unlimited" ] || ulimit -n 65535
     qemu_cmd+=("${ktest_qemu_append[@]}")
 
     set +o errexit

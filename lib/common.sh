@@ -3,6 +3,10 @@ set -o nounset
 set -o errtrace
 set -o pipefail
 
+[[ -v ktest_dir ]] || ktest_dir=$(dirname ${BASH_SOURCE})/..
+
+. "$ktest_dir/cross.conf"
+
 trap 'echo "Error $? at $BASH_SOURCE $LINENO from: $BASH_COMMAND, exiting"' ERR
 
 ktest_tmp=${ktest_tmp:-""}
@@ -15,6 +19,8 @@ ktest_exit()
     fi
 
     [[ -n $ktest_tmp ]] && rm -rf "$ktest_tmp"
+    #umount overlayfs of bcachefs-tools if needed
+    [[ -n $ktest_tmp && $(grep bcachefs-tools-$ktest_arch /proc/mounts) ]] && umount $(grep bcachefs-tools-$ktest_arch /proc/mounts | cut -d' ' -f 2)
     true
 }
 
@@ -76,27 +82,26 @@ join_by()
     echo "$*"
 }
 
-ktest_arch=$(uname -m)
-CROSS_COMPILE=""
-
 parse_arch()
 {
     case $1 in
-	x86|i386)
+	x86|i386|i686)
 	    ktest_arch=x86
 	    DEBIAN_ARCH=i386
-	    ARCH_TRIPLE=x86-linux-gnu
+	    ARCH_TRIPLE=${ARCH_TRIPLE_X86}
+	    RUST_TRIPLE=i686-unknown-linux-gnu
 
 	    KERNEL_ARCH=x86
 	    BITS=32
 
 	    QEMU_PACKAGE=qemu-system-x86
-	    QEMU_BIN=qemu-system-x86_64
+	    QEMU_BIN=qemu-system-i386
 	    ;;
 	x86_64|amd64)
 	    ktest_arch=x86_64
 	    DEBIAN_ARCH=amd64
-	    ARCH_TRIPLE=x86_64-linux-gnu
+	    ARCH_TRIPLE=${ARCH_TRIPLE_X86_64}
+	    RUST_TRIPLE=x86_64-unknown-linux-gnu
 
 	    KERNEL_ARCH=x86
 	    BITS=64
@@ -107,7 +112,8 @@ parse_arch()
 	aarch64|arm64)
 	    ktest_arch=aarch64
 	    DEBIAN_ARCH=arm64
-	    ARCH_TRIPLE=aarch64-linux-gnu
+	    ARCH_TRIPLE=${ARCH_TRIPLE_ARM64}
+	    RUST_TRIPLE=aarch64-unknown-linux-gnu
 
 	    KERNEL_ARCH=arm64
 	    BITS=64
@@ -115,39 +121,46 @@ parse_arch()
 	    QEMU_PACKAGE=qemu-system-arm
 	    QEMU_BIN=qemu-system-aarch64
 	    ;;
-	mips)
-	    DEBIAN_ARCH=mips
-	    ARCH_TRIPLE=mips-linux-gnu
+	armhf|armv7|armv7l|arm)
+	    ktest_arch=arm
+	    DEBIAN_ARCH=armhf
+	    ARCH_TRIPLE=${ARCH_TRIPLE_ARMV7}
+	    RUST_TRIPLE=armv7-unknown-linux-gnueabihf
 
-	    KERNEL_ARCH=mips
+	    KERNEL_ARCH=arm
 	    BITS=32
 
-	    QEMU_PACKAGE=qemu-system-mips
-	    QEMU_BIN=qemu-system-mips
+	    QEMU_PACKAGE=qemu-system-arm
+	    QEMU_BIN=qemu-system-arm
 	    ;;
-	mips64)
-	    DEBIAN_ARCH=mips
-	    ARCH_TRIPLE=mips-linux-gnu
+	s390x)
+	    DEBIAN_ARCH=s390x
+	    ARCH_TRIPLE=${ARCH_TRIPLE_S390X}
+	    RUST_TRIPLE=s390x-unknown-linux-gnu
 
-	    KERNEL_ARCH=mips
+	    KERNEL_ARCH=s390
 	    BITS=64
 
-	    QEMU_PACKAGE=qemu-system-mips
-	    QEMU_BIN=qemu-system-mips64
+	    QEMU_PACKAGE=qemu-system-s390x
+	    QEMU_BIN=qemu-system-s390x
 	    ;;
-	sparc)
-	    DEBIAN_ARCH=sparc
-	    ARCH_TRIPLE=sparc64-linux-gnu
+	riscv64)
+	    DEBIAN_ARCH=riscv64
+	    ARCH_TRIPLE=${ARCH_TRIPLE_RISCV64}
+	    MIRROR=http://deb.debian.org/debian-ports
+	    RUST_TRIPLE=riscv64gc-unknown-linux-gnu
 
-	    KERNEL_ARCH=sparc
-	    BITS=32
+	    KERNEL_ARCH=riscv
+	    BITS=64
 
-	    QEMU_PACKAGE=qemu-system-sparc
-	    QEMU_BIN=qemu-system-sparc
+	    QEMU_PACKAGE=qemu-system-riscv
+	    QEMU_BIN=qemu-system-riscv64
 	    ;;
 	sparc64)
-	    DEBIAN_ARCH=sparc
-	    ARCH_TRIPLE=sparc64-linux-gnu
+	    DEBIAN_ARCH=sparc64
+	    ARCH_TRIPLE=${ARCH_TRIPLE_SPARC64}
+	    MIRROR=http://deb.debian.org/debian-ports
+	    RUST_TRIPLE=sparc64-unknown-linux-gnu
 
 	    KERNEL_ARCH=sparc
 	    BITS=64
@@ -155,23 +168,13 @@ parse_arch()
 	    QEMU_PACKAGE=qemu-system-sparc
 	    QEMU_BIN=qemu-system-sparc64
 	    ;;
-	ppc|powerpc)
-	    DEBIAN_ARCH=powerpc
-	    MIRROR=http://deb.debian.org/debian-ports
-
-	    ARCH_TRIPLE=powerpc-linux-gnu
-
-	    KERNEL_ARCH=powerpc
-	    BITS=32
-
-	    QEMU_PACKAGE=qemu-system-ppc
-	    QEMU_BIN=qemu-system-ppc
-	    ;;
-	ppc64)
+	ppc64|powerpc)
+	    ktest_arch=ppc64
 	    DEBIAN_ARCH=ppc64
 	    MIRROR=http://deb.debian.org/debian-ports
 
-	    ARCH_TRIPLE=powerpc-linux-gnu
+	    ARCH_TRIPLE=${ARCH_TRIPLE_PPC64}
+	    RUST_TRIPLE=powerpc64-unknown-linux-gnu
 
 	    KERNEL_ARCH=powerpc
 	    BITS=64
@@ -186,7 +189,21 @@ parse_arch()
 
     if [[ $ktest_arch != $(uname -m) ]]; then
 	CROSS_COMPILE=1
+    else
+	CROSS_COMPILE=
     fi
+    #special case: x86_64 is able to run i386 code. we can use KVM.
+    [[ $DEBIAN_ARCH == "i386" && "$(uname -m)" == "x86_64" ]] && CROSS_COMPILE=
+    export DEBIAN_ARCH
+    export MIRROR
+    export ARCH_TRIPLE
+    export KERNEL_ARCH
+    export QEMU_PACKAGE
+    export QEMU_BIN
+    export ktest_arch
+    export BITS
+    export RUST_TRIPLE
+    export CROSS_COMPILE
 }
 
 find_command() {

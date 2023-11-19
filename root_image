@@ -34,9 +34,69 @@ usage()
     echo
     echo "options:"
     echo "  -h			Display this help and exit"
-    echo "  -a <arch>		Architecture for vm image"
+    echo "  -a <arch>		Architecture for vm (x86_64,armhf,i386,aarch64,sparc64,s390x,ppc64,riscv64)"
     echo "  -m <mirror>		Debian mirror"
     echo '  -i <image>		Image to create/update, defaults to /var/lib/ktest/root.$arch'
+}
+
+intervene()
+{
+	local yn="N";
+	echo "Installing $2 failed: both binary install and $1";
+	echo "You can start a shell to check whether any dependency issues can be fixed"
+	echo "if you do, and exit the shell, it is assumed to be fixed and installing will continue"
+	read -p "Do you wish to start a shell to investigate? (y/N)" yn
+	case $yn in
+		[Yy]* )
+			_chroot "$MNT" /tmpbuild/executer.sh /bin/bash;
+		;;
+		* ) return 1;;
+	esac
+}
+
+install_fix_deps()
+{
+	trap 'echo "Could not install packages! please revert to the included torrent file to download a working root image"; umount $MNT/tmpbuild; umount_image; rm "$ktest_image"' EXIT
+	#get necessary certificates / pgp keyrings to work with unofficial and outdated snapshots
+	_chroot "$MNT" apt-get -qq install debian-ports-archive-keyring ca-certificates
+	#disable unwanted checks - we know the snapshots are not valid
+	echo "Acquire::Check-Valid-Until false;" > $MNT/etc/apt/apt.conf.d/10-nocheckvalid
+	#create a sources.list with more options to work around missing packages
+	echo 'deb [trusted=yes] http://deb.debian.org/debian-ports unstable main non-free' > $MNT/etc/apt/sources.list
+	echo 'deb-src [trusted=yes] http://deb.debian.org/debian-ports unstable main non-free' >> $MNT/etc/apt/sources.list
+	echo 'deb [trusted=yes] http://deb.debian.org/debian-ports unreleased main non-free' >> $MNT/etc/apt/sources.list
+	echo 'deb-src [trusted=yes] http://deb.debian.org/debian-ports unreleased main non-free' >> $MNT/etc/apt/sources.list
+	for i in "${SID_SNAPSHOTS[@]}"; do
+	echo "deb [trusted=yes] https://snapshot.debian.org/archive/debian-ports/$i sid main" >> $MNT/etc/apt/sources.list
+	echo "deb-src [trusted=yes] https://snapshot.debian.org/archive/debian-ports/$i sid main" >> $MNT/etc/apt/sources.list
+	done
+	echo "deb-src http://deb.debian.org/debian unstable main contrib non-free" >> $MNT/etc/apt/sources.list
+	touch $MNT/etc/passwd
+	touch $MNT/etc/shadow
+	_chroot "$MNT" apt-get -qq --allow-unauthenticated --allow-insecure-repositories update --fix-missing
+	_chroot "$MNT" apt-get -qq --allow-unauthenticated upgrade
+	_chroot "$MNT" apt-get -qq install -f
+	_chroot "$MNT" apt-get -qq install build-essential
+	#if we can install them all at once, do so, otherwise, try one by one
+	_chroot "$MNT" apt-get -qq install -m --allow-unauthenticated --no-install-recommends "${PACKAGES[@]}" || for i in "${PACKAGES[@]}"; do
+		if [[ ! $(_chroot "$MNT" apt-cache show $i | grep Version) == "" ]]; then
+		_chroot "$MNT" apt-get -qq install --allow-unauthenticated --no-install-recommends $i && continue;
+		fi
+		#installing binary failed.  Try to install from source.  Do it in a tmpfs folder so the image doesn't get overwhelmed:
+		mkdir ${MNT}/tmpbuild;
+		mount -t tmpfs none ${MNT}/tmpbuild;
+		echo '#!/bin/bash' > "$MNT"/tmpbuild/executer.sh
+		echo 'cd /tmpbuild/; $@' >> "$MNT"/tmpbuild/executer.sh
+		chmod ago+x "$MNT"/tmpbuild/executer.sh
+		_chroot "$MNT" /tmpbuild/executer.sh apt-get -qq build-dep --allow-unauthenticated --no-install-recommends $i || intervene install-deps $i;
+		#in case the intervention also installed it, continue:
+		if [[ $(_chroot "$MNT" dpkg -l | grep "^ii  $i") == "" ]]; then
+			_chroot "$MNT" /tmpbuild/executer.sh apt-get -qq -b source --allow-unauthenticated $i || intervene build $i;
+			[ -f "${MNT}/tmpbuild/${i}*.deb" ] && _chroot "$MNT" apt-get -qq install /tmpbuild/${i}*.deb;
+		fi
+		umount ${MNT}/tmpbuild;
+		rmdir ${MNT}/tmpbuild;
+	done
 }
 
 if [[ $# = 0 ]]; then
@@ -45,6 +105,7 @@ if [[ $# = 0 ]]; then
 fi
 
 ktest_image=""
+ktest_arch="$(uname -m)"
 CMD="cmd_$1"
 shift
 
@@ -100,7 +161,7 @@ PACKAGES+=(libudev-dev libldap2-dev)
 PACKAGES+=(acct bsdextrautils xfsprogs xfslibs-dev quota libcap2-bin)
 PACKAGES+=(libattr1-dev libaio-dev libgdbm-dev libacl1-dev gettext)
 PACKAGES+=(libssl-dev libgdbm-dev libgdbm-compat-dev liburing-dev)
-PACKAGES+=(duperemove thin-provisioning-tools fsverity)
+PACKAGES+=(duperemove fsverity)
 
 # xfsprogs:
 PACKAGES+=(libinih-dev)
@@ -118,13 +179,18 @@ PACKAGES+=(cryptsetup)
 PACKAGES+=(multipath-tools sg3-utils srptools)
 
 # ZFS support
-PACKAGES+=("linux-headers-$DEBIAN_ARCH" dkms zfsutils-linux zfs-dkms)
+PACKAGES+=("linux-headers-generic")
+# unless no other option when cross-compiling, ignore ZFS
+# DKMS needs to cross-compile the module,
+# against a different kernel on a different CPUarchitecture.
+# this has to cause errors
+[[ -z ${CROSS_COMPILE} ]] && PACKAGES+=(dkms zfsutils-linux zfs-dkms)
 
 # suspend testing:
 # [[ $KERNEL_ARCH = x86 ]] && PACKAGES+=(uswsusp)
 
 EXCLUDE=(dmidecode nano rsyslog logrotate cron		\
-    iptables nfacct					\
+    iptables nfacct vim-tiny				\
     debconf-i18n info gnupg libpam-systemd)
 
 SYSTEMD_MASK=(dev-hvc0.device				\
@@ -223,19 +289,32 @@ ZZ
 
 update_packages()
 {
+    NO_RUSTUP=
     # systemd... !?
     mkdir -p "$MNT"/run/user/0
     cp /etc/resolv.conf "$MNT/etc/resolv.conf"
+    #don't do rustup on unsupported architectures, just try to install from debian repositories
+    [[ -z $(curl -qq -I "https://static.rust-lang.org/rustup/dist/${RUST_TRIPLE}/rustup-init" 2>/dev/null | grep "HTTP/2 200") ]] && NO_RUSTUP=1
+    [[ -n $NO_RUSTUP ]] && PACKAGES+=(rustc rustc-dbgsym rustfmt rustfmt-dbgsym)
+
     _chroot "$MNT" mount -t proc none /proc
-    _chroot "$MNT" apt-get -qq update
-    _chroot "$MNT" apt-get -qq upgrade
-    _chroot "$MNT" apt-get -qq install --no-install-recommends "${PACKAGES[@]}"
+    if [[ $MIRROR == *"debian-ports"* ]]; then
+	install_fix_deps
+    else
+	_chroot "$MNT" apt-get -qq --allow-unauthenticated --allow-insecure-repositories update --fix-missing
+    	_chroot "$MNT" apt-get -qq --allow-unauthenticated upgrade
+    	_chroot "$MNT" apt-get -qq install -f
+    	_chroot "$MNT" apt-get -qq install -m --allow-unauthenticated --no-install-recommends "${PACKAGES[@]}"
+    fi
     rm -f "$MNT/var/cache/apt/archives/*.deb"
 
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > "$MNT"/tmp/rustup.sh
-    chmod 755 "$MNT"/tmp/rustup.sh
+    if [[ -z $NO_RUSTUP ]]; then
+	curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > "$MNT"/tmp/rustup.sh
+	chmod 755 "$MNT"/tmp/rustup.sh
 
-    _chroot "$MNT" /tmp/rustup.sh -y
+	_chroot "$MNT" /tmp/rustup.sh --default-host ${RUST_TRIPLE} -y
+	echo 'export PATH="$HOME/.cargo/bin:$PATH"' > $MNT/etc/profile.d/rustup.sh
+    fi;
 }
 
 trim_image()
@@ -284,27 +363,45 @@ cmd_create()
 	echo "$ktest_image already exists"
 	exit 1
     fi
-
     (cd "$ktest_dir"; git submodule update --init debootstrap)
 
     MNT=$(mktemp --tmpdir -d $(basename "$0")-XXXXXXXXXX)
-    trap 'umount_image; rm "$ktest_image"' EXIT
+    trap '/bin/bash; umount_image; rm "$ktest_image"' EXIT
 
     fallocate -l "$IMAGE_SIZE" "$ktest_image"
     mkfs.ext4 -F "$ktest_image"
     mount "$ktest_image" "$MNT"
 
+   local debian_release="trixie" #general release
+   local keyring=""
+
+    if [[ $MIRROR == *"debian-ports"* ]]; then
+	debian_release="sid" #unofficial ports don't have named releases
+	echo ""
+	echo "WARNING: $ktest_arch is unsupported, using SID release for packages"
+	echo "*******************************************************************"
+	echo "PLEASE NOTE: this often has dependency problems between packages, "
+	echo "and can prevent the install due to a dependency conflict "
+	echo "If so, contact the debian maintainer for this architecture to fix it:"
+	echo "${ktest_arch} : ${DEBIAN_ARCH}@buildd.debian.org"
+	echo "*******************************************************************"
+	echo ""
+    fi
+
     DEBOOTSTRAP_DIR=$ktest_dir/debootstrap $debootstrap	\
 	--no-check-gpg					\
 	--arch="$DEBIAN_ARCH"				\
 	--exclude=$(join_by , "${EXCLUDE[@]}")		\
+	$keyring					\
 	--foreign					\
-	--components='main,contrib,non-free,bullseye-backports' \
-	bullseye "$MNT" "$MIRROR"
+	--components='main,contrib,non-free' \
+	$debian_release "$MNT" "$MIRROR"
+
+    statichelper=$(which qemu-${ktest_arch}) || statichelper=$(which qemu-${ktest_arch}-static)
+    [[ -n ${CROSS_COMPILE} ]] && cp ${statichelper} ${MNT}${statichelper}
 
     _chroot "$MNT" /debootstrap/debootstrap --second-stage
     _chroot "$MNT" dpkg --configure -a
-
     update_packages
     update_files
 
