@@ -2,6 +2,8 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
 
+require-kernel-config BCACHEFS_ERASURE_CODING
+
 require-kernel-config MD
 require-kernel-config BLK_DEV_MD
 require-kernel-config MD_FAULTY
