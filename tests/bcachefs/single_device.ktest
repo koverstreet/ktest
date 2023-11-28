@@ -18,7 +18,7 @@ test_wipe_btrfs()
     mkfs.btrfs  ${ktest_scratch_dev[0]}
     bcachefs format -f ${ktest_scratch_dev[0]}
 
-    mount -t btrfs ${ktest_scratch_dev[0]} /mnt && false
+    ! mount -t btrfs ${ktest_scratch_dev[0]} /mnt
 }
 
 test_stress_ng()
