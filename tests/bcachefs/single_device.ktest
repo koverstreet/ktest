@@ -124,6 +124,40 @@ test_extent_repair_overlapping()
     check_counters ${ktest_scratch_dev[0]}
 }
 
+test_reflink3()
+{
+    # reproducer for a common filesystem reflink bug
+    # based on zfs reflink corruption reproducer[1]
+    # apparently also exposed by portage's reflink file copy implementation[2][3]
+    # [1] https://gist.github.com/tonyhutter/d69f305508ae3b7ff6e9263b22031a84#file-reproducer-sh
+    # [2] https://wiki.gentoo.org/wiki/User:Sam/Memorable_bugs_I_like_to_reference#Bugs_found_by_Portage.27s_native_file_copying
+    # [3] https://github.com/openzfs/zfs/issues/11900#issuecomment-927568640
+    set_watchdog 10
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    prefix="reproducer_${BASHPID}_"
+    dd if=/dev/urandom of=${prefix}0 bs=1M count=1 status=none
+
+    end=5000
+    h=0
+    for i in `seq 1 $end` ; do
+        j=$((i + 1))
+        cp  ${prefix}$h ${prefix}$i
+        cp --reflink=never ${prefix}$i ${prefix}$j
+        diff ${prefix}0 ${prefix}$i
+        h=$((h + 1))
+    done
+
+    for i in `seq 1 2 $end` ; do
+        rm ${prefix}$i
+    done
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    check_counters ${ktest_scratch_dev[0]}
+}
+
 test_reflink2()
 {
     set_watchdog 10
