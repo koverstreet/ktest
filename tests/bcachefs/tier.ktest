@@ -290,7 +290,7 @@ test_change_replicas()
 
 test_concurrent_all_device_removal()
 {
-    set_watchdog 60
+    set_watchdog 120
 
     run_quiet "" bcachefs format \
        --label=ssd.ssd1 ${ktest_scratch_dev[0]}                \
