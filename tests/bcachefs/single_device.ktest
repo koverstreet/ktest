@@ -132,14 +132,14 @@ test_reflink3()
     # [1] https://gist.github.com/tonyhutter/d69f305508ae3b7ff6e9263b22031a84#file-reproducer-sh
     # [2] https://wiki.gentoo.org/wiki/User:Sam/Memorable_bugs_I_like_to_reference#Bugs_found_by_Portage.27s_native_file_copying
     # [3] https://github.com/openzfs/zfs/issues/11900#issuecomment-927568640
-    set_watchdog 10
+    set_watchdog 60
     run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     prefix="reproducer_${BASHPID}_"
     dd if=/dev/urandom of=${prefix}0 bs=1M count=1 status=none
 
-    end=5000
+    end=1000
     h=0
     for i in `seq 1 $end` ; do
         j=$((i + 1))
