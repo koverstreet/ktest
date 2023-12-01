@@ -807,4 +807,37 @@ test_key_type_error()
     check_counters ${ktest_scratch_dev[0]}
 }
 
+test_force_remove()
+{
+    set_watchdog 20
+
+    bcachefs format -f ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+
+    fio --group_reporting		\
+	--time_based			\
+	--runtime=60s			\
+	--ioengine=io_uring		\
+	--iodepth=256			\
+	--verify_async=8		\
+	--bs=4k-64k			\
+	--directory=/mnt		\
+	--size=16m			\
+	--norandommap			\
+	--random_distribution=zipf:0.5	\
+	--numjobs=16			\
+	--rw=randrw			\
+	--name=A			\
+	--direct=1			\
+	--name=B			\
+	--direct=0 >/dev/null &
+    bcachefs device evacuate ${ktest_scratch_dev[0]} || true
+    bcachefs device remove --force --force-metadata ${ktest_scratch_dev[1]} || true
+    bcachefs device remove --force --force-metadata ${ktest_scratch_dev[1]} || true
+    kill %1
+    wait
+    umount /mnt
+}
+
 main "$@"
