@@ -624,7 +624,6 @@ test_snapshot_rw()
 {
     run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
-    bcachefs device resize-journal ${ktest_scratch_dev[0]} 4G
 
     local i
     for i in $(seq 0 10); do
@@ -661,6 +660,19 @@ test_snapshot_rw()
 
     umount /mnt
     bcachefs fsck -n ${ktest_scratch_dev[0]}
+}
+
+test_snapshot_implicit_source()
+{
+    run_quiet "" bcachefs format -f  ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    mkdir /mnt/d
+    bcachefs subvolume snapshot /mnt/d/snp1
+    umount /mnt
+
+    mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
+    umount /mnt
 }
 
 main "$@"
