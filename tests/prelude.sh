@@ -200,14 +200,20 @@ set_watchdog()
 
 run_test()
 {
-    local test=test_$1
+    local test_file=$(basename -s .ktest $0)
+    local test_name=$1
+    local test_fn=test_$test_name
+    local test_output=/ktest-out/out/$test_file.$test_name
 
-    if [[ $(type -t $test) != function ]]; then
-	echo "test $1 does not exist"
+    if [[ $(type -t $test_fn) != function ]]; then
+	echo "test $test_name does not exist"
 	exit 1
     fi
 
-    $test
+    mkdir -p $test_output
+    echo "|/bin/cp --sparse=always /dev/stdin $test_output/core.%e.PID%p.SIG%s.TIME%t" > /proc/sys/kernel/core_pattern
+
+    $test_fn
 }
 
 run_tests()
