@@ -32,7 +32,8 @@ mkdir -p /root/.ssh
 cat /host/$home/.ssh/id*.pub > /root/.ssh/authorized_keys
 chmod 600 /root/.ssh/authorized_keys
 
-ln -sf "/host/$ktest_kernel_binary/lib/modules" /lib/modules
+mkdir -p /lib/modules
+ln -s /host/$ktest_kernel_binary/lib/modules/* /lib/modules
 
 dmesg --console-on
 dmesg --console-level 8
