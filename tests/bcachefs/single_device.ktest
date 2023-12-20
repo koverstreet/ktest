@@ -1208,6 +1208,9 @@ migrate_from_fs()
 	-F -f /mnt | tee /root/migratelog
     offset=$(grep -oE 'sb=[[:digit:]]+' /root/migratelog|head -n1|sed -e 's/sb=//')
 
+    umount /mnt
+    fsck.$fstype -n ${ktest_scratch_dev[0]}
+
     echo "Attempting to mount bcachefs filesystem with superblock offset $offset"
 
     if true; then
@@ -1226,9 +1229,6 @@ migrate_from_fs()
 	umount /mnt2
 	echo "rsync passed"
     fi
-
-    umount /mnt
-    fsck.$fstype -n ${ktest_scratch_dev[0]}
 
     mount -t bcachefs -o sb=$offset ${ktest_scratch_dev[0]} /mnt
     umount /mnt
