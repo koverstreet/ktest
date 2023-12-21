@@ -12,7 +12,4 @@ require-kernel-config DEBUG_ATOMIC_SLEEP
 require-kernel-config PREEMPT
 require-kernel-config DEBUG_PREEMPT
 
-require-kernel-config KASAN
-require-kernel-config KASAN_VMALLOC
-
-call_base_test lockdep-kasan "$@"
+call_base_test lockdep "$@"

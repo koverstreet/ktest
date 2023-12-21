@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-
-. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/lockdep-kasan-base.sh
