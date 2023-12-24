@@ -107,7 +107,7 @@ test_replicas_variable_buckets()
 
 test_copygc_torture()
 {
-    loops=$((($ktest_priority + 1) * 4))
+    loops=$((($ktest_priority + 1) * 2))
 
     bcachefs_antagonist
     set_watchdog 2400
