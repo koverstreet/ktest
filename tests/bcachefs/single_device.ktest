@@ -1600,4 +1600,19 @@ test_multimount()
     check_counters ${ktest_scratch_dev[0]}
 }
 
+test_kernel_fsck()
+{
+    set_watchdog 10
+    bcachefs format -f ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    touch /mnt/foo
+    mkdir /mnt/bar
+    umount /mnt
+
+    bcachefs fsck -nyvk ${ktest_scratch_dev[0]}
+
+    check_counters ${ktest_scratch_dev[0]}
+}
+
 main "$@"
