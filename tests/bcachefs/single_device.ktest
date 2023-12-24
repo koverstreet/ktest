@@ -67,9 +67,12 @@ test_remount_ro_rw()
     run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
+    echo "test: remount-ro"
     mount -o remount,ro /mnt
+    ! touch /mnt/foo
+    echo "test: remount-rw"
     mount -o remount,rw /mnt
-    touch /mnt/foo
+    touch /mnt/bar
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
