@@ -18,6 +18,7 @@ if [[ ! -v ktest_verbose ]]; then
     #ktest_storage_bus=virtio-scsi-pci
     ktest_storage_bus=virtio-blk
     ktest_images=()
+    ktest_rw_images=()
 
     ktest_scratch_dev=()
     ktest_scratch_dev_sizes=()
@@ -162,6 +163,11 @@ config-image()
     ktest_images+=("$1")
 }
 
+config-rw-image()
+{
+    ktest_rw_images+=("$1")
+}
+
 config-cpus()
 {
     ktest_cpus=$1
@@ -296,6 +302,7 @@ main()
 	    echo "ktest_kernel_make_append=(${ktest_kernel_make_append[@]})"
 	    echo "ktest_storage_bus=$ktest_storage_bus"
 	    echo "ktest_images=(${ktest_images[@]})"
+	    echo "ktest_rw_images=(${ktest_rw_images[@]})"
 	    echo "ktest_scratch_dev_sizes=(${ktest_scratch_dev_sizes[@]})"
 	    echo "ktest_make_install=(${ktest_make_install[@]})"
 	    echo "ktest_kernel_config_require=(${ktest_kernel_config_require[@]})"

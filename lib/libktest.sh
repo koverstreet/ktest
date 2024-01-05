@@ -414,6 +414,10 @@ start_vm()
 	qemu_disk file="$file",snapshot=on,cache.no-flush=on,cache.direct=$ktest_dio
     done
 
+    for file in "${ktest_rw_images[@]}"; do
+	qemu_disk file="$file",cache.no-flush=on,cache.direct=$ktest_dio
+    done
+
     for size in "${ktest_scratch_dev_sizes[@]}"; do
 	local file="$ktest_out/vm/dev-$disknr"
 
