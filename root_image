@@ -118,7 +118,7 @@ PACKAGES+=(cryptsetup)
 PACKAGES+=(multipath-tools sg3-utils srptools)
 
 # ZFS support
-PACKAGES+=("linux-headers-generic" dkms zfsutils-linux zfs-dkms)
+#PACKAGES+=("linux-headers-generic" dkms zfsutils-linux zfs-dkms)
 
 # suspend testing:
 # [[ $KERNEL_ARCH = x86 ]] && PACKAGES+=(uswsusp)
@@ -280,12 +280,15 @@ cmd_update()
 
 cmd_create()
 {
+    if ! [[ -f $debootstrap ]]; then
+	echo "Run root_image init to prep debootstrap"
+	exit 1
+    fi
+
     if [[ -e $ktest_image ]]; then
 	echo "$ktest_image already exists"
 	exit 1
     fi
-
-    (cd "$ktest_dir"; git submodule update --init debootstrap)
 
     MNT=$(mktemp --tmpdir -d $(basename "$0")-XXXXXXXXXX)
     trap 'umount_image; rm "$ktest_image"' EXIT
@@ -299,8 +302,7 @@ cmd_create()
 	--arch="$DEBIAN_ARCH"				\
 	--exclude=$(join_by , "${EXCLUDE[@]}")		\
 	--foreign					\
-	--components='main,contrib,non-free,bullseye-backports' \
-	bullseye "$MNT" "$MIRROR"
+	sid "$MNT" "$MIRROR"
 
     _chroot "$MNT" /debootstrap/debootstrap --second-stage
     _chroot "$MNT" dpkg --configure -a
@@ -310,6 +312,11 @@ cmd_create()
 
     umount_image
     trim_image "$ktest_image"
+}
+
+cmd_init()
+{
+    (cd "$ktest_dir"; git submodule update --init debootstrap)
 }
 
 if [[ $(type -t "$CMD") != function ]]; then
