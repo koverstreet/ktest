@@ -16,11 +16,16 @@ require-kernel-config QUOTA
 [[ ! -v MKFS_OPTIONS ]] && export MKFS_OPTIONS="--encrypted --no_passphrase"
 export FSTYP=bcachefs
 
-run_tests()
+run_test()
 {
-    setup_tracing 'bcachefs:*'
-    bcachefs_antagonist
+    if [[ ! -f /xfstests-init-done ]]; then
+	bcachefs_antagonist
+    fi
+
     run_xfstests "$@"
+
+    check_counters ${ktest_scratch_dev[0]}
+    check_counters ${ktest_scratch_dev[1]}
 }
 
 main "$@"

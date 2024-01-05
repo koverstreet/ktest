@@ -176,7 +176,7 @@ check_counters()
 	local nr="${linea[1]}"
 
 	if (( nr > max_fail )); then
-	    echo "Too many $event: $nr"
+	    echo "$dev: Too many $event: $nr ($line)"
 	    # Insert 0 byte seperators at the beginning of each trace event,
 	    # then grep in null separator mode to print full output of
 	    # multiline trace events:
@@ -190,6 +190,7 @@ check_counters()
 	echo "Transaction commits: $nr_commits"
     fi
 
+    bcachefs reset-counters $dev
     return $ret
 }
 
