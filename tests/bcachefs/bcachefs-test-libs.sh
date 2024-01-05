@@ -156,6 +156,16 @@ bcachefs_antagonist()
     #antagonist_switch_str_hash &
 }
 
+get_slowpath_counters()
+{
+    local dev=$1
+
+    bcachefs show-super --field-only counters "$dev"|
+	grep  -E '(fail|restart|blocked|full)'|
+	grep -vE '(path_relock_fail|mem_realloced)'|
+	grep -v  ' 0$' || true
+}
+
 check_counters()
 {
     local dev=$1
@@ -163,11 +173,15 @@ check_counters()
     local ratio=10
     local ret=0
 
+    [[ -z $nr_commits ]] && return 0
+
     [[ $# -ge 2 ]] && ratio=$2
 
     local max_fail=$((nr_commits / ratio))
 
-    local counters=$(bcachefs show-super -f counters "$dev"|grep -E '(fail|restart|blocked)'|grep -v path_relock_fail|grep -v mem_realloced)
+    local counters=$(set +e; set +o pipefail; get_slowpath_counters $dev)
+
+    [[ -z $counters ]] && return 0
 
     while IFS= read -r line; do
 	linea=($line)
@@ -176,7 +190,7 @@ check_counters()
 	local nr="${linea[1]}"
 
 	if (( nr > max_fail )); then
-	    echo "$dev: Too many $event: $nr ($line)"
+	    echo "$dev: Too many $event: $nr (max: $max_fail)"
 	    # Insert 0 byte seperators at the beginning of each trace event,
 	    # then grep in null separator mode to print full output of
 	    # multiline trace events:
