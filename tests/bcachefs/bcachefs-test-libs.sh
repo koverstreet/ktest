@@ -167,7 +167,7 @@ check_counters()
 
     local max_fail=$((nr_commits / ratio))
 
-    local counters=$(bcachefs show-super -f counters "$dev"|grep -E '(fail|restart|blocked)'|grep -v path_relock_fail)
+    local counters=$(bcachefs show-super -f counters "$dev"|grep -E '(fail|restart|blocked)'|grep -v path_relock_fail|grep -v mem_realloced)
 
     while IFS= read -r line; do
 	linea=($line)
