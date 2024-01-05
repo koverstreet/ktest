@@ -736,4 +736,24 @@ test_subvol_rmdir_empty_snapshot()
     bcachefs fsck ${ktest_scratch_dev[0]}
 }
 
+test_snapshot_reflink()
+{
+    run_quiet "" bcachefs format -f  ${ktest_scratch_dev[0]}
+    mount -t bcachefs -o noinline_data ${ktest_scratch_dev[0]} /mnt
+
+    cp /usr/bin/cp /mnt/file
+    #echo Test > /mnt/file
+    bcachefs subvolume snapshot /mnt/snapshot
+
+    cp --reflink=always /mnt/snapshot/file /mnt/file1
+    rm /mnt/file
+    cp --reflink=always /mnt/snapshot/file /mnt/file2
+
+    md5sum /mnt/file* /mnt/snapshot/file /usr/bin/cp
+    umount /mnt
+
+    mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
+    umount /mnt
+}
+
 main "$@"

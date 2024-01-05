@@ -1636,4 +1636,48 @@ test_kernel_fsck()
     check_counters ${ktest_scratch_dev[0]}
 }
 
+test_nocow_fragmented()
+{
+    set_watchdog 60
+    run_quiet "" bcachefs format -f		\
+	--errors=panic				\
+	${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    run_fio_randrw
+    echo 1 > /sys/fs/bcachefs/*/options/nocow
+    dd if=/dev/zero of=/mnt/fiotest bs=1M oflag=direct
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    check_counters ${ktest_scratch_dev[0]}
+}
+
+config-mem 16G
+
+test_nocow_fragmented2()
+{
+    modprobe brd rd_size=536870912 rd_nr=7
+    bcachefs format -f --nocow					\
+	--foreground_target=/dev/ram4				\
+	--promote_target=/dev/ram5				\
+	/dev/ram1 /dev/ram2 /dev/ram5 /dev/ram0			\
+	/dev/ram4 /dev/ram6 /dev/ram3
+    mount -t bcachefs /dev/ram1:/dev/ram2:/dev/ram5:/dev/ram0:/dev/ram4:/dev/ram6:/dev/ram3 /mnt
+    fio --group_reporting					\
+	--ioengine=io_uring					\
+	--directory=/mnt --size=16m				\
+	--time_based --runtime=60s				\
+	--iodepth=256 --verify_async=8				\
+	--bs=4k-64k --norandommap				\
+	--random_distribution=zipf:0.5 --numjobs=16 --rw=randrw	\
+	--name=A --direct=1 --name=B --direct=0 >/dev/null &
+    sleep 10
+    bcachefs device offline /dev/ram5
+
+    wait
+    umount /mnt
+}
+
 main "$@"
