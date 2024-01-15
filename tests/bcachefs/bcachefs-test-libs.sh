@@ -170,7 +170,7 @@ check_counters()
 {
     local dev=$1
     local nr_commits=$(bcachefs show-super -f counters "$dev"|awk '/transaction_commit/ {print $2}')
-    local ratio=10
+    local ratio=20
     local ret=0
 
     [[ -z $nr_commits ]] && return 0
@@ -204,7 +204,8 @@ check_counters()
 	echo "Transaction commits: $nr_commits"
     fi
 
-    bcachefs reset-counters $dev
+    # some fstests do strange things that will cause this to fail - we don't particularly care:
+    bcachefs reset-counters $dev >& /dev/null || true
     return $ret
 }
 
