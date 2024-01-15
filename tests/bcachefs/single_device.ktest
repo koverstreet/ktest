@@ -688,8 +688,25 @@ test_background_compression()
     echo zstd > /sys/fs/bcachefs/*/options/background_compression
     run_fio_randrw
 
-    check_counters ${ktest_scratch_dev[0]}
     umount /mnt
+    check_counters ${ktest_scratch_dev[0]}
+}
+
+test_rebalance_scan()
+{
+    setup_tracing 'bcachefs:move_extent bcachefs:move_extent_read bcachefs:move_extent_write bcachefs:move_extent_fail bcachefs:move_extent_start_fail bcachefs:move_extent_finish'
+    run_quiet "" bcachefs format -f		\
+	--errors=panic				\
+	${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    dd if=/dev/zero of=/mnt/foo bs=1M count=8 oflag=direct
+    sleep 0.5
+    echo zstd > /sys/fs/bcachefs/*/options/background_compression
+    sleep 2
+    cat /sys/fs/bcachefs/*/compression_stats|grep -q 'none                     0 B             0 B                     0 B'
+    umount /mnt
+    check_counters ${ktest_scratch_dev[0]}
 }
 
 test_compress_no_checksum()
