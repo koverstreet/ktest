@@ -675,4 +675,17 @@ test_snapshot_implicit_source()
     umount /mnt
 }
 
+test_delete_subvol_nested()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    bcachefs subvolume create /mnt/a
+    bcachefs subvolume create /mnt/a/b
+    bcachefs subvolume delete /mnt/a
+    umount /mnt
+
+    bcachefs fsck ${ktest_scratch_dev[0]}
+}
+
 main "$@"
