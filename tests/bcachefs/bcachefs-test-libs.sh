@@ -177,8 +177,6 @@ check_counters()
 
     [[ $# -ge 2 ]] && ratio=$2
 
-    local max_fail=$((nr_commits / ratio))
-
     local counters=$(set +e; set +o pipefail; get_slowpath_counters $dev)
 
     [[ -z $counters ]] && return 0
@@ -188,6 +186,12 @@ check_counters()
 
 	local event="${linea[0]}"
 	local nr="${linea[1]}"
+
+	local max_fail=$((nr_commits / ratio))
+
+	if [[ $event = trans_restart_would_deadlock ]]; then
+	    max_fail=$((max_fail * 2))
+	fi
 
 	if (( nr > max_fail )); then
 	    echo "$dev: Too many $event: $nr (max: $max_fail)"
