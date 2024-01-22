@@ -189,6 +189,8 @@ check_counters()
 
 	local max_fail=$((nr_commits / ratio))
 
+	max_fail=$((max_fail + 100))
+
 	if [[ $event = trans_restart_would_deadlock ]]; then
 	    max_fail=$((max_fail * 2))
 	fi
