@@ -705,4 +705,17 @@ test_snapshot_file_delete()
     umount /mnt
 }
 
+test_subvol_mv()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    bcachefs subvolume create /mnt/a
+    bcachefs subvolume create /mnt/a/b
+    mv /mnt/a/b /mnt
+    umount /mnt
+
+    bcachefs fsck ${ktest_scratch_dev[0]}
+}
+
 main "$@"
