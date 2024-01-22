@@ -4,10 +4,6 @@
 
 require-kernel-config BCACHEFS_ERASURE_CODING
 
-require-kernel-config MD
-require-kernel-config BLK_DEV_MD
-require-kernel-config MD_FAULTY
-
 config-scratch-devs 4G
 config-scratch-devs 4G
 config-scratch-devs 4G

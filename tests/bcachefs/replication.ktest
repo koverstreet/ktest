@@ -3,8 +3,8 @@
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
 
 require-kernel-config MD
-require-kernel-config BLK_DEV_MD
-require-kernel-config MD_FAULTY
+require-kernel-config BLK_DEV_DM
+require-kernel-config DM_FLAKEY
 
 config-scratch-devs 4G
 config-scratch-devs 4G
@@ -498,15 +498,19 @@ do_replicas_errors_test()
     local p=/sys/module/bcachefs/parameters/verify_all_btree_replicas
     [[ -f $p ]] && echo 1 > $p
 
-    mdadm -B /dev/md0 -lfaulty -n1 ${ktest_scratch_dev[1]}
+    local BLK_DEV_SIZE=`blockdev --getsz ${ktest_scratch_dev[1]}`
+    local FLAKEY_TABLE="0 $BLK_DEV_SIZE flakey ${ktest_scratch_dev[1]} 0 180 0"
+    local FLAKEY_TABLE_ERROR="0 $BLK_DEV_SIZE flakey ${ktest_scratch_dev[1]} 0 0 180 1 $error_type"
 
-    run_quiet "" bcachefs format		\
+    dmsetup create flakey --table "$FLAKEY_TABLE"
+
+    run_quiet "" bcachefs format -f		\
 	--replicas=2				\
-	/dev/md0 ${ktest_scratch_dev[0]}
+	${ktest_scratch_dev[0]} /dev/mapper/flakey
 
-    mount -t bcachefs -o degraded ${ktest_scratch_dev[0]}:/dev/md0 /mnt
+    mount -t bcachefs -o degraded ${ktest_scratch_dev[0]}:/dev/mapper/flakey /mnt
 
-    mdadm -G /dev/md0 -p$error_type
+    echo $FLAKEY_TABLE_ERROR|dmsetup load flakey
 
     run_fio_randrw
 
@@ -515,7 +519,7 @@ do_replicas_errors_test()
     dd if=/mnt/fiotest of=/dev/null bs=4k iflag=direct
 
     umount /mnt
-    mdadm --stop /dev/md0
+    dmsetup remove flakey
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
     check_counters ${ktest_scratch_dev[0]}
@@ -526,12 +530,12 @@ do_replicas_errors_test()
 
 test_replicas_write_errors()
 {
-    do_replicas_errors_test write-all
+    do_replicas_errors_test error_writes
 }
 
 test_replicas_read_errors()
 {
-    do_replicas_errors_test read-persistent1
+    do_replicas_errors_test error_reads
 }
 
 test_cmd_fs_usage()

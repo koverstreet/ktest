@@ -4,7 +4,6 @@
 
 require-kernel-config MD
 require-kernel-config BLK_DEV_MD
-require-kernel-config MD_FAULTY
 require-kernel-config NET
 require-kernel-config BLK_DEV
 require-kernel-config BLK_DEV_NBD
