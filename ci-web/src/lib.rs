@@ -185,7 +185,7 @@ pub fn commitdir_get_results(ktestrc: &Ktestrc, commit_id: &String) -> anyhow::R
             duration:   e.get_duration()
         };
 
-        results.insert(e.get_name()?.to_string(), r);
+        results.insert(e.get_name()?.to_string()?, r);
     }
 
     Ok(results)
@@ -214,13 +214,13 @@ fn workers_parse(f: Vec<u8>) -> anyhow::Result<Workers> {
         .get_entries()?;
 
     let workers = entries.iter().map(|e| Worker {
-        hostname:   e.get_hostname().unwrap_or("").to_string(),
-        workdir:    e.get_workdir().unwrap_or("").to_string(),
+        hostname:   e.get_hostname().unwrap().to_string().unwrap(),
+        workdir:    e.get_workdir().unwrap().to_string().unwrap(),
         starttime:  Utc.timestamp_opt(e.get_starttime(), 0).unwrap(),
-        branch:     e.get_branch().unwrap_or("").to_string(),
-        commit:     e.get_commit().unwrap_or("").to_string(),
+        branch:     e.get_branch().unwrap().to_string().unwrap(),
+        commit:     e.get_commit().unwrap().to_string().unwrap(),
         age:        e.get_age(),
-        tests:      e.get_tests().unwrap_or("").to_string(),
+        tests:      e.get_tests().unwrap().to_string().unwrap(),
     }).collect();
 
     Ok(workers)
