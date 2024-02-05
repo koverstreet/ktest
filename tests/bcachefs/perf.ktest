@@ -11,7 +11,6 @@ require-kernel-config BTRFS_FS=m
 require-kernel-config BCACHEFS_FS=y
 require-kernel-config BCACHEFS_TESTS
 require-kernel-config BCACHEFS_DEBUG=n
-require-kernel-config BCACHEFS_DEBUG_TRANSACTIONS=n
 require-kernel-config BCACHEFS_QUOTA=n
 require-kernel-config BCACHEFS_LOCK_TIME_STATS=n
 require-kernel-config BCACHEFS_NO_LATENCY_ACCT
