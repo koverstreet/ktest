@@ -33,6 +33,14 @@ list_tests()
 {
     pushd $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/xfstests > /dev/null
 
+    for i in tests/*; do
+	if [[ -d $i ]]; then
+	    pushd $i > /dev/null
+	    ../../tools/mkgroupfile group.list
+	    popd > /dev/null
+	fi
+    done
+
     for g in generic shared "$FSTYP"; do
 	[[ ! -f tests/$g/group.list ]] && continue
 	grep -hE '[0-9][0-9][0-9] .*(auto|dangerous)' tests/$g/group.list|
