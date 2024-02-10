@@ -688,4 +688,21 @@ test_delete_subvol_nested()
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
 }
 
+test_snapshot_file_delete()
+{
+    run_quiet "" bcachefs format -f --shard_inode_numbers=0 ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    #dd if=/dev/zero of=/mnt/foo bs=4k count=8 oflag=direct
+    touch /mnt/foo
+    bcachefs subvolume snapshot /mnt/snapshot
+    rm /mnt/snapshot/foo
+    rm /mnt/foo
+
+    umount /mnt
+
+    mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
+    umount /mnt
+}
+
 main "$@"
