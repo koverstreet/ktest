@@ -4,17 +4,19 @@
 
 require-kernel-config BTRFS_FS
 require-kernel-config BTRFS_FS_POSIX_ACL
-require-kernel-config BTRFS_FS_CHECK_INTEGRITY
+#require-kernel-config BTRFS_FS_CHECK_INTEGRITY
 require-kernel-config BTRFS_FS_RUN_SANITY_TESTS
 require-kernel-config BTRFS_DEBUG
 require-kernel-config BTRFS_ASSERT
 require-kernel-config BTRFS_FS_REF_VERIFY
 
+export FSTYP=btrfs
+
 run_tests()
 {
     export MKFS_OPTIONS=
 
-    run_xfstests btrfs "$@"
+    run_xfstests "$@"
 }
 
 main "$@"
