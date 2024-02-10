@@ -682,10 +682,10 @@ test_delete_subvol_nested()
 
     bcachefs subvolume create /mnt/a
     bcachefs subvolume create /mnt/a/b
-    bcachefs subvolume delete /mnt/a
+    ! bcachefs subvolume delete /mnt/a
     umount /mnt
 
-    bcachefs fsck ${ktest_scratch_dev[0]}
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
 }
 
 main "$@"
