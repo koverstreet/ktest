@@ -24,7 +24,7 @@ run_basic_tiering_test()
 
 test_tiering_torture()
 {
-    run_quiet "" bcachefs format		\
+    run_quiet "" bcachefs format -f		\
 	--block_size=4k				\
 	--bucket=8M				\
 	--label=ssd.ssd1 ${ktest_scratch_dev[0]}		\
@@ -71,14 +71,14 @@ test_tiering_buffered()
 {
     set_watchdog 6000
 
-    run_quiet "" bcachefs format		\
-	--block_size=4k				\
-	--label=ssd.ssd1 ${ktest_scratch_dev[0]}		\
-	--label=ssd.ssd2 ${ktest_scratch_dev[1]}		\
-	--label=hdd.hdd1 ${ktest_scratch_dev[2]}		\
-	--label=hdd.hdd2 ${ktest_scratch_dev[3]}		\
-	--foreground_target=ssd			\
-	--promote_target=ssd			\
+    run_quiet "" bcachefs format -f			\
+	--block_size=4k					\
+	--label=ssd.ssd1 ${ktest_scratch_dev[0]}	\
+	--label=ssd.ssd2 ${ktest_scratch_dev[1]}	\
+	--label=hdd.hdd1 ${ktest_scratch_dev[2]}	\
+	--label=hdd.hdd2 ${ktest_scratch_dev[3]}	\
+	--foreground_target=ssd				\
+	--promote_target=ssd				\
 	--background_target=hdd
 
     mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
@@ -128,7 +128,7 @@ test_setattr()
 {
     setup_tracing 'bcachefs:*'
 
-    run_quiet "" bcachefs format		\
+    run_quiet "" bcachefs format -f				\
 	--durability=0 --label=ssd ${ktest_scratch_dev[0]}	\
 	--durability=1 --label=hdd ${ktest_scratch_dev[2]}	\
 	--background_target=hdd
@@ -204,7 +204,7 @@ test_tiering_variable_buckets_replicas()
 test_device_add()
 {
     set_watchdog 60
-    run_quiet "" bcachefs format					\
+    run_quiet "" bcachefs format -f					\
 	--label=ssd ${ktest_scratch_dev[0]}				\
 	--label=hdd ${ktest_scratch_dev[2]} ${ktest_scratch_dev[3]}
 
@@ -212,7 +212,7 @@ test_device_add()
 
     run_fio_randrw|tail -n200 &
 
-    bcachefs device add --label=hdd /mnt ${ktest_scratch_dev[1]}
+    bcachefs device add -f --label=hdd /mnt ${ktest_scratch_dev[1]}
 
     wait
     umount /mnt
@@ -244,7 +244,7 @@ test_mount_umount_torture()
 test_change_replicas()
 {
     set_watchdog 180
-    run_quiet "" bcachefs format					\
+    run_quiet "" bcachefs format -f					\
 	--label=ssd ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}	\
 	--label=hdd ${ktest_scratch_dev[2]} ${ktest_scratch_dev[3]}	\
 	--foreground_target=ssd						\
@@ -292,11 +292,11 @@ test_concurrent_all_device_removal()
 {
     set_watchdog 120
 
-    run_quiet "" bcachefs format \
-       --label=ssd.ssd1 ${ktest_scratch_dev[0]}                \
-       --label=ssd.ssd2 ${ktest_scratch_dev[1]}                \
-       --label=hdd.hdd1 ${ktest_scratch_dev[2]}                \
-       --label=hdd.hdd2 ${ktest_scratch_dev[3]}                \
+    run_quiet "" bcachefs format -f			\
+       --label=ssd.ssd1 ${ktest_scratch_dev[0]}		\
+       --label=ssd.ssd2 ${ktest_scratch_dev[1]}		\
+       --label=hdd.hdd1 ${ktest_scratch_dev[2]}		\
+       --label=hdd.hdd2 ${ktest_scratch_dev[3]}		\
        --metadata_replicas=3 \
        --data_replicas=3 \
        --promote_target=ssd
