@@ -718,4 +718,22 @@ test_subvol_mv()
     bcachefs fsck ${ktest_scratch_dev[0]}
 }
 
+test_subvol_rmdir_empty_snapshot()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    cd /mnt
+    bcachefs subvolume create ./sub
+    cd sub
+    bcachefs subvolume create ./sub2
+    bcachefs subvolume snapshot . ./snap
+    rmdir ./snap
+
+    cd /
+    umount /mnt
+
+    bcachefs fsck ${ktest_scratch_dev[0]}
+}
+
 main "$@"
