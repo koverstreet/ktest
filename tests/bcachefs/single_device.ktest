@@ -283,10 +283,17 @@ test_merge_torture_flakey()
     local n=40M
 
     local BLK_DEV_SIZE=`blockdev --getsz ${ktest_scratch_dev[0]}`
-    local FLAKEY_TABLE="0 $BLK_DEV_SIZE flakey ${ktest_scratch_dev[0]} 0 180 0"
+    local FLAKEY_TABLE="0 $BLK_DEV_SIZE flakey ${ktest_scratch_dev[0]} 0 0 180"
     local FLAKEY_TABLE_ERROR="0 $BLK_DEV_SIZE flakey ${ktest_scratch_dev[0]} 0 0 180 1 error_writes"
 
     dmsetup create flakey --table "$FLAKEY_TABLE"
+
+    set_dm_table()
+    {
+	dmsetup suspend flakey
+	echo "$@"|dmsetup load flakey
+	dmsetup resume flakey
+    }
 
     run_quiet "" bcachefs format -f --btree_node_size=32k --errors=panic /dev/mapper/flakey
 
@@ -300,23 +307,27 @@ test_merge_torture_flakey()
 	grep "^l " /sys/kernel/debug/bcachefs/*/btrees/xattrs-formats|wc -l
 	df -h /mnt
 
+	echo "inserting keys"
 	echo seq_insert		$n 1	> /sys/fs/bcachefs/*/perf_test &
 	sleep 10
-	echo $FLAKEY_TABLE_ERROR|dmsetup load flakey
+	echo "starting write errors"
+
+	set_dm_table "$FLAKEY_TABLE_ERROR"
 	wait
 
 	umount /mnt
-	echo $FLAKEY_TABLE|dmsetup load flakey
+
+	set_dm_table "$FLAKEY_TABLE"
 
 	mount -t bcachefs -o fsck /dev/mapper/flakey /mnt
 
 	echo seq_delete		$n 1	> /sys/fs/bcachefs/*/perf_test &
 	sleep 2
-	echo $FLAKEY_TABLE_ERROR|dmsetup load flakey
+	set_dm_table "$FLAKEY_TABLE_ERROR"
 	wait
 
 	umount /mnt
-	echo $FLAKEY_TABLE|dmsetup load flakey
+	set_dm_table "$FLAKEY_TABLE"
     done
 
     dmsetup remove flakey
