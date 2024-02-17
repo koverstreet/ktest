@@ -139,7 +139,7 @@ run_test_job() {
     while (( ${#SUBTESTS[@]} )); do
 	rm -rf ktest-out/gcov.*
 
-	FULL_LOG=$TEST_NAME.$(HOSTNAME).$(date -Iseconds).log
+	FULL_LOG=$TEST_NAME.$HOSTNAME.$(date -Iseconds).log
 
 	for t in ${SUBTESTS[@]}; do
 	    FNAME=$(echo "$t"|tr / .)
@@ -183,7 +183,7 @@ run_test_job() {
 	if [[ -d ktest-out/gcov.0 ]]; then
 	    echo "Sending gcov results to jobserver"
 
-	    LCOV=ktest-out/out/lcov.partial.$TEST_NAME.$(HOSTNAME).$(date -Iseconds)
+	    LCOV=ktest-out/out/lcov.partial.$TEST_NAME.$HOSTNAME.$(date -Iseconds)
 	    lcov --capture --quiet --directory ktest-out/gcov.0 --output-file $LCOV
 	    sed -i -e "s_$(pwd)/__" $LCOV
 
