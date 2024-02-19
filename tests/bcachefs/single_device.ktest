@@ -165,7 +165,7 @@ test_reflink2()
 {
     set_watchdog 10
     bcachefs_antagonist
-    run_quiet "" bcachefs format ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
@@ -448,7 +448,7 @@ test_reflink_inline_data()
 test_split_compressed()
 {
     set_watchdog 30
-    run_quiet "" bcachefs format --compression=zstd ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f --compression=zstd ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     # Test that splitting of compressed extents is working correctly:
@@ -491,7 +491,7 @@ test_fcollapse()
 test_finsert()
 {
     set_watchdog 30
-    run_quiet "" bcachefs format ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
 
     dd if=/dev/zero of=/mnt/foo bs=64k count=1 oflag=direct
@@ -508,7 +508,7 @@ test_finsert()
 test_key_merge()
 {
     set_watchdog 30
-    run_quiet "" bcachefs format --data_checksum=none ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f --data_checksum=none ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
@@ -527,7 +527,7 @@ test_key_merge()
 test_key_merge_csum()
 {
     set_watchdog 30
-    run_quiet "" bcachefs format --data_checksum=crc32c ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f --data_checksum=crc32c ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
@@ -548,7 +548,7 @@ test_key_merge_csum()
 test_reconstruct_alloc()
 {
     set_watchdog 120
-    run_quiet "" bcachefs format --btree_node_size=16k ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f --btree_node_size=16k ${ktest_scratch_dev[0]}
 
     mount -t bcachefs -o reconstruct_alloc,fix_errors,fsck ${ktest_scratch_dev[0]} /mnt
 
@@ -581,7 +581,7 @@ test_reconstruct_alloc()
 test_recovery()
 {
     set_watchdog 30
-    run_quiet "" bcachefs format		\
+    run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	--encrypted --no_passphrase		\
 	--bucket=8k				\
@@ -615,7 +615,7 @@ test_recovery()
 	umount /mnt
     done
 
-    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs fsck -nyk ${ktest_scratch_dev[0]}
     check_counters ${ktest_scratch_dev[0]}
 }
 
@@ -767,7 +767,7 @@ test_xxhash()
 
 test_crypto_locked_mnt()
 {
-    echo foo|bcachefs format --encrypted ${ktest_scratch_dev[0]}
+    echo foo|bcachefs format -f --encrypted ${ktest_scratch_dev[0]}
     echo foo|bcachefs unlock -k session ${ktest_scratch_dev[0]}
     mount -t bcachefs -o verbose ${ktest_scratch_dev[0]} /mnt
     umount /mnt
@@ -1573,7 +1573,7 @@ test_mount_twice()
 test_dump()
 {
     set_watchdog 60
-    run_quiet "" bcachefs format ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
@@ -1586,7 +1586,7 @@ test_dump()
 test_kill_btree_node()
 {
     set_watchdog 240
-    run_quiet "" bcachefs format --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     cp -a /usr /mnt
