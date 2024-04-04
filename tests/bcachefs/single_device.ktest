@@ -176,7 +176,7 @@ test_reflink2()
     cp --reflink /mnt/foo /mnt/foo5
     cp --reflink /mnt/foo /mnt/foo6
 
-    cat /sys/kernel/debug/bcachefs/*/btrees/reflink
+    cat /sys/kernel/debug/bcachefs/*/btrees/reflink/keys
 
     dd if=/dev/urandom of=/mnt/foo2 bs=4k oflag=direct conv=notrunc count=1
     dd if=/dev/urandom of=/mnt/foo3 bs=4k oflag=direct conv=notrunc count=1 seek=1
@@ -186,11 +186,11 @@ test_reflink2()
     dd if=/dev/urandom of=/mnt/foo6 bs=4k oflag=direct conv=notrunc count=1 seek=3
     dd if=/dev/urandom of=/mnt/foo6 bs=4k oflag=direct conv=notrunc count=1 seek=2
 
-    cat /sys/kernel/debug/bcachefs/*/btrees/reflink
+    cat /sys/kernel/debug/bcachefs/*/btrees/reflink/keys
 
-    cat /sys/kernel/debug/bcachefs/*/btrees/reflink|wc -l
+    cat /sys/kernel/debug/bcachefs/*/btrees/reflink/keys|wc -l
     rm /mnt/foo*
-    cat /sys/kernel/debug/bcachefs/*/btrees/reflink|wc -l
+    cat /sys/kernel/debug/bcachefs/*/btrees/reflink/keys|wc -l
 
     umount /mnt
 
@@ -218,9 +218,9 @@ test_reflink()
 
     wait
 
-    cat /sys/kernel/debug/bcachefs/*/btrees/reflink|wc -l
+    cat /sys/kernel/debug/bcachefs/*/btrees/reflink/keys|wc -l
     rm /mnt/fiotest*
-    nr_left=`cat /sys/kernel/debug/bcachefs/*/btrees/reflink|wc -l`
+    nr_left=`cat /sys/kernel/debug/bcachefs/*/btrees/reflink/keys|wc -l`
     echo "nr_left: $nr_left"
 
     [[ $nr_left = 0 ]]
@@ -304,7 +304,7 @@ test_merge_torture_flakey()
 
 	echo seq_delete		$n 1	> /sys/fs/bcachefs/*/perf_test
 	echo -n "nodes: "
-	grep "^l " /sys/kernel/debug/bcachefs/*/btrees/xattrs-formats|wc -l
+	grep "^l " /sys/kernel/debug/bcachefs/*/btrees/xattrs/formats|wc -l
 	df -h /mnt
 
 	echo "inserting keys"
@@ -312,21 +312,25 @@ test_merge_torture_flakey()
 	sleep 10
 	echo "starting write errors"
 
+	echo "enabling errors"
 	set_dm_table "$FLAKEY_TABLE_ERROR"
 	wait
 
 	umount /mnt
 
+	echo "disabling errors"
 	set_dm_table "$FLAKEY_TABLE"
 
 	mount -t bcachefs -o fsck /dev/mapper/flakey /mnt
 
 	echo seq_delete		$n 1	> /sys/fs/bcachefs/*/perf_test &
 	sleep 2
+	echo "enabling errors"
 	set_dm_table "$FLAKEY_TABLE_ERROR"
 	wait
 
 	umount /mnt
+	echo "disabling errors"
 	set_dm_table "$FLAKEY_TABLE"
     done
 
@@ -355,7 +359,7 @@ d_test_merge_torture()
 	echo rand_delete	$n 1	> /sys/fs/bcachefs/*/perf_test
 
 	echo -n "nodes: "
-	grep "^l " /sys/kernel/debug/bcachefs/*/xattrs-formats|wc -l
+	grep "^l " /sys/kernel/debug/bcachefs/*/xattrs/formats|wc -l
 	df -h /mnt
 
 	umount /mnt
@@ -417,7 +421,7 @@ test_drop_alloc()
     umount /mnt
 
     echo "reconstructing alloc:"
-    mount -t bcachefs -o reconstruct_alloc,fsck,fix_errors ${ktest_scratch_dev[0]} /mnt
+    mount -t bcachefs -o reconstruct_alloc ${ktest_scratch_dev[0]} /mnt
     umount /mnt
 
     mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
@@ -471,14 +475,14 @@ test_fcollapse()
     dd if=/dev/zero of=/mnt/foo bs=4k count=4 oflag=direct
 
     echo "before fcollapse"
-    cat /sys/kernel/debug/bcachefs/*/btrees/extents
+    cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys
     ls -l /mnt/foo
     echo
 
     xfs_io -c "fcollapse 4k 2k" /mnt/foo
 
     echo "after fcollapse"
-    cat /sys/kernel/debug/bcachefs/*/btrees/extents
+    cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys
     ls -l /mnt/foo
     echo
 
@@ -496,7 +500,7 @@ test_finsert()
 
     dd if=/dev/zero of=/mnt/foo bs=64k count=1 oflag=direct
 
-    cat /sys/kernel/debug/bcachefs/*/btrees/extents
+    cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys
 
     xfs_io -c "finsert 1024 1024" /mnt/foo
     umount /mnt
@@ -514,7 +518,7 @@ test_key_merge()
 
     dd if=/dev/zero of=/mnt/foo bs=8k count=128 oflag=direct
 
-    NR=$(cat /sys/kernel/debug/bcachefs/*/btrees/extents|wc -l)
+    NR=$(cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys|wc -l)
 
     [[ $NR -eq 4 ]]
 
@@ -535,7 +539,7 @@ test_key_merge_csum()
 
     cat /mnt/foo > /dev/null
 
-    NR=$(cat /sys/kernel/debug/bcachefs/*/btrees/extents|wc -l)
+    NR=$(cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys|wc -l)
 
     [[ $NR -le 16 ]]
 
@@ -1612,6 +1616,44 @@ test_kill_btree_node()
 
 	bcachefs fsck -ny ${ktest_scratch_dev[0]}
     done
+
+    check_counters ${ktest_scratch_dev[0]}
+}
+
+test_kill_btree_root()
+{
+    set_watchdog 240
+    run_quiet "" bcachefs format -f --btree_node_size=64k ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    cp -a /usr/bin /mnt
+    sync
+
+    cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys > /root/extents_before
+
+    umount /mnt
+    bcachefs list -m nodes ${ktest_scratch_dev[0]} > /root/nodes_before
+
+    #bcachefs kill_btree_node -b extents -l 1 ${ktest_scratch_dev[0]}
+    bcachefs kill_btree_node -b snapshots -l 0 ${ktest_scratch_dev[0]}
+
+    echo "Running fsck"
+    # How to assert exit status equals something specific with -o errexit?
+    mount -t bcachefs -o fsck,fix_errors,verbose ${ktest_scratch_dev[0]} /mnt
+
+    cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys > /root/extents_after
+
+    umount /mnt
+    bcachefs list -m nodes ${ktest_scratch_dev[0]} > /root/nodes_after
+    #bcachefs fsck -y ${ktest_scratch_dev[0]} || true
+
+    echo
+    echo "Running fsck again; should be clean"
+
+    bcachefs fsck -yk ${ktest_scratch_dev[0]} || true
+    mount -t bcachefs -o fsck,fix_errors,verbose ${ktest_scratch_dev[0]} /mnt
+    diff -rq /usr/bin /mnt/bin
+    umount /mnt
 
     check_counters ${ktest_scratch_dev[0]}
 }
