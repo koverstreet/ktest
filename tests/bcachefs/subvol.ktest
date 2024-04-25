@@ -741,7 +741,7 @@ test_snapshot_reflink()
     run_quiet "" bcachefs format -f  ${ktest_scratch_dev[0]}
     mount -t bcachefs -o noinline_data ${ktest_scratch_dev[0]} /mnt
 
-    cp /usr/bin/cp /mnt/file
+    cp /bin/cp /mnt/file
     #echo Test > /mnt/file
     bcachefs subvolume snapshot /mnt/snapshot
 
@@ -749,7 +749,7 @@ test_snapshot_reflink()
     rm /mnt/file
     cp --reflink=always /mnt/snapshot/file /mnt/file2
 
-    md5sum /mnt/file* /mnt/snapshot/file /usr/bin/cp
+    md5sum /mnt/file* /mnt/snapshot/file /bin/cp
     umount /mnt
 
     mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
