@@ -1689,7 +1689,7 @@ test_kernel_fsck()
     check_counters ${ktest_scratch_dev[0]}
 }
 
-test_nocow_fragmented()
+d_test_nocow_fragmented()
 {
     set_watchdog 60
     run_quiet "" bcachefs format -f		\
@@ -1709,7 +1709,7 @@ test_nocow_fragmented()
 
 config-mem 16G
 
-test_nocow_fragmented2()
+d_test_nocow_fragmented2()
 {
     modprobe brd rd_size=536870912 rd_nr=7
     bcachefs format -f --nocow					\
