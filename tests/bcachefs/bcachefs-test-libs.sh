@@ -27,6 +27,8 @@ if [[ $ktest_arch = x86_64 ]]; then
     require-kernel-config CRYPTO_CHACHA20_X86_64
 fi
 
+export BCACHEFS_KERNEL_ONLY=1
+
 #Expensive:
 #require-kernel-config CLOSURE_DEBUG
 
