@@ -21,7 +21,7 @@ fi
 
 require-kernel-config TRANSPARENT_HUGEPAGE
 
-if [[ $ktest_arch = x86_64 ]]; then
+if [[ $ktest_arch = x86_64 && ! ${ktest_kernel_config_require[*]} == *KMSAN* ]]; then
     require-kernel-config CRYPTO_CRC32C_INTEL
     require-kernel-config CRYPTO_POLY1305_X86_64
     require-kernel-config CRYPTO_CHACHA20_X86_64

@@ -27,6 +27,7 @@ if [[ ! -v ktest_verbose ]]; then
     ktest_make_install=()
     ktest_kernel_config_require=()
     ktest_qemu_append=()
+    ktest_compiler=gcc
 
     BUILD_ON_HOST=""
 fi
@@ -197,6 +198,11 @@ config-arch()
     ktest_arch=$1
 }
 
+config-compiler()
+{
+    ktest_compiler=$1
+}
+
 set_watchdog()
 {
     ktest_timeout=$(($ktest_timeout_multiplier * $1))
@@ -295,6 +301,7 @@ main()
     case $arg in
 	deps)
 	    echo "ktest_arch=$ktest_arch"
+	    echo "ktest_compiler=$ktest_compiler"
 	    echo "ktest_cpus=$ktest_cpus"
 	    echo "ktest_mem=$ktest_mem"
 	    echo "ktest_timeout=$((ktest_timeout * ktest_timeout_multiplier))"

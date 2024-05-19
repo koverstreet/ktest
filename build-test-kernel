@@ -10,6 +10,7 @@ KTEST=$ktest_dir/ktest
 . "$ktest_dir/lib/libktest.sh"
 
 checkdep gcc
+checkdep clang
 checkdep make
 checkdep bison
 checkdep flex
@@ -20,6 +21,7 @@ ktest_kernel_source="."	# dir of kernel source
 			#       defaults: current directory
 ktest_njobs=$(nproc)
 ktest_precise=false
+ktest_compiler=gcc
 
 COVERAGE=""		# doing code coverage?
 MAKEARGS=()
@@ -128,6 +130,7 @@ do_make()
 
     make --jobs="$ktest_njobs"			\
 	--directory="$ktest_kernel_source"    	\
+	CC="$ktest_compiler"			\
 	O="$ktest_kernel_build"			\
 	INSTALL_MOD_PATH="$ktest_kernel_binary"	\
 	"${ktest_kernel_make_append[@]}"	\
@@ -155,6 +158,7 @@ kernel_opt()
     local kconfig="$ktest_kernel_build/.config"
     local config_tool="$ktest_kernel_source/scripts/config"
     local val=y
+    local ret=0
 
     if [[ $opt =~ = ]]; then
 	local val=${opt#*=}
@@ -172,10 +176,14 @@ kernel_opt()
 
 	    if [[ $c != $val ]]; then
 		echo "Kernel config option $opt is $c; should be $val"
-		exit 1
+		ret=1
 	    fi
 	    ;;
     esac
+
+    if [[ $ret != 0 ]]; then
+	return $ret
+    fi
 }
 
 build_kernel()
@@ -289,7 +297,7 @@ cmd_oldconfig()
 cmd_config()
 {
     new_config
-    do_make nconfig
+    do_make nconfig "$@"
 }
 
 cmd_faddr2line()
