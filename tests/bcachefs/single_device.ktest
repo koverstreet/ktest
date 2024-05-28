@@ -79,6 +79,39 @@ test_remount_ro_rw()
     check_counters ${ktest_scratch_dev[0]}
 }
 
+test_mount_options()
+{
+    local dev=${ktest_scratch_dev[0]}
+    set_watchdog 10
+
+    run_quiet "" bcachefs format -f --errors=panic $dev
+
+    echo "test: valid mount options"
+    mount -t bcachefs -o metadata_checksum=crc64,metadata_target=$(basename $dev) $dev /mnt
+    mount -t bcachefs | grep --quiet metadata_checksum
+    mount -t bcachefs | grep --quiet metadata_target
+
+    echo "test: valid remount options"
+    mount -o remount,ro,errors=continue /mnt
+    mount -t bcachefs | grep --quiet metadata_target
+    mount -t bcachefs | grep --quiet continue
+    mount -t bcachefs | grep --quiet ro
+    umount /mnt
+
+    echo "test: invalid mount options"
+    ! mount -t bcachefs -o metadata_checksum=invalid $dev /mnt
+    ! mount -t bcachefs -o promote_target=$(basename $dev),metadata_target=not_a_device $dev /mnt
+
+    echo "test: invalid remount options"
+    mount -t bcachefs $dev /mnt
+    ! mount -o remount,promote_target=not_a_device /mnt
+    ! mount -o remount,metadata_replicas=not_a_number /mnt
+    umount /mnt
+
+    bcachefs fsck -ny $dev
+    check_counters $dev
+}
+
 test_extent_merge2()
 {
     local p=/sys/module/bcachefs/parameters/debug_check_iterators
