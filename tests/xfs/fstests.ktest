@@ -20,7 +20,7 @@ export FSTYP=xfs
 run_tests()
 {
     if [[ ! -f /xfsprogs-init-done ]]; then
-	run_quiet "building $(basename $i)" make -j $ktest_cpus -C "$ktest_dir/tests/xfsprogs"
+	run_quiet "building $(basename $i)" make -j $ktest_cpus -C "$ktest_dir/tests/xfs/xfsprogs"
 
 	touch /xfsprogs-init-done
     fi
