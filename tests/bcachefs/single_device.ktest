@@ -756,7 +756,7 @@ test_rebalance_scan()
     sleep 0.5
     echo zstd > /sys/fs/bcachefs/*/options/background_compression
     sleep 2
-    cat /sys/fs/bcachefs/*/compression_stats|grep -q 'none                     0 B             0 B                     0 B'
+    cat /sys/fs/bcachefs/*/compression_stats|grep zstd|grep -q '8.00 MiB'
     umount /mnt
     check_counters ${ktest_scratch_dev[0]}
 }
