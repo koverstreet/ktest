@@ -837,10 +837,11 @@ test_force_remove()
 	--name=B			\
 	--direct=0 >/dev/null &
     bcachefs device evacuate ${ktest_scratch_dev[0]} || true
-    bcachefs device remove --force --force-metadata ${ktest_scratch_dev[1]} || true
-    bcachefs device remove --force --force-metadata ${ktest_scratch_dev[1]} || true
+    bcachefs device remove --force --force-metadata ${ktest_scratch_dev[0]} || true
+    bcachefs device remove --force --force-metadata ${ktest_scratch_dev[0]} || true
     kill %1
     wait
+    touch /mnt/foo
     umount /mnt
 }
 
