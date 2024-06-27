@@ -43,23 +43,29 @@ run_test()
     if [[ ! -f /xfstests-init-done ]]; then
 	export TEST_DIR="/mnt/test"
 	export TEST_DEV="localhost:/export"
+	export SCRATCH_DIR="/mnt/scratch"
+	export SCRATCH_DEV="localhost:/scratch"
 	cat << EOF > /ktest/tests/xfstests/local.config
 TEST_DEV=$TEST_DEV
 TEST_DIR=$TEST_DIR
-#SCRATCH_DEV=${ktest_scratch_dev[1]}
-#SCRATCH_MNT=/mnt/scratch
-LOGWRITES_DEV=${ktest_scratch_dev[2]}
+SCRATCH_DEV=$SCRATCH_DEV
+SCRATCH_MNT=$SCRATCH_DIR
 RESULT_BASE=/ktest-out/xfstests
 LOGGER_PROG=true
 TEST_FS_MOUNT_OPTS="-overs=3,sec=sys,nconnect=5"
 EOF
-	mkdir /export
+	mkdir /export /scratch
 	
 	run_quiet "" mkfs.xfs -f \
 		  ${ktest_scratch_dev[0]}
 	mount -t xfs ${ktest_scratch_dev[0]} /export
 
+	run_quiet "" mkfs.xfs -f \
+		  ${ktest_scratch_dev[1]}
+	mount -t xfs ${ktest_scratch_dev[1]} /scratch
+
 	echo "/export  *(rw,insecure,no_root_squash,no_subtree_check)" >> /etc/exports
+	echo "/scratch  *(rw,insecure,no_root_squash,no_subtree_check)" >> /etc/exports
 	exportfs -a
     fi
 
