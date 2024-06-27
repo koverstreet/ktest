@@ -66,13 +66,20 @@ run_xfstests()
 
 	rm -rf /ktest-out/xfstests
 
-	wipefs -af ${ktest_scratch_dev[0]}
-	mkfs.$FSTYP $MKFS_OPTIONS -q ${ktest_scratch_dev[0]}
+	if [[ $FSTYP != "nfs" ]]; then
+	    wipefs -af ${ktest_scratch_dev[0]}
+	    mkfs.$FSTYP $MKFS_OPTIONS -q ${ktest_scratch_dev[0]}
+	fi
 
-	# mkfs.xfs 5.19 requires these variables to be exported into its
-	# environment to allow sub-300MB filesystems for fstests.
-	export TEST_DEV=${ktest_scratch_dev[0]}
-	export TEST_DIR=/mnt/test
+	touch /xfstests-init-done
+    fi
+
+    # mkfs.xfs 5.19 requires these variables to be exported into its
+    # environment to allow sub-300MB filesystems for fstests.
+    export TEST_DEV=${ktest_scratch_dev[0]}
+    export TEST_DIR=/mnt/test
+
+    if [[ ! -e /ktest/tests/xfstests/local.config ]]; then
 	cat << EOF > /ktest/tests/xfstests/local.config
 TEST_DEV=${ktest_scratch_dev[0]}
 TEST_DIR=$TEST_DIR
@@ -82,14 +89,10 @@ LOGWRITES_DEV=${ktest_scratch_dev[2]}
 RESULT_BASE=/ktest-out/xfstests
 LOGGER_PROG=true
 EOF
-
-	touch /xfstests-init-done
     fi
 
     export MKFS_OPTIONS
 
-    mount -t $FSTYP ${ktest_scratch_dev[0]} /mnt/test
-
     cd "$ktest_dir/tests/xfstests"
-    ./check -d "$@"
+    ./check "$@"
 }
