@@ -6,12 +6,11 @@ require-git http://evilpiepirate.org/git/xfstests.git ../xfstests
 
 config-scratch-devs 4G
 
+require-kernel-config XFS_FS
 require-kernel-config SUNRPC_DEBUG
 require-kernel-config SECURITY
 require-kernel-config CONFIG_NFS_FS=y
-# CONFIG_NFS_V2 is not set
 require-kernel-config CONFIG_NFS_V3=y
-# CONFIG_NFS_V3_ACL is not set
 require-kernel-config CONFIG_NFS_V4=y
 require-kernel-config CONFIG_NFS_LOCALIO=y
 require-kernel-config CONFIG_NFS_SWAP=y
@@ -21,16 +20,10 @@ require-kernel-config CONFIG_PNFS_FILE_LAYOUT=y
 require-kernel-config CONFIG_PNFS_BLOCK=y
 require-kernel-config CONFIG_PNFS_FLEXFILE_LAYOUT=y
 require-kernel-config CONFIG_NFS_V4_1_IMPLEMENTATION_ID_DOMAIN="kernel.org"
-# CONFIG_NFS_V4_1_MIGRATION is not set
 require-kernel-config CONFIG_NFS_V4_SECURITY_LABEL=y
-# CONFIG_NFS_USE_LEGACY_DNS is not set
 require-kernel-config CONFIG_NFS_USE_KERNEL_DNS=y
 require-kernel-config CONFIG_NFS_DEBUG=y
-# CONFIG_NFS_DISABLE_UDP_SUPPORT is not set
-# CONFIG_NFS_V4_2_READ_PLUS is not set
 require-kernel-config CONFIG_NFSD=y
-# CONFIG_NFSD_V2 is not set
-# CONFIG_NFSD_V3_ACL is not set
 require-kernel-config CONFIG_NFSD_V4=y
 require-kernel-config CONFIG_NFSD_LOCALIO=y
 require-kernel-config CONFIG_NFSD_PNFS=y
@@ -39,12 +32,10 @@ require-kernel-config CONFIG_NFSD_SCSILAYOUT=y
 require-kernel-config CONFIG_NFSD_FLEXFILELAYOUT=y
 require-kernel-config CONFIG_NFSD_V4_2_INTER_SSC=y
 require-kernel-config CONFIG_NFSD_V4_SECURITY_LABEL=y
-# CONFIG_NFSD_LEGACY_CLIENT_TRACKING is not set
 require-kernel-config CONFIG_NFS_COMMON_LOCALIO_SUPPORT=y
 require-kernel-config CONFIG_NFS_COMMON=y
 require-kernel-config CONFIG_NFS_V4_2_SSC_HELPER=y
 
-#[[ ! -v MKFS_OPTIONS ]] && export MKFS_OPTIONS="--encrypted --no_passphrase"
 export FSTYP=nfs
 
 run_test()
