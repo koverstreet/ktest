@@ -12,6 +12,7 @@ require-kernel-config SECURITY
 require-kernel-config CONFIG_NFS_FS=y
 require-kernel-config CONFIG_NFS_V3=y
 require-kernel-config CONFIG_NFS_V4=y
+require-kernel-config CONFIG_NFS_LOCALIO=y
 require-kernel-config CONFIG_NFS_SWAP=y
 require-kernel-config CONFIG_NFS_V4_1=y
 require-kernel-config CONFIG_NFS_V4_2=y
@@ -24,18 +25,16 @@ require-kernel-config CONFIG_NFS_USE_KERNEL_DNS=y
 require-kernel-config CONFIG_NFS_DEBUG=y
 require-kernel-config CONFIG_NFSD=y
 require-kernel-config CONFIG_NFSD_V4=y
+require-kernel-config CONFIG_NFSD_LOCALIO=y
 require-kernel-config CONFIG_NFSD_PNFS=y
 require-kernel-config CONFIG_NFSD_BLOCKLAYOUT=y
 require-kernel-config CONFIG_NFSD_SCSILAYOUT=y
 require-kernel-config CONFIG_NFSD_FLEXFILELAYOUT=y
 require-kernel-config CONFIG_NFSD_V4_2_INTER_SSC=y
 require-kernel-config CONFIG_NFSD_V4_SECURITY_LABEL=y
+require-kernel-config CONFIG_NFS_COMMON_LOCALIO_SUPPORT=y
 require-kernel-config CONFIG_NFS_COMMON=y
 require-kernel-config CONFIG_NFS_V4_2_SSC_HELPER=y
-
-#require-kernel-config CONFIG_NFS_COMMON_LOCALIO_SUPPORT=y
-#require-kernel-config CONFIG_NFS_LOCALIO=y
-#require-kernel-config CONFIG_NFSD_LOCALIO=y
 
 export FSTYP=nfs
 
