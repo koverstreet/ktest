@@ -79,7 +79,7 @@ run_xfstests()
 	export TEST_DIR=/mnt/test
 
 	rm -f /ktest/tests/xfstests/local.config
-	cat << EOF > /ktest/tests/xfstests/local.config
+	cat << EOF > /tmp/xfstests.config
 TEST_DEV=${ktest_scratch_dev[0]}
 TEST_DIR=$TEST_DIR
 SCRATCH_DEV=${ktest_scratch_dev[1]}
@@ -91,6 +91,7 @@ EOF
 	touch /xfstests-config-done
     fi
 
+    export HOST_OPTIONS=/tmp/xfstests.config
     export MKFS_OPTIONS
 
     cd "$ktest_dir/tests/xfstests"
