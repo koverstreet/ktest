@@ -492,6 +492,7 @@ test_device_repeated_add_remove()
 
 do_replicas_errors_test()
 {
+    setup_tracing 'bcachefs:*'
     set_watchdog 180
     error_type=$1
 
@@ -511,6 +512,7 @@ do_replicas_errors_test()
     mount -t bcachefs -o degraded ${ktest_scratch_dev[0]}:/dev/mapper/flakey /mnt
 
     echo $FLAKEY_TABLE_ERROR|dmsetup load flakey
+    dmsetup resume flakey
 
     run_fio_randrw
 
