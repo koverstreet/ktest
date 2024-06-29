@@ -202,7 +202,7 @@ check_counters()
 	    # Insert 0 byte seperators at the beginning of each trace event,
 	    # then grep in null separator mode to print full output of
 	    # multiline trace events:
-	    sed -e '/ \[[0-9]\{3\}\]/ i\\x00' /sys/kernel/tracing/trace|grep -z "$event"|head -n500
+	    sed -e '/ \[[0-9]\{3\}\]/ i\\x00' /sys/kernel/tracing/trace|grep -z "$event"|head -n500 || true
 	    ret=1
 	fi
     done <<< "$counters"
