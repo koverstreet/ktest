@@ -194,7 +194,7 @@ check_counters()
 	max_fail=$((max_fail + 100))
 
 	if [[ $event = trans_restart_would_deadlock ]]; then
-	    max_fail=$((max_fail * 2))
+	    max_fail=$((max_fail * 5))
 	fi
 
 	if (( nr > max_fail )); then
