@@ -11,7 +11,6 @@ use anyhow;
 
 pub mod testresult_capnp;
 pub mod worker_capnp;
-pub mod testjob_capnp;
 
 pub fn git_get_commit(repo: &git2::Repository, reference: String) -> Result<git2::Commit, git2::Error> {
     let r = repo.revparse_single(&reference);

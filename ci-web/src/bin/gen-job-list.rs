@@ -153,77 +153,71 @@ fn rc_test_jobs(rc: &Ktestrc, repo: &git2::Repository,
             .flat_map(move |test| branch_test_jobs(rc, repo, &branch, &testgroup, &test, verbose)))
         .collect();
 
+    /* sort by commit, dedup */
+
     ret.sort();
+    ret.reverse();
     ret
 }
 
-use ci_cgi::testjob_capnp::test_jobs;
-use capnp::serialize;
+fn write_test_jobs(rc: &Ktestrc, jobs_in: Vec<TestJob>) -> anyhow::Result<()> {
+    let jobs_fname      = rc.output_dir.join("jobs");
+    let jobs_fname_new  = rc.output_dir.join("jobs.new");
+    let mut jobs_out    = std::io::BufWriter::new(File::create(&jobs_fname_new)?);
 
-fn test_jobs_to_capnp(rc: &Ktestrc, jobs_in: Vec<TestJob>) -> anyhow::Result<()> {
-    let mut message = capnp::message::Builder::new_default();
-    let jobs = message.init_root::<test_jobs::Builder>();
-    let mut jobs_list = jobs.init_entries(jobs_in.len().try_into().unwrap());
-
-    for (idx, job_in) in jobs_in.iter().enumerate() {
-        let mut job = jobs_list.reborrow().get(idx.try_into().unwrap());
-
-        job.set_branch(job_in.branch.clone());
-        job.set_commit(job_in.commit.clone());
-        job.set_age(job_in.age);
-        job.set_priority(job_in.priority);
-        job.set_test(job_in.test.to_str().unwrap().to_owned());
-
-        let mut subtests = job.init_subtests(job_in.subtests.len().try_into().unwrap());
-        for (idx, subtest_in) in job_in.subtests.iter().enumerate() {
-            subtests.set(idx.try_into().unwrap(), subtest_in);
+    for job in jobs_in.iter() {
+        for subtest in job.subtests.iter() {
+            let _ = jobs_out.write(job.branch.as_bytes());
+            let _ = jobs_out.write(b" ");
+            let _ = jobs_out.write(job.commit.as_bytes());
+            let _ = jobs_out.write(b" ");
+            let _ = jobs_out.write(job.age.to_string().as_bytes());
+            let _ = jobs_out.write(b" ");
+            let _ = jobs_out.write(job.test.as_os_str().as_encoded_bytes());
+            let _ = jobs_out.write(b" ");
+            let _ = jobs_out.write(subtest.as_bytes());
+            let _ = jobs_out.write(b"\n");
         }
     }
 
-    let jobs_fname       = rc.output_dir.join("jobs.capnp");
-    let jobs_fname_new   = rc.output_dir.join("jobs.capnp.new");
-
-    let mut jobs_out = File::create(&jobs_fname_new)?;
-
-    serialize::write_message(&mut jobs_out, &message)?;
     drop(jobs_out);
     std::fs::rename(jobs_fname_new, jobs_fname)?;
     Ok(())
 }
 
-fn fetch_remotes(rc: &Ktestrc, repo: &git2::Repository) -> Result<(), git2::Error> {
-    for (branch, branchconfig) in &rc.branch {
-        let fetch = branchconfig.fetch
-            .split_whitespace()
-            .map(|i| OsStr::new(i));
+fn fetch_remotes(rc: &Ktestrc, repo: &git2::Repository) -> anyhow::Result<bool> {
+    fn fetch_remotes_locked(rc: &Ktestrc, repo: &git2::Repository) -> Result<(), git2::Error> {
+        for (branch, branchconfig) in &rc.branch {
+            let fetch = branchconfig.fetch
+                .split_whitespace()
+                .map(|i| OsStr::new(i));
 
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&rc.linux_repo)
-            .arg("fetch")
-            .args(fetch)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .status()
-            .expect(&format!("failed to execute fetch"));
-        if !status.success() {
-            eprintln!("fetch error: {}", status);
-            return Ok(());
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&rc.linux_repo)
+                .arg("fetch")
+                .args(fetch)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .status()
+                .expect(&format!("failed to execute fetch"));
+            if !status.success() {
+                eprintln!("fetch error: {}", status);
+                return Ok(());
+            }
+
+            let fetch_head = repo.revparse_single("FETCH_HEAD")
+                .map_err(|e| { eprintln!("error parsing FETCH_HEAD: {}", e); e})?
+                .peel_to_commit()
+                .map_err(|e| { eprintln!("error getting FETCH_HEAD: {}", e); e})?;
+
+            repo.branch(branch, &fetch_head, true)?;
         }
 
-        let fetch_head = repo.revparse_single("FETCH_HEAD")
-            .map_err(|e| { eprintln!("error parsing FETCH_HEAD: {}", e); e})?
-            .peel_to_commit()
-            .map_err(|e| { eprintln!("error getting FETCH_HEAD: {}", e); e})?;
-
-        repo.branch(branch, &fetch_head, true)?;
+        Ok(())
     }
 
-    Ok(())
-}
-
-fn update_jobs(rc: &Ktestrc, repo: &git2::Repository) -> anyhow::Result<()> {
-    let lockfile = "update_jobs.lock";
+    let lockfile = rc.output_dir.join("fetch.lock");
     let metadata = std::fs::metadata(&lockfile);
     if let Ok(metadata) = metadata {
         let elapsed = metadata.modified().unwrap()
@@ -231,24 +225,37 @@ fn update_jobs(rc: &Ktestrc, repo: &git2::Repository) -> anyhow::Result<()> {
             .unwrap_or_default();
 
         if elapsed < std::time::Duration::from_secs(30) {
-            return Ok(());
+            return Ok(false);
         }
     }
 
     let mut filelock = FileLock::lock(lockfile, false, FileOptions::new().create(true).write(true))?;
 
     eprint!("Fetching remotes...");
-    fetch_remotes(rc, repo)?;
+    fetch_remotes_locked(rc, repo)?;
     eprintln!(" done");
 
+    filelock.file.write_all(b"ok")?; /* update lockfile mtime */
+
     /*
-     * XXX: we only need to regenerate test jobs if remotes were updated
+     * XXX: return true only if remotes actually changed
      */
+    Ok(true)
+}
+
+fn update_jobs(rc: &Ktestrc, repo: &git2::Repository) -> anyhow::Result<()> {
+    if !fetch_remotes(rc, repo)? {
+        return Ok(());
+    }
+
+    let lockfile = rc.output_dir.join("jobs.lock");
+    let filelock = FileLock::lock(lockfile, true, FileOptions::new().create(true).write(true))?;
 
     let jobs_in = rc_test_jobs(rc, repo, false);
-    test_jobs_to_capnp(rc, jobs_in)?;
+    write_test_jobs(rc, jobs_in)?;
 
-    filelock.file.write_all(b"ok")?; /* update lockfile mtime */
+    drop(filelock);
+
     Ok(())
 }
 
