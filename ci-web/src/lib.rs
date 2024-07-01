@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
-use std::fs::read_to_string;
-use std::fs::File;
+use std::fs::{File, OpenOptions, create_dir_all, read_to_string};
+use std::io::ErrorKind;
 use std::io::prelude::*;
 use std::path::PathBuf;
+use std::time::SystemTime;
+use die::die;
 use serde_derive::Deserialize;
 use toml;
 use anyhow;
@@ -347,4 +349,51 @@ pub fn update_lcov(rc: &Ktestrc, commit_id: &String) -> Option<()> {
 
     drop(filelock);
     Some(())
+}
+
+pub fn lockfile_exists(rc: &Ktestrc, commit: &str, test_name: &str, create: bool) -> bool {
+    let lockfile = rc.output_dir.join(commit).join(test_name).join("status");
+
+    let timeout = std::time::Duration::from_secs(3600);
+    let metadata = std::fs::metadata(&lockfile);
+
+    if let Ok(metadata) = metadata {
+        let elapsed = metadata.modified().unwrap()
+            .elapsed()
+            .unwrap_or(std::time::Duration::from_secs(0));
+
+        if metadata.is_file() &&
+           metadata.len() == 0 &&
+           elapsed > timeout &&
+           std::fs::remove_file(&lockfile).is_ok() {
+            eprintln!("Deleted stale lock file {:?}, mtime {:?} now {:?} elapsed {:?})",
+                      &lockfile, metadata.modified().unwrap(),
+                      SystemTime::now(),
+                      elapsed);
+        }
+    }
+
+    if !create {
+        lockfile.exists()
+    } else {
+        let dir = lockfile.parent().unwrap();
+        let r = create_dir_all(dir);
+        if let Err(e) = r {
+            if e.kind() != ErrorKind::AlreadyExists {
+                die!("error creating {:?}: {}", dir, e);
+            }
+        }
+
+        let r = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lockfile);
+        if let Err(ref e) = r {
+            if e.kind() != ErrorKind::AlreadyExists {
+                die!("error creating {:?}: {}", lockfile, e);
+            }
+        }
+
+        r.is_ok()
+    }
 }
