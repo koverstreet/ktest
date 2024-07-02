@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+#
+# PuzzleFS tests
+#
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/../test-libs.sh
+
+require-git https://github.com/project-machine/puzzlefs
+require-make puzzlefs
+
+config-mem 4G
+config-compiler clang
+require-kernel-config RUST
+require-kernel-config MISC_FILESYSTEMS
+require-kernel-config PUZZLEFS_FS
+config-scratch-devs 4G
+
+check_rsync_log()
+{
+    # rsync itemized output
+    # https://jhpce.jhu.edu/files/rsync-itemize-table/
+    # .: the item is not being updated (though it might have attributes that are being modified)
+    # h: the item is a hard link to another item (requires --hard-links).
+
+    # We don't expect any lines to start with anything other than a dot or h
+    # Ideally the output should be empty, but the lost+found/ directory is
+    # ignored and the mountpoints themselves could have a modified time
+    # Sample expected output:
+    # .d..t...... ./
+    # .d..t...... lost+found/
+    ! grep -E '^[^.h]' $1
+}
+
+prepare_source_fs()
+{
+    local fstype=$1
+
+    if [[ $fstype = ext4 ]]; then
+	run_quiet "" mkfs.$fstype -F ${ktest_scratch_dev[0]}
+	mount -t $fstype -o user_xattr ${ktest_scratch_dev[0]} /mnt
+    else
+	run_quiet "" mkfs.$fstype -f ${ktest_scratch_dev[0]}
+	mount -t $fstype ${ktest_scratch_dev[0]} /mnt
+    fi
+
+    # Copy only /usr/bin until PuzzleFS can handle larger filesystems
+    cp -a /usr/bin /mnt
+
+    for i in /mnt/bin/*; do
+	if [ ! -L $i ]; then
+	    ln $i ${i}-migrate2
+	    setfattr -n user.foo -v test $i
+	fi
+    done
+}
+
+# build a filesystem from a source
+build_from_fs()
+{
+    set_watchdog 180
+
+    prepare_source_fs $1
+
+    puzzlefs build /mnt /tmp/puzzlefs-oci pfs_image
+
+    echo "Attempting to mount puzzlefs filesystem"
+    local image_manifest=$(jq -r ".manifests[] | .digest" /tmp/puzzlefs-oci/index.json | cut -d ':' -f2)
+
+    mkdir -p /mnt2
+    mount -t puzzlefs -o oci_root_dir="/tmp/puzzlefs-oci" -o image_manifest="$image_manifest" none /mnt2
+
+    rsync --archive				\
+	--acls					\
+	--xattrs				\
+	--checksum				\
+	--hard-links				\
+	--dry-run				\
+	--itemize-changes		 	\
+	/mnt/ /mnt2/ > /root/rsynclog-build
+
+    check_rsync_log /root/rsynclog-build
+
+    umount /mnt2
+    echo "rsync passed"
+
+    umount /mnt
+}
+
+test_build_from_ext4()
+{
+    build_from_fs ext4
+}
+
+main "$@"

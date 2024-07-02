@@ -117,6 +117,9 @@ PACKAGES+=(cryptsetup)
 # weird block layer crap
 PACKAGES+=(multipath-tools sg3-utils srptools)
 
+# PuzzleFS support
+PACKAGES+=(capnproto jq)
+
 # ZFS support
 #PACKAGES+=("linux-headers-generic" dkms zfsutils-linux zfs-dkms)
 
