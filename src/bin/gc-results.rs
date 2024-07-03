@@ -88,11 +88,14 @@ fn main() {
     let rc = rc.unwrap();
 
     let commits = get_live_commits(&rc);
+    let now = std::time::SystemTime::now();
+    let older_than = now.checked_sub(std::time::Duration::new(3600, 0)).unwrap();
 
     for d in rc.ktest.output_dir.read_dir().unwrap()
         .filter_map(|d| d.ok())
         .filter(|d| !result_is_live(&commits, &d))
-        .map(|d| d.path()) {
+        .map(|d| d.path())
+        .filter(|d| d.metadata().unwrap().modified().unwrap() < older_than) {
         println!("Removing: {}", d.to_string_lossy());
 
         if !args.dry_run {
