@@ -5,7 +5,7 @@ use chrono::Duration;
 extern crate cgi;
 extern crate querystring;
 
-use ci_cgi::{Ktestrc, ktestrc_read, TestResultsMap, TestStatus, commitdir_get_results, git_get_commit, workers_get, update_lcov};
+use ci_cgi::{CiConfig, Userrc, ciconfig_read, TestResultsMap, TestStatus, commitdir_get_results, git_get_commit, workers_get, update_lcov};
 
 const COMMIT_FILTER:    &str = include_str!("../../commit-filter");
 const STYLESHEET:       &str = "bootstrap.min.css";
@@ -18,18 +18,19 @@ fn filter_results(r: TestResultsMap, tests_matching: &Regex) -> TestResultsMap {
 }
 
 struct Ci {
-    ktestrc:            Ktestrc,
+    rc:                 CiConfig,
     repo:               git2::Repository,
     stylesheet:         String,
     script_name:        String,
 
+    user:               Option<String>,
     branch:             Option<String>,
     commit:             Option<String>,
     tests_matching:     Regex,
 }
 
 fn commitdir_get_results_filtered(ci: &Ci, commit_id: &String) -> TestResultsMap {
-    let results = commitdir_get_results(&ci.ktestrc, commit_id).unwrap_or(BTreeMap::new());
+    let results = commitdir_get_results(&ci.rc.ktest, commit_id).unwrap_or(BTreeMap::new());
 
     filter_results(results, &ci.tests_matching)
 }
@@ -240,9 +241,9 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
 
     writeln!(&mut out, "<h3><th>{}</th></h3>", &message[..subject_len]).unwrap();
 
-    update_lcov(&ci.ktestrc, &commit_id);
+    update_lcov(&ci.rc.ktest, &commit_id);
 
-    if ci.ktestrc.output_dir.join(&commit_id).join("lcov").exists() {
+    if ci.rc.ktest.output_dir.join(&commit_id).join("lcov").exists() {
         writeln!(&mut out, "<p> <a href=c/{}/lcov> Code coverage </a> </p>", &commit_id).unwrap();
     }
 
@@ -274,20 +275,53 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
     cgi::html_response(200, out)
 }
 
-fn ci_list_branches(ci: &Ci, out: &mut String) {
+fn ci_list_branches(ci: &Ci, user: &Userrc, out: &mut String) {
     writeln!(out, "<div> <table class=\"table\">").unwrap();
 
-    for (b, _) in &ci.ktestrc.branch {
+    for (b, _) in &user.branch {
         writeln!(out, "<tr> <th> <a href={}?branch={}>{}</a> </th> </tr>", ci.script_name, b, b).unwrap();
     }
 
     writeln!(out, "</table> </div>").unwrap();
 }
 
+fn ci_user(ci: &Ci) -> cgi::Response {
+    let username = ci.user.as_ref().unwrap();
+    let u = ci.rc.users.get(username);
+
+    if u.is_none() {
+        return error_response(format!("User {} not found", &username));
+    }
+    let u = u.unwrap();
+
+    let mut out = String::new();
+
+    writeln!(&mut out, "<!DOCTYPE HTML>").unwrap();
+    writeln!(&mut out, "<html><head><title>CI branch list</title></head>").unwrap();
+    writeln!(&mut out, "<link href=\"{}\" rel=\"stylesheet\">", ci.stylesheet).unwrap();
+
+    writeln!(&mut out, "<body>").unwrap();
+
+    ci_list_branches(ci, &u, &mut out);
+
+    writeln!(&mut out, "</body>").unwrap();
+    writeln!(&mut out, "</html>").unwrap();
+
+    cgi::html_response(200, out)
+}
+
+fn ci_list_users(ci: &Ci, out: &mut String) {
+    writeln!(out, "<div> <table class=\"table\">").unwrap();
+    for (i, _) in &ci.rc.users {
+        writeln!(out, "<tr> <th> <a href={}?user={}>{}</a> </th> </tr>", ci.script_name, i, i).unwrap();
+    }
+    writeln!(out, "</table> </div>").unwrap();
+}
+
 fn ci_worker_status(ci: &Ci, out: &mut String) -> Option<()>{
     use chrono::prelude::Utc;
 
-    let workers = workers_get(&ci.ktestrc).ok()?;
+    let workers = workers_get(&ci.rc.ktest).ok()?;
 
     writeln!(out, "<div> <table class=\"table\">").unwrap();
 
@@ -299,7 +333,7 @@ fn ci_worker_status(ci: &Ci, out: &mut String) -> Option<()>{
     writeln!(out, "</tr>").unwrap();
 
     let now = Utc::now();
-    let tests_dir = ci.ktestrc.ktest_dir.clone().into_os_string().into_string().unwrap() + "/tests/";
+    let tests_dir = ci.rc.ktest.ktest_dir.clone().into_os_string().into_string().unwrap() + "/tests/";
 
     for w in workers {
         let elapsed = (now - w.starttime).max(Duration::zero());
@@ -330,7 +364,7 @@ fn ci_home(ci: &Ci) -> cgi::Response {
 
     writeln!(&mut out, "<body>").unwrap();
 
-    ci_list_branches(ci, &mut out);
+    ci_list_users(ci, &mut out);
 
     ci_worker_status(ci, &mut out);
 
@@ -357,15 +391,15 @@ fn error_response(msg: String) -> cgi::Response {
 }
 
 cgi::cgi_main! {|request: cgi::Request| -> cgi::Response {
-    let ktestrc = ktestrc_read();
-    if let Err(e) = ktestrc {
+    let rc = ciconfig_read();
+    if let Err(e) = rc {
         return error_response(format!("could not read config; {}", e));
     }
-    let ktestrc = ktestrc.unwrap();
+    let rc = rc.unwrap();
 
-    if !ktestrc.output_dir.exists() {
+    if !rc.ktest.output_dir.exists() {
         return error_response(format!("required file missing: JOBSERVER_OUTPUT_DIR (got {:?})",
-                                      ktestrc.output_dir));
+                                      rc.ktest.output_dir));
     }
 
     unsafe {
@@ -373,9 +407,9 @@ cgi::cgi_main! {|request: cgi::Request| -> cgi::Response {
             .expect("set_verify_owner_validation should never fail");
     }
 
-    let repo = git2::Repository::open(&ktestrc.linux_repo);
+    let repo = git2::Repository::open(&rc.ktest.linux_repo);
     if let Err(e) = repo {
-        return error_response(format!("error opening repository {:?}: {}", ktestrc.linux_repo, e));
+        return error_response(format!("error opening repository {:?}: {}", rc.ktest.linux_repo, e));
     }
     let repo = repo.unwrap();
 
@@ -386,11 +420,12 @@ cgi::cgi_main! {|request: cgi::Request| -> cgi::Response {
     let tests_matching = query.get("test").unwrap_or(&"");
 
     let ci = Ci {
-        ktestrc:            ktestrc,
+        rc:                 rc,
         repo:               repo,
         stylesheet:         String::from(STYLESHEET),
         script_name:        cgi_header_get(&request, "x-cgi-script-name"),
 
+        user:               query.get("user").map(|x| x.to_string()),
         branch:             query.get("branch").map(|x| x.to_string()),
         commit:             query.get("commit").map(|x| x.to_string()),
         tests_matching:     Regex::new(tests_matching).unwrap_or(Regex::new("").unwrap()),
@@ -400,6 +435,8 @@ cgi::cgi_main! {|request: cgi::Request| -> cgi::Response {
         ci_commit(&ci)
     } else if ci.branch.is_some() {
         ci_log(&ci)
+    } else if ci.user.is_some() {
+        ci_user(&ci)
     } else {
         ci_home(&ci)
     }

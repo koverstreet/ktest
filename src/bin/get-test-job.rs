@@ -1,7 +1,7 @@
 extern crate libc;
 use std::path::Path;
 use std::process;
-use ci_cgi::{Ktestrc, ktestrc_read, lockfile_exists};
+use ci_cgi::{Ktestrc, ciconfig_read, lockfile_exists};
 use ci_cgi::{Worker, workers_update};
 use file_lock::{FileLock, FileOptions};
 use clap::Parser;
@@ -137,12 +137,13 @@ fn main() {
 
     let args = Args::parse();
 
-    let rc = ktestrc_read();
+    let rc = ciconfig_read();
     if let Err(e) = rc {
         eprintln!("could not read config; {}", e);
         process::exit(1);
     }
     let rc = rc.unwrap();
+    let rc = rc.ktest;
 
     let lockfile = rc.output_dir.join("jobs.lock");
     let filelock = FileLock::lock(lockfile, true, FileOptions::new().create(true).write(true)).unwrap();

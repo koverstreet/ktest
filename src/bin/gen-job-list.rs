@@ -6,7 +6,7 @@ use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::process::Stdio;
-use ci_cgi::{Ktestrc, KtestrcTestGroup, ktestrc_read, git_get_commit, commitdir_get_results, lockfile_exists};
+use ci_cgi::{CiConfig, Userrc, RcTestGroup, ciconfig_read, git_get_commit, commitdir_get_results, lockfile_exists};
 use ci_cgi::TestResultsMap;
 use file_lock::{FileLock, FileOptions};
 use memoize::memoize;
@@ -80,12 +80,12 @@ fn have_result(results: &TestResultsMap, subtest: &str) -> bool {
     }
 }
 
-fn branch_test_jobs(rc: &Ktestrc, repo: &git2::Repository,
+fn branch_test_jobs(rc: &CiConfig, repo: &git2::Repository,
                     branch: &str,
-                    test_group: &KtestrcTestGroup,
+                    test_group: &RcTestGroup,
                     test_path: &Path,
                     verbose: bool) -> Vec<TestJob> {
-    let test_path = rc.ktest_dir.join("tests").join(test_path);
+    let test_path = rc.ktest.ktest_dir.join("tests").join(test_path);
     let mut ret = Vec::new();
 
     let subtests = get_subtests(test_path.clone());
@@ -113,7 +113,7 @@ fn branch_test_jobs(rc: &Ktestrc, repo: &git2::Repository,
             .enumerate() {
         let commit = commit.id().to_string();
 
-        let results = commitdir_get_results(rc, &commit).unwrap_or(BTreeMap::new());
+        let results = commitdir_get_results(&rc.ktest, &commit).unwrap_or(BTreeMap::new());
 
         if verbose { eprintln!("at commit {} age {}\nresults {:?}",
             &commit, age, results) }
@@ -124,7 +124,7 @@ fn branch_test_jobs(rc: &Ktestrc, repo: &git2::Repository,
                 let full_subtest_name = subtest_full_name(&test_path, &i);
 
                 !have_result(&results, &full_subtest_name) &&
-                    !lockfile_exists(rc, &commit, &full_subtest_name, false)
+                    !lockfile_exists(&rc.ktest, &commit, &full_subtest_name, false)
             })
             .map(|i| i.clone())
             .collect();
@@ -144,11 +144,12 @@ fn branch_test_jobs(rc: &Ktestrc, repo: &git2::Repository,
     ret
 }
 
-fn rc_test_jobs(rc: &Ktestrc, repo: &git2::Repository,
-                verbose: bool) -> Vec<TestJob> {
-    let mut ret: Vec<_> = rc.branch.iter()
+fn user_test_jobs(rc: &CiConfig, repo: &git2::Repository,
+                  user: &Userrc,
+                  verbose: bool) -> Vec<TestJob> {
+    let mut ret: Vec<_> = user.branch.iter()
         .flat_map(move |(branch, branchconfig)| branchconfig.tests.iter()
-            .filter_map(|i| rc.test_group.get(i)).map(move |testgroup| (branch, testgroup)))
+            .filter_map(|i| user.test_group.get(i)).map(move |testgroup| (branch, testgroup)))
         .flat_map(move |(branch, testgroup)| testgroup.tests.iter()
             .flat_map(move |test| branch_test_jobs(rc, repo, &branch, &testgroup, &test, verbose)))
         .collect();
@@ -160,9 +161,22 @@ fn rc_test_jobs(rc: &Ktestrc, repo: &git2::Repository,
     ret
 }
 
-fn write_test_jobs(rc: &Ktestrc, jobs_in: Vec<TestJob>) -> anyhow::Result<()> {
-    let jobs_fname      = rc.output_dir.join("jobs");
-    let jobs_fname_new  = rc.output_dir.join("jobs.new");
+fn rc_test_jobs(rc: &CiConfig, repo: &git2::Repository,
+                verbose: bool) -> Vec<TestJob> {
+    let mut ret: Vec<_> = rc.users.iter()
+        .flat_map(|(_, user)| user_test_jobs(rc, repo, &user, verbose))
+        .collect();
+
+    /* sort by commit, dedup */
+
+    ret.sort();
+    ret.reverse();
+    ret
+}
+
+fn write_test_jobs(rc: &CiConfig, jobs_in: Vec<TestJob>) -> anyhow::Result<()> {
+    let jobs_fname      = rc.ktest.output_dir.join("jobs");
+    let jobs_fname_new  = rc.ktest.output_dir.join("jobs.new");
     let mut jobs_out    = std::io::BufWriter::new(File::create(&jobs_fname_new)?);
 
     for job in jobs_in.iter() {
@@ -185,39 +199,41 @@ fn write_test_jobs(rc: &Ktestrc, jobs_in: Vec<TestJob>) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn fetch_remotes(rc: &Ktestrc, repo: &git2::Repository) -> anyhow::Result<bool> {
-    fn fetch_remotes_locked(rc: &Ktestrc, repo: &git2::Repository) -> Result<(), git2::Error> {
-        for (branch, branchconfig) in &rc.branch {
-            let fetch = branchconfig.fetch
-                .split_whitespace()
-                .map(|i| OsStr::new(i));
+fn fetch_remotes(rc: &CiConfig, repo: &git2::Repository) -> anyhow::Result<bool> {
+    fn fetch_remotes_locked(rc: &CiConfig, repo: &git2::Repository) -> Result<(), git2::Error> {
+        for (_, userconfig) in &rc.users {
+            for (branch, branchconfig) in &userconfig.branch {
+                let fetch = branchconfig.fetch
+                    .split_whitespace()
+                    .map(|i| OsStr::new(i));
 
-            let status = std::process::Command::new("git")
-                .arg("-C")
-                .arg(&rc.linux_repo)
-                .arg("fetch")
-                .args(fetch)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .status()
-                .expect(&format!("failed to execute fetch"));
-            if !status.success() {
-                eprintln!("fetch error: {}", status);
-                return Ok(());
+                let status = std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&rc.ktest.linux_repo)
+                    .arg("fetch")
+                    .args(fetch)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .status()
+                    .expect(&format!("failed to execute fetch"));
+                if !status.success() {
+                    eprintln!("fetch error: {}", status);
+                    return Ok(());
+                }
+
+                let fetch_head = repo.revparse_single("FETCH_HEAD")
+                    .map_err(|e| { eprintln!("error parsing FETCH_HEAD: {}", e); e})?
+                    .peel_to_commit()
+                    .map_err(|e| { eprintln!("error getting FETCH_HEAD: {}", e); e})?;
+
+                repo.branch(branch, &fetch_head, true)?;
             }
-
-            let fetch_head = repo.revparse_single("FETCH_HEAD")
-                .map_err(|e| { eprintln!("error parsing FETCH_HEAD: {}", e); e})?
-                .peel_to_commit()
-                .map_err(|e| { eprintln!("error getting FETCH_HEAD: {}", e); e})?;
-
-            repo.branch(branch, &fetch_head, true)?;
         }
 
         Ok(())
     }
 
-    let lockfile = rc.output_dir.join("fetch.lock");
+    let lockfile = rc.ktest.output_dir.join("fetch.lock");
     let metadata = std::fs::metadata(&lockfile);
     if let Ok(metadata) = metadata {
         let elapsed = metadata.modified().unwrap()
@@ -243,12 +259,12 @@ fn fetch_remotes(rc: &Ktestrc, repo: &git2::Repository) -> anyhow::Result<bool> 
     Ok(true)
 }
 
-fn update_jobs(rc: &Ktestrc, repo: &git2::Repository) -> anyhow::Result<()> {
+fn update_jobs(rc: &CiConfig, repo: &git2::Repository) -> anyhow::Result<()> {
     if !fetch_remotes(rc, repo)? {
         return Ok(());
     }
 
-    let lockfile = rc.output_dir.join("jobs.lock");
+    let lockfile = rc.ktest.output_dir.join("jobs.lock");
     let filelock = FileLock::lock(lockfile, true, FileOptions::new().create(true).write(true))?;
 
     let jobs_in = rc_test_jobs(rc, repo, false);
@@ -260,20 +276,20 @@ fn update_jobs(rc: &Ktestrc, repo: &git2::Repository) -> anyhow::Result<()> {
 }
 
 fn main() {
-    let ktestrc = ktestrc_read();
-    if let Err(e) = ktestrc {
+    let rc = ciconfig_read();
+    if let Err(e) = rc {
         eprintln!("could not read config; {}", e);
         process::exit(1);
     }
-    let ktestrc = ktestrc.unwrap();
+    let rc = rc.unwrap();
 
-    let repo = git2::Repository::open(&ktestrc.linux_repo);
+    let repo = git2::Repository::open(&rc.ktest.linux_repo);
     if let Err(e) = repo {
-        eprintln!("Error opening {:?}: {}", ktestrc.linux_repo, e);
+        eprintln!("Error opening {:?}: {}", rc.ktest.linux_repo, e);
         eprintln!("Please specify correct linux_repo");
         process::exit(1);
     }
     let repo = repo.unwrap();
 
-    update_jobs(&ktestrc, &repo).ok();
+    update_jobs(&rc, &repo).ok();
 }

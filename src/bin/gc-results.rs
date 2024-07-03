@@ -2,7 +2,7 @@ extern crate libc;
 use std::process;
 use std::collections::HashSet;
 use std::fs::DirEntry;
-use ci_cgi::{Ktestrc, ktestrc_read, git_get_commit};
+use ci_cgi::{CiConfig, ciconfig_read, git_get_commit};
 use clap::Parser;
 
 #[derive(Parser)]
@@ -36,22 +36,30 @@ fn branch_get_commits(repo: &git2::Repository,
         .collect()
 }
 
-fn get_live_commits(rc: &Ktestrc) -> HashSet<String>
+fn get_live_commits(rc: &CiConfig) -> HashSet<String>
 {
-    let repo = git2::Repository::open(&rc.linux_repo);
+    let repo = git2::Repository::open(&rc.ktest.linux_repo);
     if let Err(e) = repo {
-        eprintln!("Error opening {:?}: {}", rc.linux_repo, e);
+        eprintln!("Error opening {:?}: {}", rc.ktest.linux_repo, e);
         eprintln!("Please specify correct linux_repo");
         process::exit(1);
     }
     let repo = repo.unwrap();
 
-    rc.branch.iter()
-        .flat_map(move |(branch, branchconfig)| branchconfig.tests.iter()
-            .filter_map(|i| rc.test_group.get(i)).map(move |test_group| (branch, test_group)))
-        .map(|(branch, test_group)| branch_get_commits(&repo, &branch, test_group.max_commits))
-        .flatten()
-        .collect()
+    let mut ret: HashSet<String> = HashSet::new();
+
+    for (_, user) in rc.users.iter() {
+        for (branch, branch_config) in user.branch.iter()  {
+            for test_group in branch_config.tests.iter() {
+                let max_commits = user.test_group.get(test_group).map(|x| x.max_commits).unwrap_or(0);
+                for commit in branch_get_commits(&repo, &branch, max_commits) {
+                    ret.insert(commit);
+                }
+            }
+        }
+    }
+
+    ret
 }
 
 fn result_is_live(commits: &HashSet<String>, d: &DirEntry) -> bool {
@@ -72,7 +80,7 @@ fn result_is_live(commits: &HashSet<String>, d: &DirEntry) -> bool {
 fn main() {
     let args = Args::parse();
 
-    let rc = ktestrc_read();
+    let rc = ciconfig_read();
     if let Err(e) = rc {
         eprintln!("could not read config; {}", e);
         process::exit(1);
@@ -81,7 +89,7 @@ fn main() {
 
     let commits = get_live_commits(&rc);
 
-    for d in rc.output_dir.read_dir().unwrap()
+    for d in rc.ktest.output_dir.read_dir().unwrap()
         .filter_map(|d| d.ok())
         .filter(|d| !result_is_live(&commits, &d))
         .map(|d| d.path()) {

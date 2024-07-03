@@ -11,6 +11,9 @@ use anyhow;
 
 pub mod testresult_capnp;
 pub mod worker_capnp;
+pub mod users;
+pub use users::Userrc;
+pub use users::RcTestGroup;
 
 pub fn git_get_commit(repo: &git2::Repository, reference: String) -> Result<git2::Commit, git2::Error> {
     let r = repo.revparse_single(&reference);
@@ -28,25 +31,11 @@ pub fn git_get_commit(repo: &git2::Repository, reference: String) -> Result<git2
 }
 
 #[derive(Deserialize)]
-pub struct KtestrcTestGroup {
-    pub max_commits:        u64,
-    pub priority:           u64,
-    pub tests:              Vec<PathBuf>,
-}
-
-#[derive(Deserialize)]
-pub struct KtestrcBranch {
-    pub fetch:              String,
-    pub tests:              Vec<String>,
-}
-
-#[derive(Deserialize)]
 pub struct Ktestrc {
     pub linux_repo:         PathBuf,
     pub output_dir:         PathBuf,
     pub ktest_dir:          PathBuf,
-    pub test_group:         BTreeMap<String, KtestrcTestGroup>,
-    pub branch:             BTreeMap<String, KtestrcBranch>,
+    pub users_dir:          PathBuf,
 }
 
 pub fn ktestrc_read() -> anyhow::Result<Ktestrc> {
@@ -54,6 +43,27 @@ pub fn ktestrc_read() -> anyhow::Result<Ktestrc> {
     let ktestrc: Ktestrc = toml::from_str(&config)?;
 
     Ok(ktestrc)
+}
+
+pub struct CiConfig {
+    pub ktest:              Ktestrc,
+    pub users:              BTreeMap<String, Userrc>,
+}
+
+pub fn ciconfig_read() -> anyhow::Result<CiConfig> {
+    let mut rc = CiConfig {
+        ktest:  ktestrc_read()?,
+        users:  BTreeMap::new(),
+    };
+
+    for i in std::fs::read_dir(&rc.ktest.users_dir)?
+        .filter_map(|x| x.ok())
+        .map(|i| i.path()){
+        rc.users.insert(i.file_stem().unwrap().to_string_lossy().to_string(),
+                        users::userrc_read(&i)?);
+    }
+
+    Ok(rc)
 }
 
 pub use testresult_capnp::test_result::Status as TestStatus;
