@@ -1,6 +1,6 @@
 #!/bin/bash
 
-. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/../test-libs.sh
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/test-libs.sh
 
 config-timeout-multiplier 3
 
