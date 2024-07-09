@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../xfstests.sh
+
+require-kernel-config JFS_FS
+require-kernel-config JFS_POSIX_ACL
+require-kernel-config JFS_DEBUG
+require-kernel-config QUOTA
+
+export FSTYP=jfs
+export MKFS_OPTIONS=
+
+run_tests()
+{
+    run_xfstests "$@"
+}
+
+main "$@"
