@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../xfstests.sh
+
+require-kernel-config NILFS2_FS
+
+export FSTYP=nilfs2
+export MKFS_OPTIONS=
+
+run_tests()
+{
+    run_xfstests "$@"
+}
+
+main "$@"
