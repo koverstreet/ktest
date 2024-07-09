@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+
+export MKFS_OPTIONS="-m reflink=1,rmapbt=1 -i sparse=1,nrext64=1"
+export MOUNT_OPTIONS=" -o usrquota,grpquota,prjquota"
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/fstests.ktest

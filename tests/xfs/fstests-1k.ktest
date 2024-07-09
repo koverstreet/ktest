@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+
+export MKFS_OPTIONS="-b size=1k"
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/fstests.ktest
