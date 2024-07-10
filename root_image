@@ -108,6 +108,12 @@ PACKAGES+=(libinih-dev)
 # nfs testing:
 PACKAGES+=(nfs-kernel-server)
 
+# minixfs
+PACKAGES+=(util-linux-extra)
+
+# ocfs2 testing:
+PACKAGES+=(ocfs2-tools)
+
 # nbd testing
 PACKAGES+=(nbd-client nbd-server)
 

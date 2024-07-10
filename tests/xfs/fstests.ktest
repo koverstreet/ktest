@@ -2,8 +2,6 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../xfstests.sh
 
-require-git https://git.kernel.org/pub/scm/linux/kernel/git/djwong/xfsprogs-dev.git xfsprogs
-
 require-kernel-config XFS_FS
 require-kernel-config XFS_QUOTA
 require-kernel-config XFS_POSIX_ACL
@@ -19,12 +17,6 @@ export FSTYP=xfs
 
 run_tests()
 {
-    if [[ ! -f /xfsprogs-init-done ]]; then
-	run_quiet "building $(basename $i)" make -j $ktest_cpus -C "$ktest_dir/tests/xfs/xfsprogs"
-
-	touch /xfsprogs-init-done
-    fi
-
     run_xfstests "$@"
 }
 
