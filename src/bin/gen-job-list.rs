@@ -12,6 +12,7 @@ use file_lock::{FileLock, FileOptions};
 use memoize::memoize;
 use anyhow;
 use chrono::Utc;
+use clap::Parser;
 
 #[memoize]
 fn get_subtests(test_path: PathBuf) -> Vec<String> {
@@ -174,26 +175,33 @@ fn rc_test_jobs(rc: &CiConfig, repo: &git2::Repository,
     ret
 }
 
-fn write_test_jobs(rc: &CiConfig, jobs_in: Vec<TestJob>) -> anyhow::Result<()> {
+fn write_test_jobs(rc: &CiConfig, jobs_in: Vec<TestJob>, verbose: bool) -> anyhow::Result<()> {
+    eprintln!("Writing {} test jobs...", jobs_in.len());
+
+    if verbose {
+        eprint!("jobs: {:?}", jobs_in);
+    }
+
     let jobs_fname      = rc.ktest.output_dir.join("jobs");
     let jobs_fname_new  = rc.ktest.output_dir.join("jobs.new");
     let mut jobs_out    = std::io::BufWriter::new(File::create(&jobs_fname_new)?);
 
     for job in jobs_in.iter() {
         for subtest in job.subtests.iter() {
-            let _ = jobs_out.write(job.branch.as_bytes());
-            let _ = jobs_out.write(b" ");
-            let _ = jobs_out.write(job.commit.as_bytes());
-            let _ = jobs_out.write(b" ");
-            let _ = jobs_out.write(job.age.to_string().as_bytes());
-            let _ = jobs_out.write(b" ");
-            let _ = jobs_out.write(job.test.as_os_str().as_encoded_bytes());
-            let _ = jobs_out.write(b" ");
-            let _ = jobs_out.write(subtest.as_bytes());
-            let _ = jobs_out.write(b"\n");
+            jobs_out.write(job.branch.as_bytes())?;
+            jobs_out.write(b" ")?;
+            jobs_out.write(job.commit.as_bytes())?;
+            jobs_out.write(b" ")?;
+            jobs_out.write(job.age.to_string().as_bytes())?;
+            jobs_out.write(b" ")?;
+            jobs_out.write(job.test.as_os_str().as_encoded_bytes())?;
+            jobs_out.write(b" ")?;
+            jobs_out.write(subtest.as_bytes())?;
+            jobs_out.write(b"\n")?;
         }
     }
 
+    jobs_out.flush()?;
     drop(jobs_out);
     std::fs::rename(jobs_fname_new, jobs_fname)?;
     Ok(())
@@ -259,8 +267,9 @@ fn fetch_remotes(rc: &CiConfig, repo: &git2::Repository) -> anyhow::Result<bool>
     Ok(true)
 }
 
-fn update_jobs(rc: &CiConfig, repo: &git2::Repository) -> anyhow::Result<()> {
+fn update_jobs(rc: &CiConfig, repo: &git2::Repository, verbose: bool) -> anyhow::Result<()> {
     if !fetch_remotes(rc, repo)? {
+        eprintln!("remotes unchanged, skipping updating joblist");
         return Ok(());
     }
 
@@ -268,14 +277,23 @@ fn update_jobs(rc: &CiConfig, repo: &git2::Repository) -> anyhow::Result<()> {
     let filelock = FileLock::lock(lockfile, true, FileOptions::new().create(true).write(true))?;
 
     let jobs_in = rc_test_jobs(rc, repo, false);
-    write_test_jobs(rc, jobs_in)?;
+    write_test_jobs(rc, jobs_in, verbose)?;
 
     drop(filelock);
 
     Ok(())
 }
 
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(short, long)]
+    verbose:    bool,
+}
+
 fn main() {
+    let args = Args::parse();
+
     let rc = ciconfig_read();
     if let Err(e) = rc {
         eprintln!("could not read config; {}", e);
@@ -291,5 +309,7 @@ fn main() {
     }
     let repo = repo.unwrap();
 
-    update_jobs(&rc, &repo).ok();
+    if let Err(e) = update_jobs(&rc, &repo, args.verbose) {
+        eprintln!("update_jobs() error: {}", e);
+    }
 }

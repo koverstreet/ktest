@@ -4,8 +4,8 @@ use std::process;
 use ci_cgi::{Ktestrc, ciconfig_read, lockfile_exists};
 use ci_cgi::{Worker, workers_update};
 use file_lock::{FileLock, FileOptions};
-use clap::Parser;
 use chrono::Utc;
+use clap::Parser;
 
 #[derive(Debug)]
 struct TestJob {
@@ -131,10 +131,6 @@ fn get_and_lock_job(rc: &Ktestrc) -> Option<TestJob> {
 }
 
 fn main() {
-    std::process::Command::new("gen-job-list")
-        .output()
-        .expect("failed to execute gen-job-list");
-
     let args = Args::parse();
 
     let rc = ciconfig_read();
