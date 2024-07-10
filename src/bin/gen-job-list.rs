@@ -225,8 +225,8 @@ fn fetch_remotes(rc: &CiConfig, repo: &git2::Repository) -> anyhow::Result<bool>
                     .status()
                     .expect(&format!("failed to execute fetch"));
                 if !status.success() {
-                    eprintln!("fetch error: {}", status);
-                    return Ok(());
+                    eprintln!("fetch error for {}: {}", branchconfig.fetch, status);
+                    continue;
                 }
 
                 let fetch_head = repo.revparse_single("FETCH_HEAD")
