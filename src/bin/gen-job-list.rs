@@ -1,12 +1,12 @@
 extern crate libc;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::process::Stdio;
-use ci_cgi::{CiConfig, Userrc, RcTestGroup, ciconfig_read, git_get_commit, commitdir_get_results, lockfile_exists};
+use ci_cgi::{CiConfig, Userrc, RcTestGroup, ciconfig_read, git_get_commit, commitdir_get_results, lockfile_exists, commit_update_results_from_fs};
 use ci_cgi::TestResultsMap;
 use file_lock::{FileLock, FileOptions};
 use memoize::memoize;
@@ -107,6 +107,8 @@ fn branch_test_jobs(rc: &CiConfig, repo: &git2::Repository,
         return ret;
     }
 
+    let mut commits_updated = HashSet::new();
+
     for (age, commit) in walk
             .filter_map(|i| i.ok())
             .filter_map(|i| repo.find_commit(i).ok())
@@ -125,7 +127,9 @@ fn branch_test_jobs(rc: &CiConfig, repo: &git2::Repository,
                 let full_subtest_name = subtest_full_name(&test_path, &i);
 
                 !have_result(&results, &full_subtest_name) &&
-                    !lockfile_exists(&rc.ktest, &commit, &full_subtest_name, false)
+                    !lockfile_exists(&rc.ktest, &commit, &full_subtest_name,
+                                     false,
+                                     &mut commits_updated)
             })
             .map(|i| i.clone())
             .collect();
@@ -140,6 +144,10 @@ fn branch_test_jobs(rc: &CiConfig, repo: &git2::Repository,
                 subtests:   missing_subtests,
             });
         }
+    }
+
+    for i in commits_updated.iter() {
+        commit_update_results_from_fs(&rc.ktest, &i);
     }
 
     ret

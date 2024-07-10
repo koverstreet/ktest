@@ -1,4 +1,5 @@
 extern crate libc;
+use std::collections::HashSet;
 use std::path::Path;
 use std::process;
 use ci_cgi::{Ktestrc, ciconfig_read, lockfile_exists, commit_update_results_from_fs};
@@ -106,11 +107,19 @@ fn subtest_full_name(test_path: &Path, subtest: &String) -> String {
 }
 
 fn create_job_lockfiles(rc: &Ktestrc, mut job: TestJob) -> Option<TestJob> {
+    let mut commits_updated = HashSet::new();
+
     job.subtests = job.subtests.iter()
         .filter(|i| lockfile_exists(rc, &job.commit,
-                                    &subtest_full_name(&Path::new(&job.test), &i), true))
+                                    &subtest_full_name(&Path::new(&job.test), &i),
+                                    true,
+                                    &mut commits_updated))
         .map(|i| i.to_string())
         .collect();
+
+    for i in commits_updated.iter() {
+        commit_update_results_from_fs(rc, &i);
+    }
 
     if !job.subtests.is_empty() { Some(job) } else { None }
 }

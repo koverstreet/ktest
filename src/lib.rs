@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::{File, OpenOptions, create_dir_all, read_to_string};
 use std::io::ErrorKind;
 use std::io::prelude::*;
@@ -361,7 +361,8 @@ pub fn update_lcov(rc: &Ktestrc, commit_id: &String) -> Option<()> {
     Some(())
 }
 
-pub fn lockfile_exists(rc: &Ktestrc, commit: &str, test_name: &str, create: bool) -> bool {
+pub fn lockfile_exists(rc: &Ktestrc, commit: &str, test_name: &str, create: bool,
+                       commits_updated: &mut HashSet<String>) -> bool {
     let lockfile = rc.output_dir.join(commit).join(test_name).join("status");
 
     let timeout = std::time::Duration::from_secs(3600);
@@ -380,6 +381,7 @@ pub fn lockfile_exists(rc: &Ktestrc, commit: &str, test_name: &str, create: bool
                       &lockfile, metadata.modified().unwrap(),
                       SystemTime::now(),
                       elapsed);
+            commits_updated.insert(commit.to_string());
         }
     }
 
