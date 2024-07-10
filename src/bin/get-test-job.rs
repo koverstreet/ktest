@@ -1,7 +1,7 @@
 extern crate libc;
 use std::path::Path;
 use std::process;
-use ci_cgi::{Ktestrc, ciconfig_read, lockfile_exists};
+use ci_cgi::{Ktestrc, ciconfig_read, lockfile_exists, commit_update_results_from_fs};
 use ci_cgi::{Worker, workers_update};
 use file_lock::{FileLock, FileOptions};
 use chrono::Utc;
@@ -166,6 +166,8 @@ fn main() {
             commit:     job.commit.clone(),
             tests:      tests.clone(),
         });
+
+        commit_update_results_from_fs(&rc, &job.commit);
     } else {
         workers_update(&rc, Worker {
             hostname:   args.hostname,
