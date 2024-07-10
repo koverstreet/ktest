@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+#
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../xfstests.sh
+
+require-kernel-config MISC_FILESYSTEMS
+require-kernel-config MINIX_FS
+
+export FSTYP=minix
+export MKFS_OPTIONS=
+
+run_tests()
+{
+    export MKFS_OPTIONS=
+
+    run_xfstests minix "$@"
+}
+
+main "$@"
