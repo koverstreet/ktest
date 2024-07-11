@@ -8,6 +8,20 @@ ktest_verbose=false
 ktest_verbosearg=""
 ktest_once=false
 
+ssh_retry() {
+    (
+	set +o errexit
+
+	while true; do
+	    ssh "$@"
+	    (($? == 0)) && break
+	    sleep 1
+	    tput cuu1
+	    tput el
+	done
+    )
+}
+
 KTEST_DIR=$(dirname "$(readlink -e "$0")")/..
 
 . $KTEST_DIR/lib/common.sh
@@ -39,25 +53,11 @@ shift $(( OPTIND - 1 ))
 
 JOBSERVER=$1
 
-source <(ssh $JOBSERVER cat .ktestrc)
+source <(ssh_retry $JOBSERVER cat .ktestrc)
 
 JOBSERVER_LINUX_REPO=ssh://$JOBSERVER/$JOBSERVER_HOME/linux
 HOSTNAME=$(uname -n)
 WORKDIR=$(basename $(pwd))
-
-ssh() {
-    (
-	set +o errexit
-
-	while true; do
-	    env ssh "$@"
-	    (($? == 0)) && break
-	    sleep 1
-	    tput cuu1
-	    tput el
-	done
-    )
-}
 
 git_fetch() {
     local repo=$1
@@ -177,11 +177,23 @@ run_test_job() {
 	echo "Compressing output"
 	find ktest-out/out -type f -name \*log -print0|xargs -0 brotli --rm -9
 
-	ssh $JOBSERVER mkdir -p $OUTPUT
 
 	echo "Sending results to jobserver"
-	(cd ktest-out/out; tar --create --file - *)|
-	    ssh $JOBSERVER "(cd $OUTPUT; tar --extract --file -)"
+	mv ktest-out/out ktest-out/$COMMIT
+	(
+	    set +o errexit
+	    cd ktest-out
+
+	    while true; do
+		tar --create --file - $COMMIT|
+		    ssh $JOBSERVER "(cd $JOBSERVER_OUTPUT_DIR; tar --extract --file -)"
+		(($? == 0)) && break
+		sleep 1
+		tput cuu1
+		tput el
+	    done
+	)
+	mv ktest-out/$COMMIT ktest-out/out
 
 	if [[ -d ktest-out/gcov.0 ]]; then
 	    echo "Sending gcov results to jobserver"
@@ -192,11 +204,11 @@ run_test_job() {
 
 	    scp $LCOV $JOBSERVER:$OUTPUT
 
-	    ssh $JOBSERVER "(cd $OUTPUT; touch lcov-stale)"
-	    ssh $JOBSERVER "update-lcov $COMMIT"
+	    ssh_retry $JOBSERVER "(cd $OUTPUT; touch lcov-stale)"
+	    ssh_retry $JOBSERVER "update-lcov $COMMIT"
 	fi
 
-	ssh $JOBSERVER gen-commit-summary $COMMIT
+	ssh_retry $JOBSERVER gen-commit-summary $COMMIT
 
 	SUBTESTS=( "${SUBTESTS_REMAINING[@]}" )
     done
@@ -206,7 +218,7 @@ while true; do
     echo "Getting test job"
 
     while true; do
-	TEST_JOB=( $(ssh $JOBSERVER get-test-job $ktest_verbosearg $HOSTNAME $WORKDIR) )
+	TEST_JOB=( $(ssh_retry $JOBSERVER get-test-job $ktest_verbosearg $HOSTNAME $WORKDIR) )
 
 	[[ ${#TEST_JOB[@]} != 0 && ${TEST_JOB[0]} == TEST_JOB ]] && break
 
