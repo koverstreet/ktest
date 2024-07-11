@@ -11,6 +11,7 @@ use anyhow;
 
 pub mod testresult_capnp;
 pub mod worker_capnp;
+pub mod durations_capnp;
 pub mod users;
 pub use users::Userrc;
 pub use users::RcTestGroup;
