@@ -2,8 +2,8 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
 
-require-git http://evilpiepirate.org/git/linuxquota.git
-require-make linuxquota
+#require-git http://evilpiepirate.org/git/linuxquota.git
+#require-make linuxquota
 
 require-git http://evilpiepirate.org/git/xfstests.git ../xfstests
 
