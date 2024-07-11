@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::fs::{File, OpenOptions, create_dir_all, read_to_string};
 use std::io::ErrorKind;
 use std::io::prelude::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use die::die;
 use serde_derive::Deserialize;
@@ -359,6 +359,14 @@ pub fn update_lcov(rc: &Ktestrc, commit_id: &String) -> Option<()> {
 
     drop(filelock);
     Some(())
+}
+
+pub fn subtest_full_name(test: &Path, subtest: &String) -> String {
+    let test = test.to_string_lossy();
+    let test = test.replace(".ktest", "");
+    let test = test + "." + subtest;
+    let test = test.replace("/", ".");
+    test
 }
 
 pub fn lockfile_exists(rc: &Ktestrc, commit: &str, test_name: &str, create: bool,

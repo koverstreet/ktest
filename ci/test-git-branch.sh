@@ -93,7 +93,10 @@ run_test_job() {
     shift 3
     SUBTESTS=("$@")
 
-    TEST_NAME=$(basename -s .ktest $TEST_PATH)
+    FULL_TEST_PATH=${KTEST_DIR}/tests/$TEST_PATH
+    TEST_NAME=${TEST_PATH%%.ktest}
+    TEST_NAME=$(echo "$TEST_NAME"|tr / .)
+
     OUTPUT=$JOBSERVER_OUTPUT_DIR/$COMMIT
 
     if [[ -z $BRANCH ]]; then
@@ -106,7 +109,7 @@ run_test_job() {
 	exit 1
     fi
 
-    if [[ -z $TEST_PATH ]]; then
+    if [[ -z $FULL_TEST_PATH ]]; then
 	echo "Error getting test job: need test to run"
 	exit 1
     fi
@@ -121,7 +124,7 @@ run_test_job() {
     [[ $(git rev-parse HEAD) != $COMMIT ]] && exit 1
 
     for i in ktest-out/*; do
-	[[ $i != ktest-out/kernel* ]] && rm -rf $i
+	[[ "$i" != ktest-out/kernel* ]] && rm -rf "$i"
     done
 
     mkdir -p ktest-out/out
@@ -147,11 +150,11 @@ run_test_job() {
 		"ktest-out/out/$TEST_NAME.$FNAME/full_log.br"
 	done
 
-	echo "Running test $TEST_NAME ${SUBTESTS[@]}"
+	echo "Running test $TEST_PATH ${SUBTESTS[@]}"
 
 	$KTEST_DIR/lib/supervisor -T 1200 -f "$FULL_LOG" -S -F	\
 	    -b $TEST_NAME -o ktest-out/out				\
-	    -- build-test-kernel run -P $TEST_PATH ${SUBTESTS[@]} &
+	    -- build-test-kernel run -P $FULL_TEST_PATH ${SUBTESTS[@]} &
 	wait
 
 	SUBTESTS_REMAINING=()

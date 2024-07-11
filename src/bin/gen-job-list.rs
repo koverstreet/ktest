@@ -6,7 +6,7 @@ use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::process::Stdio;
-use ci_cgi::{CiConfig, Userrc, RcTestGroup, ciconfig_read, git_get_commit, commitdir_get_results, lockfile_exists, commit_update_results_from_fs};
+use ci_cgi::{CiConfig, Userrc, RcTestGroup, ciconfig_read, git_get_commit, commitdir_get_results, lockfile_exists, commit_update_results_from_fs, subtest_full_name};
 use ci_cgi::TestResultsMap;
 use file_lock::{FileLock, FileOptions};
 use memoize::memoize;
@@ -61,12 +61,6 @@ impl PartialEq for TestJob {
 
 impl Eq for TestJob {}
 
-fn subtest_full_name(test_path: &Path, subtest: &String) -> String {
-    format!("{}.{}",
-            test_path.file_stem().unwrap().to_string_lossy(),
-            subtest.replace("/", "."))
-}
-
 fn have_result(results: &TestResultsMap, subtest: &str) -> bool {
     use ci_cgi::TestStatus;
 
@@ -86,10 +80,10 @@ fn branch_test_jobs(rc: &CiConfig, repo: &git2::Repository,
                     test_group: &RcTestGroup,
                     test_path: &Path,
                     verbose: bool) -> Vec<TestJob> {
-    let test_path = rc.ktest.ktest_dir.join("tests").join(test_path);
+    let full_test_path = rc.ktest.ktest_dir.join("tests").join(test_path);
     let mut ret = Vec::new();
 
-    let subtests = get_subtests(test_path.clone());
+    let subtests = get_subtests(full_test_path);
 
     if verbose { eprintln!("looking for tests to run for branch {} test {:?} subtests {:?}",
         branch, test_path, subtests) }

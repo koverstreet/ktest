@@ -2,7 +2,7 @@ extern crate libc;
 use std::collections::HashSet;
 use std::path::Path;
 use std::process;
-use ci_cgi::{Ktestrc, ciconfig_read, lockfile_exists, commit_update_results_from_fs};
+use ci_cgi::{Ktestrc, ciconfig_read, lockfile_exists, commit_update_results_from_fs, subtest_full_name};
 use ci_cgi::{Worker, workers_update};
 use file_lock::{FileLock, FileOptions};
 use chrono::Utc;
@@ -98,12 +98,6 @@ fn get_test_job(rc: &Ktestrc) -> Option<TestJob> {
     let _ = file.set_len(len);
 
     ret
-}
-
-fn subtest_full_name(test_path: &Path, subtest: &String) -> String {
-    format!("{}.{}",
-            test_path.file_stem().unwrap().to_string_lossy(),
-            subtest.replace("/", "."))
 }
 
 fn create_job_lockfiles(rc: &Ktestrc, mut job: TestJob) -> Option<TestJob> {
