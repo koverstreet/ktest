@@ -6,9 +6,6 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../../test-libs.sh
 
-require-git http://evilpiepirate.org/git/bcachefs-tools.git
-require-make bcachefs-tools
-
 require-kernel-config BCACHEFS_FS
 
 if [[ ! -v NO_BCACHEFS_DEBUG ]]; then
