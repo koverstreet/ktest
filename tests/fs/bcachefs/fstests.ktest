@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-git http://evilpiepirate.org/git/linuxquota.git
+require-make linuxquota
+
+require-git http://evilpiepirate.org/git/xfstests.git ../xfstests
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../fstests.sh
+
+require-kernel-config BCACHEFS_POSIX_ACL
+require-kernel-config BCACHEFS_QUOTA
+require-kernel-config QUOTA
+
+[[ ! -v MKFS_OPTIONS ]] && export MKFS_OPTIONS="--encrypted --no_passphrase"
+export FSTYP=bcachefs
+
+run_test()
+{
+    if [[ ! -f /xfstests-init-done ]]; then
+	bcachefs_antagonist
+    fi
+
+    run_fstests "$@"
+
+    check_counters ${ktest_scratch_dev[0]}
+    check_counters ${ktest_scratch_dev[1]}
+}
+
+main "$@"

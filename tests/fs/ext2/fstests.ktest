@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../fstests.sh
+
+require-kernel-config EXT2_FS
+require-kernel-config EXT2_FS_XATTR
+require-kernel-config EXT2_FS_POSIX_ACL
+
+export FSTYP=ext2
+export MKFS_OPTIONS=
+
+run_tests()
+{
+    run_fstests "$@"
+}
+
+main "$@"

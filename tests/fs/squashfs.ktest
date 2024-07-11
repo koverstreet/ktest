@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../test-libs.sh
+
+require-kernel-config MISC_FILESYSTEMS
+require-kernel-config SQUASHFS
+require-kernel-config SQUASHFS_ZLIB
+require-kernel-config SQUASHFS_LZO
+require-kernel-config SQUASHFS_LZ4
+require-kernel-config SQUASHFS_XZ
+require-kernel-config SQUASHFS_ZSTD
+
+config-timeout $(stress_timeout)
+
+config-image /home/kent/squashfs-test-images/file.sqsh
+config-image /home/kent/squashfs-test-images/bcachefs-tools.gzip.sqfs
+config-image /home/kent/squashfs-test-images/bcachefs-tools.lz4.sqfs
+config-image /home/kent/squashfs-test-images/bcachefs-tools.lzo.sqfs
+config-image /home/kent/squashfs-test-images/bcachefs-tools.xz.sqfs
+config-image /home/kent/squashfs-test-images/bcachefs-tools.zstd.sqfs
+
+case $1 in
+    prep)
+	for c in gzip lzo lz4 xz zstd lzma; do
+	    mksquashfs . bcachefs-tools.$c.sqfs -comp $c
+	done
+	;;
+esac
+
+test_squashfs()
+{
+    for dev in /dev/vdb; do
+	echo "testing image $dev"
+
+	mount -t squashfs $dev /mnt
+	find /mnt -type f -print|xargs cat > /dev/null
+	umount /mnt
+    done
+}
+
+main "$@"

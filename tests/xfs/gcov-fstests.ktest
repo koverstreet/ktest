@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-
-. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/../test-libs.sh
-
-require-gcov fs/xfs
-
-. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/fstests.ktest

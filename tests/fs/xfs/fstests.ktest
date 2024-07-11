@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../fstests.sh
+
+require-kernel-config XFS_FS
+require-kernel-config XFS_QUOTA
+require-kernel-config XFS_POSIX_ACL
+require-kernel-config XFS_RT XFS_ONLINE_SCRUB
+require-kernel-config XFS_DEBUG
+require-kernel-config XFS_ONLINE_SCRUB
+require-kernel-config XFS_ONLINE_REPAIR
+require-kernel-config QUOTA
+require-kernel-config TRANSPARENT_HUGEPAGE
+
+[[ ! -v MKFS_OPTIONS ]] && export MKFS_OPTIONS="-m reflink=1,rmapbt=1 -i sparse=1,nrext64=1"
+export FSTYP=xfs
+
+run_tests()
+{
+    run_fstests "$@"
+}
+
+main "$@"

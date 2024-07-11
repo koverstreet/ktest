@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-git http://evilpiepirate.org/git/linuxquota.git
+require-make linuxquota
+
+require-git http://evilpiepirate.org/git/xfstests.git ../xfstests
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../fstests.sh
+
+require-kernel-config FUSE_FS
+
+export MKFS_OPTIONS=
+export FSTYP=fuse.bcachefs
+#export FUSE_SUBTYP=.bcachefs
+
+run_tests()
+{
+    mv /usr/local/sbin/mount.fuse.bcachefs /sbin
+
+    run_fstests "$@"
+}
+
+main "$@"
+

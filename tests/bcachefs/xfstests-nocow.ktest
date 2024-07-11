@@ -1,5 +1,0 @@
-#!/usr/bin/env bash
-
-export MKFS_OPTIONS="--nocow"
-
-. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/xfstests.ktest

@@ -1,0 +1,273 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../test-libs.sh
+
+require-git http://evilpiepirate.org/git/bcachefs-tools.git
+require-make bcachefs-tools
+
+require-kernel-config XFS_FS=m
+require-kernel-config BTRFS_FS=m
+
+require-kernel-config BCACHEFS_FS=y
+require-kernel-config BCACHEFS_TESTS
+require-kernel-config BCACHEFS_DEBUG=n
+require-kernel-config BCACHEFS_DEBUG_TRANSACTIONS=n
+require-kernel-config BCACHEFS_QUOTA=n
+require-kernel-config BCACHEFS_LOCK_TIME_STATS=n
+require-kernel-config BCACHEFS_NO_LATENCY_ACCT
+require-kernel-config LATENCYTOP
+
+if [[ $ktest_arch = x86 ]]; then
+    require-kernel-config CRYPTO_CRC32C_INTEL
+fi
+
+#require-qemu-append -device vfio-pci,host=02:01.0
+require-qemu-append -device vfio-pci,host=03:00.0
+require-kernel-config BLK_DEV_NVME
+
+perf_mkfs()
+{
+    blkdiscard /dev/nvme0n1
+
+    run_quiet "" bcachefs format -f		\
+	--errors=panic				\
+	--bucket=$btree_node_size		\
+	--btree_node_size=$btree_node_size	\
+	--metadata_checksum=none		\
+	--data_checksum=none			\
+	--journal_transaction_names=0		\
+	/dev/nvme0n1
+    mount -t bcachefs -o no_data_io /dev/nvme0n1 /mnt
+    #bcachefs device resize-journal /dev/sdb 4G
+    ln -sf /sys/fs/bcachefs/*/perf_test p
+}
+
+do_fio_bench()
+{
+    cd /root
+
+    local rw=$1
+    local numjobs=$2
+    local profile=$3
+
+    ioengine=io_uring
+    ioengine=libaio
+    cat > /root/fio.sh <<-ZZ
+#!/bin/bash
+    exec fio					\
+	--group_reporting			\
+	--runtime=60s				\
+	--exitall_on_error=1			\
+	--ioengine=$ioengine			\
+	--iodepth=128				\
+	--iodepth_batch=32			\
+	--iodepth_batch_complete=32		\
+	--direct=1				\
+	--overwrite=1				\
+	--directory=/mnt		    	\
+	--name=randwrite			\
+	--rw=$rw				\
+	--loops=100				\
+	--numjobs=$numjobs			\
+	--filesize=1G				\
+	--bs=4k
+ZZ
+    chmod 755 /root/fio.sh
+
+    FSTYP=bcachefs
+
+    dmesg -n4
+    perf_mkfs
+
+    #setup_tracing 'bcachefs:write_buffer_flush bcachefs:trans_restart_write_buffer_flush'
+    trace=false
+    if $trace; then
+	#setup_tracing 'bcachefs:*'
+	#setup_tracing 'sched:sched_blocked'
+	#echo stacktrace > /sys/kernel/debug/tracing/events/sched/sched_blocked/trigger
+	echo 8192				> /sys/kernel/tracing/buffer_size_kb
+	echo function				> /sys/kernel/tracing/current_tracer
+	echo func_stack_trace			> /sys/kernel/tracing/trace_options
+	echo stacktrace				> /sys/kernel/tracing/trace_options
+	echo __default_send_IPI_dest_field	> /sys/kernel/tracing/set_ftrace_filter
+	echo 1					> /sys/kernel/tracing/tracing_on
+    fi
+
+    if $profile; then
+	perf record -agq -- /root/fio.sh
+	perf report --sort=symbol|head -n80|cut -b1-80 || true
+	#/host/home/kent/.cargo/bin/latency-tracer \
+	#    /root/fio.sh
+	#	    cat /sys/fs/bcachefs/*/internal/write_points
+    else
+	/root/fio.sh|
+	    sed -rne '/IOPS/ s/ +([[:alpha:]]+) ?:.*IOPS=([^,]+).*/\1 \2/ p'|
+	    awk '{printf("%s", $2)} END {printf("\n")}'
+    fi
+
+    if $trace; then
+	echo 0 > /sys/kernel/tracing/tracing_on
+    fi
+    #cat /sys/fs/bcachefs/*/internal/journal_res_get*
+    #cat /sys/fs/bcachefs/*/internal/journal_entry*
+    umount /mnt
+}
+
+do_bench_three_times()
+{
+    local run1=$(do_fio_bench "$@")
+    echo $run1
+    local run2=$(do_fio_bench "$@")
+    echo $run2
+    local run3=$(do_fio_bench "$@")
+    echo $run3
+
+    echo -n "result "
+    echo -e "$run1\n$run2\n$run3"|sort -rn|head -n1
+}
+
+test_random_reads()
+{
+    do_bench_three_times randread 1 false
+}
+
+test_random_reads_mt()
+{
+    do_bench_three_times randread $t false
+}
+
+test_random_writes()
+{
+    do_bench_three_times randwrite 1 false
+}
+
+test_random_writes_mt()
+{
+    do_bench_three_times randwrite $t false
+}
+
+test_random_writes_profile()
+{
+    do_fio_bench randwrite 1 true
+}
+
+test_random_writes_mt_profile()
+{
+    do_fio_bench randwrite $t true
+}
+
+test_random_writes_mt_st()
+{
+    do_fio_bench randwrite $t false
+    do_fio_bench randwrite  1 false
+}
+
+test_appends()
+{
+    cd /root
+
+    local loops=$((($ktest_priority + 1) * 4))
+
+    cat > /root/fio.sh <<-ZZ
+    fio --group_reporting			\
+	--eta=always				\
+	--exitall_on_error=1			\
+	--randrepeat=0				\
+	--ioengine=sync				\
+	--iodepth=1				\
+	--direct=1				\
+	--numjobs=1				\
+	--filename=/mnt/fiotest		    	\
+	--name=write				\
+	--rw=write				\
+	--filesize=1G				\
+	--bs=4k
+ZZ
+
+    chmod 755 /root/fio.sh
+
+    FSTYP=btrfs
+    FSTYP=xfs
+    FSTYP=bcachefs
+
+    if true; then
+	run_quiet "" bcachefs format -f		\
+	    --errors=panic			\
+	    --bucket_size=2M			\
+	    --data_checksum=none		\
+	    --nocow				\
+	    /dev/sdb
+    else
+	mkfs.$FSTYP /dev/sdb
+    fi
+
+    mount -t $FSTYP /dev/sdb /mnt
+
+    fallocate -l1G /mnt/fiotest
+
+    #setup_tracing 'bcachefs:bucket_alloc_fail'
+    #setup_tracing 'sched:sched_switch'
+    #echo stacktrace > /sys/kernel/debug/tracing/events/sched/sched_switch/trigger
+    #echo 8192			> /sys/kernel/debug/tracing/buffer_size_kb
+    #echo function		> /sys/kernel/debug/tracing/current_tracer
+    #echo func_stack_trace	> /sys/kernel/debug/tracing/trace_options
+    #echo __schedule		> /sys/kernel/debug/tracing/set_ftrace_filter
+    #echo 1			> /sys/kernel/debug/tracing/tracing_on
+
+    perf record -a -- /root/fio.sh
+    perf report --sort=symbol|head -n60|cut -b1-50 || true
+    #echo 0			> /sys/kernel/debug/tracing/tracing_on
+
+    #umount /mnt
+}
+
+test_seq_reads()
+{
+    cd /root
+
+    mkfs.xfs /dev/sdb
+    mount /dev/sdb /mnt
+    fallocate -l1G /mnt/test
+    dd if=/mnt/test of=/dev/null 2>/dev/null
+
+    perf record -ag -- \
+    fio --group_reporting			\
+	--gtod_reduce=1				\
+	--runtime=60s				\
+	--exitall_on_error=1			\
+	--ioengine=psync			\
+	--fallocate=none			\
+	--fadvise_hint=1			\
+	--invalidate=0				\
+	--name=randread				\
+	--rw=randread				\
+	--filename=/mnt/test			\
+	--filesize=1G				\
+	--io_size=64G				\
+	--numjobs=$t				\
+	--bs=512
+
+    umount /mnt
+}
+
+test_blkdev_writes()
+{
+    fio						\
+	--group_reporting			\
+	--runtime=60s				\
+	--exitall_on_error=1			\
+	--ioengine=libaio			\
+	--iodepth=128				\
+	--iodepth_batch=32			\
+	--iodepth_batch_complete=32		\
+	--direct=1				\
+	--filename=/dev/nvme0n1		    	\
+	--name=randwrite			\
+	--rw=randwrite				\
+	--loops=100				\
+	--numjobs=$t				\
+	--filesize=1G				\
+	--bs=4k
+}
+
+main "$@"
