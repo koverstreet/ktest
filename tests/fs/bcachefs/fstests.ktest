@@ -5,8 +5,6 @@
 #require-git http://evilpiepirate.org/git/linuxquota.git
 #require-make linuxquota
 
-require-git http://evilpiepirate.org/git/xfstests.git ../xfstests
-
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../fstests.sh
 
 require-kernel-config BCACHEFS_POSIX_ACL

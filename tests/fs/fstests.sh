@@ -3,7 +3,7 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../test-libs.sh
 
-require-git https://git.kernel.org/pub/scm/fs/xfs/xfstests-dev.git xfstests
+require-git http://evilpiepirate.org/git/xfstests.git xfstests
 
 # disable io_uring - io_uring is currently broken w.r.t. unmounting, we get
 # spurious umount failures with -EBUSY
