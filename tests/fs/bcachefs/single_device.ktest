@@ -647,7 +647,7 @@ test_recovery()
 	#    --rw=randwrite			\
 	#    --bsrange=4k-8k
 
-	$ktest_dir/tests/xfstests/src/godown -f /mnt
+	$ktest_dir/tests/fs/xfstests/src/godown -f /mnt
 
 	umount /mnt
     done

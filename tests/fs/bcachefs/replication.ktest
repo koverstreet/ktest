@@ -45,7 +45,7 @@ test_recovery()
 	    --bsrange=4k-8k			\
 	    --runtime=2
 
-	$ktest_dir/tests/xfstests/src/godown -f /mnt
+	$ktest_dir/tests/fs/xfstests/src/godown -f /mnt
 
 	umount /mnt
     done

@@ -46,7 +46,7 @@ run_test()
 	export SCRATCH_DIR="/mnt/scratch"
 	export SCRATCH_DEV="localhost:/scratch"
 
-	rm -f /ktest/tests/xfstests/local.config
+	rm -f /ktest/tests/fs/xfstests/local.config
 	cat << EOF > /tmp/xfstests.config
 TEST_DEV=$TEST_DEV
 TEST_DIR=$TEST_DIR

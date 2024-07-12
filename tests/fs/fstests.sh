@@ -62,7 +62,7 @@ run_fstests()
 
 	mkdir -p /mnt/test /mnt/scratch
 
-	run_quiet "building $(basename $i)" make -j $ktest_cpus -C "$ktest_dir/tests/xfstests"
+	run_quiet "building $(basename $i)" make -j $ktest_cpus -C "$ktest_dir/tests/fs/xfstests"
 
 	rm -rf /ktest-out/xfstests
 
@@ -78,7 +78,7 @@ run_fstests()
 	export TEST_DEV=${ktest_scratch_dev[0]}
 	export TEST_DIR=/mnt/test
 
-	rm -f /ktest/tests/xfstests/local.config
+	rm -f /ktest/tests/fs/xfstests/local.config
 	cat << EOF > /tmp/xfstests.config
 TEST_DEV=${ktest_scratch_dev[0]}
 TEST_DIR=$TEST_DIR
@@ -94,6 +94,6 @@ EOF
     export HOST_OPTIONS=/tmp/xfstests.config
     export MKFS_OPTIONS
 
-    cd "$ktest_dir/tests/xfstests"
+    cd "$ktest_dir/tests/fs/xfstests"
     ./check "$@"
 }
