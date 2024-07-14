@@ -11,9 +11,11 @@ lib/supervisor
 
 ltp-fsx/ltp-fsx
 
-tests/bcachefs/bcachefs-tools
-tests/bcachefs/linuxquota
-tests/xfstests
+tests/fs/bcachefs/bcachefs-tools
+tests/fs/bcachefs/linuxquota
+tests/fs/xfstests
+
+target
 
 !.gitignore
 !.editorconfig
