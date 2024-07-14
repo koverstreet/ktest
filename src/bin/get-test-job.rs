@@ -49,13 +49,12 @@ fn get_test_job(rc: &Ktestrc) -> Option<TestJob> {
         .read(true)
         .write(true)
         .open(rc.output_dir.join("jobs")).unwrap();
-    let map = unsafe { MmapOptions::new().map(&file).unwrap() };
-
     let mut len = file.metadata().unwrap().len();
     if len == 0 {
         return None;
     }
 
+    let map = unsafe { MmapOptions::new().map(&file).unwrap() };
     let mut ret = None;
 
     for job in map.rsplit(|b| *b == b'\n') {
