@@ -1,6 +1,6 @@
 extern crate libc;
 use std::collections::HashSet;
-use std::path::Path;
+use std::fs::File;
 use std::process;
 use ci_cgi::{Ktestrc, ciconfig_read, lockfile_exists, commit_update_results_from_fs, subtest_full_name};
 use ci_cgi::{Worker, workers_update};
@@ -34,6 +34,9 @@ use memmap::MmapOptions;
 use std::fs::OpenOptions;
 use std::str;
 
+use ci_cgi::durations_capnp::durations;
+use capnp::serialize;
+
 fn commit_test_matches(job: &Option<TestJob>, commit: &str, test: &str) -> bool {
     if let Some(job) = job {
         if job.commit == commit && job.test == test {
@@ -44,7 +47,35 @@ fn commit_test_matches(job: &Option<TestJob>, commit: &str, test: &str) -> bool 
     false
 }
 
-fn get_test_job(rc: &Ktestrc) -> Option<TestJob> {
+fn test_duration(durations: &Option<durations::Reader>, test: &str, subtest: &str) -> Option<u64> {
+    use std::cmp::Ordering::*;
+
+    if let Some(d) = durations.as_ref() {
+        let full_test = subtest_full_name(test, subtest);
+        let full_test = full_test.as_str();
+
+        let d = d.get_entries().unwrap();
+
+        let mut l = 0;
+        let mut r = d.len();
+
+        while l < r {
+            let m = l + (r - l) / 2;
+            let d_m = d.get(m);
+            let d_m_test = d_m.get_test().unwrap().to_str().unwrap();
+
+            match full_test.cmp(d_m_test) {
+                Less    => r = m,
+                Equal   => return Some(d_m.get_duration()),
+                Greater => l = m,
+            }
+        }
+    }
+
+    None
+}
+
+fn get_test_job(args: &Args, rc: &Ktestrc, durations: &Option<durations::Reader>) -> Option<TestJob> {
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -53,6 +84,8 @@ fn get_test_job(rc: &Ktestrc) -> Option<TestJob> {
     if len == 0 {
         return None;
     }
+
+    let mut duration_sum: u64 = 0;
 
     let map = unsafe { MmapOptions::new().map(&file).unwrap() };
     let mut ret = None;
@@ -82,12 +115,20 @@ fn get_test_job(rc: &Ktestrc) -> Option<TestJob> {
             len = job.as_ptr() as u64 - map.as_ptr() as u64;
         } else if commit_test_matches(&ret, commit, test) {
             if let Some(ref mut r) = ret {
-                r.subtests.push(subtest.to_string());
-                len = job.as_ptr() as u64 - map.as_ptr() as u64;
+                let duration_secs = test_duration(durations, test, subtest);
 
-                if r.subtests.len() > 20 {
+                if args.verbose {
+                    println!("duration for {}.{}={:?}", test, subtest, duration_secs);
+                }
+
+                let duration_secs = duration_secs.unwrap_or(rc.subtest_duration_def);
+
+                if duration_sum != 0 && duration_sum + duration_secs > rc.subtest_duration_max {
                     break;
                 }
+
+                duration_sum += duration_secs;
+                r.subtests.push(subtest.to_string());
             }
         } else {
             break;
@@ -104,7 +145,7 @@ fn create_job_lockfiles(rc: &Ktestrc, mut job: TestJob) -> Option<TestJob> {
 
     job.subtests = job.subtests.iter()
         .filter(|i| lockfile_exists(rc, &job.commit,
-                                    &subtest_full_name(&Path::new(&job.test), &i),
+                                    &subtest_full_name(&job.test, &i),
                                     true,
                                     &mut commits_updated))
         .map(|i| i.to_string())
@@ -117,9 +158,9 @@ fn create_job_lockfiles(rc: &Ktestrc, mut job: TestJob) -> Option<TestJob> {
     if !job.subtests.is_empty() { Some(job) } else { None }
 }
 
-fn get_and_lock_job(rc: &Ktestrc) -> Option<TestJob> {
+fn get_and_lock_job(args: &Args, rc: &Ktestrc, durations: &Option<durations::Reader>) -> Option<TestJob> {
     loop {
-        let job = get_test_job(rc);
+        let job = get_test_job(args, rc, durations);
         if let Some(job) = job {
             let job = create_job_lockfiles(rc, job);
             if job.is_some() {
@@ -143,13 +184,18 @@ fn main() {
     let rc = rc.unwrap();
     let rc = rc.ktest;
 
+    let durations_file = File::open(rc.output_dir.join("test_durations.capnp")).ok();
+    let durations_map = durations_file.map(|x| unsafe { MmapOptions::new().map(&x).ok() } ).flatten();
+    let durations_reader = durations_map.as_ref().map(|x| serialize::read_message_from_flat_slice(&mut &x[..], capnp::message::ReaderOptions::new()).ok()).flatten();
+    let durations = durations_reader.as_ref().map(|x| x.get_root::<durations::Reader>().ok()).flatten();
+
     let lockfile = rc.output_dir.join("jobs.lock");
     let filelock = FileLock::lock(lockfile, true, FileOptions::new().create(true).write(true)).unwrap();
 
     let job = if !args.dry_run {
-        get_and_lock_job(&rc)
+        get_and_lock_job(&args, &rc, &durations)
     } else {
-        get_test_job(&rc)
+        get_test_job(&args, &rc, &durations)
     };
 
     drop(filelock);

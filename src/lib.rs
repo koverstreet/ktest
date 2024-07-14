@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::fs::{File, OpenOptions, create_dir_all, read_to_string};
 use std::io::ErrorKind;
 use std::io::prelude::*;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::SystemTime;
 use die::die;
 use serde_derive::Deserialize;
@@ -33,10 +33,12 @@ pub fn git_get_commit(repo: &git2::Repository, reference: String) -> Result<git2
 
 #[derive(Deserialize)]
 pub struct Ktestrc {
-    pub linux_repo:         PathBuf,
-    pub output_dir:         PathBuf,
-    pub ktest_dir:          PathBuf,
-    pub users_dir:          PathBuf,
+    pub linux_repo:             PathBuf,
+    pub output_dir:             PathBuf,
+    pub ktest_dir:              PathBuf,
+    pub users_dir:              PathBuf,
+    pub subtest_duration_max:   u64,
+    pub subtest_duration_def:   u64,
 }
 
 pub fn ktestrc_read() -> anyhow::Result<Ktestrc> {
@@ -362,8 +364,8 @@ pub fn update_lcov(rc: &Ktestrc, commit_id: &String) -> Option<()> {
     Some(())
 }
 
-pub fn subtest_full_name(test: &Path, subtest: &String) -> String {
-    let test = test.to_string_lossy();
+pub fn subtest_full_name(test: &str, subtest: &str) -> String {
+    let test = test.to_owned();
     let test = test.replace(".ktest", "");
     let test = test + "." + subtest;
     let test = test.replace("/", ".");

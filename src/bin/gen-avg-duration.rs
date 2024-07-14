@@ -67,7 +67,9 @@ fn write_durations_capnp(rc: &Ktestrc, durations_in: TestDurationMap) {
 
     serialize::write_message(&mut out, &message).unwrap();
     drop(out);
-    std::fs::rename(fname_new, fname).unwrap();
+    std::fs::rename(fname_new, &fname).unwrap();
+
+    println!("wrote durations for {} tests to {}", durations_in.len(), fname.display());
 }
 
 fn main() {

@@ -118,7 +118,7 @@ fn branch_test_jobs(rc: &CiConfig, repo: &git2::Repository,
         let missing_subtests: Vec<_> = subtests
             .iter()
             .filter(|i| {
-                let full_subtest_name = subtest_full_name(&test_path, &i);
+                let full_subtest_name = subtest_full_name(&test_path.to_string_lossy(), &i);
 
                 !have_result(&results, &full_subtest_name) &&
                     !lockfile_exists(&rc.ktest, &commit, &full_subtest_name,
