@@ -54,7 +54,12 @@ fn test_duration(durations: &Option<durations::Reader>, test: &str, subtest: &st
         let full_test = subtest_full_name(test, subtest);
         let full_test = full_test.as_str();
 
-        let d = d.get_entries().unwrap();
+        let d = d.get_entries();
+        if let Err(e) = d.as_ref() {
+            eprintln!("error getting test duration entries: {}", e);
+            return None;
+        }
+        let d = d.unwrap();
 
         let mut l = 0;
         let mut r = d.len();
@@ -62,7 +67,15 @@ fn test_duration(durations: &Option<durations::Reader>, test: &str, subtest: &st
         while l < r {
             let m = l + (r - l) / 2;
             let d_m = d.get(m);
-            let d_m_test = d_m.get_test().unwrap().to_str().unwrap();
+            let d_m_test = d_m.get_test();
+
+            // why does this happen? */
+            if d_m_test.is_err() {
+                eprintln!("no test at idx {}/){}", m, d.len());
+                return None;
+            }
+
+            let d_m_test = d_m_test.unwrap().to_str().unwrap();
 
             match full_test.cmp(d_m_test) {
                 Less    => r = m,
