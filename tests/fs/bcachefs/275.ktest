@@ -1,0 +1,17 @@
+#!/bin/bash
+
+require-lib bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+
+config-timeout $(stress_timeout)
+
+config-cpus 12
+
+test_foo()
+{
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+    cd /mnt
+    /host/home/kent/github-275
+}

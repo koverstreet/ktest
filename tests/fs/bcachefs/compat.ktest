@@ -1,0 +1,19 @@
+#!/bin/bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-image /home/kent/dead-filesystems/lordkitsuna-backpointers-upgrade/dump.0
+config-image /home/kent/dead-filesystems/lordkitsuna-backpointers-upgrade/dump.1
+config-image /home/kent/dead-filesystems/lordkitsuna-backpointers-upgrade/dump.2
+config-image /home/kent/dead-filesystems/lordkitsuna-backpointers-upgrade/dump.3
+
+config-timeout $(stress_timeout)
+
+test_image()
+{
+    mount -t bcachefs -o fsck,fix_errors /dev/sdb:/dev/sdc:/dev/sdd:/dev/sde /mnt
+    run_fio_randrw
+    umount /mnt
+}
+
+main "$@"

@@ -1,0 +1,77 @@
+#!/bin/bash
+
+#export NO_BCACHEFS_DEBUG=1
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/ticpu/dump.0
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/ticpu/dump.1
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/ticpu/dump.2
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/ticpu/dump.3
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/ticpu/dump.4
+
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/noradtux/lxstore.0
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/noradtux/lxstore.1
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/noradtux/lxstore.2
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/noradtux/lxstore.3
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/noradtux/lxstore.4
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/noradtux/lxstore.5
+
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/noradtux/LXDATA
+
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/noradtux/root.0
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/noradtux/root.1
+
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../dead-filesystems/gunderson/corrupted-fs.0
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../dead-filesystems/gunderson/corrupted-fs.1
+
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../dead-filesystems/inodentry/dump3.1
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../dead-filesystems/inodentry/dump3.2
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../dead-filesystems/inodentry/dump3.3
+
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/sid127/sid127.1
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/sid127/sid127.2
+
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../dead-filesystems/sesse/corrupted-fs.0
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../dead-filesystems/sesse/corrupted-fs.1
+
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../dead-filesystems/clonejo/0
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../dead-filesystems/clonejo/1
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../dead-filesystems/clonejo/2
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../dead-filesystems/clonejo/3
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../dead-filesystems/clonejo/4
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../dead-filesystems/clonejo/5
+
+#config-rw-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/boomshroom/fs.0
+#config-rw-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/boomshroom/fs.1
+#config-rw-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/boomshroom/fs.2
+#config-rw-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/boomshroom/fs.3
+
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/syzbot/disk-9221b281.raw
+#
+config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/dead-filesystems/AinzOoalGown/bcachefs-dump
+
+#config-rw-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/../../../ssd/downgrade-test
+
+config-mem 32G
+config-cpus 12
+config-timeout $(stress_timeout)
+
+test_foo()
+{
+    if [[ -f /sys/module/bcachefs/parameters/expensive_debug_checks ]]; then
+	echo 1 > /sys/module/bcachefs/parameters/expensive_debug_checks
+    fi
+    setup_tracing 'bcachefs:transaction_commit'
+    devs=$(ls /dev/vd*|grep -v vda|paste -sd:)
+
+    cat >> /etc/fstab <<-ZZ
+OLD_BCACHEFS_UUID=foo   /mnt            bcachefs        x.systemd.requires=,x-systemd.after=
+ZZ
+
+    #mount -t bcachefs -o verbose,very_degraded,fsck,fix_errors,noratelimit_errors $devs /mnt
+    bcachefs unlock /dev/vdb
+    bcachefs mount -o verbose UUID=7594aea3-de1f-466c-8420-3c7e4997fb34 /mnt
+}
+
+main "$@"

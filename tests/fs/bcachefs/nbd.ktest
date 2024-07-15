@@ -1,0 +1,30 @@
+#!/bin/bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+
+config-timeout $(stress_timeout)
+
+DRIVES=(/dev/sd[bc])
+NBD_PORT=1043
+
+function join_by {
+	local IFS="$1"
+	shift
+	echo "$*"
+}
+
+test_nbd()
+{
+	bcachefs format --replicas=$1 --erasure_code --bucket=2M --discard /dev/sd[bc]
+
+	mount -t bcachefs $(join_by ':' "${DRIVES[@]}") /mnt
+
+	modprobe nbd
+	nbd-server $NBD_PORT /mnt/test.bin
+	nbd-client localhost $NBD_PORT /dev/nbd0
+}
+
+main "$@"

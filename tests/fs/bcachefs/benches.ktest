@@ -1,0 +1,94 @@
+#!/bin/bash
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+config-scratch-devs 32G
+
+config-timeout $(stress_timeout)
+
+test_fsmark()
+{
+    QUOTA=
+    MKFSOPTS=
+    NFILES=10000
+    DEV=/dev/sdb
+    XATTR=""
+    NO_FSCK=1
+    NO_RM=0
+    THREADS=16
+    FSTYP=xfs
+    FSTYP=bcachefs
+     
+    while [ $# -gt 0 ]; do
+	case "$1" in
+	-N)     NFILES=$2 ; shift ;;
+	-d)     DEV=$2 ; shift ;;
+	-X)     XATTR="-X $2"; shift ;;
+	-r)     NO_RM=1 ;;
+	-t)     THREADS=$2 ; shift ;;
+	--)     shift ; break ;;
+	esac
+	shift
+    done
+    MKFSOPTS="$MKFSOPTS $*"
+     
+    sh -c "echo 3 > /proc/sys/vm/drop_caches"
+     
+    echo QUOTA=$QUOTA
+    echo MKFSOPTS=$MKFSOPTS
+    echo DEV=$DEV
+    echo THREADS=$THREADS
+     
+    dirs=""
+    for i in `seq 1 $THREADS`; do
+	dirs="$dirs -d /mnt/scratch/$i"
+    done
+     
+    cycles=$((512 / $THREADS))
+
+    mkdir -p /mnt/scratch
+     
+    umount /mnt/scratch > /dev/null 2>&1 || true
+
+    blkdiscard $DEV
+
+    if [[ $FSTYP = xfs ]]; then
+	mkfs.xfs -d agcount=75 $DEV
+	mount -o logbsize=262144 $DEV /mnt/scratch
+    else
+	bcachefs format -f --version=14 --no_initialize --bucket=2M $DEV
+	mount -o version_upgrade,shard_inode_numbers $DEV /mnt/scratch
+	bcachefs device resize-journal $DEV 4G
+	umount /mnt/scratch
+	mount -o version_upgrade,shard_inode_numbers $DEV /mnt/scratch
+    fi
+     
+    chmod 777 /mnt/scratch
+    (cd /mnt/scratch; time fs_mark $XATTR -D 10000 -S0 -n $NFILES -s 0 -L $cycles $dirs)
+    xfs_io -c syncfs /mnt/scratch/
+    umount /mnt/scratch
+
+    if [ $NO_FSCK = 0 ]; then
+	echo Repair
+	if [[ $FSTYP = xfs ]]; then
+	    time xfs_repair $DEV 2>&1 | tail -25
+	else
+	    time fsck.$FSTYP $DEV 2>&1 | tail -25
+	fi
+    fi
+
+    echo Mount
+    time mount $DEV /mnt/scratch
+     
+    if [ $NO_RM -ne 0 ]; then
+	    exit
+    fi
+     
+    echo Removing files
+    for f in /mnt/scratch/* ; do time rm -rf $f &  done
+    wait
+     
+    umount /mnt/scratch
+}
+
+main "$@"

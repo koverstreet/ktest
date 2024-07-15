@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+#config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/version-10.1-image
+config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/version-11.0-image
+config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/version-11.1-image
+config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/version-11.2-image
+
+test_upgrade()
+{
+    setup_tracing 'bcachefs:*'
+    set_watchdog 60
+
+    bcachefs show-super /dev/vdb
+    #bcachefs fsck /dev/vdb || true
+    mount -t bcachefs /dev/vdb /mnt
+    umount /mnt
+
+    mount -t bcachefs /dev/vdb /mnt
+    umount /mnt
+
+    exit
+
+    for dev in /dev/vd[bcde]; do
+	bcachefs show-super $dev
+	mount -t bcachefs $dev /mnt
+	umount /mnt
+    done
+}
+
+main "$@"

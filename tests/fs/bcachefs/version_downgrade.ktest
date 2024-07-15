@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/version-new-image
+
+test_downgrade()
+{
+    set_watchdog 60
+
+    bcachefs show-super /dev/vdb
+    mount -t bcachefs -o errors=ro /dev/vdb /mnt
+    umount /mnt
+    bcachefs show-super /dev/vdb
+}
+
+main "$@"

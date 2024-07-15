@@ -1,0 +1,29 @@
+#!/bin/bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-mem 4G
+config-cpus 12
+
+config-scratch-devs 8G
+
+config-timeout $(stress_timeout)
+
+test_fsmark()
+{
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount -t bcachefs /dev/sdb /mnt
+    cd /mnt
+
+    THREADS=12
+    dirs=""
+    for i in `seq 1 $THREADS`; do
+	dirs="$dirs -d /mnt/$i"
+    done
+
+    cycles=$((512 / $THREADS))
+ 
+    fs_mark -D 10000 -S0 -n 1000 -s 0 -L $cycles $dirs
+}
+
+main "$@"

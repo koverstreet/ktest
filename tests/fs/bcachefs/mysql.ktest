@@ -1,0 +1,18 @@
+#!/bin/bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config BCACHEFS_TESTS
+
+config-scratch-devs 4G
+
+config-timeout $(stress_timeout)
+
+test_mysql()
+{
+    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    mount /dev/sdb /mnt
+
+}
+
+main "$@"

@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+
+export NO_BCACHEFS_DEBUG=1
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config BCACHEFS_ERASURE_CODING
+
+require-kernel-config MD
+require-kernel-config BLK_DEV_MD
+require-kernel-config MD_FAULTY
+
+config-scratch-devs 8G
+config-scratch-devs 8G
+config-scratch-devs 8G
+config-scratch-devs 8G
+config-scratch-devs 8G
+
+test_ec_gc()
+{
+    set_watchdog 2400
+
+    local loops=100
+
+    # We need errors=panic since we're ignoring errors from fio:
+    run_quiet "" bcachefs format -f		\
+	--replicas=2				\
+	"${ktest_scratch_dev[@]}"
+
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
+    mount -t bcachefs -o erasure_code $devs /mnt
+
+    bcachefs_antagonist
+
+    gc_torture_workload
+    umount /mnt
+
+    bcachefs fsck -n "${ktest_scratch_dev[@]}"
+
+    # test remount:
+    mount -t bcachefs $devs /mnt
+    umount /mnt
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    check_counters ${ktest_scratch_dev[0]}
+}
+
+test_ec_mixed_tiers()
+{
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--compression=lz4			\
+	--replicas=2				\
+	--label dup				\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}			\
+	--label tri				\
+	${ktest_scratch_dev[2]}			\
+	${ktest_scratch_dev[3]}			\
+	--bucket=128k				\
+	${ktest_scratch_dev[4]}			\
+	--foreground_target=dup			\
+	--promote_target=dup			\
+	--background_target=tri
+
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
+    mount -t bcachefs $devs /mnt
+
+    #enable_memory_faults
+    #run_fio_randrw
+    #dd if=/dev/zero of=/mnt/foo bs=1M count=100 oflag=direct
+    #disable_memory_faults
+
+    fill_device /mnt/fiotest
+
+    local loops=$((($ktest_priority + 1) * 3))
+    loops=1000
+
+    for i in $(seq 0 $loops); do
+	gc_torture_workload_iter
+	umount /mnt
+	mount -t bcachefs -o fsck $devs /mnt
+    done
+
+    umount /mnt
+
+    # test remount:
+    echo "Testing remount"
+    mount -t bcachefs -o fsck $devs /mnt
+    umount /mnt
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    check_counters ${ktest_scratch_dev[0]}
+}
+
+main "$@"

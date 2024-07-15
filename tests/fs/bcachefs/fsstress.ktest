@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-git http://evilpiepirate.org/git/xfstests.git ../xfstests
+
+config-scratch-devs 5G
+config-cpus 8
+
+test_fsstress()
+{
+    run_quiet "building $(basename $i)" make -j $ktest_cpus -C "$ktest_dir/tests/xfstests"
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount ${ktest_scratch_dev[0]} /mnt
+
+    $ktest_dir/tests/xfstests/ltp/fsstress -d /mnt -n 1000 -p 8
+}
+
+test_dd()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount ${ktest_scratch_dev[0]} /mnt
+
+    dd if=/dev/zero of=/mnt/foo bs=1M count=8 oflag=direct
+    dd if=/mnt/foo of=/dev/null
+}
+
+main "$@"
+

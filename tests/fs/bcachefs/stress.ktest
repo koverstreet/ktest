@@ -1,0 +1,54 @@
+#!/bin/bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 8G
+config-scratch-devs 8G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+
+config-timeout $(stress_timeout)
+
+test_high_random_stress()
+{
+    run_quiet "" bcachefs format                \
+        --block_size=4k                         \
+        --bucket=8M                             \
+        --label=ssd.ssd1 /dev/sdb               \
+        --label=ssd.ssd2 /dev/sdc               \
+        --label=ssd.ssd3 /dev/sdd               \
+        --label=ssd.ssd4 /dev/sde               \
+        --label=hdd.hdd1 /dev/sdf               \
+        --label=hdd.hdd2 /dev/sdg               \
+        --label=hdd.hdd3 /dev/sdh               \
+        --label=hdd.hdd4 /dev/sdi               \
+        --label=hdd.hdd5 /dev/sdj               \
+        --foreground_target=ssd                 \
+        --promote_target=ssd                    \
+        --background_target=hdd
+
+    mount -t bcachefs /dev/sdb:/dev/sdc:/dev/sdd:/dev/sde:/dev/sdf:/dev/sdg:/dev/sdh:/dev/sdi:/dev/sdj /mnt
+    bcachefs fs usage -h /mnt
+#   local loops=$((($ktest_priority + 1) * 4))
+
+    fio --eta=always                            \
+        --ioengine=libaio                       \
+        --group_reporting                       \
+        --iodepth=64                            \
+        --numjobs=35                            \
+	--directory=/mnt			\
+	--nrfiles=47				\
+        --size=900M                             \
+        --rw=randrw                             \
+        --name=randrw                           \
+        --bsrange=512-16k
+    bcachefs fs usage -h /mnt
+    umount /mnt
+}
+
+main "$@"

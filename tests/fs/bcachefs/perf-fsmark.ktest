@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+
+NO_BCACHEFS_DEBUG=1
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+require-kernel-config XFS_FS=y
+require-kernel-config BTRFS_FS=y
+
+require-kernel-config BCACHEFS_FS=y
+require-kernel-config BCACHEFS_TESTS
+require-kernel-config BCACHEFS_QUOTA=n
+require-kernel-config LATENCYTOP
+
+require-kernel-config INIT_STACK_NONE
+
+require-qemu-append -device vfio-pci,host=03:00.0
+require-kernel-config BLK_DEV_NVME
+
+config-mem 16G
+
+btree_node_size=512k
+t=8
+trace=false
+bcachefs_fast_mode=true
+FSTYP=bcachefs
+
+perf_mkfs()
+{
+#    blkdiscard /dev/nvme0n1
+
+    if $bcachefs_fast_mode; then
+	run_quiet "" bcachefs format -f		\
+	    --errors=panic			\
+	    --bucket=2M				\
+	    --btree_node_size=$btree_node_size	\
+	    --metadata_checksum=none		\
+	    --data_checksum=none		\
+	    --journal_transaction_names=0	\
+	    /dev/nvme0n1
+	mount -t bcachefs -o no_data_io /dev/nvme0n1 /mnt
+	run_quiet "" bcachefs device resize-journal /dev/nvme0n1 2G
+	ln -sf /sys/fs/bcachefs/*/perf_test p
+    else
+	mkfs.$FSTYP -f /dev/nvme0n1
+	mount -t $FSTYP /dev/nvme0n1 /mnt
+    fi
+}
+
+test_chmod()
+{
+    perf_mkfs
+
+    cp -xr /usr /mnt/usr1
+    cp -xr /usr /mnt/usr2
+    cp -xr /usr /mnt/usr3
+    cp -xr /usr /mnt/usr4
+
+    cat > /root/chmod.sh <<-ZZ
+    for i in `seq 1 4`; do
+	(chmod -R +x /mnt/usr$i) &
+    done
+    wait
+ZZ
+    chmod 755 /root/chmod.sh
+    perf record -ag -- /root/chmod.sh
+}
+
+main "$@"
