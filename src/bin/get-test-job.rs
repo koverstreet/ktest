@@ -47,12 +47,16 @@ fn commit_test_matches(job: &Option<TestJob>, commit: &str, test: &str) -> bool 
     false
 }
 
-fn test_duration(durations: &Option<durations::Reader>, test: &str, subtest: &str) -> Option<u64> {
-    use std::cmp::Ordering::*;
+fn test_duration(durations: Option<&[u8]>, test: &str, subtest: &str) -> Option<u64> {
 
-    if let Some(d) = durations.as_ref() {
-        let full_test = subtest_full_name(test, subtest);
-        let full_test = full_test.as_str();
+    if let Some(d) = durations {
+        let mut d = d;
+        let d_reader = serialize::read_message_from_flat_slice(&mut d, capnp::message::ReaderOptions::new()).ok();
+        let d = d_reader.as_ref().map(|x| x.get_root::<durations::Reader>().ok()).flatten();
+        if d.is_none() {
+            return None;
+        }
+        let d = d.unwrap();
 
         let d = d.get_entries();
         if let Err(e) = d.as_ref() {
@@ -60,6 +64,9 @@ fn test_duration(durations: &Option<durations::Reader>, test: &str, subtest: &st
             return None;
         }
         let d = d.unwrap();
+
+        let full_test = subtest_full_name(test, subtest);
+        let full_test = full_test.as_str();
 
         let mut l = 0;
         let mut r = d.len();
@@ -77,6 +84,7 @@ fn test_duration(durations: &Option<durations::Reader>, test: &str, subtest: &st
 
             let d_m_test = d_m_test.unwrap().to_str().unwrap();
 
+            use std::cmp::Ordering::*;
             match full_test.cmp(d_m_test) {
                 Less    => r = m,
                 Equal   => return Some(d_m.get_duration()),
@@ -88,7 +96,7 @@ fn test_duration(durations: &Option<durations::Reader>, test: &str, subtest: &st
     None
 }
 
-fn get_test_job(args: &Args, rc: &Ktestrc, durations: &Option<durations::Reader>) -> Option<TestJob> {
+fn get_test_job(args: &Args, rc: &Ktestrc, durations: Option<&[u8]>) -> Option<TestJob> {
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -171,7 +179,7 @@ fn create_job_lockfiles(rc: &Ktestrc, mut job: TestJob) -> Option<TestJob> {
     if !job.subtests.is_empty() { Some(job) } else { None }
 }
 
-fn get_and_lock_job(args: &Args, rc: &Ktestrc, durations: &Option<durations::Reader>) -> Option<TestJob> {
+fn get_and_lock_job(args: &Args, rc: &Ktestrc, durations: Option<&[u8]>) -> Option<TestJob> {
     loop {
         let job = get_test_job(args, rc, durations);
         if let Some(job) = job {
@@ -199,16 +207,15 @@ fn main() {
 
     let durations_file = File::open(rc.output_dir.join("test_durations.capnp")).ok();
     let durations_map = durations_file.map(|x| unsafe { MmapOptions::new().map(&x).ok() } ).flatten();
-    let durations_reader = durations_map.as_ref().map(|x| serialize::read_message_from_flat_slice(&mut &x[..], capnp::message::ReaderOptions::new()).ok()).flatten();
-    let durations = durations_reader.as_ref().map(|x| x.get_root::<durations::Reader>().ok()).flatten();
+    let durations = durations_map.as_ref().map(|x| x.as_ref());
 
     let lockfile = rc.output_dir.join("jobs.lock");
     let filelock = FileLock::lock(lockfile, true, FileOptions::new().create(true).write(true)).unwrap();
 
     let job = if !args.dry_run {
-        get_and_lock_job(&args, &rc, &durations)
+        get_and_lock_job(&args, &rc, durations)
     } else {
-        get_test_job(&args, &rc, &durations)
+        get_test_job(&args, &rc, durations)
     };
 
     drop(filelock);
