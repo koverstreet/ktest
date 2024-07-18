@@ -136,6 +136,9 @@ PACKAGES+=(capnproto jq)
 # ZFS support
 #PACKAGES+=("linux-headers-generic" dkms zfsutils-linux zfs-dkms)
 
+# Lustre support
+PACKAGES+=(libyaml-0-2 libyaml-dev)
+
 # suspend testing:
 # [[ $KERNEL_ARCH = x86 ]] && PACKAGES+=(uswsusp)
 
