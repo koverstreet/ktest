@@ -31,6 +31,7 @@ usage()
     echo "Usage: root_image cmd [options]"
     echo "  create		Create a new image"
     echo "  update		Update an existing image"
+    echo "  sync		Copy directory to an existing image"
     echo
     echo "options:"
     echo "  -h			Display this help and exit"
@@ -291,6 +292,31 @@ cmd_update()
 
     update_packages
     update_files
+
+    umount_image
+    trim_image "$ktest_image".new
+    mv "$ktest_image".new "$ktest_image"
+}
+
+cmd_sync()
+{
+    local source="${1:-$(pwd)/}"
+    local source_dir="$(basename "$source")"
+
+    if [[ ! -e "$ktest_image" ]]; then
+	echo "$ktest_image does not exist"
+	exit 1
+    fi
+
+    MNT="$(mktemp --tmpdir -d $(basename "$0")-XXXXXXXXXX)"
+    trap 'umount_image' EXIT
+
+    cp "$ktest_image" "$ktest_image".new
+    mount "$ktest_image".new "$MNT"
+
+    rm -rf "$MNT/workspace/$source_dir"
+    mkdir -p "$MNT/workspace/$source_dir"
+    rsync --archive -r "$source" "$MNT/workspace/$source_dir"
 
     umount_image
     trim_image "$ktest_image".new
