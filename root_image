@@ -75,14 +75,18 @@ mkdir -p "$(dirname "$ktest_image")"
 
 PACKAGES=(kexec-tools less psmisc openssh-server curl		\
     pciutils							\
-    build-essential make gcc g++				\
-    autoconf automake autopoint bison				\
     pkg-config libtool-bin					\
     gdb strace linux-perf trace-cmd blktrace sysstat iotop htop	\
     hdparm mdadm lvm2						\
     btrfs-progs jfsutils nilfs-tools f2fs-tools			\
     bc attr gawk acl rsync git python3-docutils			\
-    stress-ng)
+    stress-ng lsof)
+
+# build tools:
+PACKAGES+=(build-essential make gcc g++ clang)
+PACKAGES+=(autoconf automake autopoint bison)
+PACKAGES+=(cargo)
+PACKAGES+=(devscripts debhelper)
 
 # stress testing:
 PACKAGES+=(fio dbench bonnie++ fsmark)
