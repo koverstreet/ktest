@@ -13,7 +13,7 @@ require-make linuxquota
 
 test_usrquota_twodevices()
 {
-    run_quiet "" bcachefs format		\
+    run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	${ktest_scratch_dev[@]}
 
@@ -46,7 +46,7 @@ test_usrquota()
     if false; then
 	mkfs.xfs ${ktest_scratch_dev[0]}
     else
-	bcachefs format				\
+	bcachefs format -f			\
 	    --errors=panic			\
 	    ${ktest_scratch_dev[0]} >/dev/null
     fi
@@ -80,7 +80,7 @@ test_grpquota()
     if false; then
 	mkfs.xfs ${ktest_scratch_dev[0]}
     else
-	run_quiet "" bcachefs format		\
+	run_quiet "" bcachefs format -f		\
 	    --errors=panic			\
 	    ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} >/dev/null
     fi
@@ -101,7 +101,7 @@ test_grpquota()
 
 test_prjquota()
 {
-   run_quiet ""  bcachefs format	\
+   run_quiet ""  bcachefs format -f	\
 	--errors=panic			\
 	${ktest_scratch_dev[0]} >/dev/null
 
@@ -135,7 +135,7 @@ test_prjquota()
 
 test_prjquota_multidevices()
 {
-    run_quiet "" bcachefs format	\
+    run_quiet "" bcachefs format -f	\
 	--errors=panic			\
 	${ktest_scratch_dev[@]}
 

@@ -224,7 +224,7 @@ test_device_add()
 test_mount_umount_torture()
 {
     set_watchdog 60
-    run_quiet "" bcachefs format					\
+    run_quiet "" bcachefs format -f					\
 	--replicas=2							\
 	--label=ssd ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}	\
 	--label=hdd ${ktest_scratch_dev[2]} ${ktest_scratch_dev[3]}	\

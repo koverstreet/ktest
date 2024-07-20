@@ -578,7 +578,7 @@ test_cmd_fs_usage()
 test_rereplicate()
 {
     set_watchdog 60
-    run_quiet "" bcachefs format		\
+    run_quiet "" bcachefs format -f		\
 	${ktest_scratch_dev[0]}			\
 	${ktest_scratch_dev[1]}			\
 	${ktest_scratch_dev[2]}
@@ -647,7 +647,7 @@ test_striping()
 
 	dd if=/dev/zero of=/mnt/test1 bs=1M count=1024 oflag=direct
     else
-	run_quiet "" bcachefs format		\
+	run_quiet "" bcachefs format -f		\
 	    --data_checksum=none		\
 	    --replicas=2			\
 	    --label cache			\
@@ -767,7 +767,7 @@ test_replace_replica()
 {
     set_watchdog 60
 
-    bcachefs format --replicas=2 ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    bcachefs format -f --replicas=2 ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
     mount -t bcachefs -o degraded ${ktest_scratch_dev[0]} /mnt
 
     bcachefs device add -f /mnt ${ktest_scratch_dev[2]}
@@ -791,7 +791,7 @@ test_key_type_error()
 {
     set_watchdog 20
 
-    bcachefs format --replicas=2 ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    bcachefs format -f --replicas=2 ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
     bcachefs setattr --data_replicas=1 /mnt

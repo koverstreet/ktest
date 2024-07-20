@@ -16,7 +16,7 @@ config-timeout $(stress_timeout)
 
 test_high_random_stress()
 {
-    run_quiet "" bcachefs format                \
+    run_quiet "" bcachefs format -f             \
         --block_size=4k                         \
         --bucket=8M                             \
         --label=ssd.ssd1 /dev/sdb               \

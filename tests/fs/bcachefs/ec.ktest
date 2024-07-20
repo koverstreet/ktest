@@ -220,7 +220,7 @@ do_remove_test()
 
     set_watchdog 60
 
-    run_quiet "" bcachefs format		\
+    run_quiet "" bcachefs format -f		\
 	--erasure_code				\
 	--replicas=2				\
 	"${ktest_scratch_dev[@]}"

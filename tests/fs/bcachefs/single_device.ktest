@@ -1298,7 +1298,7 @@ build_from_fs()
 
     prepare_source_fs $1
 
-    bcachefs format				\
+    bcachefs format -f				\
 	--source=/mnt ${ktest_scratch_dev[1]} | tee /root/buildlog
 
     echo "Attempting to mount bcachefs filesystem"
