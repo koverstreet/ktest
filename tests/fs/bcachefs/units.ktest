@@ -2,8 +2,6 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
 
-require-make bcachefs-tools
-
 require-kernel-config BCACHEFS_FS
 require-kernel-config BCACHEFS_DEBUG
 require-kernel-config BCACHEFS_TESTS
