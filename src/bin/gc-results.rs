@@ -63,15 +63,23 @@ fn get_live_commits(rc: &CiConfig) -> HashSet<String>
 }
 
 fn result_is_live(commits: &HashSet<String>, d: &DirEntry) -> bool {
-    let d = d.file_name().into_string().ok();
+    let fname = d.file_name().into_string().ok();
 
-    if let Some(d) = d {
+    if let Some(fname) = fname {
         /* If it's not actually a commit, don't delete it: */
-        if d.len() < 40 {
+        if fname.len() < 40 {
             return true;
         }
 
-        commits.contains(&d[..40].to_string())
+        if commits.contains(&fname[..40].to_string()) {
+            let f = std::fs::File::open(d.path());
+            if let Ok(f) = f {
+                let _ = f.set_modified(std::time::SystemTime::now());
+            }
+            true
+        } else {
+            false
+        }
     } else {
         false
     }
