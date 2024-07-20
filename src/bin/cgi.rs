@@ -29,38 +29,34 @@ struct Ci {
     tests_matching:     Regex,
 }
 
-fn commitdir_get_results_filtered(ci: &Ci, commit_id: &String) -> TestResultsMap {
-    let results = commitdir_get_results(&ci.rc.ktest, commit_id).unwrap_or(BTreeMap::new());
-
-    filter_results(results, &ci.tests_matching)
-}
-
 struct CommitResults {
     id:             String,
     message:        String,
     tests:          TestResultsMap,
 }
 
-fn commit_get_results(ci: &Ci, commit: &git2::Commit) -> CommitResults {
-    let id = commit.id().to_string();
-    let tests = commitdir_get_results_filtered(ci, &id);
-
-    CommitResults {
-        id:         id,
-        message:    commit.message().unwrap().to_string(),
-        tests:      tests,
-    }
-}
-
 fn branch_get_results(ci: &Ci) -> Result<Vec<CommitResults>, String> {
+    fn commit_get_results(ci: &Ci, commit: &git2::Commit) -> CommitResults {
+        let id = commit.id().to_string();
+        let tests = commitdir_get_results(&ci.rc.ktest, &id).unwrap_or(BTreeMap::new());
+        let tests = filter_results(tests, &ci.tests_matching);
+
+        CommitResults {
+            id,
+            message:    commit.message().unwrap().to_string(),
+            tests,
+        }
+    }
+
     let mut nr_empty = 0;
     let mut nr_commits = 0;
     let mut ret: Vec<CommitResults> = Vec::new();
 
-    let branch = ci.branch.as_ref().unwrap();
+    let branch_or_commit =
+        ci.commit.as_ref().or(ci.branch.as_ref()).unwrap();
     let mut walk = ci.repo.revwalk().unwrap();
 
-    let reference = git_get_commit(&ci.repo, branch.clone());
+    let reference = git_get_commit(&ci.repo, branch_or_commit.clone());
     if reference.is_err() {
         /* XXX: return a 404 */
         return Err(format!("commit not found"));
@@ -68,7 +64,7 @@ fn branch_get_results(ci: &Ci) -> Result<Vec<CommitResults>, String> {
     let reference = reference.unwrap();
 
     if let Err(e) = walk.push(reference.id()) {
-        return Err(format!("Error walking {}: {}", branch, e));
+        return Err(format!("Error walking {}: {}", branch_or_commit, e));
     }
 
     for commit in walk
@@ -219,17 +215,16 @@ fn ci_log(ci: &Ci) -> cgi::Response {
 }
 
 fn ci_commit(ci: &Ci) -> cgi::Response {
-    let commit_id = ci.commit.as_ref().unwrap();
     let mut out = String::new();
-    let commit = git_get_commit(&ci.repo, commit_id.clone());
-    if commit.is_err() {
-        /* XXX: return a 404 */
-        return error_response(format!("commit not found"));
-    }
-    let commit = commit.unwrap();
-    let commit_id = commit.id().to_string(); // normalize
 
-    let message = commit.message().unwrap();
+    let commits = branch_get_results(ci);
+    if let Err(e) = commits {
+        return error_response(e);
+    }
+    let commits = commits.unwrap();
+
+    let first_commit = &commits[0];
+    let message = &first_commit.message;
     let subject_len = message.find('\n').unwrap_or(message.len());
 
     writeln!(&mut out, "<!DOCTYPE HTML>").unwrap();
@@ -241,24 +236,24 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
 
     writeln!(&mut out, "<h3><th>{}</th></h3>", &message[..subject_len]).unwrap();
 
-    update_lcov(&ci.rc.ktest, &commit_id);
+    update_lcov(&ci.rc.ktest, &first_commit.id);
 
-    if ci.rc.ktest.output_dir.join(&commit_id).join("lcov").exists() {
-        writeln!(&mut out, "<p> <a href=c/{}/lcov> Code coverage </a> </p>", &commit_id).unwrap();
+    if ci.rc.ktest.output_dir.join(&first_commit.id).join("lcov").exists() {
+        writeln!(&mut out, "<p> <a href=c/{}/lcov> Code coverage </a> </p>", &first_commit.id).unwrap();
     }
 
     out.push_str(COMMIT_FILTER);
 
     writeln!(&mut out, "<table class=\"table\">").unwrap();
 
-    for (name, result) in commitdir_get_results_filtered(ci, &commit_id) {
+    for (name, result) in &first_commit.tests {
         writeln!(&mut out, "<tr class={}>", result.status.table_class()).unwrap();
         writeln!(&mut out, "<td> {} </td>", name).unwrap();
         writeln!(&mut out, "<td> {} </td>", result.status.to_str()).unwrap();
         writeln!(&mut out, "<td> {}s </td>", result.duration).unwrap();
-        writeln!(&mut out, "<td> <a href=c/{}/{}/log.br>        log                 </a> </td>", &commit_id, name).unwrap();
-        writeln!(&mut out, "<td> <a href=c/{}/{}/full_log.br>   full log            </a> </td>", &commit_id, name).unwrap();
-        writeln!(&mut out, "<td> <a href=c/{}/{}>		        output directory    </a> </td>", &commit_id, name).unwrap();
+        writeln!(&mut out, "<td> <a href=c/{}/{}/log.br>        log                 </a> </td>", &first_commit.id, name).unwrap();
+        writeln!(&mut out, "<td> <a href=c/{}/{}/full_log.br>   full log            </a> </td>", &first_commit.id, name).unwrap();
+        writeln!(&mut out, "<td> <a href=c/{}/{}>		        output directory    </a> </td>", &first_commit.id, name).unwrap();
 
         if let Some(branch) = &ci.branch {
             writeln!(&mut out, "<td> <a href={}?branch={}&test=^{}$> git log        </a> </td>",
