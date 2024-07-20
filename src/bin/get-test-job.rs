@@ -156,7 +156,9 @@ fn get_test_job(args: &Args, rc: &Ktestrc, durations: Option<&[u8]>) -> Option<T
         }
     }
 
-    let _ = file.set_len(len);
+    if !args.dry_run {
+        let _ = file.set_len(len);
+    }
 
     ret
 }
