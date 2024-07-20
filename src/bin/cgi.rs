@@ -302,7 +302,10 @@ fn ci_user(ci: &Ci) -> cgi::Response {
 
     writeln!(&mut out, "<body>").unwrap();
 
-    ci_list_branches(ci, &u, &mut out);
+    match u {
+        Ok(u)   => ci_list_branches(ci, &u, &mut out),
+        Err(e)  => writeln!(out, "error parsing user config: {}", e).unwrap(),
+    }
 
     writeln!(&mut out, "</body>").unwrap();
     writeln!(&mut out, "</html>").unwrap();

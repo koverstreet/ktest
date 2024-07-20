@@ -167,7 +167,8 @@ fn user_test_jobs(rc: &CiConfig, repo: &git2::Repository,
 fn rc_test_jobs(rc: &CiConfig, repo: &git2::Repository,
                 verbose: bool) -> Vec<TestJob> {
     let mut ret: Vec<_> = rc.users.iter()
-        .flat_map(|(_, user)| user_test_jobs(rc, repo, &user, verbose))
+        .filter_map(|u| u.1.as_ref().ok())
+        .flat_map(|user| user_test_jobs(rc, repo, &user, verbose))
         .collect();
 
     /* sort by commit, dedup */
@@ -211,7 +212,7 @@ fn write_test_jobs(rc: &CiConfig, jobs_in: Vec<TestJob>, verbose: bool) -> anyho
 
 fn fetch_remotes(rc: &CiConfig, repo: &git2::Repository) -> anyhow::Result<bool> {
     fn fetch_remotes_locked(rc: &CiConfig, repo: &git2::Repository) -> Result<(), git2::Error> {
-        for (_, userconfig) in &rc.users {
+        for userconfig in rc.users.iter().filter_map(|u| u.1.as_ref().ok()) {
             for (branch, branchconfig) in &userconfig.branch {
                 let fetch = branchconfig.fetch
                     .split_whitespace()

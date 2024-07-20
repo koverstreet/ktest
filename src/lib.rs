@@ -50,7 +50,7 @@ pub fn ktestrc_read() -> anyhow::Result<Ktestrc> {
 
 pub struct CiConfig {
     pub ktest:              Ktestrc,
-    pub users:              BTreeMap<String, Userrc>,
+    pub users:              BTreeMap<String, anyhow::Result<Userrc>>,
 }
 
 pub fn ciconfig_read() -> anyhow::Result<CiConfig> {
@@ -63,7 +63,7 @@ pub fn ciconfig_read() -> anyhow::Result<CiConfig> {
         .filter_map(|x| x.ok())
         .map(|i| i.path()){
         rc.users.insert(i.file_stem().unwrap().to_string_lossy().to_string(),
-                        users::userrc_read(&i)?);
+                        users::userrc_read(&i));
     }
 
     Ok(rc)

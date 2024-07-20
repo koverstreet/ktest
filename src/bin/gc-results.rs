@@ -49,11 +49,13 @@ fn get_live_commits(rc: &CiConfig) -> HashSet<String>
     let mut ret: HashSet<String> = HashSet::new();
 
     for (_, user) in rc.users.iter() {
-        for (branch, branch_config) in user.branch.iter()  {
-            for test_group in branch_config.tests.iter() {
-                let max_commits = user.test_group.get(test_group).map(|x| x.max_commits).unwrap_or(0);
-                for commit in branch_get_commits(&repo, &branch, max_commits) {
-                    ret.insert(commit);
+        if let Ok(user) = user {
+            for (branch, branch_config) in user.branch.iter()  {
+                for test_group in branch_config.tests.iter() {
+                    let max_commits = user.test_group.get(test_group).map(|x| x.max_commits).unwrap_or(0);
+                    for commit in branch_get_commits(&repo, &branch, max_commits) {
+                        ret.insert(commit);
+                    }
                 }
             }
         }
