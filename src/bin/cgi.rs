@@ -214,6 +214,24 @@ fn ci_log(ci: &Ci) -> cgi::Response {
     cgi::html_response(200, out)
 }
 
+fn last_good_line(results: &Vec<CommitResults>, test: &str) -> String {
+    for (idx, result) in results.iter().map(|i| i.tests.get(test)).enumerate() {
+        if let Some(result) = result {
+            if result.status == TestStatus::Passed {
+                return format!("Passed {} commits ago", idx);
+            }
+
+            if result.status != TestStatus::Failed {
+                return format!("Last {} commits failed", idx);
+            }
+        } else {
+            return format!("Last {} commits failed", idx);
+        }
+    }
+
+    return format!("Last {} commits failed", results.len());
+}
+
 fn ci_commit(ci: &Ci) -> cgi::Response {
     let mut out = String::new();
 
@@ -260,6 +278,7 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
                      ci.script_name, &branch, name).unwrap();
         }
 
+        writeln!(&mut out, "<td> {} </td>", last_good_line(&commits, name)).unwrap();
         writeln!(&mut out, "</tr>").unwrap();
     }
 
