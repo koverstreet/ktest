@@ -10,6 +10,28 @@ use ci_cgi::{CiConfig, Userrc, ciconfig_read, TestResultsMap, TestStatus, commit
 const COMMIT_FILTER:    &str = include_str!("../../commit-filter");
 const STYLESHEET:       &str = "bootstrap.min.css";
 
+const COMMIT_CSS_JS:       &str =
+"
+<style>
+.toplevel-container {
+        margin-left: 10px;
+}
+.horizontal {
+        margin-right: 10px;
+}
+.horizontal-container {
+        display: flex;
+        flex-direction: row;
+}
+</style>
+<script>
+document.getElementById('myLink').addEventListener('click', function(event) {
+    event.preventDefault(); // Prevents the default link behavior
+    alert('Link clicked!');
+});
+</script>
+";
+
 fn filter_results(r: TestResultsMap, tests_matching: &Regex) -> TestResultsMap {
     r.iter()
         .filter(|i| tests_matching.is_match(&i.0) )
@@ -232,6 +254,19 @@ fn last_good_line(results: &Vec<CommitResults>, test: &str) -> String {
     return format!("&gt;= {}", results.len());
 }
 
+fn log_link(out: &mut String, fname: &str, link: &str) {
+    let onclick = format!(
+"fetch('{}')
+    .then(response => response.text())
+    .then(text => {{
+        document.getElementById('testlog').textContent = text;
+  }});
+  return false;
+", &fname);
+
+    writeln!(out, "<td> <a href={} onclick=\"{}\"> {} </a> </td>", fname, onclick, link).unwrap();
+}
+
 fn ci_commit(ci: &Ci) -> cgi::Response {
     let mut out = String::new();
 
@@ -250,7 +285,7 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
     writeln!(&mut out, "<link href=\"{}\" rel=\"stylesheet\">", ci.stylesheet).unwrap();
 
     writeln!(&mut out, "<body>").unwrap();
-    writeln!(&mut out, "<div class=\"container\">").unwrap();
+    writeln!(&mut out, "<div class=\"toplevel-container\">").unwrap();
 
     writeln!(&mut out, "<h3><th>{}</th></h3>", &message[..subject_len]).unwrap();
 
@@ -261,21 +296,24 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
     }
 
     out.push_str(COMMIT_FILTER);
+    out.push_str(COMMIT_CSS_JS);
 
+    writeln!(&mut out, "<div class=\"horizontal-container\">").unwrap();
+
+    writeln!(&mut out, "<div class=\"horizontal\">").unwrap();
     writeln!(&mut out, "<table class=\"table\">").unwrap();
-
     for (name, result) in &first_commit.tests {
         writeln!(&mut out, "<tr class={}>", result.status.table_class()).unwrap();
-        writeln!(&mut out, "<td> {}  </td>", name).unwrap();
+        log_link(&mut out, &format!("c/{}/{}/log.br", &first_commit.id, name), name);
         writeln!(&mut out, "<td> {}s </td>", result.duration).unwrap();
         writeln!(&mut out, "<td> {}  </td>", result.status.to_str()).unwrap();
         writeln!(&mut out, "<td> {}  </td>", last_good_line(&commits, name)).unwrap();
         if let Some(branch) = &ci.branch {
-            writeln!(&mut out, "<td> <a href={}?branch={}&test=^{}$> log            </a> </td>",
+            writeln!(&mut out, "<td> <a href={}?branch={}&test=^{}$> git log        </a> </td>",
                      ci.script_name, &branch, name).unwrap();
         }
-        writeln!(&mut out, "<td> <a href=c/{}/{}/log.br>        out                 </a> </td>", &first_commit.id, name).unwrap();
-        writeln!(&mut out, "<td> <a href=c/{}/{}/full_log.br>   full                </a> </td>", &first_commit.id, name).unwrap();
+
+        log_link(&mut out, &format!("c/{}/{}/full_log.br", &first_commit.id, name), "full");
 
         /*  We're not currently using this:
         writeln!(&mut out, "<td> <a href=c/{}/{}>		        output directory    </a> </td>", &first_commit.id, name).unwrap();
@@ -283,8 +321,13 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
 
         writeln!(&mut out, "</tr>").unwrap();
     }
-
     writeln!(&mut out, "</table>").unwrap();
+    writeln!(&mut out, "</div>").unwrap();
+
+    writeln!(&mut out, "<div class=\"horizontal\">").unwrap();
+    writeln!(&mut out, " <pre id=\"testlog\"></pre> ").unwrap();
+    writeln!(&mut out, "</div>").unwrap();
+
     writeln!(&mut out, "</div>").unwrap();
     writeln!(&mut out, "</body>").unwrap();
     writeln!(&mut out, "</html>").unwrap();
