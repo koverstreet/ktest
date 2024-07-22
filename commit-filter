@@ -29,7 +29,7 @@ maybe relocate the script block to within <head></head>
 <script>
 (function () {
     function get_row_status(el) {
-        return el.querySelector("td:nth-child(2)").textContent.trim()
+        return el.querySelector("td:nth-child(3)").textContent.trim()
     }
     function refresh_filters() {
         const shown_statuses = new Set()

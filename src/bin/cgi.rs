@@ -218,18 +218,18 @@ fn last_good_line(results: &Vec<CommitResults>, test: &str) -> String {
     for (idx, result) in results.iter().map(|i| i.tests.get(test)).enumerate() {
         if let Some(result) = result {
             if result.status == TestStatus::Passed {
-                return format!("Passed {} commits ago", idx);
+                return format!("{}", idx);
             }
 
             if result.status != TestStatus::Failed {
-                return format!("Last {} commits failed", idx);
+                return format!("&gt;= {}", idx);
             }
         } else {
-            return format!("Last {} commits failed", idx);
+            return format!("&gt;= {}", idx);
         }
     }
 
-    return format!("Last {} commits failed", results.len());
+    return format!("&gt;= {}", results.len());
 }
 
 fn ci_commit(ci: &Ci) -> cgi::Response {
@@ -266,19 +266,21 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
 
     for (name, result) in &first_commit.tests {
         writeln!(&mut out, "<tr class={}>", result.status.table_class()).unwrap();
-        writeln!(&mut out, "<td> {} </td>", name).unwrap();
-        writeln!(&mut out, "<td> {} </td>", result.status.to_str()).unwrap();
+        writeln!(&mut out, "<td> {}  </td>", name).unwrap();
         writeln!(&mut out, "<td> {}s </td>", result.duration).unwrap();
-        writeln!(&mut out, "<td> <a href=c/{}/{}/log.br>        log                 </a> </td>", &first_commit.id, name).unwrap();
-        writeln!(&mut out, "<td> <a href=c/{}/{}/full_log.br>   full log            </a> </td>", &first_commit.id, name).unwrap();
-        writeln!(&mut out, "<td> <a href=c/{}/{}>		        output directory    </a> </td>", &first_commit.id, name).unwrap();
-
+        writeln!(&mut out, "<td> {}  </td>", result.status.to_str()).unwrap();
+        writeln!(&mut out, "<td> {}  </td>", last_good_line(&commits, name)).unwrap();
         if let Some(branch) = &ci.branch {
-            writeln!(&mut out, "<td> <a href={}?branch={}&test=^{}$> git log        </a> </td>",
+            writeln!(&mut out, "<td> <a href={}?branch={}&test=^{}$> log            </a> </td>",
                      ci.script_name, &branch, name).unwrap();
         }
+        writeln!(&mut out, "<td> <a href=c/{}/{}/log.br>        out                 </a> </td>", &first_commit.id, name).unwrap();
+        writeln!(&mut out, "<td> <a href=c/{}/{}/full_log.br>   full                </a> </td>", &first_commit.id, name).unwrap();
 
-        writeln!(&mut out, "<td> {} </td>", last_good_line(&commits, name)).unwrap();
+        /*  We're not currently using this:
+        writeln!(&mut out, "<td> <a href=c/{}/{}>		        output directory    </a> </td>", &first_commit.id, name).unwrap();
+        */
+
         writeln!(&mut out, "</tr>").unwrap();
     }
 
