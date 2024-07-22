@@ -15,13 +15,18 @@ const COMMIT_CSS_JS:       &str =
 <style>
 .toplevel-container {
         margin-left: 10px;
+        height: 100%;
 }
-.horizontal {
-        margin-right: 10px;
+.header {
+        position: absolute;
 }
 .horizontal-container {
         display: flex;
         flex-direction: row;
+}
+.horizontal {
+        margin-right: 10px;
+        overflow-y: scroll
 }
 </style>
 <script>
@@ -281,6 +286,8 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
     let subject_len = message.find('\n').unwrap_or(message.len());
 
     writeln!(&mut out, "<!DOCTYPE HTML>").unwrap();
+
+    writeln!(&mut out, "<div class=\"header\">").unwrap();
     writeln!(&mut out, "<html><head><title>{}</title></head>", &message[..subject_len]).unwrap();
     writeln!(&mut out, "<link href=\"{}\" rel=\"stylesheet\">", ci.stylesheet).unwrap();
 
@@ -297,6 +304,7 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
 
     out.push_str(COMMIT_FILTER);
     out.push_str(COMMIT_CSS_JS);
+    writeln!(&mut out, "</div>").unwrap();
 
     writeln!(&mut out, "<div class=\"horizontal-container\">").unwrap();
 
