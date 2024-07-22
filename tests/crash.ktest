@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/test-libs.sh"
+
 config-mem 512M
 config-timeout 120
 
-main()
+test_crash()
 {
     echo c > /proc/sysrq-trigger
 }
+
+main "$@"

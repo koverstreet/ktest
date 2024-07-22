@@ -317,6 +317,7 @@ cmd_create()
 	--no-check-gpg					\
 	--arch="$DEBIAN_ARCH"				\
 	--exclude=$(join_by , "${EXCLUDE[@]}")		\
+	--no-merged-usr					\
 	--foreign					\
 	sid "$MNT" "$MIRROR"
 
