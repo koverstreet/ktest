@@ -28,6 +28,7 @@ if [[ ! -v ktest_verbose ]]; then
     ktest_kernel_config_require=()
     ktest_qemu_append=()
     ktest_compiler=gcc
+    ktest_allow_taint=false
 
     BUILD_ON_HOST=""
 fi
@@ -203,6 +204,11 @@ config-compiler()
     ktest_compiler=$1
 }
 
+allow_taint()
+{
+    ktest_allow_taint=true
+}
+
 set_watchdog()
 {
     ktest_timeout=$(($ktest_timeout_multiplier * $1))
@@ -314,6 +320,7 @@ main()
 	    echo "ktest_make_install=(${ktest_make_install[@]})"
 	    echo "ktest_kernel_config_require=(${ktest_kernel_config_require[@]})"
 	    echo "ktest_qemu_append=(${ktest_qemu_append[@]})"
+	    echo "ktest_allow_taint=$ktest_allow_taint"
 	    ;;
 	list-tests)
 	    list_tests
