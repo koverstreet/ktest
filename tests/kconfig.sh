@@ -226,6 +226,7 @@ require-kernel-config FTRACE
 require-kernel-config FTRACE_SYSCALLS
 require-kernel-config FUNCTION_TRACER
 #require-kernel-config ENABLE_DEFAULT_TRACERS
+require-kernel-config MEM_ALLOC_PROFILING
 
 require-kernel-config PANIC_ON_OOPS
 require-kernel-config SOFTLOCKUP_DETECTOR
