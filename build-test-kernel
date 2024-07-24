@@ -176,7 +176,12 @@ kernel_opt()
 
 	    if [[ $c != $val ]]; then
 		echo "Kernel config option $opt is $c; should be $val"
-		ret=1
+
+		# If the current kernel doesn't have the option available,
+		# don't fail
+		if [[ $(cd $ktest_kernel_source; git grep "CONFIG_$opt") ]]; then
+		    ret=1
+		fi
 	    fi
 	    ;;
     esac
