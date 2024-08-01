@@ -267,22 +267,22 @@ do_remove_test()
     check_counters ${ktest_scratch_dev[0]}
 }
 
-d_test_device_remove_offline()
+test_device_remove_offline()
 {
     do_remove_test 1 0
 }
 
-d_test_device_remove_online()
+test_device_remove_online()
 {
     do_remove_test 0 0
 }
 
-d_test_device_evacuate_offline()
+test_device_evacuate_offline()
 {
     do_remove_test 1 1
 }
 
-d_test_device_evacuate_online()
+test_device_evacuate_online()
 {
     do_remove_test 0 1
 }
