@@ -36,6 +36,11 @@ const COMMIT_CSS_JS:    &str =
         #filters label {
                 margin-left: 0.3em;
         }
+        .table.no-wrap,
+        .table.no-wrap td,
+        .table.no-wrap th {
+                white-space: nowrap;
+        }
 </style>
 <script>
         document.getElementById('myLink').addEventListener('click', function(event) {
@@ -360,7 +365,7 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
     writeln!(&mut out, "<div class=\"horizontal-container\">").unwrap();
 
     writeln!(&mut out, "<div class=\"horizontal\">").unwrap();
-    writeln!(&mut out, "<table class=\"table\">").unwrap();
+    writeln!(&mut out, "<table class=\"table no-wrap\">").unwrap();
     for (name, result) in &first_commit.tests {
         writeln!(&mut out, "<tr class={}>", result.status.table_class()).unwrap();
         log_link(&mut out, &format!("c/{}/{}/log.br", &first_commit.id, name), name);
