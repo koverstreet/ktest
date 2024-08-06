@@ -39,6 +39,7 @@ case $ktest_arch in
 	require-kernel-append console=hvc0
 	;;
     aarch64)
+	require-kernel-config CPU_LITTLE_ENDIAN
 	require-kernel-config PCI_HOST_GENERIC
 	require-kernel-config RTC_DRV_PL031
 
