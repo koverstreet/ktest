@@ -7,34 +7,84 @@ extern crate querystring;
 
 use ci_cgi::{CiConfig, Userrc, ciconfig_read, TestResultsMap, TestStatus, commitdir_get_results, git_get_commit, workers_get, update_lcov};
 
-const COMMIT_FILTER:    &str = include_str!("../../commit-filter");
 const STYLESHEET:       &str = "bootstrap.min.css";
 
-const COMMIT_CSS_JS:       &str =
+const COMMIT_CSS_JS:    &str =
 "
 <style>
-.toplevel-container {
-        margin-left: 10px;
-        height: 100%;
-}
-.header {
-        position: absolute;
-}
-.horizontal-container {
-        display: flex;
-        flex-direction: row;
-}
-.horizontal {
-        margin-right: 10px;
-        overflow-y: scroll
-}
+        .toplevel-container {
+                margin-left: 10px;
+                height: 100%;
+        }
+        .header {
+                position: absolute;
+        }
+        .horizontal-container {
+                display: flex;
+                flex-direction: row;
+        }
+        .horizontal {
+                margin-right: 10px;
+                overflow-y: scroll
+        }
+        .filtered {
+                display: none;
+        }
+        #filters {
+                margin: 1em 0;
+        }
+        #filters label {
+                margin-left: 0.3em;
+        }
 </style>
 <script>
-document.getElementById('myLink').addEventListener('click', function(event) {
-    event.preventDefault(); // Prevents the default link behavior
-    alert('Link clicked!');
-});
+        document.getElementById('myLink').addEventListener('click', function(event) {
+                event.preventDefault();
+                alert('Link clicked!');
+        });
+        function getSelectedRadioValue(name) {                
+                const radios = document.getElementsByName(name);
+                                                                
+                for (let i = 0; i < radios.length; i++) {       
+                        if (radios[i].checked) {
+                                return radios[i].value;            
+                        }                                                 
+                }                                                         
+                                                                          
+                return null;                                   
+        }                                                   
+                                                            
+        function get_row_status(el) {
+                return el.querySelector('td:nth-child(3)').textContent.trim()                                                
+        }                                                                                                                    
+                                                                                                                             
+        function update_filter() {                                                                                           
+                const v = getSelectedRadioValue('testfilter');                                                               
+                const el_table = document.querySelector('table')                                                             
+                                                                                                                             
+                for (const el of el_table.querySelectorAll('tr')) {                                                          
+                        if (!v || v == 'All' || v == get_row_status(el)) {                                                   
+                                el.classList.remove('filtered')                                                              
+                        } else {                                                                                             
+                                el.classList.add('filtered')                                                                 
+                        }                                                                                                    
+                }                                                                                                            
+        }
 </script>
+";
+
+const COMMIT_FILTER:    &str =
+"
+<div id=filters>
+    Filter by:                                         
+    <label><input type=radio name=testfilter onchange='update_filter()' value='Passed'>         Passed</label>
+    <label><input type=radio name=testfilter onchange='update_filter()' value='Failed' checked> Failed</label>
+    <label><input type=radio name=testfilter onchange='update_filter()' value='Not run'>        Not run</label>
+    <label><input type=radio name=testfilter onchange='update_filter()' value='Not started'>    Not started</label>
+    <label><input type=radio name=testfilter onchange='update_filter()' value='In progress'>    In progress</label>
+    <label><input type=radio name=testfilter onchange='update_filter()' value='Unknown'>        Unknown</label>
+    <label><input type=radio name=testfilter onchange='update_filter()' value='All'>            All</label>
+</div>
 ";
 
 fn filter_results(r: TestResultsMap, tests_matching: &Regex) -> TestResultsMap {
@@ -285,7 +335,11 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
     let message = &first_commit.message;
     let subject_len = message.find('\n').unwrap_or(message.len());
 
+    update_lcov(&ci.rc.ktest, &first_commit.id);
+
     writeln!(&mut out, "<!DOCTYPE HTML>").unwrap();
+
+    out.push_str(COMMIT_CSS_JS);
 
     writeln!(&mut out, "<div class=\"header\">").unwrap();
     writeln!(&mut out, "<html><head><title>{}</title></head>", &message[..subject_len]).unwrap();
@@ -296,14 +350,11 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
 
     writeln!(&mut out, "<h3><th>{}</th></h3>", &message[..subject_len]).unwrap();
 
-    update_lcov(&ci.rc.ktest, &first_commit.id);
-
     if ci.rc.ktest.output_dir.join(&first_commit.id).join("lcov").exists() {
         writeln!(&mut out, "<p> <a href=c/{}/lcov> Code coverage </a> </p>", &first_commit.id).unwrap();
     }
 
     out.push_str(COMMIT_FILTER);
-    out.push_str(COMMIT_CSS_JS);
     writeln!(&mut out, "</div>").unwrap();
 
     writeln!(&mut out, "<div class=\"horizontal-container\">").unwrap();
@@ -335,6 +386,8 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
     writeln!(&mut out, "<div class=\"horizontal\">").unwrap();
     writeln!(&mut out, " <pre id=\"testlog\"></pre> ").unwrap();
     writeln!(&mut out, "</div>").unwrap();
+
+    writeln!(&mut out, "<script>update_filter()</script>").unwrap();
 
     writeln!(&mut out, "</div>").unwrap();
     writeln!(&mut out, "</body>").unwrap();
