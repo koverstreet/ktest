@@ -15,7 +15,7 @@ config-scratch-devs 4G
 test_wipe_btrfs()
 {
     set_watchdog 10
-    mkfs.btrfs  ${ktest_scratch_dev[0]}
+    mkfs.btrfs -f  ${ktest_scratch_dev[0]}
     bcachefs format -f ${ktest_scratch_dev[0]}
 
     ! mount -t btrfs ${ktest_scratch_dev[0]} /mnt
@@ -118,7 +118,7 @@ test_extent_merge2()
 
     set_watchdog 10
 
-    [[ -f $p ]] && echo 1 > p
+    [[ -f $p ]] && echo 1 > $p
 
     run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
@@ -131,7 +131,7 @@ test_extent_merge2()
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
     check_counters ${ktest_scratch_dev[0]}
 
-    [[ -f $p ]] && echo 0 > p
+    [[ -f $p ]] && echo 0 > $p
     true
 }
 
@@ -1152,7 +1152,7 @@ require-kernel-config BLK_DEV_DM
 test_offline_resize_lv()
 {
     set_watchdog 60
-    pvcreate ${ktest_scratch_dev[0]}
+    pvcreate -f ${ktest_scratch_dev[0]}
     vgcreate vg ${ktest_scratch_dev[0]}
     lvcreate -L 1G -n foo  vg
     dev=/dev/vg/foo
@@ -1220,11 +1220,12 @@ test_set_option()
 	${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
-    bcachefs set-option --compression=zstd ${ktest_scratch_dev[0]}
+    bcachefs set-fs-option --compression=zstd ${ktest_scratch_dev[0]}
     cat /sys/fs/bcachefs/*/options/compression
     umount /mnt
 
-    bcachefs set-option --compression=lz4 ${ktest_scratch_dev[0]}
+    echo "Setting option on offline fs"
+    bcachefs set-fs-option --compression=lz4 ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     cat /sys/fs/bcachefs/*/options/compression
