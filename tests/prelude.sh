@@ -295,6 +295,13 @@ list_tests()
     declare -F|sed -ne '/ test_/ s/.*test_// p'
 }
 
+run_init_hooks()
+{
+    for h in `declare -F|grep -Eo '\<init_.*'`; do
+	$h
+    done
+}
+
 main()
 {
     if [[ $# = 0 ]]; then
@@ -326,6 +333,7 @@ main()
 	    list_tests
 	    ;;
 	run-tests)
+	    run_init_hooks
 	    run_tests "$@"
 	    ;;
 	*)
