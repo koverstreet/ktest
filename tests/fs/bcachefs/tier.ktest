@@ -138,8 +138,8 @@ test_setattr()
     touch /mnt/foo
     touch /mnt/bar
 
-    bcachefs set-fs-option --foreground_target $(basename ${ktest_scratch_dev[0]}) /mnt/
-    bcachefs set-fs-option --promote_target ssd /mnt/
+    bcachefs set-file-option --foreground_target $(basename ${ktest_scratch_dev[0]}) /mnt/
+    bcachefs set-file-option --promote_target ssd /mnt/
 
     umount /mnt
 
