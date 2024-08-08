@@ -34,8 +34,7 @@ use memmap::MmapOptions;
 use std::fs::OpenOptions;
 use std::str;
 
-use ci_cgi::durations_capnp::durations;
-use capnp::serialize;
+use ci_cgi::test_duration;
 
 fn commit_test_matches(job: &Option<TestJob>, commit: &str, test: &str) -> bool {
     if let Some(job) = job {
@@ -45,55 +44,6 @@ fn commit_test_matches(job: &Option<TestJob>, commit: &str, test: &str) -> bool 
     }
 
     false
-}
-
-fn test_duration(durations: Option<&[u8]>, test: &str, subtest: &str) -> Option<u64> {
-
-    if let Some(d) = durations {
-        let mut d = d;
-        let d_reader = serialize::read_message_from_flat_slice(&mut d, capnp::message::ReaderOptions::new()).ok();
-        let d = d_reader.as_ref().map(|x| x.get_root::<durations::Reader>().ok()).flatten();
-        if d.is_none() {
-            return None;
-        }
-        let d = d.unwrap();
-
-        let d = d.get_entries();
-        if let Err(e) = d.as_ref() {
-            eprintln!("error getting test duration entries: {}", e);
-            return None;
-        }
-        let d = d.unwrap();
-
-        let full_test = subtest_full_name(test, subtest);
-        let full_test = full_test.as_str();
-
-        let mut l = 0;
-        let mut r = d.len();
-
-        while l < r {
-            let m = l + (r - l) / 2;
-            let d_m = d.get(m);
-            let d_m_test = d_m.get_test();
-
-            // why does this happen? */
-            if d_m_test.is_err() {
-                eprintln!("no test at idx {}/){}", m, d.len());
-                return None;
-            }
-
-            let d_m_test = d_m_test.unwrap().to_str().unwrap();
-
-            use std::cmp::Ordering::*;
-            match full_test.cmp(d_m_test) {
-                Less    => r = m,
-                Equal   => return Some(d_m.get_duration()),
-                Greater => l = m,
-            }
-        }
-    }
-
-    None
 }
 
 fn get_test_job(args: &Args, rc: &Ktestrc, durations: Option<&[u8]>) -> Option<TestJob> {
