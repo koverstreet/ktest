@@ -184,6 +184,9 @@ require-kernel-config NETDEVICES
 
 # Filesystems:
 require-kernel-config TMPFS
+require-kernel-config TMPFS_POSIX_ACL
+require-kernel-config TMPFS_XATTR
+require-kernel-config TMPFS_QUOTA
 require-kernel-config INOTIFY_USER
 require-kernel-config CONFIGFS_FS	# systemd
 
