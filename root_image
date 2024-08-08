@@ -254,11 +254,6 @@ update_packages()
     _chroot "$MNT" apt-get -qq upgrade
     _chroot "$MNT" apt-get -qq install --no-install-recommends "${PACKAGES[@]}"
     rm -f "$MNT/var/cache/apt/archives/*.deb"
-
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > "$MNT"/tmp/rustup.sh
-    chmod 755 "$MNT"/tmp/rustup.sh
-
-    _chroot "$MNT" /tmp/rustup.sh -y
 }
 
 trim_image()
