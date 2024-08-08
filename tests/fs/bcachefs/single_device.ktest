@@ -1672,8 +1672,8 @@ test_setattr()
     mkdir /mnt/foo
     touch /mnt/foo/bar
 
-    bcachefs set-fs-option --compression lz4 /mnt/foo
-    bcachefs set-fs-option --foreground_target= /mnt/foo
+    bcachefs set-file-option --compression lz4 /mnt/foo
+    bcachefs set-file-option --foreground_target= /mnt/foo
     getfattr -R -d -m - /mnt
 
     umount /mnt
