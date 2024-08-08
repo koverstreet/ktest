@@ -1,12 +1,14 @@
 use std::collections::BTreeMap;
 use std::process;
-use std::fs::{File, read_to_string};
-use ci_cgi::{Ktestrc, ktestrc_read};
-use walkdir::WalkDir;
+use std::fs::File;
+use ci_cgi::{Ktestrc, ktestrc_read, commitdir_get_results, TestStatus};
 
+#[derive(Default, Debug)]
 struct TestDuration {
     secs:       u64,
     nr:         u64,
+    nr_passed:  u64,
+    nr_failed:  u64,
 }
 
 type TestDurationMap = BTreeMap<String, TestDuration>;
@@ -14,31 +16,26 @@ type TestDurationMap = BTreeMap<String, TestDuration>;
 fn read_duration_sums(rc: &Ktestrc) -> TestDurationMap {
     let mut durations: BTreeMap<String, TestDuration> = BTreeMap::new();
 
-    for i in WalkDir::new(&rc.output_dir)
+    for i in std::fs::read_dir(&rc.output_dir).unwrap()
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_name() == "duration") {
-        let i = i.into_path();
+        .filter(|e| e.metadata().unwrap().is_dir())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter_map(|e| commitdir_get_results(rc, &e).ok()) {
 
-        let duration: Option<u64> = read_to_string(&i).ok()
-            .map(|d| d.parse().ok())
-            .flatten();
-        if duration.is_none() {
-            continue;
-        }
-        let duration = duration.unwrap();
-        let test = i.components().nth_back(1);
-        if test.is_none() {
-            continue;
-        }
-        let test = test.unwrap().as_os_str().to_string_lossy().to_string();
+        for (test, result) in i {
+            let mut t = durations.get_mut(&test);
 
-        let t = durations.get_mut(&test);
-        if let Some(t) = t {
-            t.secs  += duration;
-            t.nr    += 1;
-        } else {
-            durations.insert(test, TestDuration { secs: duration, nr: 1 });
+            if t.is_none() {
+                durations.insert(test.clone(), Default::default());
+                t = durations.get_mut(&test);
+            }
+            let t = t.unwrap();
+
+            t.secs      += result.duration;
+            t.nr        += 1;
+            t.nr_passed += (result.status == TestStatus::Passed) as u64;
+            t.nr_failed += (result.status == TestStatus::Failed) as u64;
         }
     }
 
@@ -57,6 +54,9 @@ fn write_durations_capnp(rc: &Ktestrc, durations_in: TestDurationMap) {
         let mut duration_out = entries.reborrow().get(idx.try_into().unwrap());
 
         duration_out.set_test(name);
+        duration_out.set_nr(duration_in.nr);
+        duration_out.set_passed(duration_in.nr_passed);
+        duration_out.set_failed(duration_in.nr_failed);
         duration_out.set_duration(duration_in.secs / duration_in.nr);
     }
 

@@ -1,7 +1,7 @@
 use std::fs::File;
 use memmap::MmapOptions;
 use std::process;
-use ci_cgi::{ciconfig_read, test_duration};
+use ci_cgi::{ciconfig_read, test_stats};
 use clap::Parser;
 
 #[derive(Parser)]
@@ -26,5 +26,5 @@ fn main() {
     let durations_map = durations_file.map(|x| unsafe { MmapOptions::new().map(&x).ok() } ).flatten();
     let durations = durations_map.as_ref().map(|x| x.as_ref());
 
-    println!("{:?}", test_duration(durations, &args.test, &args.subtest));
+    println!("{:?}", test_stats(durations, &args.test, &args.subtest));
 }

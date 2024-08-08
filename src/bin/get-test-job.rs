@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::process;
 use ci_cgi::{Ktestrc, ciconfig_read, lockfile_exists, commit_update_results_from_fs, subtest_full_name};
-use ci_cgi::{Worker, workers_update};
+use ci_cgi::{Worker, workers_update, test_stats};
 use file_lock::{FileLock, FileOptions};
 use chrono::Utc;
 use clap::Parser;
@@ -33,8 +33,6 @@ struct Args {
 use memmap::MmapOptions;
 use std::fs::OpenOptions;
 use std::str;
-
-use ci_cgi::test_duration;
 
 fn commit_test_matches(job: &Option<TestJob>, commit: &str, test: &str) -> bool {
     if let Some(job) = job {
@@ -78,11 +76,15 @@ fn get_test_job(args: &Args, rc: &Ktestrc, durations: Option<&[u8]>) -> Option<T
             break;
         }
 
-        let duration_secs = test_duration(durations, test, subtest);
+        let stats = test_stats(durations, test, subtest);
         if args.verbose {
-            println!("duration for {}.{}={:?}", test, subtest, duration_secs);
+            println!("stats for {}.{}={:?}", test, subtest, stats);
         }
-        let duration_secs = duration_secs.unwrap_or(rc.subtest_duration_def);
+        let duration_secs = if let Some(s) = stats {
+            s.duration
+        } else {
+            rc.subtest_duration_def
+        };
 
         if duration_sum != 0 && duration_sum + duration_secs > rc.subtest_duration_max {
             break;

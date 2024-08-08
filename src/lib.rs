@@ -421,8 +421,16 @@ pub fn lockfile_exists(rc: &Ktestrc, commit: &str, test_name: &str, create: bool
     }
 }
 
+#[derive(Debug)]
+pub struct TestStats {
+    pub nr:             u64,
+    pub passed:         u64,
+    pub failed:         u64,
+    pub duration:       u64,
+}
+
 use durations_capnp::durations;
-pub fn test_duration(durations: Option<&[u8]>, test: &str, subtest: &str) -> Option<u64> {
+pub fn test_stats(durations: Option<&[u8]>, test: &str, subtest: &str) -> Option<TestStats> {
 
     if let Some(d) = durations {
         let mut d = d;
@@ -461,7 +469,11 @@ pub fn test_duration(durations: Option<&[u8]>, test: &str, subtest: &str) -> Opt
             use std::cmp::Ordering::*;
             match full_test.cmp(d_m_test) {
                 Less    => r = m,
-                Equal   => return Some(d_m.get_duration()),
+                Equal   => return Some(TestStats {
+                    nr:         d_m.get_nr(),
+                    passed:     d_m.get_passed(),
+                    failed:     d_m.get_failed(),
+                    duration:   d_m.get_duration() }),
                 Greater => l = m,
             }
         }
