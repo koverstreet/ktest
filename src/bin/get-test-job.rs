@@ -38,12 +38,10 @@ use ci_cgi::test_duration;
 
 fn commit_test_matches(job: &Option<TestJob>, commit: &str, test: &str) -> bool {
     if let Some(job) = job {
-        if job.commit == commit && job.test == test {
-            return true;
-        }
+        job.commit == commit && job.test == test
+    } else {
+        false
     }
-
-    false
 }
 
 fn get_test_job(args: &Args, rc: &Ktestrc, durations: Option<&[u8]>) -> Option<TestJob> {
@@ -55,6 +53,8 @@ fn get_test_job(args: &Args, rc: &Ktestrc, durations: Option<&[u8]>) -> Option<T
     if len == 0 {
         return None;
     }
+
+    let mut commits_updated = HashSet::new();
 
     let mut duration_sum: u64 = 0;
 
@@ -74,7 +74,28 @@ fn get_test_job(args: &Args, rc: &Ktestrc, durations: Option<&[u8]>) -> Option<T
         let test        = str::from_utf8(fields.next().unwrap()).unwrap();
         let subtest     = str::from_utf8(fields.next().unwrap()).unwrap();
 
-        if ret.is_none() {
+        if ret.is_some() && !commit_test_matches(&ret, commit, test) {
+            break;
+        }
+
+        let duration_secs = test_duration(durations, test, subtest);
+        if args.verbose {
+            println!("duration for {}.{}={:?}", test, subtest, duration_secs);
+        }
+        let duration_secs = duration_secs.unwrap_or(rc.subtest_duration_def);
+
+        if duration_sum != 0 && duration_sum + duration_secs > rc.subtest_duration_max {
+            break;
+        }
+
+        if !lockfile_exists(rc, &commit, &subtest_full_name(&test, &subtest),
+                            !args.dry_run, &mut commits_updated) {
+            break;
+        }
+
+        if let Some(ref mut r) = ret {
+            r.subtests.push(subtest.to_string());
+        } else {
             ret = Some(TestJob {
                 branch:     branch.to_string(),
                 commit:     commit.to_string(),
@@ -82,68 +103,21 @@ fn get_test_job(args: &Args, rc: &Ktestrc, durations: Option<&[u8]>) -> Option<T
                 age,
                 subtests:   vec![subtest.to_string()],
             });
-
-            len = job.as_ptr() as u64 - map.as_ptr() as u64;
-        } else if commit_test_matches(&ret, commit, test) {
-            if let Some(ref mut r) = ret {
-                let duration_secs = test_duration(durations, test, subtest);
-
-                if args.verbose {
-                    println!("duration for {}.{}={:?}", test, subtest, duration_secs);
-                }
-
-                let duration_secs = duration_secs.unwrap_or(rc.subtest_duration_def);
-
-                if duration_sum != 0 && duration_sum + duration_secs > rc.subtest_duration_max {
-                    break;
-                }
-
-                duration_sum += duration_secs;
-                r.subtests.push(subtest.to_string());
-            }
-        } else {
-            break;
         }
+
+        duration_sum += duration_secs;
+        len = job.as_ptr() as u64 - map.as_ptr() as u64;
     }
 
     if !args.dry_run {
         let _ = file.set_len(len);
     }
 
-    ret
-}
-
-fn create_job_lockfiles(rc: &Ktestrc, mut job: TestJob) -> Option<TestJob> {
-    let mut commits_updated = HashSet::new();
-
-    job.subtests = job.subtests.iter()
-        .filter(|i| lockfile_exists(rc, &job.commit,
-                                    &subtest_full_name(&job.test, &i),
-                                    true,
-                                    &mut commits_updated))
-        .map(|i| i.to_string())
-        .collect();
-
     for i in commits_updated.iter() {
         commit_update_results_from_fs(rc, &i);
     }
 
-    if !job.subtests.is_empty() { Some(job) } else { None }
-}
-
-fn get_and_lock_job(args: &Args, rc: &Ktestrc, durations: Option<&[u8]>) -> Option<TestJob> {
-    loop {
-        let job = get_test_job(args, rc, durations);
-        if let Some(job) = job {
-            let job = create_job_lockfiles(rc, job);
-            if job.is_some() {
-                return job;
-            }
-        } else {
-            return job;
-        }
-
-    }
+    ret
 }
 
 fn main() {
@@ -164,11 +138,7 @@ fn main() {
     let lockfile = rc.output_dir.join("jobs.lock");
     let filelock = FileLock::lock(lockfile, true, FileOptions::new().create(true).write(true)).unwrap();
 
-    let job = if !args.dry_run {
-        get_and_lock_job(&args, &rc, durations)
-    } else {
-        get_test_job(&args, &rc, durations)
-    };
+    let job = get_test_job(&args, &rc, durations);
 
     drop(filelock);
 
@@ -186,8 +156,6 @@ fn main() {
             commit:     job.commit.clone(),
             tests:      tests.clone(),
         });
-
-        commit_update_results_from_fs(&rc, &job.commit);
     } else {
         workers_update(&rc, Worker {
             hostname:   args.hostname,
