@@ -794,8 +794,8 @@ test_key_type_error()
     bcachefs format -f --replicas=2 ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
-    bcachefs setattr --data_replicas=1 /mnt
-    bcachefs setattr --foreground_target=$(basename ${ktest_scratch_dev[1]}) /mnt
+    bcachefs set-fs-option --data_replicas=1 /mnt
+    bcachefs set-fs-option --foreground_target=$(basename ${ktest_scratch_dev[1]}) /mnt
 
     dd if=/dev/zero of=/mnt/foo bs=64k count=8 oflag=direct
 
