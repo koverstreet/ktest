@@ -6,9 +6,10 @@ use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::process::Stdio;
-use ci_cgi::{CiConfig, Userrc, RcTestGroup, ciconfig_read, git_get_commit, commitdir_get_results, lockfile_exists, commit_update_results_from_fs, subtest_full_name};
+use ci_cgi::{CiConfig, Userrc, RcTestGroup, ciconfig_read, git_get_commit, commitdir_get_results, lockfile_exists, commit_update_results_from_fs, subtest_full_name, test_stats};
 use ci_cgi::TestResultsMap;
 use file_lock::{FileLock, FileOptions};
+use memmap::MmapOptions;
 use memoize::memoize;
 use anyhow;
 use chrono::Utc;
@@ -35,8 +36,8 @@ pub struct TestJob {
     commit:     String,
     age:        u64,
     priority:   u64,
-    test:       PathBuf,
-    subtests:   Vec<String>,
+    test:       String,
+    subtest:    String,
 }
 
 fn testjob_weight(j: &TestJob) -> u64 {
@@ -48,6 +49,8 @@ use std::cmp::Ordering;
 impl Ord for TestJob {
     fn cmp(&self, other: &Self) -> Ordering {
         testjob_weight(self).cmp(&testjob_weight(other))
+            .then(self.commit.cmp(&other.commit))
+            .then(self.test.cmp(&other.test))
     }
 }
 
@@ -75,18 +78,23 @@ fn have_result(results: &TestResultsMap, subtest: &str) -> bool {
     }
 }
 
-fn branch_test_jobs(rc: &CiConfig, repo: &git2::Repository,
+fn branch_test_jobs(rc: &CiConfig,
+                    durations: Option<&[u8]>,
+                    repo: &git2::Repository,
                     branch: &str,
                     test_group: &RcTestGroup,
                     test_path: &Path,
                     verbose: bool) -> Vec<TestJob> {
+    let test_name = &test_path.to_string_lossy();
     let full_test_path = rc.ktest.ktest_dir.join("tests").join(test_path);
     let mut ret = Vec::new();
 
     let subtests = get_subtests(full_test_path);
 
-    if verbose { eprintln!("looking for tests to run for branch {} test {:?} subtests {:?}",
-        branch, test_path, subtests) }
+    if verbose {
+        eprintln!("looking for tests to run for branch {} test {:?} subtests {:?}",
+                  branch, test_path, subtests)
+    }
 
     let mut walk = repo.revwalk().unwrap();
     let reference = git_get_commit(&repo, branch.to_string());
@@ -115,28 +123,36 @@ fn branch_test_jobs(rc: &CiConfig, repo: &git2::Repository,
         if verbose { eprintln!("at commit {} age {}\nresults {:?}",
             &commit, age, results) }
 
-        let missing_subtests: Vec<_> = subtests
+        for subtest in subtests
             .iter()
             .filter(|i| {
-                let full_subtest_name = subtest_full_name(&test_path.to_string_lossy(), &i);
+                let full_subtest_name = subtest_full_name(&test_name, &i);
 
                 !have_result(&results, &full_subtest_name) &&
                     !lockfile_exists(&rc.ktest, &commit, &full_subtest_name,
                                      false,
                                      &mut commits_updated)
             })
-            .map(|i| i.clone())
-            .collect();
+            .map(|i| i.clone()) {
+                let mut priority = test_group.priority;
 
-        if !missing_subtests.is_empty() {
-            ret.push(TestJob {
-                branch:     branch.to_string(),
-                commit:     commit.clone(),
-                age:        age as u64,
-                priority:   test_group.priority,
-                test:       test_path.to_path_buf(),
-                subtests:   missing_subtests,
-            });
+                let stats = test_stats(durations, test_name, &subtest);
+                if let Some(stats) = stats {
+                    // Deprioritize tests that only pass or only fail
+                    // XXX: make this configurable
+                    if !stats.passed != !stats.failed && stats.passed + stats.failed > 10 {
+                        priority += 10;
+                    }
+                }
+
+                ret.push(TestJob {
+                    branch:     branch.to_string(),
+                    commit:     commit.clone(),
+                    age:        age as u64,
+                    priority,
+                    test:       test_name.to_string(),
+                    subtest,
+                });
         }
     }
 
@@ -147,14 +163,16 @@ fn branch_test_jobs(rc: &CiConfig, repo: &git2::Repository,
     ret
 }
 
-fn user_test_jobs(rc: &CiConfig, repo: &git2::Repository,
+fn user_test_jobs(rc: &CiConfig,
+                  durations: Option<&[u8]>,
+                  repo: &git2::Repository,
                   user: &Userrc,
                   verbose: bool) -> Vec<TestJob> {
     let mut ret: Vec<_> = user.branch.iter()
         .flat_map(move |(branch, branchconfig)| branchconfig.tests.iter()
             .filter_map(|i| user.test_group.get(i)).map(move |testgroup| (branch, testgroup)))
         .flat_map(move |(branch, testgroup)| testgroup.tests.iter()
-            .flat_map(move |test| branch_test_jobs(rc, repo, &branch, &testgroup, &test, verbose)))
+            .flat_map(move |test| branch_test_jobs(rc, durations, repo, &branch, &testgroup, &test, verbose)))
         .collect();
 
     /* sort by commit, dedup */
@@ -164,11 +182,13 @@ fn user_test_jobs(rc: &CiConfig, repo: &git2::Repository,
     ret
 }
 
-fn rc_test_jobs(rc: &CiConfig, repo: &git2::Repository,
+fn rc_test_jobs(rc: &CiConfig,
+                durations: Option<&[u8]>,
+                repo: &git2::Repository,
                 verbose: bool) -> Vec<TestJob> {
     let mut ret: Vec<_> = rc.users.iter()
         .filter_map(|u| u.1.as_ref().ok())
-        .flat_map(|user| user_test_jobs(rc, repo, &user, verbose))
+        .flat_map(|user| user_test_jobs(rc, durations, repo, &user, verbose))
         .collect();
 
     /* sort by commit, dedup */
@@ -190,18 +210,16 @@ fn write_test_jobs(rc: &CiConfig, jobs_in: Vec<TestJob>, verbose: bool) -> anyho
     let mut jobs_out    = std::io::BufWriter::new(File::create(&jobs_fname_new)?);
 
     for job in jobs_in.iter() {
-        for subtest in job.subtests.iter() {
-            jobs_out.write(job.branch.as_bytes())?;
-            jobs_out.write(b" ")?;
-            jobs_out.write(job.commit.as_bytes())?;
-            jobs_out.write(b" ")?;
-            jobs_out.write(job.age.to_string().as_bytes())?;
-            jobs_out.write(b" ")?;
-            jobs_out.write(job.test.as_os_str().as_encoded_bytes())?;
-            jobs_out.write(b" ")?;
-            jobs_out.write(subtest.as_bytes())?;
-            jobs_out.write(b"\n")?;
-        }
+        jobs_out.write(job.branch.as_bytes())?;
+        jobs_out.write(b" ")?;
+        jobs_out.write(job.commit.as_bytes())?;
+        jobs_out.write(b" ")?;
+        jobs_out.write(job.age.to_string().as_bytes())?;
+        jobs_out.write(b" ")?;
+        jobs_out.write(job.test.as_bytes())?;
+        jobs_out.write(b" ")?;
+        jobs_out.write(job.subtest.as_bytes())?;
+        jobs_out.write(b"\n")?;
     }
 
     jobs_out.flush()?;
@@ -276,10 +294,14 @@ fn update_jobs(rc: &CiConfig, repo: &git2::Repository, verbose: bool) -> anyhow:
         return Ok(());
     }
 
+    let durations_file = File::open(rc.ktest.output_dir.join("test_durations.capnp")).ok();
+    let durations_map = durations_file.map(|x| unsafe { MmapOptions::new().map(&x).ok() } ).flatten();
+    let durations = durations_map.as_ref().map(|x| x.as_ref());
+
     let lockfile = rc.ktest.output_dir.join("jobs.lock");
     let filelock = FileLock::lock(lockfile, true, FileOptions::new().create(true).write(true))?;
 
-    let jobs_in = rc_test_jobs(rc, repo, false);
+    let jobs_in = rc_test_jobs(rc, durations, repo, false);
     write_test_jobs(rc, jobs_in, verbose)?;
 
     drop(filelock);
