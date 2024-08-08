@@ -122,6 +122,9 @@ PACKAGES+=(util-linux-extra)
 # ocfs2 testing:
 PACKAGES+=(ocfs2-tools)
 
+# afs
+PACKAGES+=(openafs-dbserver openafs-fileserver)
+
 # nbd testing
 PACKAGES+=(nbd-client nbd-server)
 
