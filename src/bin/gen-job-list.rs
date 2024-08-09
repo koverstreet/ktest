@@ -35,13 +35,13 @@ pub struct TestJob {
     branch:     String,
     commit:     String,
     age:        u64,
-    priority:   u64,
+    nice:       u64,
     test:       String,
     subtest:    String,
 }
 
 fn testjob_weight(j: &TestJob) -> u64 {
-    j.age + j.priority
+    j.age + j.nice
 }
 
 use std::cmp::Ordering;
@@ -134,14 +134,14 @@ fn branch_test_jobs(rc: &CiConfig,
                                      &mut commits_updated)
             })
             .map(|i| i.clone()) {
-                let mut priority = test_group.priority;
+                let mut nice = test_group.nice;
 
                 let stats = test_stats(durations, test_name, &subtest);
                 if let Some(stats) = stats {
                     // Deprioritize tests that only pass or only fail
                     // XXX: make this configurable
                     if !stats.passed != !stats.failed && stats.passed + stats.failed > 10 {
-                        priority += 10;
+                        nice += 10;
                     }
                 }
 
@@ -149,7 +149,7 @@ fn branch_test_jobs(rc: &CiConfig,
                     branch:     branch.to_string(),
                     commit:     commit.clone(),
                     age:        age as u64,
-                    priority,
+                    nice,
                     test:       test_name.to_string(),
                     subtest,
                 });

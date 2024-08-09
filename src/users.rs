@@ -8,7 +8,7 @@ use anyhow;
 #[derive(Deserialize)]
 pub struct RcTestGroup {
     pub max_commits:        u64,
-    pub priority:           u64,
+    pub nice:               u64,
     pub tests:              Vec<PathBuf>,
 }
 
