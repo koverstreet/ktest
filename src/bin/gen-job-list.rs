@@ -36,6 +36,7 @@ pub struct TestJob {
     commit:     String,
     age:        u64,
     nice:       u64,
+    duration:   u64,
     test:       String,
     subtest:    String,
 }
@@ -51,6 +52,7 @@ impl Ord for TestJob {
         testjob_weight(self).cmp(&testjob_weight(other))
             .then(self.commit.cmp(&other.commit))
             .then(self.test.cmp(&other.test))
+            .then(self.duration.cmp(&other.duration))
     }
 }
 
@@ -137,11 +139,15 @@ fn branch_test_jobs(rc: &CiConfig,
                 let mut nice = test_group.nice;
 
                 let stats = test_stats(durations, test_name, &subtest);
-                if let Some(stats) = stats {
-                    // Deprioritize tests that only pass or only fail
-                    // XXX: make this configurable
-                    if !stats.passed != !stats.failed && stats.passed + stats.failed > 10 {
-                        nice += 10;
+                if let Some(ref stats) = stats {
+                    if test_group.test_always_passes_nice != 0 &&
+                       !stats.passed != !stats.failed  &&
+                       stats.passed + stats.failed > test_group.test_always_passes_nice {
+                        nice += test_group.test_always_passes_nice;
+                    }
+
+                    if test_group.test_duration_nice != 0 {
+                        nice += stats.duration / test_group.test_duration_nice;
                     }
                 }
 
@@ -150,6 +156,7 @@ fn branch_test_jobs(rc: &CiConfig,
                     commit:     commit.clone(),
                     age:        age as u64,
                     nice,
+                    duration:   stats.map_or(rc.ktest.subtest_duration_def, |s| s.duration),
                     test:       test_name.to_string(),
                     subtest,
                 });
