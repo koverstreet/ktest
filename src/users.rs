@@ -7,11 +7,26 @@ use anyhow;
 
 #[derive(Deserialize)]
 pub struct RcTestGroup {
+    #[serde(default)]
     pub max_commits:                u64,
     pub nice:                       u64,
+    #[serde(default)]
     pub test_duration_nice:         u64,
+    #[serde(default)]
     pub test_always_passes_nice:    u64,
     pub tests:                      Vec<PathBuf>,
+}
+
+impl Default for RcTestGroup {
+    fn default() -> Self {
+        RcTestGroup {
+            max_commits:                50,
+            nice:                       0,
+            test_duration_nice:         180,
+            test_always_passes_nice:    10,
+            tests:                      Vec::new(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
