@@ -6,7 +6,7 @@ use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::process::Stdio;
-use ci_cgi::{CiConfig, Userrc, RcTestGroup, ciconfig_read, git_get_commit, commitdir_get_results, lockfile_exists, commit_update_results_from_fs, subtest_full_name, test_stats};
+use ci_cgi::{CiConfig, Userrc, RcTestGroup, ciconfig_read, git_get_commit, commitdir_get_results, lockfile_exists, commit_update_results_from_fs, subtest_full_name, test_stats, users::RcBranch};
 use ci_cgi::TestResultsMap;
 use file_lock::{FileLock, FileOptions};
 use memmap::MmapOptions;
@@ -236,36 +236,32 @@ fn write_test_jobs(rc: &CiConfig, jobs_in: Vec<TestJob>, verbose: bool) -> anyho
 }
 
 fn fetch_remotes(rc: &CiConfig, repo: &git2::Repository) -> anyhow::Result<bool> {
-    fn fetch_remotes_locked(rc: &CiConfig, repo: &git2::Repository) -> Result<(), git2::Error> {
-        for userconfig in rc.users.iter().filter_map(|u| u.1.as_ref().ok()) {
-            for (branch, branchconfig) in &userconfig.branch {
-                let fetch = branchconfig.fetch
-                    .split_whitespace()
-                    .map(|i| OsStr::new(i));
+    fn fetch_branch(rc: &CiConfig, repo: &git2::Repository,
+                    branch: &str, branchconfig: &RcBranch) -> Result<(), git2::Error> {
+        let fetch = branchconfig.fetch
+            .split_whitespace()
+            .map(|i| OsStr::new(i));
 
-                let status = std::process::Command::new("git")
-                    .arg("-C")
-                    .arg(&rc.ktest.linux_repo)
-                    .arg("fetch")
-                    .args(fetch)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .status()
-                    .expect(&format!("failed to execute fetch"));
-                if !status.success() {
-                    eprintln!("fetch error for {}: {}", branchconfig.fetch, status);
-                    continue;
-                }
-
-                let fetch_head = repo.revparse_single("FETCH_HEAD")
-                    .map_err(|e| { eprintln!("error parsing FETCH_HEAD: {}", e); e})?
-                    .peel_to_commit()
-                    .map_err(|e| { eprintln!("error getting FETCH_HEAD: {}", e); e})?;
-
-                repo.branch(branch, &fetch_head, true)?;
-            }
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&rc.ktest.linux_repo)
+            .arg("fetch")
+            .args(fetch)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .status()
+            .expect(&format!("failed to execute fetch"));
+        if !status.success() {
+            eprintln!("fetch error for {}: {}", branchconfig.fetch, status);
+            return Ok(());
         }
 
+        let fetch_head = repo.revparse_single("FETCH_HEAD")
+            .map_err(|e| { eprintln!("error parsing FETCH_HEAD: {}", e); e})?
+            .peel_to_commit()
+            .map_err(|e| { eprintln!("error getting FETCH_HEAD: {}", e); e})?;
+
+        repo.branch(branch, &fetch_head, true)?;
         Ok(())
     }
 
@@ -284,7 +280,11 @@ fn fetch_remotes(rc: &CiConfig, repo: &git2::Repository) -> anyhow::Result<bool>
     let mut filelock = FileLock::lock(lockfile, false, FileOptions::new().create(true).write(true))?;
 
     eprint!("Fetching remotes...");
-    fetch_remotes_locked(rc, repo)?;
+    for userconfig in rc.users.iter().filter_map(|u| u.1.as_ref().ok()) {
+        for (branch, branchconfig) in &userconfig.branch {
+            fetch_branch(rc, repo, branch, branchconfig).ok();
+        }
+    }
     eprintln!(" done");
 
     filelock.file.write_all(b"ok")?; /* update lockfile mtime */
@@ -295,8 +295,8 @@ fn fetch_remotes(rc: &CiConfig, repo: &git2::Repository) -> anyhow::Result<bool>
     Ok(true)
 }
 
-fn update_jobs(rc: &CiConfig, repo: &git2::Repository, verbose: bool) -> anyhow::Result<()> {
-    if !fetch_remotes(rc, repo)? {
+fn update_jobs(rc: &CiConfig, args: &Args, repo: &git2::Repository) -> anyhow::Result<()> {
+    if fetch_remotes(rc, repo).ok() == Some(false) && !args.force_update_jobs {
         eprintln!("remotes unchanged, skipping updating joblist");
         return Ok(());
     }
@@ -309,7 +309,7 @@ fn update_jobs(rc: &CiConfig, repo: &git2::Repository, verbose: bool) -> anyhow:
     let filelock = FileLock::lock(lockfile, true, FileOptions::new().create(true).write(true))?;
 
     let jobs_in = rc_test_jobs(rc, durations, repo, false);
-    write_test_jobs(rc, jobs_in, verbose)?;
+    write_test_jobs(rc, jobs_in, args.verbose)?;
 
     drop(filelock);
 
@@ -320,7 +320,8 @@ fn update_jobs(rc: &CiConfig, repo: &git2::Repository, verbose: bool) -> anyhow:
 #[command(author, version, about, long_about = None)]
 struct Args {
     #[arg(short, long)]
-    verbose:    bool,
+    verbose:            bool,
+    force_update_jobs:  bool,
 }
 
 fn main() {
@@ -341,7 +342,7 @@ fn main() {
     }
     let repo = repo.unwrap();
 
-    if let Err(e) = update_jobs(&rc, &repo, args.verbose) {
+    if let Err(e) = update_jobs(&rc, &args, &repo) {
         eprintln!("update_jobs() error: {}", e);
     }
 }
