@@ -13,6 +13,8 @@ export PATH=$PATH:/root/.cargo/bin
 
 . /host/$ktest_env
 
+export ktest_interactive
+
 ktest_dir="/host/$ktest_dir"
 ktest_tmp="/host/$ktest_tmp"
 ktest_out="/host/$ktest_out"

@@ -62,7 +62,9 @@ run_fstests()
 
 	mkdir -p /mnt/test /mnt/scratch
 
-	run_quiet "building $(basename $i)" make -j $ktest_cpus -C "$ktest_dir/tests/fs/xfstests"
+	if $ktest_interactive; then
+	    run_quiet "building $(basename $i)" make -j $ktest_cpus -C "$ktest_dir/tests/fs/xfstests"
+	fi
 
 	rm -rf /ktest-out/xfstests
 
