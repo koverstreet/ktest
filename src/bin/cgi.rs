@@ -237,9 +237,9 @@ fn ci_log(ci: &Ci) -> cgi::Response {
                 let duration: u64 = r.tests.iter().map(|x| x.1.duration).sum();
 
                 writeln!(&mut out, "<tr>").unwrap();
-                writeln!(&mut out, "<td> <a href=\"{}?branch={}&commit={}\">{}</a> </td>",
-                         ci.script_name, branch,
-                         r.id, &r.id.as_str()[..14]).unwrap();
+                writeln!(&mut out, "<td> <a href=\"{}?user={}&branch={}&commit={}\">{}</a> </td>",
+                         ci.script_name, ci.user.as_ref().unwrap(),
+                         branch, r.id, &r.id.as_str()[..14]).unwrap();
                 writeln!(&mut out, "<td> {} </td>", &r.message[..subject_len]).unwrap();
                 writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::Passed)).unwrap();
                 writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::Failed)).unwrap();
@@ -373,8 +373,8 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
         writeln!(&mut out, "<td> {}  </td>", result.status.to_str()).unwrap();
         writeln!(&mut out, "<td> {}  </td>", last_good_line(&commits, name)).unwrap();
         if let Some(branch) = &ci.branch {
-            writeln!(&mut out, "<td> <a href={}?branch={}&test=^{}$> git log        </a> </td>",
-                     ci.script_name, &branch, name).unwrap();
+            writeln!(&mut out, "<td> <a href={}?user={}&branch={}&test=^{}$> git log        </a> </td>",
+                     ci.script_name, ci.user.as_ref().unwrap(), &branch, name).unwrap();
         }
 
         log_link(&mut out, &format!("c/{}/{}/full_log.br", &first_commit.id, name), "full");
@@ -404,7 +404,8 @@ fn ci_list_branches(ci: &Ci, user: &Userrc, out: &mut String) {
     writeln!(out, "<div> <table class=\"table\">").unwrap();
 
     for (b, _) in &user.branch {
-        writeln!(out, "<tr> <th> <a href={}?branch={}>{}</a> </th> </tr>", ci.script_name, b, b).unwrap();
+        writeln!(out, "<tr> <th> <a href={}?user={}&branch={}>{}</a> </th> </tr>",
+                 ci.script_name, ci.user.as_ref().unwrap(), b, b).unwrap();
     }
 
     writeln!(out, "</table> </div>").unwrap();
@@ -559,12 +560,14 @@ cgi::cgi_main! {|request: cgi::Request| -> cgi::Response {
         tests_matching:     Regex::new(tests_matching).unwrap_or(Regex::new("").unwrap()),
     };
 
-    if ci.commit.is_some() {
-        ci_commit(&ci)
-    } else if ci.branch.is_some() {
-        ci_log(&ci)
-    } else if ci.user.is_some() {
-        ci_user(&ci)
+    if ci.user.is_some() {
+        if ci.commit.is_some() {
+            ci_commit(&ci)
+        } else if ci.branch.is_some() {
+            ci_log(&ci)
+        } else {
+            ci_user(&ci)
+        }
     } else {
         ci_home(&ci)
     }
