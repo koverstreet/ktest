@@ -34,6 +34,10 @@ test_llmount()
     load_zfs_modules
 
     "$lustre_pkg_path/lustre/tests/llmount.sh"
+
+    sleep 10
+
+    "$lustre_pkg_path/lustre/tests/llmountcleanup.sh"
 }
 
 main "$@"
