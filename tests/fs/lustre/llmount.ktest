@@ -15,29 +15,19 @@
 
 . "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/lustre-libs.sh"
 
-require-kernel-config QUOTA
-require-kernel-config KEYS
-require-kernel-config NETWORK_FILESYSTEMS
-require-kernel-config MULTIUSER
-require-kernel-config NFS_FS
-require-kernel-config BITREVERSE
-require-kernel-config CRYPTO_DEFLATE
-require-kernel-config ZLIB_DEFLATE
-require-kernel-config KASAN
-require-kernel-config KASAN_VMALLOC
+require-lustre-kernel-config
+require-lustre-debug-kernel-config
 
 config-mem 10G
 config-timeout 60
 
 test_llmount()
 {
-    load_zfs_modules
-
-    "$lustre_pkg_path/lustre/tests/llmount.sh"
+    setup_lustrefs
 
     sleep 10
 
-    "$lustre_pkg_path/lustre/tests/llmountcleanup.sh"
+    cleanup_lustrefs
 }
 
 main "$@"

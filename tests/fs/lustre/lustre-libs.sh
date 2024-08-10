@@ -20,6 +20,19 @@ export workspace_path="/workspace"
 export lustre_pkg_path="$workspace_path/lustre-release"
 export zfs_pkg_path="$workspace_path/zfs"
 
+# Set Lustre test-framework.sh environment
+export ZFS="$zfs_pkg_path/cmd/zfs/zfs"
+export ZPOOL="$zfs_pkg_path/cmd/zpool/zpool"
+export FSTYPE="zfs"
+export RUNAS_ID="1000"
+
+# Update paths
+set +u
+export PATH="$zfs_pkg_path/cmd/zpool:$zfs_pkg_path/cmd/zfs:$PATH"
+export LD_LIBRARY_PATH="$zfs_pkg_path/lib/libzfs/.libs:$zfs_pkg_path/lib/libzfs_core/.libs:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="$zfs_pkg_path/lib/libuutil/.libs:$zfs_pkg_path/lib/libnvpair/.libs:$LD_LIBRARY_PATH"
+set -u
+
 function load_zfs_modules()
 {
     insmod "$zfs_pkg_path/module/spl/spl.ko"
@@ -33,17 +46,35 @@ function load_zfs_modules()
     insmod "$zfs_pkg_path/module/zfs/zfs.ko"
 }
 
-# Set Lustre test-framework.sh environment
-export ZFS="$zfs_pkg_path/cmd/zfs/zfs"
-export ZPOOL="$zfs_pkg_path/cmd/zpool/zpool"
-export FSTYPE="zfs"
+function require-lustre-kernel-config()
+{
+    require-kernel-config QUOTA
+    require-kernel-config KEYS
+    require-kernel-config NETWORK_FILESYSTEMS
+    require-kernel-config MULTIUSER
+    require-kernel-config NFS_FS
+    require-kernel-config BITREVERSE
+    require-kernel-config CRYPTO_DEFLATE
+    require-kernel-config ZLIB_DEFLATE
+}
 
-# Update paths
-set +u
-export PATH="$zfs_pkg_path/cmd/zpool:$zfs_pkg_path/cmd/zfs:$PATH"
-export LD_LIBRARY_PATH="$zfs_pkg_path/lib/libzfs/.libs:$zfs_pkg_path/lib/libzfs_core/.libs:$LD_LIBRARY_PATH"
-export LD_LIBRARY_PATH="$zfs_pkg_path/lib/libuutil/.libs:$zfs_pkg_path/lib/libnvpair/.libs:$LD_LIBRARY_PATH"
-set -u
+function require-lustre-debug-kernel-config()
+{
+    require-kernel-config KASAN
+    require-kernel-config KASAN_VMALLOC
+}
+
+function setup_lustrefs()
+{
+    load_zfs_modules
+
+    "$lustre_pkg_path/lustre/tests/llmount.sh"
+}
+
+function cleanup_lustrefs()
+{
+    "$lustre_pkg_path/lustre/tests/llmountcleanup.sh"
+}
 
 # Lustre/ZFS will always taint kernel
 allow_taint
