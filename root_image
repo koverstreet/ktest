@@ -309,16 +309,14 @@ cmd_sync()
     MNT="$(mktemp --tmpdir -d $(basename "$0")-XXXXXXXXXX)"
     trap 'umount_image' EXIT
 
-    cp "$ktest_image" "$ktest_image".new
-    mount "$ktest_image".new "$MNT"
+    mount "$ktest_image" "$MNT"
 
     rm -rf "$MNT/workspace/$source_dir"
     mkdir -p "$MNT/workspace/$source_dir"
     rsync --archive -r "$source" "$MNT/workspace/$source_dir"
 
     umount_image
-    trim_image "$ktest_image".new
-    mv "$ktest_image".new "$ktest_image"
+    trim_image "$ktest_image"
 }
 
 cmd_create()
