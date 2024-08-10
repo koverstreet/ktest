@@ -209,6 +209,12 @@ allow_taint()
     ktest_allow_taint=true
 }
 
+create_ktest_user()
+{
+    groupadd -g 1000 ktest_group
+    useradd -u 1000 -g 1000 ktest_user
+}
+
 set_watchdog()
 {
     ktest_timeout=$(($ktest_timeout_multiplier * $1))
@@ -333,6 +339,7 @@ main()
 	    list_tests
 	    ;;
 	run-tests)
+	    create_ktest_user
 	    run_init_hooks
 	    run_tests "$@"
 	    ;;
