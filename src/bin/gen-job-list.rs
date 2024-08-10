@@ -83,6 +83,7 @@ fn have_result(results: &TestResultsMap, subtest: &str) -> bool {
 fn branch_test_jobs(rc: &CiConfig,
                     durations: Option<&[u8]>,
                     repo: &git2::Repository,
+                    user: &str,
                     branch: &str,
                     test_group: &RcTestGroup,
                     test_path: &Path,
@@ -98,16 +99,18 @@ fn branch_test_jobs(rc: &CiConfig,
                   branch, test_path, subtests)
     }
 
+    let userbranch = user.to_string() + "/" + branch;
+
     let mut walk = repo.revwalk().unwrap();
-    let reference = git_get_commit(&repo, branch.to_string());
+    let reference = git_get_commit(&repo, userbranch.clone());
     if reference.is_err() {
-        eprintln!("branch {} not found", branch);
+        eprintln!("branch {} not found", &userbranch);
         return ret;
     }
     let reference = reference.unwrap();
 
     if let Err(e) = walk.push(reference.id()) {
-        eprintln!("Error walking {}: {}", branch, e);
+        eprintln!("Error walking {}: {}", &userbranch, e);
         return ret;
     }
 
@@ -173,13 +176,14 @@ fn branch_test_jobs(rc: &CiConfig,
 fn user_test_jobs(rc: &CiConfig,
                   durations: Option<&[u8]>,
                   repo: &git2::Repository,
-                  user: &Userrc,
+                  user: &str,
+                  userconfig: &Userrc,
                   verbose: bool) -> Vec<TestJob> {
-    let mut ret: Vec<_> = user.branch.iter()
+    let mut ret: Vec<_> = userconfig.branch.iter()
         .flat_map(move |(branch, branchconfig)| branchconfig.tests.iter()
-            .filter_map(|i| user.test_group.get(i)).map(move |testgroup| (branch, testgroup)))
+            .filter_map(|i| userconfig.test_group.get(i)).map(move |testgroup| (branch, testgroup)))
         .flat_map(move |(branch, testgroup)| testgroup.tests.iter()
-            .flat_map(move |test| branch_test_jobs(rc, durations, repo, &branch, &testgroup, &test, verbose)))
+            .flat_map(move |test| branch_test_jobs(rc, durations, repo, user, &branch, &testgroup, &test, verbose)))
         .collect();
 
     /* sort by commit, dedup */
@@ -194,8 +198,9 @@ fn rc_test_jobs(rc: &CiConfig,
                 repo: &git2::Repository,
                 verbose: bool) -> Vec<TestJob> {
     let mut ret: Vec<_> = rc.users.iter()
-        .filter_map(|u| u.1.as_ref().ok())
-        .flat_map(|user| user_test_jobs(rc, durations, repo, &user, verbose))
+        .filter(|u| u.1.is_ok())
+        .map(|(user, userconfig)| (user, userconfig.as_ref().unwrap()))
+        .flat_map(|(user, userconfig)| user_test_jobs(rc, durations, repo, &user, &userconfig, verbose))
         .collect();
 
     /* sort by commit, dedup */
@@ -237,7 +242,7 @@ fn write_test_jobs(rc: &CiConfig, jobs_in: Vec<TestJob>, verbose: bool) -> anyho
 
 fn fetch_remotes(rc: &CiConfig, repo: &git2::Repository) -> anyhow::Result<bool> {
     fn fetch_branch(rc: &CiConfig, repo: &git2::Repository,
-                    branch: &str, branchconfig: &RcBranch) -> Result<(), git2::Error> {
+                    user: &str, branch: &str, branchconfig: &RcBranch) -> Result<(), git2::Error> {
         let fetch = branchconfig.fetch
             .split_whitespace()
             .map(|i| OsStr::new(i));
@@ -261,7 +266,7 @@ fn fetch_remotes(rc: &CiConfig, repo: &git2::Repository) -> anyhow::Result<bool>
             .peel_to_commit()
             .map_err(|e| { eprintln!("error getting FETCH_HEAD: {}", e); e})?;
 
-        repo.branch(branch, &fetch_head, true)?;
+        repo.branch(&(user.to_string() + "/"  + branch), &fetch_head, true)?;
         Ok(())
     }
 
@@ -280,9 +285,10 @@ fn fetch_remotes(rc: &CiConfig, repo: &git2::Repository) -> anyhow::Result<bool>
     let mut filelock = FileLock::lock(lockfile, false, FileOptions::new().create(true).write(true))?;
 
     eprint!("Fetching remotes...");
-    for userconfig in rc.users.iter().filter_map(|u| u.1.as_ref().ok()) {
+    for (user, userconfig) in rc.users.iter().filter(|u| u.1.is_ok())
+            .map(|(user, userconfig)| (user, userconfig.as_ref().unwrap())) {
         for (branch, branchconfig) in &userconfig.branch {
-            fetch_branch(rc, repo, branch, branchconfig).ok();
+            fetch_branch(rc, repo, user, branch, branchconfig).ok();
         }
     }
     eprintln!(" done");

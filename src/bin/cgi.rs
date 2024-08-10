@@ -134,8 +134,11 @@ fn branch_get_results(ci: &Ci) -> Result<Vec<CommitResults>, String> {
     let mut nr_commits = 0;
     let mut ret: Vec<CommitResults> = Vec::new();
 
-    let branch_or_commit =
-        ci.commit.as_ref().or(ci.branch.as_ref()).unwrap();
+    let branch_or_commit = if let Some(ref commit) = ci.commit {
+        commit.to_string()
+    } else {
+        ci.user.as_ref().unwrap().to_string() + "/" + ci.branch.as_ref().unwrap()
+    };
     let mut walk = ci.repo.revwalk().unwrap();
 
     let reference = git_get_commit(&ci.repo, branch_or_commit.clone());
