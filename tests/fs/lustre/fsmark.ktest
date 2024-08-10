@@ -1,0 +1,37 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0
+
+#
+# Copyright (c) 2024, Amazon and/or its affiliates. All rights reserved.
+# Use is subject to license terms.
+#
+
+#
+# Author: Timothy Day <timday@amazon.com>
+#
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/lustre-libs.sh"
+
+require-lustre-kernel-config
+require-lustre-debug-kernel-config
+
+config-mem 10G
+config-timeout 60
+
+test_fsmark()
+{
+    setup_lustrefs
+
+    dirs=""
+    for i in `seq 1 $(nproc)`; do
+	dirs="$dirs -d /mnt/lustre/$i"
+    done
+
+    fs_mark -F -D 1000 -S0 -n 1000 -s 4 -L 100 -d $dirs || true
+
+    sync
+
+    cleanup_lustrefs
+}
+
+main "$@"
