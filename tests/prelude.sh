@@ -301,6 +301,12 @@ list_tests()
     declare -F|sed -ne '/ test_/ s/.*test_// p'
 }
 
+# must have at least one init function to avoid errors below:
+init_noop()
+{
+    true
+}
+
 run_init_hooks()
 {
     for h in `declare -F|grep -Eo '\<init_.*'`; do
