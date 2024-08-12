@@ -6,6 +6,15 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../../test-libs.sh
 
+if $ktest_interactive; then
+    require-git git://evilpiepirate.org/git/bcachefs-tools.git
+    init_build_bcachefs_tools() {
+	cd $ktest_dir/tests/fs/bcachefs/bcachefs-tools
+	make -j PREFIX=/usr install
+    }
+fi
+
+
 require-kernel-config BCACHEFS_FS
 
 if [[ ! -v NO_BCACHEFS_DEBUG ]]; then

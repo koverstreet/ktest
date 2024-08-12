@@ -13,8 +13,6 @@ export PATH=$PATH:/root/.cargo/bin
 
 . /host/$ktest_env
 
-export ktest_interactive
-
 ktest_dir="/host/$ktest_dir"
 ktest_tmp="/host/$ktest_tmp"
 ktest_out="/host/$ktest_out"
@@ -175,6 +173,8 @@ trap 'pkill -P $$ >/dev/null' EXIT
 cd /root
 
 export ktest_failfast
+export ktest_interactive
+export ktest_verbose
 export ktest_out
 
 set +e

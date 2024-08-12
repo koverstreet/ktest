@@ -3,7 +3,11 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../lib/common.sh
 
-if [[ ! -v ktest_verbose ]]; then
+if [[ ! -v ktest_interactive ]]; then
+    ktest_interactive=false
+fi
+
+if [[ ! -v ktest_cpus ]]; then
     ktest_verbose=false
     ktest_priority=0
     ktest_cpus=$(nproc)
@@ -310,6 +314,7 @@ init_noop()
 run_init_hooks()
 {
     for h in `declare -F|grep -Eo '\<init_.*'`; do
+	echo "hook $h"
 	$h
     done
 }
