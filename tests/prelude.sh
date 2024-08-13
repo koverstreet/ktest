@@ -30,6 +30,7 @@ if [[ ! -v ktest_cpus ]]; then
 
     ktest_make_install=()
     ktest_kernel_config_require=()
+    ktest_kernel_config_require_soft=()
     ktest_qemu_append=()
     ktest_compiler=gcc
     ktest_allow_taint=false
@@ -124,6 +125,11 @@ require-kernel-config()
     done
 
     IFS=$OLDIFS
+}
+
+require-kernel-config-soft()
+{
+    ktest_kernel_config_require_soft+=("$i")
 }
 
 require-qemu-append()

@@ -217,6 +217,8 @@ require-kernel-config RANDOMIZE_MEMORY=n
 # Profiling:
 require-kernel-config PROFILING
 require-kernel-config JUMP_LABEL
+require-kernel-config-soft MEM_ALLOC_PROFILING
+require-kernel-config SHRINKER_DEBUG
 
 # iotop:
 require-kernel-config TASK_DELAY_ACCT
@@ -230,7 +232,6 @@ require-kernel-config FTRACE
 require-kernel-config FTRACE_SYSCALLS
 require-kernel-config FUNCTION_TRACER
 #require-kernel-config ENABLE_DEFAULT_TRACERS
-require-kernel-config MEM_ALLOC_PROFILING
 
 require-kernel-config PANIC_ON_OOPS
 require-kernel-config SOFTLOCKUP_DETECTOR
