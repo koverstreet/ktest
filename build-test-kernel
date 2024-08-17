@@ -16,9 +16,6 @@ checkdep bison
 checkdep flex
 checkdep bc
 
-ktest_kernel_source="."	# dir of kernel source
-			#       set with: -k <path>
-			#       defaults: current directory
 ktest_njobs=$(nproc)
 ktest_precise=false
 ktest_compiler=gcc

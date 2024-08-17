@@ -12,6 +12,10 @@ ktest_root_image=""	# virtual machine root filesystem
                         #       set with: -i <path>
                         #       defaults: /var/lib/ktest/root
                         #       auto-override: $HOME/.ktest/root
+ktest_kernel_source="."	# dir of kernel source
+			#       set with: -k <path>
+			#       defaults: current directory
+ktest_kernel_build=
 ktest_out="./ktest-out"	# dir for test output (logs, code coverage, etc.)
 
 ktest_priority=0	# hint for how long test should run
@@ -447,5 +451,11 @@ start_vm()
 
     set +o errexit
     save_env
-    "${qemu_cmd[@]}"
+  
+    local decode_stacktrace=$ktest_kernel_source/scripts/decode_stacktrace.sh
+    if [[ -f $decode_stacktrace && -d $ktest_kernel_build ]]; then
+	"${qemu_cmd[@]}"|bash "$decode_stacktrace" "$ktest_kernel_build/vmlinux"
+    else
+	"${qemu_cmd[@]}"
+    fi
 }
