@@ -4,12 +4,13 @@
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../lib/common.sh
 
 if [[ ! -v ktest_interactive ]]; then
+    ktest_failfast=false
     ktest_interactive=false
+    ktest_verbose=false
+    ktest_priority=0
 fi
 
 if [[ ! -v ktest_cpus ]]; then
-    ktest_verbose=false
-    ktest_priority=0
     ktest_cpus=$(nproc)
     ktest_mem=""
     ktest_timeout=""

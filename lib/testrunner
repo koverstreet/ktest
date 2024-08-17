@@ -175,6 +175,7 @@ cd /root
 export ktest_failfast
 export ktest_interactive
 export ktest_verbose
+export ktest_priority
 export ktest_out
 
 set +e
