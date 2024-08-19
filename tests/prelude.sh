@@ -130,7 +130,7 @@ require-kernel-config()
 
 require-kernel-config-soft()
 {
-    ktest_kernel_config_require_soft+=("$i")
+    ktest_kernel_config_require_soft+=("$1")
 }
 
 require-qemu-append()
@@ -350,6 +350,7 @@ main()
 	    echo "ktest_scratch_dev_sizes=(${ktest_scratch_dev_sizes[@]})"
 	    echo "ktest_make_install=(${ktest_make_install[@]})"
 	    echo "ktest_kernel_config_require=(${ktest_kernel_config_require[@]})"
+	    echo "ktest_kernel_config_require_soft=(${ktest_kernel_config_require_soft[@]})"
 	    echo "ktest_qemu_append=(${ktest_qemu_append[@]})"
 	    echo "ktest_allow_taint=$ktest_allow_taint"
 	    ;;
