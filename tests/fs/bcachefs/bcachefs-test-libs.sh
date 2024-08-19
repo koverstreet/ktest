@@ -38,6 +38,11 @@ export BCACHEFS_KERNEL_ONLY=1
 #Expensive:
 #require-kernel-config CLOSURE_DEBUG
 
+check_bcachefs_leaks()
+{
+    ! grep -v "0        0" /proc/allocinfo|grep fs/bcachefs/
+}
+
 expect_sysfs()
 {
     prefix=$1
