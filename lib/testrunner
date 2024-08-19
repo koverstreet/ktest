@@ -179,6 +179,8 @@ export ktest_priority
 export ktest_out
 
 set +e
+/host/$ktest_test init
+
 ret=0
 iterations=0
 while [[ $ret = 0 ]]; do

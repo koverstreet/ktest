@@ -354,12 +354,14 @@ main()
 	    echo "ktest_qemu_append=(${ktest_qemu_append[@]})"
 	    echo "ktest_allow_taint=$ktest_allow_taint"
 	    ;;
+	init)
+	    create_ktest_user
+	    run_init_hooks
+	    ;;
 	list-tests)
 	    list_tests
 	    ;;
 	run-tests)
-	    create_ktest_user
-	    run_init_hooks
 	    run_tests "$@"
 	    ;;
 	*)
