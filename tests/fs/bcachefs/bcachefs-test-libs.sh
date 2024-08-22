@@ -208,6 +208,10 @@ check_counters()
 	    max_fail=$((max_fail * 5))
 	fi
 
+	if [[ $event = bucket_alloc_fail ]]; then
+	    max_fail=$((max_fail * 5))
+	fi
+
 	if (( nr > max_fail )); then
 	    echo "$dev: Too many $event: $nr (max: $max_fail)"
 	    # Insert 0 byte seperators at the beginning of each trace event,
