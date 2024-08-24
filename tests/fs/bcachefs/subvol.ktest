@@ -775,4 +775,34 @@ test_snapshot_nested()
     umount /mnt
 }
 
+test_snapshot_file_delete_2()
+{
+    set_watchdog 60
+    run_quiet "" bcachefs format -f		\
+	--errors=panic				\
+	${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    local a=/mnt
+    local b=/mnt/derivative
+
+    touch $a/hi_there
+
+    bcachefs subvolume snapshot $a $b
+
+    rm $a/hi_there
+    rm $b/hi_there
+
+    bcachefs subvolume delete $b
+    umount /mnt
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    umount /mnt
+
+    mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
+    umount /mnt
+
+    check_counters ${ktest_scratch_dev[0]}
+}
+
 main "$@"
