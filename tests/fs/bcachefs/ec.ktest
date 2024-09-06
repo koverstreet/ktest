@@ -287,4 +287,37 @@ test_device_evacuate_online()
     do_remove_test 0 1
 }
 
+test_device_failed()
+{
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f --errors=panic \
+	--erasure_code				\
+	--replicas=2				\
+	"${ktest_scratch_dev[@]}"
+
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+
+    local fioout="$ktest_out/fio-out"
+    run_fio_randrw >"$fioout" 2>&1 &
+    local fiopid=$!
+
+    sleep 1
+
+    bcachefs device set-state -f failed ${ktest_scratch_dev[0]}
+
+    if ! wait $fiopid; then
+	cat "$fioout"
+	return 1
+    fi
+
+    umount /mnt
+
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+    umount /mnt
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    check_counters ${ktest_scratch_dev[0]}
+}
+
 main "$@"
