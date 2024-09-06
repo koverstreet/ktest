@@ -248,7 +248,7 @@ require-kernel-config DEBUG_KERNEL
 #require-kernel-config DEBUG_RODATA
 #require-kernel-config DEBUG_SET_MODULE_RONX
 
-#require-kernel-config DEBUG_LIST
+require-kernel-config DEBUG_LIST
 
 # More expensive
 #require-kernel-config DYNAMIC_DEBUG
