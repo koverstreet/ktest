@@ -80,7 +80,10 @@ join_by()
     echo "$*"
 }
 
-ktest_arch=$(uname -m)
+if [[ ! -v ktest_arch ]]; then
+    ktest_arch=$(uname -m)
+fi
+
 CROSS_COMPILE=""
 
 parse_arch()
