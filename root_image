@@ -110,9 +110,6 @@ PACKAGES+=(duperemove fsverity)
 # xfsprogs:
 PACKAGES+=(libinih-dev)
 
-# bcachefs:
-PACKAGES+=(bcachefs-tools)
-
 # nfs testing:
 PACKAGES+=(nfs-kernel-server)
 
