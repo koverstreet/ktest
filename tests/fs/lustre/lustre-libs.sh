@@ -64,6 +64,25 @@ function require-lustre-debug-kernel-config()
     require-kernel-config KASAN_VMALLOC
 }
 
+function load_lustre_modules()
+{
+    load_zfs_modules
+
+    "$lustre_pkg_path/lustre/tests/llmount.sh" --load-modules
+}
+
+function setup_lustre_mgs()
+{
+    zpool create lustre-mgs "${ktest_scratch_dev[0]}"
+    "$lustre_pkg_path/lustre/utils/mkfs.lustre" --mgs --fsname=lustre lustre-mgs/mgs
+    mkdir -p /mnt/lustre-mgs
+    mount -t lustre lustre-mgs/mgs /mnt/lustre-mgs
+
+    sleep 5
+
+    umount -t lustre /mnt/lustre-mgs
+}
+
 function setup_lustrefs()
 {
     load_zfs_modules
