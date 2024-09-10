@@ -7,8 +7,8 @@
 #
 
 #
-# Run a simple mount test (client and server). This currently
-# only works with ZFS.
+# Setup/cleanup a Lustre MGT. The backing OSD is specified
+# with FSTYPE.
 #
 # Author: Timothy Day <timday@amazon.com>
 #
@@ -27,6 +27,10 @@ test_llmount()
 {
     load_lustre_modules
     setup_lustre_mgs
+
+    sleep 5
+
+    cleanup_lustre_mgs
 }
 
 main "$@"

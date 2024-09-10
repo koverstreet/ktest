@@ -23,7 +23,7 @@ export zfs_pkg_path="$workspace_path/zfs"
 # Set Lustre test-framework.sh environment
 export ZFS="$zfs_pkg_path/cmd/zfs/zfs"
 export ZPOOL="$zfs_pkg_path/cmd/zpool/zpool"
-export FSTYPE="zfs"
+export LUSTRE="$lustre_pkg_path/lustre"
 export RUNAS_ID="1000"
 
 # Update paths
@@ -31,6 +31,31 @@ set +u
 export PATH="$zfs_pkg_path/cmd/zpool:$zfs_pkg_path/cmd/zfs:$PATH"
 export LD_LIBRARY_PATH="$zfs_pkg_path/lib/libzfs/.libs:$zfs_pkg_path/lib/libzfs_core/.libs:$LD_LIBRARY_PATH"
 export LD_LIBRARY_PATH="$zfs_pkg_path/lib/libuutil/.libs:$zfs_pkg_path/lib/libnvpair/.libs:$LD_LIBRARY_PATH"
+set -u
+
+# Dump out all of the special Lustre variables
+function print_lustre_env() {
+    echo "FSTYPE=$FSTYPE"
+}
+
+# Run a command as if it were part of test-framework.sh
+function run_tf() {
+	    cat << EOF | bash
+. "$LUSTRE/tests/test-framework.sh" > /dev/null
+init_test_env > /dev/null
+$@
+EOF
+}
+
+# Grab special Lustre environment variables
+# TODO: There's probably a better way to do this...
+set +u
+if [[ -n $FSTYPE ]]; then
+    rm -f /tmp/ktest-lustre.env
+    print_lustre_env > /tmp/ktest-lustre.env
+else
+    eval $(cat /host/tmp/ktest-lustre.env)
+fi
 set -u
 
 function load_zfs_modules()
@@ -66,33 +91,54 @@ function require-lustre-debug-kernel-config()
 
 function load_lustre_modules()
 {
-    load_zfs_modules
+    if [[ "$FSTYPE" =~ "zfs" ]]; then
+	load_zfs_modules
+    fi
 
-    "$lustre_pkg_path/lustre/tests/llmount.sh" --load-modules
+    FSTYPE="$FSTYPE" "$lustre_pkg_path/lustre/tests/llmount.sh" --load-modules
 }
 
 function setup_lustre_mgs()
 {
-    zpool create lustre-mgs "${ktest_scratch_dev[0]}"
-    "$lustre_pkg_path/lustre/utils/mkfs.lustre" --mgs --fsname=lustre lustre-mgs/mgs
     mkdir -p /mnt/lustre-mgs
-    mount -t lustre lustre-mgs/mgs /mnt/lustre-mgs
 
-    sleep 5
+    # TODO: This logic probably belongs in llmount.sh or test-framework.sh?
+    case "$FSTYPE" in
+	zfs)
+	    zpool create lustre-mgs "${ktest_scratch_dev[0]}"
+	    "$lustre_pkg_path/lustre/utils/mkfs.lustre" --mgs --fsname=lustre lustre-mgs/mgs
+	    mount -t lustre lustre-mgs/mgs /mnt/lustre-mgs
+	    ;;
+	mem)
+	    export OSD_MEM_TGT_TYPE="MGT"
+	    export OSD_MEM_INDEX="0"
+	    export OSD_MEM_MGS_NID="$(hostname -i)@tcp"
+	    run_tf "$lustre_pkg_path/lustre/utils/mount.lustre" -v /mnt/lustre-mgs
+	    ;;
+	*)
+	    echo "Unsupported OSD!"
+	    exit 1
+	    ;;
+    esac
+}
 
+function cleanup_lustre_mgs()
+{
     umount -t lustre /mnt/lustre-mgs
 }
 
 function setup_lustrefs()
 {
-    load_zfs_modules
+    print_lustre_env
+    load_lustre_modules
 
-    "$lustre_pkg_path/lustre/tests/llmount.sh"
+    FSTYPE="$FSTYPE" "$lustre_pkg_path/lustre/tests/llmount.sh"
+    mount -t lustre
 }
 
 function cleanup_lustrefs()
 {
-    "$lustre_pkg_path/lustre/tests/llmountcleanup.sh"
+    FSTYPE="$FSTYPE" "$lustre_pkg_path/lustre/tests/llmountcleanup.sh"
 }
 
 # Lustre/ZFS will always taint kernel
