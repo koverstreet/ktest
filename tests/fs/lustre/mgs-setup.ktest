@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0
+
+#
+# Copyright (c) 2024, Amazon and/or its affiliates. All rights reserved.
+# Use is subject to license terms.
+#
+
+#
+# Run a simple mount test (client and server). This currently
+# only works with ZFS.
+#
+# Author: Timothy Day <timday@amazon.com>
+#
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/lustre-libs.sh"
+
+require-lustre-kernel-config
+require-lustre-debug-kernel-config
+
+config-mem 10G
+config-timeout 60
+
+config-scratch-devs 512M
+
+test_llmount()
+{
+    load_lustre_modules
+    setup_lustre_mgs
+}
+
+main "$@"
