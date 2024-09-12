@@ -158,6 +158,10 @@ function setup_lustrefs()
     load_lustre_modules
 
     FSTYPE="$FSTYPE" "$lustre_pkg_path/lustre/tests/llmount.sh"
+
+    # Disable identity upcall (for OSD mem)
+    "$LCTL" set_param mdt.*.identity_upcall=NONE
+
     mount -t lustre
 }
 
