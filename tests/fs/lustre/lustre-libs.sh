@@ -24,6 +24,7 @@ export zfs_pkg_path="$workspace_path/zfs"
 export ZFS="$zfs_pkg_path/cmd/zfs/zfs"
 export ZPOOL="$zfs_pkg_path/cmd/zpool/zpool"
 export LUSTRE="$lustre_pkg_path/lustre"
+export LCTL="$LUSTRE/utils/lctl"
 export RUNAS_ID="1000"
 
 # Update paths
@@ -44,6 +45,30 @@ function run_tf() {
 . "$LUSTRE/tests/test-framework.sh" > /dev/null
 init_test_env > /dev/null
 $@
+EOF
+}
+
+# Run llog_test.ko unit tests
+function run_llog() {
+    export MGS="$($LCTL dl | awk '/mgs/ { print $4 }')"
+
+    cat << EOF | bash
+. "$LUSTRE/tests/test-framework.sh" > /dev/null
+init_test_env > /dev/null
+
+# Load module
+load_module kunit/llog_test || error "load_module failed"
+
+# Using ignore_errors will allow lctl to cleanup even if the test fails.
+$LCTL mark "Attempt llog unit tests"
+eval "$LCTL <<-EOF || RC=2
+	attach llog_test llt_name llt_uuid
+	ignore_errors
+	setup $MGS
+	--device llt_name cleanup
+	--device llt_name detach
+EOF"
+$LCTL mark "Finish llog units tests"
 EOF
 }
 
