@@ -1724,7 +1724,7 @@ test_kill_btree_node()
 
 	[[ $btree = freespace ]] && index=0
 
-	bcachefs kill_btree_node -b $btree -i $index ${ktest_scratch_dev[0]}
+	bcachefs kill_btree_node -n$btree:0:$index ${ktest_scratch_dev[0]}
 
 	echo "Running fsck"
 	# How to assert exit status equals something specific with -o errexit?
@@ -1747,7 +1747,7 @@ test_kill_btree_root()
     run_quiet "" bcachefs format -f --btree_node_size=64k ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
-    cp -a /usr/bin /mnt
+    cp -rL /usr/bin /mnt
     sync
 
     cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys > /root/extents_before
@@ -1755,8 +1755,7 @@ test_kill_btree_root()
     umount /mnt
     bcachefs list -m nodes ${ktest_scratch_dev[0]} > /root/nodes_before
 
-    #bcachefs kill_btree_node -b extents -l 1 ${ktest_scratch_dev[0]}
-    bcachefs kill_btree_node -b snapshots -l 0 ${ktest_scratch_dev[0]}
+    bcachefs kill_btree_node -nsnapshots -nsnapshot_trees -nsubvolumes ${ktest_scratch_dev[0]}
 
     echo "Running fsck"
     # How to assert exit status equals something specific with -o errexit?
