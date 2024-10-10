@@ -1747,7 +1747,7 @@ test_kill_btree_root()
     run_quiet "" bcachefs format -f --btree_node_size=64k ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
-    cp -a /usr/bin /mnt
+    cp -rL /usr/bin /mnt
     sync
 
     cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys > /root/extents_before
