@@ -7,8 +7,8 @@
 #
 
 #
-# Run a simple mount test (client and server). This currently
-# only works with ZFS.
+# Run a simple mount test (client and server). The backing OSD is
+# specified with FSTYPE.
 #
 # Author: Timothy Day <timday@amazon.com>
 #
