@@ -49,6 +49,7 @@ fn get_test_job(args: &Args, rc: &Ktestrc, durations: Option<&[u8]>) -> Option<T
         .open(rc.output_dir.join("jobs")).unwrap();
     let mut len = file.metadata().unwrap().len();
     if len == 0 {
+        eprintln!("get-test-job: No test job available");
         return None;
     }
 
@@ -60,25 +61,34 @@ fn get_test_job(args: &Args, rc: &Ktestrc, durations: Option<&[u8]>) -> Option<T
     let mut ret = None;
 
     for job in map.rsplit(|b| *b == b'\n') {
+        let job = str::from_utf8(job).unwrap();
+
         if job.is_empty() {
             continue;
         }
 
-        let mut fields = job.split(|b| *b == b' ');
-        let branch      = str::from_utf8(fields.next().unwrap()).unwrap();
-        let commit      = str::from_utf8(fields.next().unwrap()).unwrap();
-        let age_str     = str::from_utf8(fields.next().unwrap()).unwrap();
+        if args.verbose {
+            eprintln!("get-test-job: considering {}", job);
+        }
+
+        let mut fields = job.split(' ');
+        let branch      = fields.next().unwrap();
+        let commit      = fields.next().unwrap();
+        let age_str     = fields.next().unwrap();
         let age         = str::parse::<u64>(age_str).unwrap();
-        let test        = str::from_utf8(fields.next().unwrap()).unwrap();
-        let subtest     = str::from_utf8(fields.next().unwrap()).unwrap();
+        let test        = fields.next().unwrap();
+        let subtest     = fields.next().unwrap();
 
         if ret.is_some() && !commit_test_matches(&ret, commit, test) {
+            if args.verbose {
+                eprintln!("get-test-job: subtest from different test as previous, breaking");
+            }
             break;
         }
 
         let stats = test_stats(durations, test, subtest);
         if args.verbose {
-            println!("stats for {}.{}={:?}", test, subtest, stats);
+            eprintln!("get-test-job: stats for {}.{}={:?}", test, subtest, stats);
         }
         let duration_secs = if let Some(s) = stats {
             s.duration
@@ -87,12 +97,19 @@ fn get_test_job(args: &Args, rc: &Ktestrc, durations: Option<&[u8]>) -> Option<T
         };
 
         if duration_sum != 0 && duration_sum + duration_secs > rc.subtest_duration_max {
+            if args.verbose {
+                eprintln!("get-test-job: have {} > {} seconds of work, breaking",
+                          duration_sum + duration_secs, rc.subtest_duration_max);
+            }
             break;
         }
 
         if !lockfile_exists(rc, &commit, &subtest_full_name(&test, &subtest),
                             !args.dry_run, &mut commits_updated) {
-            break;
+            if args.verbose {
+                eprintln!("get-test-job: test {} already in progress", job);
+            }
+            continue;
         }
 
         if let Some(ref mut r) = ret {
@@ -112,11 +129,18 @@ fn get_test_job(args: &Args, rc: &Ktestrc, durations: Option<&[u8]>) -> Option<T
     }
 
     if !args.dry_run {
-        let _ = file.set_len(len);
+        let r = file.set_len(len);
+        if let Err(e) = r {
+            eprintln!("get-test-job: error truncating jobs file: {}", e);
+        }
     }
 
     for i in commits_updated.iter() {
         commit_update_results_from_fs(rc, &i);
+    }
+
+    if args.verbose {
+        eprintln!("get-test-job: got {:?}", ret);
     }
 
     ret
@@ -131,7 +155,8 @@ fn main() {
         process::exit(1);
     }
     let rc = rc.unwrap();
-    let rc = rc.ktest;
+    let mut rc = rc.ktest;
+    rc.verbose = std::cmp::max(rc.verbose, args.verbose);
 
     let durations_file = File::open(rc.output_dir.join("test_durations.capnp")).ok();
     let durations_map = durations_file.map(|x| unsafe { MmapOptions::new().map(&x).ok() } ).flatten();

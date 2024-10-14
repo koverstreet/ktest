@@ -39,6 +39,8 @@ pub struct Ktestrc {
     pub users_dir:              PathBuf,
     pub subtest_duration_max:   u64,
     pub subtest_duration_def:   u64,
+    #[serde(default)]
+    pub verbose:                bool,
 }
 
 pub fn ktestrc_read() -> anyhow::Result<Ktestrc> {
@@ -249,8 +251,12 @@ pub fn workers_get(ktestrc: &Ktestrc) -> anyhow::Result<Workers> {
 
 use file_lock::{FileLock, FileOptions};
 
-pub fn workers_update(ktestrc: &Ktestrc, n: Worker) -> Option<()> {
-    let fname = ktestrc.output_dir.join("workers.capnp");
+pub fn workers_update(rc: &Ktestrc, n: Worker) -> Option<()> {
+    if rc.verbose {
+        eprintln!("workers_update: {:?}", n);
+    }
+
+    let fname = rc.output_dir.join("workers.capnp");
     let foptions = FileOptions::new().read(true).write(true).append(false).create(true);
 
     let mut filelock = FileLock::lock(fname, true, foptions)
