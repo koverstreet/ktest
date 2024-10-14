@@ -17,6 +17,7 @@ ktest_dir="/host/$ktest_dir"
 ktest_tmp="/host/$ktest_tmp"
 ktest_out="/host/$ktest_out"
 
+rm -f /ktest /ktest-out
 ln -sf $ktest_dir /ktest
 ln -sf $ktest_out /ktest-out
 
