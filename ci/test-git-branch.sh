@@ -222,6 +222,7 @@ while true; do
 
 	[[ ${#TEST_JOB[@]} != 0 && ${TEST_JOB[0]} == TEST_JOB ]] && break
 
+	echo "No test job available"
 	$ktest_once && exit 1
 
 	sleep 10
