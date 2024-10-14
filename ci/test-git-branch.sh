@@ -13,7 +13,11 @@ ssh_retry() {
 	set +o errexit
 
 	while true; do
-	    ssh "$@"
+	    ssh -o 'ControlMaster=auto'			\
+		-o 'ControlPath=~/.ssh/master-%r@%h:%p'	\
+		-o 'ControlPersist=10m'			\
+		-o 'ServerAliveInterval=10'		\
+		"$@"
 	    (($? == 0)) && break
 	    sleep 1
 	    tput cuu1
@@ -186,7 +190,7 @@ run_test_job() {
 
 	    while true; do
 		tar --create --file - $COMMIT|
-		    ssh $JOBSERVER "(cd $JOBSERVER_OUTPUT_DIR; tar --extract --file -)"
+		    ssh_retry $JOBSERVER "(cd $JOBSERVER_OUTPUT_DIR; tar --extract --file -)"
 		(($? == 0)) && break
 		sleep 1
 		tput cuu1
