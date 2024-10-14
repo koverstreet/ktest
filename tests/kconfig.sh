@@ -236,6 +236,7 @@ require-kernel-config FUNCTION_TRACER
 require-kernel-config PANIC_ON_OOPS
 require-kernel-config SOFTLOCKUP_DETECTOR
 require-kernel-config DETECT_HUNG_TASK
+require-kernel-config CONFIG_DEFAULT_HUNG_TASK_TIMEOUT=10
 #require-kernel-config DEFAULT_HUNG_TASK_TIMEOUT=30
 require-kernel-config WQ_WATCHDOG
 
