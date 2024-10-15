@@ -81,7 +81,7 @@ PACKAGES=(kexec-tools less psmisc openssh-server curl		\
     hdparm mdadm lvm2						\
     btrfs-progs jfsutils nilfs-tools f2fs-tools			\
     bc attr gawk acl rsync git python3-docutils			\
-    stress-ng lsof)
+    stress-ng lsof xxd)
 
 # build tools:
 PACKAGES+=(build-essential make gcc g++ clang)
