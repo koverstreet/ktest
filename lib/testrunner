@@ -156,7 +156,7 @@ do_reboot()
 echo -n "Kernel version: "
 uname -r
 
-if [[ -z $ktest_tests ]]; then
+if [[ -z $ktest_tests ]] && ! $ktest_tests_unknown; then
     echo "No tests found"
     echo "TEST FAILED"
     exit 1

@@ -18,7 +18,7 @@ parse_test_deps()
     ktest_tests=$("$ktest_test" list-tests)
     ktest_tests=$(echo $ktest_tests)
 
-    if [[ -z $ktest_tests ]]; then
+    if [[ -z $ktest_tests ]] && ! $ktest_tests_unknown; then
 	echo "No tests found"
 	echo "TEST FAILED"
 	exit 1
@@ -28,12 +28,14 @@ parse_test_deps()
 
     # Ensure specified tests exist:
     if [[ -n $ktest_testargs ]]; then
-	for t in $ktest_testargs; do
-	    if ! echo "$ktest_tests"|grep -wq "$t"; then
-		echo "Test $t not found"
-		exit 1
-	    fi
-	done
+	if ! $ktest_tests_unknown; then
+	    for t in $ktest_testargs; do
+		if ! echo "$ktest_tests"|grep -wq "$t"; then
+		    echo "Test $t not found"
+		    exit 1
+		fi
+	    done
+	fi
 
 	ktest_tests="$ktest_testargs"
     fi
