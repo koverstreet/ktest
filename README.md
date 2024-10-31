@@ -43,7 +43,7 @@ Then, to build a kernel and run some tests, from your linux kernel source tree
 run
 
 ```
-build-test-kernel run -I ~/ktest/tests/bcachefs/single_device.ktest
+build-test-kernel run -I ~/ktest/tests/fs/bcachefs/single_device.ktest
 ```
 
 While virtual machine is running, you can interact with it by running various
