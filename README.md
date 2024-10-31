@@ -15,7 +15,7 @@ options, scratch devices, timeouts, etc).
 DEPENDENCIES:
 =============
 
- * standand build tools (gcc, make)
+ * standard build tools (gcc, make)
  * qemu
  * minicom
  * socat
