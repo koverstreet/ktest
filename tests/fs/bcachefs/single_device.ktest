@@ -1827,8 +1827,6 @@ d_test_nocow_fragmented()
     check_counters ${ktest_scratch_dev[0]}
 }
 
-config-mem 16G
-
 d_test_nocow_fragmented2()
 {
     modprobe brd rd_size=536870912 rd_nr=7
