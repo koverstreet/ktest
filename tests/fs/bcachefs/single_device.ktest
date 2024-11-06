@@ -35,7 +35,7 @@ test_stress_ng()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_punch()
@@ -57,7 +57,7 @@ test_punch()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_remount_ro_rw()
@@ -76,7 +76,7 @@ test_remount_ro_rw()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_mount_options()
@@ -109,7 +109,7 @@ test_mount_options()
     umount /mnt
 
     bcachefs fsck -ny $dev
-    check_counters $dev
+    bcachefs_test_end_checks $dev
 }
 
 test_extent_merge2()
@@ -129,7 +129,7 @@ test_extent_merge2()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 
     [[ -f $p ]] && echo 0 > $p
     true
@@ -157,7 +157,7 @@ test_extent_repair_overlapping()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_reflink3()
@@ -191,7 +191,7 @@ test_reflink3()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_reflink2()
@@ -228,7 +228,7 @@ test_reflink2()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_reflink()
@@ -261,7 +261,7 @@ test_reflink()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_fio_raw()
@@ -306,7 +306,7 @@ test_rewrite_old_nodes()
     bcachefs show-super ${ktest_scratch_dev[0]}
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_merge_torture_flakey()
@@ -370,7 +370,7 @@ test_merge_torture_flakey()
     dmsetup remove flakey
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 # Disabled, because currently OOMs
@@ -418,7 +418,7 @@ test_make_files()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_journal_resize()
@@ -438,7 +438,7 @@ test_journal_resize()
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_drop_alloc()
@@ -461,7 +461,7 @@ test_drop_alloc()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_reflink_inline_data()
@@ -479,7 +479,7 @@ test_reflink_inline_data()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_split_compressed()
@@ -494,7 +494,7 @@ test_split_compressed()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_fcollapse()
@@ -522,7 +522,7 @@ test_fcollapse()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_finsert()
@@ -539,7 +539,7 @@ test_finsert()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_key_merge()
@@ -558,7 +558,7 @@ test_key_merge()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_key_merge_csum()
@@ -579,7 +579,7 @@ test_key_merge_csum()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_reconstruct_alloc()
@@ -612,7 +612,7 @@ test_reconstruct_alloc()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_recovery()
@@ -653,7 +653,7 @@ test_recovery()
     done
 
     bcachefs fsck -nyk ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_lz4_zeros()
@@ -667,7 +667,7 @@ test_lz4_zeros()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_lz4_incompressible()
@@ -680,7 +680,7 @@ test_lz4_incompressible()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_lz4()
@@ -713,7 +713,7 @@ test_lz4_buffered()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_gzip()
@@ -741,7 +741,7 @@ test_background_compression()
     run_fio_randrw
 
     umount /mnt
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_rebalance_scan()
@@ -758,7 +758,7 @@ test_rebalance_scan()
     sleep 2
     cat /sys/fs/bcachefs/*/compression_stats|grep zstd|grep -q '8.00 MiB'
     umount /mnt
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_compress_no_checksum()
@@ -810,7 +810,7 @@ test_crypto_locked_mnt()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_crypto()
@@ -822,7 +822,7 @@ test_crypto()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_crypto_lz4()
@@ -877,7 +877,7 @@ run_copygc_torture()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_copygc_torture()
@@ -931,7 +931,7 @@ d_test_crypto_passphrase()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_partial_overwritten_extents()
@@ -962,7 +962,7 @@ test_partial_overwritten_extents()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 # test the xattr interface for per-inode IO options:
@@ -993,7 +993,7 @@ test_xattr()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_quota()
@@ -1014,7 +1014,7 @@ test_quota()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 # test nfs exports:
@@ -1039,7 +1039,7 @@ test_nfs()
     umount /export2
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 # We should get this working at some point:
@@ -1073,7 +1073,7 @@ d_test_suspend()
     fi
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_journal_torture()
@@ -1096,7 +1096,7 @@ test_journal_torture()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_online_resize()
@@ -1118,7 +1118,7 @@ test_online_resize()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_offline_resize()
@@ -1144,7 +1144,7 @@ test_offline_resize()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 require-kernel-config BLK_DEV_DM
@@ -1190,7 +1190,7 @@ test_sysfs()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_debugfs()
@@ -1209,7 +1209,7 @@ test_debugfs()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_set_option()
@@ -1232,7 +1232,7 @@ test_set_option()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 disabled_test_swapfile()
@@ -1250,7 +1250,7 @@ disabled_test_swapfile()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 prepare_source_fs()
@@ -1326,7 +1326,7 @@ build_from_fs()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[1]}
-    check_counters ${ktest_scratch_dev[1]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[1]}
 }
 
 test_build_from_ext4()
@@ -1401,7 +1401,7 @@ migrate_from_fs()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_migrate_from_ext4()
@@ -1498,7 +1498,7 @@ test_long_name()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_many_files()
@@ -1519,7 +1519,7 @@ test_many_files()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 disabled_test_invalid_keys()
@@ -1560,7 +1560,7 @@ test_buffered_reads()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 # Small filesystem tests currently disabled - TODO item:
@@ -1582,7 +1582,7 @@ d_test_small_fs()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 d_test_small_torture()
@@ -1622,7 +1622,7 @@ test_gc()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_attr_inherit()
@@ -1657,7 +1657,7 @@ test_attr_inherit()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_setattr()
@@ -1679,7 +1679,7 @@ test_setattr()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_mount_twice()
@@ -1738,7 +1738,7 @@ test_kill_btree_node()
 	bcachefs fsck -ny ${ktest_scratch_dev[0]}
     done
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_kill_btree_root()
@@ -1775,7 +1775,7 @@ test_kill_btree_root()
     diff -rq /usr/bin /mnt/bin
     umount /mnt
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_multimount()
@@ -1791,7 +1791,7 @@ test_multimount()
     umount /mnt/2
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_kernel_fsck()
@@ -1805,8 +1805,7 @@ test_kernel_fsck()
     umount /mnt
 
     bcachefs fsck -nyvk ${ktest_scratch_dev[0]}
-
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 d_test_nocow_fragmented()
@@ -1824,7 +1823,7 @@ d_test_nocow_fragmented()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 d_test_nocow_fragmented2()

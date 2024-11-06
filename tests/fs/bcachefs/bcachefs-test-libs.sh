@@ -232,6 +232,14 @@ check_counters()
     return $ret
 }
 
+bcachefs_test_end_checks()
+{
+    check_bcachefs_leaks
+    for dev in $@; do
+	check_counters $dev
+    done
+}
+
 fill_device()
 {
     local filename=$1
@@ -321,6 +329,7 @@ run_basic_fio_test_counter_threshold()
     #umount /mnt
 
     bcachefs fsck -ny "${devs[@]}"
+    check_bcachefs_leaks
     check_counters "${devs[0]}" "$ratio"
 }
 

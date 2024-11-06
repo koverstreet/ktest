@@ -44,7 +44,7 @@ test_tiering_torture()
     umount /mnt
 
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_tiering()
@@ -64,7 +64,7 @@ test_tiering_drop_alloc()
     echo "final fsck:"
 
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_tiering_buffered()
@@ -101,7 +101,7 @@ test_tiering_buffered()
     umount /mnt
 
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_writethrough()
@@ -143,7 +143,7 @@ test_setattr()
 
     umount /mnt
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_tiering_no_checksum()
@@ -218,7 +218,7 @@ test_device_add()
     umount /mnt
 
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_mount_umount_torture()
@@ -238,7 +238,7 @@ test_mount_umount_torture()
     done
 
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_change_replicas()
@@ -285,7 +285,7 @@ test_change_replicas()
     umount /mnt
 
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_concurrent_all_device_removal()
@@ -321,7 +321,7 @@ test_concurrent_all_device_removal()
     mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
     umount /mnt
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 main $@

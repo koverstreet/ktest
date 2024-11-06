@@ -22,10 +22,7 @@ run_test()
 
     run_fstests "$@"
 
-    check_bcachefs_leaks
-
-    check_counters ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[1]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
 }
 
 main "$@"

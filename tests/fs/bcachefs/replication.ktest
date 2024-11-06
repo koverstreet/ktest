@@ -51,7 +51,7 @@ test_recovery()
     done
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_twodevices()
@@ -73,7 +73,7 @@ test_largebuckets()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_replicas()
@@ -102,7 +102,7 @@ test_replicas_variable_buckets()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]} ${ktest_scratch_dev[3]} ${ktest_scratch_dev[4]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 d_test_copygc_torture()
@@ -159,7 +159,7 @@ d_test_copygc_torture()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 do_remove_test()
@@ -224,7 +224,7 @@ do_remove_test()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_device_remove_offline()
@@ -280,7 +280,7 @@ test_device_add()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_device_add_label()
@@ -296,7 +296,7 @@ test_device_add_label()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_device_add_label_compound()
@@ -315,7 +315,7 @@ test_device_add_label_compound()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_device_set_state()
@@ -352,7 +352,7 @@ test_device_set_state()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_device_ro()
@@ -386,7 +386,7 @@ test_device_ro()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_device_set_state_offline()
@@ -422,7 +422,7 @@ test_device_set_state_offline()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_device_readd()
@@ -460,7 +460,7 @@ test_device_readd()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_device_repeated_add_remove()
@@ -487,7 +487,7 @@ test_device_repeated_add_remove()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 do_replicas_errors_test()
@@ -524,7 +524,7 @@ do_replicas_errors_test()
     dmsetup remove flakey
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 
     [[ -f $p ]] && echo 0 > $p
     true
@@ -572,7 +572,7 @@ test_cmd_fs_usage()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_rereplicate()
@@ -601,7 +601,7 @@ test_rereplicate()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 disabled_test_device_add_faults()
@@ -624,7 +624,7 @@ disabled_test_device_add_faults()
     run_fault_injection_test bcachefs:bch_fs_init:alloc_start	device_add_fault_fn
     run_fault_injection_test bcachefs:bch_fs_init:read_super	device_add_fault_fn
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_striping()
@@ -671,7 +671,7 @@ test_striping()
 
     umount /mnt
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 disabled_change_replicas()
@@ -704,7 +704,7 @@ disabled_change_replicas()
     kill %1
     umount /mnt
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 disabled_change_replicas2()
@@ -728,7 +728,7 @@ disabled_change_replicas2()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_replicas_gc()
@@ -757,7 +757,7 @@ test_replicas_gc()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[@]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 
     [[ -f $p ]] && echo 0 > $p
     true
@@ -784,7 +784,7 @@ test_replace_replica()
     # We expect more btree_path_upgrade_fail events than usual in this test,
     # due to the way the btree node rewrite path works and the fact that we're
     # rewriting every btree node
-    check_counters ${ktest_scratch_dev[0]} 4
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]} 4
 }
 
 test_key_type_error()
@@ -810,7 +810,7 @@ test_key_type_error()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_force_remove()

@@ -42,7 +42,7 @@ test_ec_small()
     umount /mnt
 
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_ec_umount()
@@ -64,7 +64,7 @@ test_ec_umount()
     done
 
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 do_ec_test()
@@ -99,7 +99,7 @@ do_ec_test()
     umount /mnt
 
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_ec()
@@ -159,7 +159,7 @@ test_ec_mixed_tiers()
     umount /mnt
 
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_ec_gc()
@@ -210,7 +210,7 @@ test_ec_gc()
     umount /mnt
 
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 do_remove_test()
@@ -264,7 +264,7 @@ do_remove_test()
     umount /mnt
 
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_device_remove_offline()
@@ -317,7 +317,7 @@ test_device_failed()
     umount /mnt
 
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 main "$@"

@@ -42,7 +42,7 @@ test_snapshots_simple()
     mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
     umount /mnt
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_files_many()
@@ -61,7 +61,7 @@ test_files_many()
     time mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
     umount /mnt
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 d_test_snapshots_many()
@@ -83,7 +83,7 @@ d_test_snapshots_many()
     mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
     umount /mnt
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_dbench()
@@ -122,7 +122,7 @@ test_dbench()
     df -h /mnt
     umount /mnt
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_reflink()
@@ -138,7 +138,7 @@ test_reflink()
 
     umount /mnt
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 d_test_finsert()
@@ -154,7 +154,7 @@ d_test_finsert()
 
     umount /mnt
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 d_test_snapshots_fio()
@@ -238,7 +238,7 @@ d_test_snapshots_fio()
     df -h /mnt
     umount /mnt
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_subvol_create()
@@ -254,7 +254,7 @@ test_subvol_create()
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_subvol_delete()
@@ -268,7 +268,7 @@ test_subvol_delete()
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_subvol_create_delete()
@@ -302,7 +302,7 @@ test_subvol_snapshot_create()
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_subvol_snapshot_create_ro()
@@ -318,7 +318,7 @@ test_subvol_snapshot_create_ro()
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_subvol_snapshot_delete()
@@ -333,7 +333,7 @@ test_subvol_snapshot_delete()
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_subvol_snapshot_delete_create()
@@ -349,7 +349,7 @@ test_subvol_snapshot_delete_create()
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 d_test_subvol_snapshot_rm()
@@ -364,7 +364,7 @@ d_test_subvol_snapshot_rm()
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 # Create a subvolume, then snapshot the parent subvolume, then move the child
@@ -380,7 +380,7 @@ test_mkdir_mv_snapshot()
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_subvol_mv_snapshot()
@@ -394,7 +394,7 @@ test_subvol_mv_snapshot()
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 # Test moving a subvol to another subvol
@@ -409,7 +409,7 @@ test_subvol_mv_subvol()
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_subvol_snapshot_reuse_snapshot_name()
@@ -425,7 +425,7 @@ test_subvol_snapshot_reuse_snapshot_name()
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_subvol_delete_snapshot_of_deleted_subvol()
@@ -441,7 +441,7 @@ test_subvol_delete_snapshot_of_deleted_subvol()
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_subvol_snapshot_delete_repeat()
@@ -456,7 +456,7 @@ test_subvol_snapshot_delete_repeat()
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_subvol_snapshot_delete_fio()
@@ -479,7 +479,7 @@ test_subvol_snapshot_delete_fio()
     umount /mnt
     bcachefs fsck -n ${ktest_scratch_dev[0]}
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_snapshot_copygc()
@@ -495,7 +495,7 @@ test_snapshot_copygc()
     bcachefs fs usage -h /mnt
     umount /mnt
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_snapshot_many_overwrite()
@@ -511,7 +511,7 @@ test_snapshot_many_overwrite()
     bcachefs fs usage -h /mnt
     umount /mnt
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_snapshot_prjquota()
@@ -528,7 +528,7 @@ test_snapshot_prjquota()
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     umount /mnt
 
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 md5sum_file()
