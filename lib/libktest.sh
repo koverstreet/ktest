@@ -452,10 +452,5 @@ start_vm()
     set +o errexit
     save_env
   
-    local decode_stacktrace=$ktest_kernel_source/scripts/decode_stacktrace.sh
-    if [[ -f $decode_stacktrace && -d $ktest_kernel_build ]]; then
-	"${qemu_cmd[@]}"|bash "$decode_stacktrace" "$ktest_kernel_build/vmlinux"
-    else
-	"${qemu_cmd[@]}"
-    fi
+    "${qemu_cmd[@]}"
 }
