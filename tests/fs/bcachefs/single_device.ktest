@@ -1809,6 +1809,29 @@ test_kernel_fsck()
     check_counters ${ktest_scratch_dev[0]}
 }
 
+test_online_fsck()
+{
+    set_watchdog 10
+    bcachefs format -f ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    (
+	echo foo
+	rm /mnt/foo
+	sleep 10
+	echo bar
+    ) > /mnt/foo &
+
+    bcachefs fsck -yk ${ktest_scratch_dev[0]}
+    wait
+    umount /mnt
+
+    bcachefs fsck -nyvk ${ktest_scratch_dev[0]}
+
+    check_counters ${ktest_scratch_dev[0]}
+}
+
 d_test_nocow_fragmented()
 {
     set_watchdog 60
