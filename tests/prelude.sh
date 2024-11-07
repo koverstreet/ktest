@@ -222,8 +222,8 @@ allow_taint()
 
 create_ktest_user()
 {
-    groupadd -g 1000 ktest_group
-    useradd -u 1000 -g 1000 ktest_user
+    groupadd -g 1000 ktest_group	>& /dev/null || true
+    useradd -u 1000 -g 1000 ktest_user	>& /dev/null || true
 }
 
 set_watchdog()
