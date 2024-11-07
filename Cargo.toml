@@ -26,6 +26,8 @@ capnp = "0.19.*"
 anyhow = "1.0.71"
 chrono = "0.4.26"
 memmap = "0.7.0"
+serde_json = "1.0.132"
+reqwest = { version = "0.12.9", features = ["blocking"] }
 
 [build-dependencies]
 capnpc = "0.19.*"
