@@ -272,3 +272,7 @@ require-kernel-config DEBUG_LIST
 # require-kernel-config DEBUG_PAGEALLOC
 
 require-kernel-append kasan.fault=panic
+require-kernel-config PANIC_TIMEOUT=0
+
+# for some reason, NR_CPUS=8 as syzbot sets breaks kgdb:
+require-kernel-config NR_CPUS=64
