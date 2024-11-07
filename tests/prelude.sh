@@ -35,7 +35,9 @@ if [[ ! -v ktest_cpus ]]; then
     ktest_qemu_append=()
     ktest_compiler=gcc
     ktest_allow_taint=false
+
     ktest_tests_unknown=false
+    ktest_kconfig_base=
 
     BUILD_ON_HOST=""
 fi
@@ -355,6 +357,7 @@ main()
 	    echo "ktest_qemu_append=(${ktest_qemu_append[@]})"
 	    echo "ktest_allow_taint=$ktest_allow_taint"
 	    echo "ktest_tests_unknown=$ktest_tests_unknown"
+	    echo "ktest_kconfig_base=$ktest_kconfig_base"
 	    ;;
 	init)
 	    create_ktest_user

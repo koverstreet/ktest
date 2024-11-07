@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+#
+# Run syzbot reproducers:
+#
+# Example usage, to reproduce locally the bug https://syzkaller.appspot.com/bug?extid=f074d2e31d8d35a6a38c
+#   build-test-kernel run -I ~/ktest/tests/syzbot-repro.ktest f074d2e31d8d35a6a38c
+# or, with an optionl crash index:
+#   build-test-kernel run -I ~/ktest/tests/syzbot-repro.ktest f074d2e31d8d35a6a38c 3
+#
+# The syzbot-get tool first needs to be built and installed, run
+#   cargo install --path "path to ktest"
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/test-libs.sh
+
+ktest_tests_unknown=true
+
+if [[ $1 == "deps" ]]; then
+    syz_id=$2
+    crash_idx=${3:-"0"}
+
+    syzbot-get --output "$ktest_out/syzbot" --id $syz_id --idx $crash_idx
+    ktest_kconfig_base="$ktest_out/syzbot/$syz_id.$crash_idx.kconfig"
+fi
+
+run_test()
+{
+    syz_id=$1
+    crash_idx=${2:-"0"}
+
+    gcc -O2 -Wall -o /tmp/syz-repro "$ktest_out/syzbot/$syz_id.$crash_idx.repro.c"
+    /tmp/syz-repro
+}
+
+main "$@"

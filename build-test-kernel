@@ -198,7 +198,11 @@ build_kernel()
 	mv "$kconfig" "$kconfig".bak
     fi
 
-    new_config
+    if [[ -z $ktest_kconfig_base ]]; then
+	new_config
+    else
+	cp "$ktest_kconfig_base" "$kconfig"
+    fi
 
     log_verbose "kernel_config_require: ${ktest_kernel_config_require[@]}  ${ktest_kernel_config_require_soft[@]}"
 

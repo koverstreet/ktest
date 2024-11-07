@@ -2,7 +2,9 @@
 parse_test_deps()
 {
     export ktest_crashdump
-    eval $("$ktest_test" deps)
+    export ktest_out
+
+    eval $( "$ktest_test" deps $ktest_testargs )
 
     parse_arch "$ktest_arch"
 
