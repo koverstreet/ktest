@@ -19,6 +19,7 @@ checkdep bc
 ktest_njobs=$(nproc)
 ktest_precise=false
 ktest_compiler=gcc
+ktest_skip_kernel_config=false
 
 COVERAGE=""		# doing code coverage?
 MAKEARGS=()
@@ -43,7 +44,8 @@ usage()
     ktest_usage_run_opts
     echo "      -k <dir>        kernel source dir"
     echo "      -c <dir>        enable coverage for this dir (only valid without -K)"
-    echo "      -M <arg>        Extra arguments to be passed to make when building the kernel"
+    echo "      -M <arg>        extra arguments to be passed to make when building the kernel"
+    echo "      -K              keep existing kernel .config"
     echo
     ktest_usage_post
 }
@@ -57,7 +59,7 @@ fi
 CMD="$1"
 shift
 
-while getopts "k:Pc:M:h${ktest_args}" arg; do
+while getopts "k:Pc:M:Kh${ktest_args}" arg; do
     case $arg in
 	k)
 	    ktest_kernel_source="$OPTARG"
@@ -81,7 +83,9 @@ while getopts "k:Pc:M:h${ktest_args}" arg; do
 	M)
 	    MAKEARGS+=("$OPTARG")
 	    ;;
-
+	K)
+	    ktest_skip_kernel_config=true
+	    ;;
 	h)
 	    usage
 	    exit 0
@@ -188,17 +192,19 @@ kernel_opt()
     fi
 }
 
-build_kernel()
+configure_kernel()
 {
-    rm -rf "$ktest_kernel_binary"
-    mkdir -p "$ktest_kernel_binary"
     local kconfig="$ktest_kernel_build/.config"
 
-    if $ktest_precise && [[ -f "$kconfig" ]]; then
-	mv "$kconfig" "$kconfig".bak
+    if [[ -f "$kconfig" ]]; then
+	cp "$kconfig" "$kconfig".bak
     fi
 
     if [[ -z $ktest_kconfig_base ]]; then
+	if $ktest_precise; then
+	    rm -f "$kconfig"
+	fi
+
 	new_config
     else
 	cp "$ktest_kconfig_base" "$kconfig"
@@ -223,8 +229,18 @@ build_kernel()
     done
 
     # Preserve timestamp if config didn't change:
-    if $ktest_precise && [[ -f "$kconfig".bak ]] && diff -q "$kconfig" "$kconfig".bak; then
+    if [[ -f "$kconfig".bak ]] && diff -q "$kconfig" "$kconfig".bak; then
 	mv "$kconfig".bak "$kconfig"
+    fi
+}
+
+build_kernel()
+{
+    rm -rf "$ktest_kernel_binary"
+    mkdir -p "$ktest_kernel_binary"
+
+    if ! $ktest_skip_kernel_config; then
+	configure_kernel
     fi
 
     case $KERNEL_ARCH in
