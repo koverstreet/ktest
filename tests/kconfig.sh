@@ -276,3 +276,6 @@ require-kernel-config PANIC_TIMEOUT=0
 
 # for some reason, NR_CPUS=8 as syzbot sets breaks kgdb:
 require-kernel-config NR_CPUS=64
+
+# Syzbot:
+require-kernel-config BLK_DEV_LOOP
