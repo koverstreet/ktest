@@ -171,10 +171,9 @@ fn results_to_capnp(ktestrc: &Ktestrc, commit_id: &str, results_in: &TestResults
     let fname       = ktestrc.output_dir.join(format!("{commit_id}.capnp"));
     let fname_new   = ktestrc.output_dir.join(format!("{commit_id}.capnp.new"));
 
-    let mut out = File::create(&fname_new)?;
-
+    let mut out = File::create(&fname_new).map(std::io::BufWriter::new)?;
     serialize::write_message(&mut out, &message)?;
-    drop(out);
+    out.into_inner()?;
     std::fs::rename(fname_new, fname)?;
 
     Ok(())
