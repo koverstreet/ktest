@@ -124,7 +124,7 @@ pub struct TestResult {
 
 pub type TestResultsMap = BTreeMap<String, TestResult>;
 
-fn commitdir_get_results_fs(ktestrc: &Ktestrc, commit_id: &String) -> TestResultsMap {
+fn commitdir_get_results_fs(ktestrc: &Ktestrc, commit_id: &str) -> TestResultsMap {
     fn read_test_result(testdir: &std::fs::DirEntry) -> Option<TestResult> {
         let mut f = File::open(&testdir.path().join("status")).ok()?;
         let mut status = String::new();
@@ -155,7 +155,7 @@ fn commitdir_get_results_fs(ktestrc: &Ktestrc, commit_id: &String) -> TestResult
 use testresult_capnp::test_results;
 use capnp::serialize;
 
-fn results_to_capnp(ktestrc: &Ktestrc, commit_id: &String, results_in: &TestResultsMap) -> anyhow::Result<()> {
+fn results_to_capnp(ktestrc: &Ktestrc, commit_id: &str, results_in: &TestResultsMap) -> anyhow::Result<()> {
     let mut message = capnp::message::Builder::new_default();
     let results = message.init_root::<test_results::Builder>();
     let mut result_list = results.init_entries(results_in.len().try_into().unwrap());
@@ -168,8 +168,8 @@ fn results_to_capnp(ktestrc: &Ktestrc, commit_id: &String, results_in: &TestResu
         result.set_status(result_in.status);
     }
 
-    let fname       = ktestrc.output_dir.join(commit_id.clone() + ".capnp");
-    let fname_new   = ktestrc.output_dir.join(commit_id.clone() + ".capnp.new");
+    let fname       = ktestrc.output_dir.join(format!("{commit_id}.capnp"));
+    let fname_new   = ktestrc.output_dir.join(format!("{commit_id}.capnp.new"));
 
     let mut out = File::create(&fname_new)?;
 
@@ -180,14 +180,14 @@ fn results_to_capnp(ktestrc: &Ktestrc, commit_id: &String, results_in: &TestResu
     Ok(())
 }
 
-pub fn commit_update_results_from_fs(ktestrc: &Ktestrc, commit_id: &String) {
+pub fn commit_update_results_from_fs(ktestrc: &Ktestrc, commit_id: &str) {
     let results = commitdir_get_results_fs(&ktestrc, commit_id);
 
     results_to_capnp(ktestrc, commit_id, &results)
         .map_err(|e| eprintln!("error generating capnp: {}", e)).ok();
 }
 
-pub fn commitdir_get_results(ktestrc: &Ktestrc, commit_id: &String) -> anyhow::Result<TestResultsMap> {
+pub fn commitdir_get_results(ktestrc: &Ktestrc, commit_id: &str) -> anyhow::Result<TestResultsMap> {
     let f = std::fs::read(ktestrc.output_dir.join(commit_id.to_owned() + ".capnp"))?;
 
     let message_reader = serialize::read_message_from_flat_slice(&mut &f[..], capnp::message::ReaderOptions::new())?;
@@ -299,7 +299,7 @@ pub fn workers_update(rc: &Ktestrc, n: Worker) -> Option<()> {
     Some(())
 }
 
-pub fn update_lcov(rc: &Ktestrc, commit_id: &String) -> Option<()> {
+pub fn update_lcov(rc: &Ktestrc, commit_id: &str) -> Option<()> {
     let commit_dir = rc.output_dir.join(commit_id);
 
     if !std::fs::remove_file(commit_dir.join("lcov-stale")).is_ok() { return Some(()); }

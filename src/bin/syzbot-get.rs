@@ -48,12 +48,12 @@ struct SyzBug {
     crashes:        Vec<SyzCrash>,
 }
 
-fn get_syz_url(url: &String) -> String {
+fn get_syz_url(url: &str) -> String {
     let url = format!("https://syzkaller.appspot.com{}", url);
     reqwest::blocking::get(url).unwrap().text().unwrap()
 }
 
-fn fetch_syz_url(args: &Args, url: &String, fname: &String) {
+fn fetch_syz_url(args: &Args, url: &str, fname: &str) {
     let fname = args.output.join(fname);
     if !fname.exists() {
         if args.verbose { eprintln!("fetching {} => {:?}", &url, &fname); }
