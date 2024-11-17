@@ -63,6 +63,24 @@ JOBSERVER_LINUX_REPO=ssh://$JOBSERVER/$JOBSERVER_HOME/linux
 HOSTNAME=$(uname -n)
 WORKDIR=$(basename $(pwd))
 
+server_has_mem()
+{
+    readarray -t -d ' ' free_info < <(ssh_retry $JOBSERVER free|awk '/Mem:/ {print $2 " " $3}')
+
+    local mem_total=${free_info[0]}
+    local mem_used=${free_info[1]}
+
+    ((mem_used < mem_total / 2 ))
+}
+
+wait_for_server_mem()
+{
+    while ! server_has_mem; do
+	echo "waiting for server load to go down"
+	sleep 1
+    done
+}
+
 git_fetch() {
     local repo=$1
     shift
@@ -71,6 +89,8 @@ git_fetch() {
 	set +o errexit
 
 	while true; do
+	    wait_for_server_mem
+
 	    git fetch ssh://$JOBSERVER/$JOBSERVER_HOME/$repo $@
 	    ret=$?
 	    (($ret == 0)) && break
