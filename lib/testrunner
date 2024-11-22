@@ -30,8 +30,11 @@ ktest_no_cleanup_tmpdir=1
 log_verbose "Testrunner starting"
 
 mkdir -p /root/.ssh
-cat /host/$home/.ssh/id*.pub > /root/.ssh/authorized_keys
-chmod 600 /root/.ssh/authorized_keys
+if cat /host/$home/.ssh/id*.pub > /root/.ssh/authorized_keys; then
+    chmod 600 /root/.ssh/authorized_keys || true
+else
+    echo "Create an ssh key for ssh access"
+fi
 
 mkdir -p /lib/modules
 ln -s /host/$ktest_kernel_binary/lib/modules/* /lib/modules
