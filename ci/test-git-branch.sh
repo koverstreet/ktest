@@ -63,22 +63,9 @@ JOBSERVER_LINUX_REPO=ssh://$JOBSERVER/$JOBSERVER_HOME/linux
 HOSTNAME=$(uname -n)
 WORKDIR=$(basename $(pwd))
 
-server_has_mem()
-{
-    readarray -t -d ' ' free_info < <(ssh_retry $JOBSERVER free|awk '/Mem:/ {print $2 " " $3}')
-
-    local mem_total=${free_info[0]}
-    local mem_used=${free_info[1]}
-
-    ((mem_used < mem_total / 2 ))
-}
-
 wait_for_server_mem()
 {
-    while ! server_has_mem; do
-	echo "waiting for server load to go down"
-	sleep 1
-    done
+    ssh_retry $JOBSERVER $KTEST_DIR/ci/wait-for-mem.sh
 }
 
 git_fetch() {
@@ -89,8 +76,6 @@ git_fetch() {
 	set +o errexit
 
 	while true; do
-	    wait_for_server_mem
-
 	    git fetch ssh://$JOBSERVER/$JOBSERVER_HOME/$repo $@
 	    ret=$?
 	    (($ret == 0)) && break
@@ -104,7 +89,6 @@ git_fetch() {
 
 sync_git_repos() {
     local repo
-
     for repo in ${JOBSERVER_GIT_REPOS[@]}; do
 	(cd ~/$repo; git_fetch $repo && git checkout -f FETCH_HEAD) || true > /dev/null
     done
@@ -254,6 +238,8 @@ while true; do
 
     TEST_JOB=("${TEST_JOB[@]:1}")
     echo "Got job ${TEST_JOB[@]}"
+
+    wait_for_server_mem
 
     (run_test_job "${TEST_JOB[@]}") || sleep 10
 
