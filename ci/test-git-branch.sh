@@ -233,7 +233,8 @@ while true; do
 	echo "test-git-branch: No test job available"
 	$ktest_once && exit 1
 
-	sleep 10
+	# soft start:
+	sleep $(($RANDOM % 100))
     done
 
     TEST_JOB=("${TEST_JOB[@]:1}")
