@@ -76,6 +76,8 @@ git_fetch() {
 	set +o errexit
 
 	while true; do
+	    wait_for_server_mem
+
 	    git fetch ssh://$JOBSERVER/$JOBSERVER_HOME/$repo $@
 	    ret=$?
 	    (($ret == 0)) && break
@@ -124,7 +126,7 @@ run_test_job() {
 
     echo "Running test $TEST_NAME for branch $BRANCH and commit $COMMIT"
 
-    run_quiet "Syncing git repos" sync_git_repos
+    sync_git_repos
 
     run_quiet "Fetching $COMMIT" git_fetch linux $COMMIT
     run_quiet "Checking out $COMMIT" git checkout -f FETCH_HEAD
