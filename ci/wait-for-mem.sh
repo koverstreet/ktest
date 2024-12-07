@@ -16,5 +16,5 @@ server_has_mem()
 
 while ! server_has_mem; do
     echo "waiting for server load to go down"
-    sleep 1
+    sleep $(($RANDOM % 20))
 done
