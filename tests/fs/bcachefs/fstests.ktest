@@ -11,7 +11,7 @@ require-kernel-config BCACHEFS_POSIX_ACL
 require-kernel-config BCACHEFS_QUOTA
 require-kernel-config QUOTA
 
-[[ ! -v MKFS_OPTIONS ]] && export MKFS_OPTIONS="--encrypted --no_passphrase"
+[[ ! -v MKFS_OPTIONS ]] && export MKFS_OPTIONS="--encrypted --no_passphrase --errors=ro"
 export FSTYP=bcachefs
 
 run_test()

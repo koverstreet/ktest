@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 
-export MKFS_OPTIONS="--nocow"
+export MKFS_OPTIONS="--nocow --errors=ro"
 
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/fstests.ktest
