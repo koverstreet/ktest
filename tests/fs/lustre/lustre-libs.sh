@@ -21,15 +21,21 @@ export lustre_pkg_path="$workspace_path/lustre-release"
 export zfs_pkg_path="$workspace_path/zfs"
 
 # Set Lustre test-framework.sh environment
-export ZFS="$zfs_pkg_path/cmd/zfs/zfs"
-export ZPOOL="$zfs_pkg_path/cmd/zpool/zpool"
+if [[ -f "$zfs_pkg_path/zfs" ]]; then
+    export ZFS="$zfs_pkg_path/zfs"
+    export ZPOOL="$zfs_pkg_path/zpool"
+else
+    export ZFS="$zfs_pkg_path/cmd/zfs/zfs"
+    export ZPOOL="$zfs_pkg_path/cmd/zpool/zpool"
+fi
+
 export LUSTRE="$lustre_pkg_path/lustre"
 export LCTL="$LUSTRE/utils/lctl"
 export RUNAS_ID="1000"
 
 # Update paths
 set +u
-export PATH="$zfs_pkg_path/cmd/zpool:$zfs_pkg_path/cmd/zfs:$PATH"
+export PATH="$zfs_pkg_path:$zfs_pkg_path/cmd/zpool:$zfs_pkg_path/cmd/zfs:$PATH"
 export LD_LIBRARY_PATH="$zfs_pkg_path/lib/libzfs/.libs:$zfs_pkg_path/lib/libzfs_core/.libs:$LD_LIBRARY_PATH"
 export LD_LIBRARY_PATH="$zfs_pkg_path/lib/libuutil/.libs:$zfs_pkg_path/lib/libnvpair/.libs:$LD_LIBRARY_PATH"
 set -u
@@ -85,15 +91,20 @@ set -u
 
 function load_zfs_modules()
 {
-    insmod "$zfs_pkg_path/module/spl/spl.ko"
-    insmod "$zfs_pkg_path/module/zstd/zzstd.ko"
-    insmod "$zfs_pkg_path/module/unicode/zunicode.ko"
-    insmod "$zfs_pkg_path/module/avl/zavl.ko"
-    insmod "$zfs_pkg_path/module/lua/zlua.ko"
-    insmod "$zfs_pkg_path/module/nvpair/znvpair.ko"
-    insmod "$zfs_pkg_path/module/zcommon/zcommon.ko"
-    insmod "$zfs_pkg_path/module/icp/icp.ko"
-    insmod "$zfs_pkg_path/module/zfs/zfs.ko"
+    # ZFS pre-2.3.0
+    insmod "$zfs_pkg_path/module/spl/spl.ko" || true
+    insmod "$zfs_pkg_path/module/zstd/zzstd.ko" || true
+    insmod "$zfs_pkg_path/module/unicode/zunicode.ko" || true
+    insmod "$zfs_pkg_path/module/avl/zavl.ko" || true
+    insmod "$zfs_pkg_path/module/lua/zlua.ko" || true
+    insmod "$zfs_pkg_path/module/nvpair/znvpair.ko" || true
+    insmod "$zfs_pkg_path/module/zcommon/zcommon.ko" || true
+    insmod "$zfs_pkg_path/module/icp/icp.ko" || true
+    insmod "$zfs_pkg_path/module/zfs/zfs.ko" || true
+
+    # ZFS post-2.3.0
+    insmod "$zfs_pkg_path/module/spl.ko" || true
+    insmod "$zfs_pkg_path/module/zfs.ko" || true
 }
 
 function require-lustre-kernel-config()
