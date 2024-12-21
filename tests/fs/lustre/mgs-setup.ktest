@@ -7,6 +7,9 @@
 #
 
 #
+# Setup/cleanup a Lustre MGT. The backing OSD is specified
+# with FSTYPE.
+#
 # Author: Timothy Day <timday@amazon.com>
 #
 
@@ -18,13 +21,16 @@ require-lustre-debug-kernel-config
 config-mem 10G
 config-timeout 60
 
-test_sanity-quick()
+config-scratch-devs 512M
+
+test_llmount()
 {
-    setup_lustrefs
+    load_lustre_modules
+    setup_lustre_mgs
 
-    FSTYPE="$FSTYPE" "$lustre_pkg_path/lustre/tests/auster" -v sanity --stop-at 16
+    sleep 5
 
-    cleanup_lustrefs
+    cleanup_lustre_mgs
 }
 
 main "$@"

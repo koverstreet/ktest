@@ -7,6 +7,8 @@
 #
 
 #
+# Just boot using the Lustre kernel config
+#
 # Author: Timothy Day <timday@amazon.com>
 #
 
@@ -18,13 +20,9 @@ require-lustre-debug-kernel-config
 config-mem 10G
 config-timeout 60
 
-test_sanity-quick()
+test_llmount()
 {
-    setup_lustrefs
-
-    FSTYPE="$FSTYPE" "$lustre_pkg_path/lustre/tests/auster" -v sanity --stop-at 16
-
-    cleanup_lustrefs
+    echo boot
 }
 
 main "$@"
