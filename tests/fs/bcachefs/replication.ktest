@@ -847,4 +847,40 @@ test_force_remove()
     umount /mnt
 }
 
+do_scrub()
+{
+    local offline=$1
+
+    set_watchdog 60
+    run_quiet "" bcachefs format -f		\
+	--replicas=2				\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}			\
+	${ktest_scratch_dev[2]}
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
+
+    dd if=/dev/urandom of=/mnt/test bs=1M count=1000 oflag=direct
+
+    dd if=/dev/zero of=/dev/vdd bs=1M seek=2 count=100 oflag=direct || true
+
+    if $offline; then
+	bcachefs device offline -f /dev/vdb
+    fi
+    bcachefs data scrub /mnt
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
+    check_counters ${ktest_scratch_dev[0]}
+}
+
+test_scrub()
+{
+    do_scrub false
+}
+
+test_scrub_offline()
+{
+    do_scrub true
+}
+
 main "$@"
