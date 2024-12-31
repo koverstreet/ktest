@@ -690,7 +690,7 @@ test_delete_subvol_nested()
 
 test_snapshot_file_delete()
 {
-    run_quiet "" bcachefs format -f --shard_inode_numbers=0 ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     #dd if=/dev/zero of=/mnt/foo bs=4k count=8 oflag=direct
