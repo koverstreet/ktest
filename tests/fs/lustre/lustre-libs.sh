@@ -311,5 +311,31 @@ function cleanup_lustrefs()
     fi
 }
 
+split_array() {
+    local input="$1"
+    local input_array=($input)
+    local chunk_size=$2
+    local target_chunk=$3
+    local result=()
+
+    # Calculate the starting and ending indices for the target chunk
+    local start_index=$(( (target_chunk - 1) * chunk_size ))
+    local end_index=$(( start_index + chunk_size - 1 ))
+
+    # Populate the result array with the specified chunk
+    for i in $(seq $start_index $end_index); do
+	[[ $i -lt ${#input_array[@]} ]] && result+=("${input_array[i]}")
+    done
+
+    # Print the result array
+    echo "${result[@]}"
+}
+
+join () {
+    local IFS="$1"
+    shift
+    echo "$*"
+}
+
 # Lustre/ZFS will always taint kernel
 allow_taint
