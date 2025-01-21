@@ -14,7 +14,7 @@ require-kernel-config NFS_V4
 
 test_nfs()
 {
-    mkdir /export1 /export2
+    mkdir -p /export1 /export2
 
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
@@ -30,6 +30,7 @@ test_nfs()
     umount /mnt
 
     exportfs -ua
+    sleep 1
     umount /export2
 }
 
