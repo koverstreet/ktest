@@ -306,7 +306,7 @@ run_basic_fio_test_counter_threshold()
 
     bcachefs_antagonist
 
-    run_quiet "" bcachefs format -f --discard --no_initialize "$@"
+    run_quiet "" bcachefs format -f --discard --no_initialize --errors=ro "$@"
 
     mount -t bcachefs -o fsck "$(join_by : "${devs[@]}")" /mnt
 
