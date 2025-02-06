@@ -746,7 +746,7 @@ test_background_compression()
 
 test_rebalance_scan()
 {
-    setup_tracing 'bcachefs:move_extent bcachefs:move_extent_read bcachefs:move_extent_write bcachefs:move_extent_fail bcachefs:move_extent_start_fail bcachefs:move_extent_finish'
+    setup_tracing 'bcachefs:*'
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	${ktest_scratch_dev[0]}
