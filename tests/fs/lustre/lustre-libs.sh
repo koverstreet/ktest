@@ -43,6 +43,8 @@ set -u
 # Dump out all of the special Lustre variables
 function print_lustre_env() {
     echo "FSTYPE=$FSTYPE"
+    echo "TESTSUITE=$TESTSUITE"
+    echo "ONLY=$ONLY"
 }
 
 # Run a command as if it were part of test-framework.sh
@@ -81,7 +83,7 @@ EOF
 # Grab special Lustre environment variables
 # TODO: There's probably a better way to do this...
 set +u
-if [[ -n $FSTYPE ]]; then
+if [[ -n "$FSTYPE" || -n "$TESTSUITE" || -n "$ONLY" ]]; then
     rm -f /tmp/ktest-lustre.env
     print_lustre_env > /tmp/ktest-lustre.env
 else

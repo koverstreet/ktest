@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0
+
+#
+# Copyright (c) 2025, Amazon and/or its affiliates. All rights reserved.
+# Use is subject to license terms.
+#
+
+#
+# Run a subset ($ONLY) of a Lustre test suite ($TESTSUITE) on
+# a $FSTYPE-backed filesystem.
+#
+# Author: Timothy Day <timday@amazon.com>
+#
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/lustre-libs.sh"
+
+require-lustre-kernel-config
+require-lustre-debug-kernel-config
+
+config-mem 10G
+config-timeout 60
+
+test_auster()
+{
+    setup_lustrefs
+
+    FSTYPE="$FSTYPE" "$lustre_pkg_path/lustre/tests/auster" -v "$TESTSUITE" --only "$ONLY"
+
+    cleanup_lustrefs
+}
+
+main "$@"
