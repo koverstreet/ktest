@@ -109,6 +109,7 @@ function load_zfs_modules()
 
 function require-lustre-kernel-config()
 {
+    # Minimal config required for Lustre to build
     require-kernel-config QUOTA
     require-kernel-config KEYS
     require-kernel-config NETWORK_FILESYSTEMS
@@ -121,8 +122,28 @@ function require-lustre-kernel-config()
 
 function require-lustre-debug-kernel-config()
 {
+    # Basic debugging stuff
     require-kernel-config KASAN
     require-kernel-config KASAN_VMALLOC
+
+    # ZFS doesn't support some options
+    if [[ "$FSTYPE" =~ "zfs" ]]; then
+	return
+    fi
+
+    # Extra debug (probably expensive)
+    require-kernel-config DEBUG_INFO
+    require-kernel-config DEBUG_FS
+    require-kernel-config DEBUG_KERNEL
+    require-kernel-config DEBUG_MEMORY_INIT
+    require-kernel-config DEBUG_RT_MUTEXES
+    require-kernel-config DEBUG_SPINLOCK
+    require-kernel-config DEBUG_MUTEXES
+    require-kernel-config DEBUG_WW_MUTEX_SLOWPATH
+    require-kernel-config DEBUG_RWSEMS
+    require-kernel-config DEBUG_IRQFLAGS
+    require-kernel-config DEBUG_BUGVERBOSE
+    require-kernel-config DEBUG_PI_LIST
 }
 
 function load_lustre_modules()
