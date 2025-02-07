@@ -199,7 +199,9 @@ function setup_lustrefs()
 
 function cleanup_lustrefs()
 {
-    FSTYPE="$FSTYPE" "$lustre_pkg_path/lustre/tests/llmountcleanup.sh"
+    if [[ "$ktest_interactive" != "true" ]]; then
+	FSTYPE="$FSTYPE" "$lustre_pkg_path/lustre/tests/llmountcleanup.sh"
+    fi
 }
 
 # Lustre/ZFS will always taint kernel
