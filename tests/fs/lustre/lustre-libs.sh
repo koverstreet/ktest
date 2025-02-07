@@ -85,7 +85,12 @@ if [[ -n $FSTYPE ]]; then
     rm -f /tmp/ktest-lustre.env
     print_lustre_env > /tmp/ktest-lustre.env
 else
-    eval $(cat /host/tmp/ktest-lustre.env)
+    # If the filesystem doesn't exist, use defaults
+    if [[ -f /host/tmp/ktest-lustre.env ]]; then
+	eval $(cat /host/tmp/ktest-lustre.env)
+    else
+	FSTYPE="mem"
+    fi
 fi
 set -u
 
