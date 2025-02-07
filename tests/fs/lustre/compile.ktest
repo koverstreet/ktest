@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0
+
+#
+# Copyright (c) 2025, Amazon and/or its affiliates. All rights reserved.
+# Use is subject to license terms.
+#
+
+#
+# Build and run bcachefs-tools.
+#
+# Author: Timothy Day <timday@amazon.com>
+#
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/lustre-libs.sh"
+
+require-lustre-kernel-config
+require-lustre-debug-kernel-config
+
+config-mem 10G
+config-timeout 60
+
+get_dir_checksum()
+{
+    local dir="$1"
+    local file="$2"
+    local stat_file="$file.stat"
+
+    find "$dir" -type f -print0 | sort -z | xargs -0 sha256sum > "$file"
+    find "$dir" -type f -print0 | sort -z | xargs -0 stat > "$stat_file"
+    cat "$file" | sha256sum
+}
+
+reset_mounts()
+{
+    local chk_file_a="/tmp/chk.$RANDOM"
+    local chk_a="$(get_dir_checksum /mnt/lustre/bcachefs-tools $chk_file_a)"
+
+    sync; echo 3 > /proc/sys/vm/drop_caches
+    cd /
+    umount /mnt/lustre
+    run_tf mountcli
+
+    local chk_file_b="/tmp/chk.$RANDOM"
+    local chk_b="$(get_dir_checksum /mnt/lustre/bcachefs-tools $chk_file_b)"
+
+    if [[ "$chk_a" != "$chk_b" ]]; then
+	echo "Corruption found! A=$chk_a B=$chk_b"
+	diff "$chk_file_a" "$chk_file_b" || true
+	diff "$chk_file_a.stat" "$chk_file_b.stat" || true
+	exit 1
+    fi
+
+    echo "Checksums match!"
+}
+
+test_compile()
+{
+    setup_lustrefs
+
+    # Get source
+    cd /mnt/lustre
+    git clone https://github.com/koverstreet/bcachefs-tools.git
+    reset_mounts
+
+    # Build
+    cd /mnt/lustre/bcachefs-tools
+    make -j$(nproc)
+    reset_mounts
+
+    # Run
+    bash -c "/mnt/lustre/bcachefs-tools/bcachefs" || true
+
+    cleanup_lustrefs
+}
+
+main "$@"
