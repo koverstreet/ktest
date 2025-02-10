@@ -20,7 +20,7 @@ require-lustre-debug-kernel-config
 config-mem 10G
 config-timeout 60
 
-test_llmount()
+test_boot()
 {
     echo boot
 }

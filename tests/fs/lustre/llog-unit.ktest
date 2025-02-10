@@ -22,7 +22,7 @@ config-timeout 60
 
 config-scratch-devs 512M
 
-test_llmount()
+test_llog-unit()
 {
     load_lustre_modules
     setup_lustre_mgs
