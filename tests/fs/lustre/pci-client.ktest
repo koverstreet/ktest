@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0
+
+#
+# Copyright (c) 2025, Amazon and/or its affiliates. All rights reserved.
+# Use is subject to license terms.
+#
+
+#
+# Mount a client with PCIe passthrough.
+#
+# Author: Timothy Day <timday@amazon.com>
+#
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/lustre-libs.sh"
+
+require-lustre-kernel-config
+require-lustre-efa-kernel-config
+
+config-mem 32G
+config-timeout 60
+config-cpus 64
+
+require-qemu-append -device vfio-pci,host=99:00.0
+require-qemu-append -device vfio-pci,host=9b:00.0
+require-qemu-prepend numactl --cpunodebind=1 --membind=1
+
+test_llmount()
+{
+    local interface="eth1"
+    local mntpnt="/mnt/lustre"
+
+    configure_interface "$interface"
+    set_hostname_interface "$interface"
+
+    load_lustre_modules
+    configure_lnet "$interface"
+
+    mkdir -p "$mntpnt"
+    mount -t lustre "$MGSNID:/$FSNAME" "$mntpnt"
+    mount -t lustre
+
+    lustre_client_performance_tuning
+
+    fio --name=seqwrite \
+	--rw=write \
+	--ioengine=libaio \
+	--iodepth=16 \
+	--bs=1M \
+	--direct=1 \
+	--size=100M \
+	--numjobs="$(nproc)" \
+	--directory "$mntpnt" \
+	--verify=crc32c
+}
+
+main "$@"
