@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: GPL-2.0
 
 #
-# Copyright (c) 2024, Amazon and/or its affiliates. All rights reserved.
+# Copyright (c) 2025, Amazon and/or its affiliates. All rights reserved.
 # Use is subject to license terms.
 #
 
 #
-# Setup/cleanup a Lustre MGT. The backing OSD is specified
-# with FSTYPE.
+# Run a subset ($ONLY) of a Lustre test suite ($TESTSUITE) on
+# a $FSTYPE-backed filesystem.
 #
 # Author: Timothy Day <timday@amazon.com>
 #
@@ -21,16 +21,13 @@ require-lustre-debug-kernel-config
 config-mem 10G
 config-timeout 60
 
-config-scratch-devs 512M
-
-test_mgs-setup()
+test_auster()
 {
-    load_lustre_modules
-    setup_lustre_mgs
+    setup_lustrefs
 
-    sleep 5
+    FSTYPE="$FSTYPE" "$lustre_pkg_path/lustre/tests/auster" -v "$TESTSUITE" --only "$ONLY"
 
-    cleanup_lustre_mgs
+    cleanup_lustrefs
 }
 
 main "$@"

@@ -43,6 +43,8 @@ set -u
 # Dump out all of the special Lustre variables
 function print_lustre_env() {
     echo "FSTYPE=$FSTYPE"
+    echo "TESTSUITE=$TESTSUITE"
+    echo "ONLY=$ONLY"
 }
 
 # Run a command as if it were part of test-framework.sh
@@ -81,11 +83,16 @@ EOF
 # Grab special Lustre environment variables
 # TODO: There's probably a better way to do this...
 set +u
-if [[ -n $FSTYPE ]]; then
+if [[ -n "$FSTYPE" || -n "$TESTSUITE" || -n "$ONLY" ]]; then
     rm -f /tmp/ktest-lustre.env
     print_lustre_env > /tmp/ktest-lustre.env
 else
-    eval $(cat /host/tmp/ktest-lustre.env)
+    # If the filesystem doesn't exist, use defaults
+    if [[ -f /host/tmp/ktest-lustre.env ]]; then
+	eval $(cat /host/tmp/ktest-lustre.env)
+    else
+	FSTYPE="mem"
+    fi
 fi
 set -u
 
@@ -109,6 +116,7 @@ function load_zfs_modules()
 
 function require-lustre-kernel-config()
 {
+    # Minimal config required for Lustre to build
     require-kernel-config QUOTA
     require-kernel-config KEYS
     require-kernel-config NETWORK_FILESYSTEMS
@@ -121,8 +129,28 @@ function require-lustre-kernel-config()
 
 function require-lustre-debug-kernel-config()
 {
+    # Basic debugging stuff
     require-kernel-config KASAN
     require-kernel-config KASAN_VMALLOC
+
+    # ZFS doesn't support some options
+    if [[ "$FSTYPE" =~ "zfs" ]]; then
+	return
+    fi
+
+    # Extra debug (probably expensive)
+    require-kernel-config DEBUG_INFO
+    require-kernel-config DEBUG_FS
+    require-kernel-config DEBUG_KERNEL
+    require-kernel-config DEBUG_MEMORY_INIT
+    require-kernel-config DEBUG_RT_MUTEXES
+    require-kernel-config DEBUG_SPINLOCK
+    require-kernel-config DEBUG_MUTEXES
+    require-kernel-config DEBUG_WW_MUTEX_SLOWPATH
+    require-kernel-config DEBUG_RWSEMS
+    require-kernel-config DEBUG_IRQFLAGS
+    require-kernel-config DEBUG_BUGVERBOSE
+    require-kernel-config DEBUG_PI_LIST
 }
 
 function load_lustre_modules()
@@ -178,7 +206,9 @@ function setup_lustrefs()
 
 function cleanup_lustrefs()
 {
-    FSTYPE="$FSTYPE" "$lustre_pkg_path/lustre/tests/llmountcleanup.sh"
+    if [[ "$ktest_interactive" != "true" ]]; then
+	FSTYPE="$FSTYPE" "$lustre_pkg_path/lustre/tests/llmountcleanup.sh"
+    fi
 }
 
 # Lustre/ZFS will always taint kernel
