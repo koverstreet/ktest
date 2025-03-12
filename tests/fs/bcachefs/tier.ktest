@@ -340,4 +340,77 @@ test_concurrent_all_device_removal()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+## reproducer for https://github.com/koverstreet/bcachefs/issues/834
+# v1: works as expected, background target=device 0
+test_metadata_on_wrong_device_after_disk_add_v1()
+{
+    run_quiet "" bcachefs format -f \
+        --background_target=hdd \
+        --foreground_target=hdd \
+        --promote_target=hdd \
+        --metadata_target=ssd \
+        --label=hdd \
+        ${ktest_scratch_dev[2]} \
+        --label=ssd \
+        ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[2]}:${ktest_scratch_dev[0]} /mnt
+
+    for i in $(seq 0 100000); do
+        echo $i > /mnt/$i
+    done
+
+    bcachefs fs usage -h /mnt
+
+    run_quiet "" bcachefs device add -f --label=hdd /mnt ${ktest_scratch_dev[3]}
+
+    for i in $(seq 0 100000); do
+        echo $i > /mnt/a$i
+    done
+
+    btree_devs=$(bcachefs fs usage -h /mnt/ | grep -c ^btree:)
+
+    test $btree_devs -eq 1 || return 1
+
+    umount /mnt
+}
+
+# v2: metadata ends up on wrong device, foreground target=device 0
+test_metadata_on_wrong_device_after_disk_add_v2()
+{
+    run_quiet "" bcachefs format -f \
+        --background_target=hdd \
+        --foreground_target=hdd \
+        --promote_target=hdd \
+        --metadata_target=ssd \
+        --label=ssd \
+        ${ktest_scratch_dev[0]} \
+        --label=hdd \
+        ${ktest_scratch_dev[2]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[2]} /mnt
+
+    for i in $(seq 0 100000); do
+        echo $i > /mnt/$i
+    done
+
+    sync
+    bcachefs fs usage -h /mnt
+
+    run_quiet "" bcachefs device add -f --label=hdd /mnt ${ktest_scratch_dev[3]}
+
+    for i in $(seq 0 100000); do
+        echo $i > /mnt/a$i
+    done
+
+    sync
+    bcachefs fs usage -h /mnt
+
+    btree_devs=$(bcachefs fs usage -h /mnt/ | grep -c ^btree:)
+
+    test $btree_devs -eq 1 || return 1
+
+    umount /mnt
+}
+
 main $@
