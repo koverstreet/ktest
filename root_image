@@ -94,7 +94,7 @@ PACKAGES+=(fio dbench bonnie++ fsmark)
 
 # bcachefs-tools build dependencies:
 PACKAGES+=(libblkid-dev uuid-dev libscrypt-dev libsodium-dev)
-PACKAGES+=(libkeyutils-dev liburcu-dev libudev-dev zlib1g-dev libattr1-dev)
+PACKAGES+=(libkeyutils-dev liburcu-dev libudev-dev zlib1g-dev libattr1-dev systemd-dev)
 PACKAGES+=(libaio-dev libzstd-dev liblz4-dev libfuse3-dev valgrind)
 PACKAGES+=(llvm libclang-dev)
 
