@@ -250,6 +250,8 @@ require-kernel-config DEBUG_KERNEL
 #require-kernel-config DEBUG_SET_MODULE_RONX
 
 require-kernel-config DEBUG_LIST
+require-kernel-config STACKPROTECTOR
+require-kernel-config STACKPROTECTOR_STRONG
 
 # More expensive
 #require-kernel-config DYNAMIC_DEBUG
