@@ -272,7 +272,7 @@ run_fio()
 	--iodepth_batch=16			\
 	--direct=1				\
 	--numjobs=1				\
-	--verify=meta				\
+	--verify=sha1				\
 	--verify_fatal=1			\
 	--buffer_compress_percentage=30		\
 	--filename=/mnt/fiotest		    	\
