@@ -1851,4 +1851,32 @@ d_test_nocow_fragmented2()
     umount /mnt
 }
 
+test_recover_super()
+{
+    set_watchdog 60
+    run_quiet "" bcachefs format -f		\
+	--errors=panic				\
+	${ktest_scratch_dev[0]}
+    bcachefs show-super -l ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    cp -rx /usr /mnt/usr
+    umount /mnt
+
+    echo "Wiping super"
+    dd if=/dev/zero of=${ktest_scratch_dev[0]} bs=1M count=1 oflag=direct
+
+    echo "Attempting mount, should fail"
+    ! mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    echo "Recovering superblock"
+    bcachefs recover-super -y ${ktest_scratch_dev[0]}
+
+    echo "Attempting mount, should succeed"
+    mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
+    umount /mnt
+
+    check_counters ${ktest_scratch_dev[0]}
+}
+
 main "$@"
