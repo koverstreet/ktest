@@ -621,7 +621,7 @@ test_recovery()
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	--encrypted --no_passphrase		\
-	--bucket=8k				\
+	--bucket_size=8k				\
 	${ktest_scratch_dev[0]}
 
     for i in `seq 0 1`; do
@@ -659,7 +659,11 @@ test_recovery()
 test_lz4_zeros()
 {
     set_watchdog 30
-    run_quiet "" bcachefs format -f --errors=panic --compression=lz4 --data_checksum=none --bucket=2M ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f --errors=panic	\
+	--compression=lz4				\
+	--data_checksum=none				\
+	--bucket_size=2M				\
+	${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     dd if=/dev/zero of=/mnt/foo bs=1M count=10
@@ -673,7 +677,11 @@ test_lz4_zeros()
 test_lz4_incompressible()
 {
     set_watchdog 120
-    run_quiet "" bcachefs format -f --errors=panic --compression=lz4 --data_checksum=none --bucket=2M ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f --errors=panic	\
+	--compression=lz4				\
+	--data_checksum=none				\
+	--bucket_size=2M				\
+	${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     dd if=/dev/urandom of=/mnt/foo || true
@@ -882,24 +890,24 @@ run_copygc_torture()
 
 test_copygc_torture()
 {
-    #run_copygc_torture --bucket=256k --btree_node_size=8k
-    run_copygc_torture --bucket=32k --btree_node_size=32k
+    #run_copygc_torture --bucket_size=256k --btree_node_size=8k
+    run_copygc_torture --bucket_size=32k --btree_node_size=32k
 }
 
 test_copygc_torture_no_checksum()
 {
-    run_copygc_torture --bucket=256k --btree_node_size=16k --data_checksum=none
+    run_copygc_torture --bucket_size=256k --btree_node_size=16k --data_checksum=none
 }
 
 test_copygc_torture_lz4()
 {
-    run_copygc_torture --bucket=256k --btree_node_size=16k --compression=lz4
+    run_copygc_torture --bucket_size=256k --btree_node_size=16k --compression=lz4
 }
 
 test_small_buckets()
 {
     run_basic_fio_test				\
-	--bucket=32k				\
+	--bucket_size=32k				\
 	${ktest_scratch_dev[0]}
 }
 
@@ -907,7 +915,7 @@ test_small_buckets()
 test_large_buckets()
 {
     run_basic_fio_test				\
-	--bucket=8M				\
+	--bucket_size=8M				\
 	--data_checksum=none			\
 	${ktest_scratch_dev[0]}
 }
@@ -915,7 +923,7 @@ test_large_buckets()
 test_small_nodes()
 {
     run_basic_fio_test				\
-	--bucket=256k				\
+	--bucket_size=256k				\
 	--btree_node_size=4k			\
 	${ktest_scratch_dev[0]}
 }
@@ -1548,7 +1556,7 @@ test_buffered_reads()
     set_watchdog 60
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	--bucket=8M				\
+	--bucket_size=8M				\
 	--data_checksum=none			\
 	${ktest_scratch_dev[0]}
 
@@ -1569,7 +1577,7 @@ d_test_small_fs()
     set_watchdog 60
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	--bucket=4k				\
+	--bucket_size=4k				\
 	--fs_size=512k				\
 	${ktest_scratch_dev[0]}
 
@@ -1587,7 +1595,7 @@ d_test_small_fs()
 
 d_test_small_torture()
 {
-    run_copygc_torture --bucket=4k --fs_size=32M
+    run_copygc_torture --bucket_size=4k --fs_size=32M
 }
 
 d_test_small_fsck()

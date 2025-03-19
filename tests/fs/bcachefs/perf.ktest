@@ -29,7 +29,7 @@ perf_mkfs()
 {
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	--bucket=$btree_node_size		\
+	--bucket_size=$btree_node_size		\
 	--btree_node_size=$btree_node_size	\
 	--metadata_checksum=none		\
 	--data_checksum=none			\

@@ -12,7 +12,7 @@ run_basic_tiering_test()
     run_basic_fio_test "$@"			\
 	--block_size=4k				\
 	--btree_node_size=32k			\
-	--bucket=256k				\
+	--bucket_size=256k				\
 	--label=ssd.ssd1 ${ktest_scratch_dev[0]}		\
 	--label=ssd.ssd2 ${ktest_scratch_dev[1]}		\
 	--label=hdd.hdd1 ${ktest_scratch_dev[2]}		\
@@ -26,7 +26,7 @@ test_tiering_torture()
 {
     run_quiet "" bcachefs format -f		\
 	--block_size=4k				\
-	--bucket=8M				\
+	--bucket_size=8M				\
 	--label=ssd.ssd1 ${ktest_scratch_dev[0]}		\
 	--label=ssd.ssd2 ${ktest_scratch_dev[1]}		\
 	--label=hdd.hdd1 ${ktest_scratch_dev[2]}		\
@@ -179,10 +179,10 @@ test_tiering_replication()
 test_tiering_variable_buckets()
 {
     run_basic_fio_test					\
-	--label=ssd --bucket=32k	${ktest_scratch_dev[0]}	\
-	--label=ssd --bucket=64k	${ktest_scratch_dev[1]}	\
-	--label=hdd --bucket=128k	${ktest_scratch_dev[3]}	\
-	--label=hdd --bucket=256k	${ktest_scratch_dev[2]}	\
+	--label=ssd --bucket_size=32k	${ktest_scratch_dev[0]}	\
+	--label=ssd --bucket_size=64k	${ktest_scratch_dev[1]}	\
+	--label=hdd --bucket_size=128k	${ktest_scratch_dev[3]}	\
+	--label=hdd --bucket_size=256k	${ktest_scratch_dev[2]}	\
 	--foreground_target=ssd				\
 	--promote_target=ssd				\
 	--background_target=hdd
@@ -192,10 +192,10 @@ test_tiering_variable_buckets_replicas()
 {
     run_basic_fio_test					\
 	--replicas=2					\
-	--label=ssd --bucket=32k	${ktest_scratch_dev[0]}	\
-	--label=ssd --bucket=64k	${ktest_scratch_dev[1]}	\
-	--label=hdd --bucket=128k	${ktest_scratch_dev[3]}	\
-	--label=hdd --bucket=256k	${ktest_scratch_dev[2]}	\
+	--label=ssd --bucket_size=32k	${ktest_scratch_dev[0]}	\
+	--label=ssd --bucket_size=64k	${ktest_scratch_dev[1]}	\
+	--label=hdd --bucket_size=128k	${ktest_scratch_dev[3]}	\
+	--label=hdd --bucket_size=256k	${ktest_scratch_dev[2]}	\
 	--foreground_target=ssd				\
 	--promote_target=ssd				\
 	--background_target=hdd

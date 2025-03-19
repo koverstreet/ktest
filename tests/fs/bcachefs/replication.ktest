@@ -20,7 +20,7 @@ test_recovery()
 
     run_quiet "" bcachefs format -f		\
 	--discard				\
-	--bucket=64k				\
+	--bucket_size=64k			\
 	--block_size=4k				\
 	${ktest_scratch_dev[0]}			\
 	${ktest_scratch_dev[1]}			\
@@ -63,7 +63,8 @@ test_twodevices()
 test_largebuckets()
 {
     set_watchdog 30
-    run_quiet "" bcachefs format -f --bucket=8M	\
+    run_quiet "" bcachefs format -f		\
+	--bucket_size=8M			\
 	${ktest_scratch_dev[0]}			\
 	${ktest_scratch_dev[1]}			\
 	${ktest_scratch_dev[2]}
@@ -90,11 +91,11 @@ test_replicas_variable_buckets()
     set_watchdog 1200
     run_quiet "" bcachefs format -f			\
 	--replicas=2					\
-	--bucket=32k	${ktest_scratch_dev[0]}		\
-	--bucket=64k	${ktest_scratch_dev[1]}		\
-	--bucket=128k	${ktest_scratch_dev[2]}		\
-	--bucket=128k	${ktest_scratch_dev[3]}		\
-	--bucket=128k	${ktest_scratch_dev[4]}
+	--bucket_size=32k	${ktest_scratch_dev[0]}	\
+	--bucket_size=64k	${ktest_scratch_dev[1]}	\
+	--bucket_size=128k	${ktest_scratch_dev[2]}	\
+	--bucket_size=128k	${ktest_scratch_dev[3]}	\
+	--bucket_size=128k	${ktest_scratch_dev[4]}
 
     mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
     fs_mark -v -n 20000 -s 4096 -k -S 0 -D 1000 -N 100000 -d /mnt -t 60
@@ -546,7 +547,7 @@ test_cmd_fs_usage()
 
     run_quiet "" bcachefs format -f		\
 	--replicas=2				\
-	--bucket=128k				\
+	--bucket_size=128k			\
 	${ktest_scratch_dev[0]}			\
 	${ktest_scratch_dev[1]}			\
 	${ktest_scratch_dev[2]}
@@ -652,7 +653,7 @@ test_striping()
 	    --replicas=2			\
 	    --label cache			\
 	    --durability=1			\
-	    --bucket=8M				\
+	    --bucket_size=8M			\
 	    ${ktest_scratch_dev[0]}		\
 	    --label hdd				\
 	    --durability=2			\

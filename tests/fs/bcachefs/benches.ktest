@@ -56,7 +56,7 @@ test_fsmark()
 	mkfs.xfs -d agcount=75 $DEV
 	mount -o logbsize=262144 $DEV /mnt/scratch
     else
-	bcachefs format -f --version=14 --no_initialize --bucket=2M $DEV
+	bcachefs format -f --version=14 --no_initialize --bucket_size=2M $DEV
 	mount -o version_upgrade,shard_inode_numbers $DEV /mnt/scratch
 	bcachefs device resize-journal $DEV 4G
 	umount /mnt/scratch

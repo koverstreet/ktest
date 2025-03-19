@@ -18,7 +18,7 @@ function join_by {
 
 test_nbd()
 {
-	bcachefs format -f --replicas=$1 --erasure_code --bucket=2M --discard /dev/sd[bc]
+	bcachefs format -f --replicas=$1 --erasure_code --bucket_size=2M --discard /dev/sd[bc]
 
 	mount -t bcachefs $(join_by ':' "${DRIVES[@]}") /mnt
 

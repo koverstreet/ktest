@@ -32,7 +32,7 @@ perf_mkfs()
     if $bcachefs_fast_mode; then
 	run_quiet "" bcachefs format -f		\
 	    --errors=panic			\
-	    --bucket=2M				\
+	    --bucket_size=2M			\
 	    --btree_node_size=$btree_node_size	\
 	    --metadata_checksum=none		\
 	    --data_checksum=none		\

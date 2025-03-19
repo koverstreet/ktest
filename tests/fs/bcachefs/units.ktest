@@ -19,7 +19,7 @@ run_test_inner()
 {
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
-	--bucket=$btree_node_size		\
+	--bucket_size=$btree_node_size		\
 	--btree_node_size=$btree_node_size	\
 	${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt

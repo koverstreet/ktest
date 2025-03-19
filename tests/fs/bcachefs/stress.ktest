@@ -18,7 +18,7 @@ test_high_random_stress()
 {
     run_quiet "" bcachefs format -f             \
         --block_size=4k                         \
-        --bucket=8M                             \
+        --bucket_size=8M			\
         --label=ssd.ssd1 /dev/sdb               \
         --label=ssd.ssd2 /dev/sdc               \
         --label=ssd.ssd3 /dev/sdd               \

@@ -59,7 +59,7 @@ test_ec_mixed_tiers()
 	--label tri				\
 	${ktest_scratch_dev[2]}			\
 	${ktest_scratch_dev[3]}			\
-	--bucket=128k				\
+	--bucket_size=128k			\
 	${ktest_scratch_dev[4]}			\
 	--foreground_target=dup			\
 	--promote_target=dup			\
