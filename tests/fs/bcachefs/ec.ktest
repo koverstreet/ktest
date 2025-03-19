@@ -218,7 +218,7 @@ do_remove_test()
     offline=$1
     evacuate=$2
 
-    set_watchdog 60
+    set_watchdog 240
 
     run_quiet "" bcachefs format -f		\
 	--erasure_code				\

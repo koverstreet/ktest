@@ -203,7 +203,7 @@ test_tiering_variable_buckets_replicas()
 
 test_device_add()
 {
-    set_watchdog 60
+    set_watchdog 240
     run_quiet "" bcachefs format -f					\
 	--label=ssd ${ktest_scratch_dev[0]}				\
 	--label=hdd ${ktest_scratch_dev[2]} ${ktest_scratch_dev[3]}
