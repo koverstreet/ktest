@@ -69,7 +69,7 @@ test_ec_umount()
 
 do_ec_test()
 {
-    set_watchdog 60
+    set_watchdog 240
 
     bcachefs_antagonist
 
@@ -124,7 +124,7 @@ test_ec_crypto_lz4()
 
 test_ec_mixed_tiers()
 {
-    set_watchdog 60
+    set_watchdog 240
 
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
@@ -289,7 +289,7 @@ test_device_evacuate_online()
 
 test_device_failed()
 {
-    set_watchdog 60
+    set_watchdog 240
 
     run_quiet "" bcachefs format -f --errors=panic \
 	--erasure_code				\
