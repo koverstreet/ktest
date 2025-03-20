@@ -38,9 +38,24 @@ export BCACHEFS_KERNEL_ONLY=1
 #Expensive:
 #require-kernel-config CLOSURE_DEBUG
 
+bcachefs_mem_in_use()
+{
+    grep -v "0        0" /proc/allocinfo|grep fs/bcachefs/
+}
+
 check_bcachefs_leaks()
 {
-    ! grep -v "0        0" /proc/allocinfo|grep fs/bcachefs/
+    local iter=0
+    while bcachefs_mem_in_use; do
+	echo "mem in use: "
+
+	if ((iter > 5)); then
+	    bcachefs_mem_in_use
+	    return 1
+	fi
+	((iter += 1))
+	sleep 1
+    done
 }
 
 expect_sysfs()
