@@ -6,5 +6,6 @@ config-timeout-multiplier 3
 
 require-kernel-config KASAN
 require-kernel-config KASAN_VMALLOC
+require-kernel-append kasan.fault=panic
 
 call_base_test kasan "$@"

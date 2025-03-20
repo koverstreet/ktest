@@ -273,7 +273,6 @@ require-kernel-config STACKPROTECTOR_STRONG
 # expensive, doesn't catch that much
 # require-kernel-config DEBUG_PAGEALLOC
 
-require-kernel-append kasan.fault=panic
 require-kernel-config PANIC_TIMEOUT=0
 
 # for some reason, NR_CPUS=8 as syzbot sets breaks kgdb:
