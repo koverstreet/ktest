@@ -253,6 +253,9 @@ require-kernel-config DEBUG_LIST
 require-kernel-config STACKPROTECTOR
 require-kernel-config STACKPROTECTOR_STRONG
 
+require-kernel-config DEBUG_STACK_USAGE
+require-kernel-config SCHED_STACK_END_CHECK
+
 # More expensive
 #require-kernel-config DYNAMIC_DEBUG
 
