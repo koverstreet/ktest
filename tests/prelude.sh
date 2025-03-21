@@ -15,6 +15,7 @@ if [[ ! -v ktest_cpus ]]; then
     ktest_mem=""
     ktest_timeout=""
     ktest_timeout_multiplier=1
+    ktest_mem_multiplier=1
     ktest_kernel_append=()
     ktest_kernel_make_append=()
 
@@ -191,7 +192,13 @@ config-cpus()
 
 config-mem()
 {
-    ktest_mem=$1
+    local bytes=$(echo $1|numfmt --from=iec)
+    ktest_mem=$((bytes / 1048576))
+}
+
+config-mem-multiplier()
+{
+    ktest_mem_multiplier=$(($ktest_mem_multiplier * $1))
 }
 
 config-timeout()
@@ -231,7 +238,7 @@ create_ktest_user()
 
 set_watchdog()
 {
-    ktest_timeout=$(($ktest_timeout_multiplier * $1))
+    ktest_timeout=$1
 
     echo WATCHDOG $ktest_timeout
 }
@@ -343,7 +350,7 @@ main()
 	    echo "ktest_arch=$ktest_arch"
 	    echo "ktest_compiler=$ktest_compiler"
 	    echo "ktest_cpus=$ktest_cpus"
-	    echo "ktest_mem=$ktest_mem"
+	    echo "ktest_mem=$((ktest_mem * ktest_mem_multiplier))"
 	    echo "ktest_timeout=$((ktest_timeout * ktest_timeout_multiplier))"
 	    echo "ktest_kernel_append=(${ktest_kernel_append[@]})"
 	    echo "ktest_kernel_make_append=(${ktest_kernel_make_append[@]})"

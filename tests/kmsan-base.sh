@@ -2,7 +2,9 @@
 
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/test-libs.sh
 
-config-timeout-multiplier 3
+config-timeout-multiplier   5
+config-mem-multiplier	    2
+
 config-compiler clang
 
 require-kernel-config KMSAN
