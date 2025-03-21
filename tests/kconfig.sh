@@ -11,7 +11,7 @@ case $ktest_arch in
 	require-kernel-config IO_DELAY_0XED
 	require-kernel-config 64BIT=n
 	require-kernel-config ACPI	# way slower without it, do not know why
-	require-kernel-config UNWINDER_FRAME_POINTER
+	require-kernel-config UNWINDER_ORC
 	require-kernel-config HARDLOCKUP_DETECTOR
 	require-kernel-config RTC_DRV_CMOS
 
@@ -28,7 +28,7 @@ case $ktest_arch in
 	#require-kernel-config IA32_EMULATION
 	require-kernel-config 64BIT
 	require-kernel-config ACPI	# way slower without it, do not know why
-	require-kernel-config UNWINDER_FRAME_POINTER
+	require-kernel-config UNWINDER_ORC
 	require-kernel-config HARDLOCKUP_DETECTOR
 	require-kernel-config RTC_DRV_CMOS
 
