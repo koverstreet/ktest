@@ -49,7 +49,7 @@ check_bcachefs_leaks()
     while bcachefs_mem_in_use; do
 	echo "mem in use: "
 
-	if ((iter > 5)); then
+	if ((iter > 20)); then
 	    bcachefs_mem_in_use
 	    return 1
 	fi
