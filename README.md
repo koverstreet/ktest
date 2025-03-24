@@ -15,7 +15,7 @@ options, scratch devices, timeouts, etc).
 DEPENDENCIES:
 =============
 
- * standard build tools (gcc, make)
+ * standard kernel build tools
  * qemu
  * minicom
  * socat
@@ -24,6 +24,8 @@ DEPENDENCIES:
 
 You'll need an ssh key in $HOME/.ssh for build-test-kernel ssh to work; it adds
 your public key to the vm's authorized_keys.
+
+The user running ktest should also be added to the kvm group.
 
 ktest should work on any Linux distribution.
 
