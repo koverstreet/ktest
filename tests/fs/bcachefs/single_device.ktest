@@ -9,6 +9,9 @@ require-kernel-config MD
 require-kernel-config BLK_DEV_DM
 require-kernel-config DM_FLAKEY
 
+# migrate tests:
+require-kernel-config BLK_DEV_WRITE_MOUNTED
+
 config-scratch-devs 4G
 config-scratch-devs 4G
 
