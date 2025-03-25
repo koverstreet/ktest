@@ -1268,6 +1268,9 @@ prepare_source_fs()
 {
     local fstype=$1
 
+    # prevent errors using rsync to verify, from other tests that didn't clean up:
+    rm -rf /mnt/*
+
     if [[ $fstype = ext4 ]]; then
 	run_quiet "" mkfs.$fstype -F ${ktest_scratch_dev[0]}
 	mount -t $fstype -o user_xattr ${ktest_scratch_dev[0]} /mnt
@@ -1366,9 +1369,11 @@ test_build_from_bcachefs()
 
 migrate_from_fs()
 {
+    local fstype=$1
+
     set_watchdog 180
 
-    prepare_source_fs $1
+    prepare_source_fs $fstype
 
     bcachefs migrate				\
 	--encrypted				\
