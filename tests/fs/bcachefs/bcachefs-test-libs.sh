@@ -190,7 +190,7 @@ get_slowpath_counters()
 
     bcachefs show-super --field-only counters "$dev"|
 	grep  -E '(fail|restart|blocked|full)'|
-	grep -vE '(path_relock_fail|mem_realloced|trans_restart_injected|io_move_write_fail)'|
+	grep -vE '(path_relock_fail|mem_realloced|trans_restart_injected|io_move_write_fail|and_poison)'|
 	grep -v  ' 0$' || true
 }
 
