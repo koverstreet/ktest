@@ -82,6 +82,26 @@ test_remount_ro_rw()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+test_mount_again_after_ebusy()
+{
+    set_watchdog 10
+
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    echo "test: mount ro"
+    mount -t bcachefs -o ro ${ktest_scratch_dev[0]} /mnt
+
+    mkdir -p /mnt2
+    echo "test: try mount rw (1)"
+    ! mount -t bcachefs -o rw ${ktest_scratch_dev[0]} /mnt2
+    echo "test: try mount rw (2)"
+    ! mount -t bcachefs -o rw ${ktest_scratch_dev[0]} /mnt2
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_mount_options()
 {
     local dev=${ktest_scratch_dev[0]}
