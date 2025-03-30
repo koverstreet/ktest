@@ -16,6 +16,7 @@ fi
 
 
 require-kernel-config BCACHEFS_FS
+require-kernel-config UNICODE # casefolding
 
 if [[ ! -v NO_BCACHEFS_DEBUG ]]; then
     require-kernel-config BCACHEFS_DEBUG
