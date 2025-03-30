@@ -283,3 +283,12 @@ require-kernel-config NR_CPUS=64
 
 # Syzbot:
 require-kernel-config BLK_DEV_LOOP
+require-kernel-config FAULT_INJECTION
+require-kernel-config FAILSLAB
+require-kernel-config FAIL_PAGE_ALLOC
+require-kernel-config FAULT_INJECTION_USERCOPY
+require-kernel-config FAIL_MAKE_REQUEST
+require-kernel-config FAIL_IO_TIMEOUT
+require-kernel-config FAIL_FUTEX
+require-kernel-config FAULT_INJECTION_DEBUG_FS
+require-kernel-config FAULT_INJECTION_CONFIGFG
