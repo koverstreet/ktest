@@ -292,3 +292,7 @@ require-kernel-config FAIL_IO_TIMEOUT
 require-kernel-config FAIL_FUTEX
 require-kernel-config FAULT_INJECTION_DEBUG_FS
 require-kernel-config FAULT_INJECTION_CONFIGFG
+
+# Nix:
+require-kernel-config SECCOMP
+require-kernel-config SECCOMP_FILTER
