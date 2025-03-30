@@ -252,6 +252,7 @@ require-kernel-config DEBUG_KERNEL
 require-kernel-config DEBUG_LIST
 require-kernel-config STACKPROTECTOR
 require-kernel-config STACKPROTECTOR_STRONG
+require-kernel-config FORTIFY_SOURCE
 
 require-kernel-config DEBUG_STACK_USAGE
 require-kernel-config SCHED_STACK_END_CHECK
