@@ -244,6 +244,23 @@ set_watchdog()
     echo WATCHDOG $ktest_timeout
 }
 
+check_dmesg()
+{
+    ! dmesg |
+	awk '/========= TEST/{last=NR} {if(NR>last && last!=0) print}'|
+	grep -E -q -e "kernel BUG at" \
+	    -e "WARNING:" \
+	    -e "\bBUG:" \
+	    -e "Oops:" \
+	    -e "possible recursive locking detected" \
+	    -e "Internal error" \
+	    -e "(INFO|ERR): suspicious RCU usage" \
+	    -e "INFO: possible circular locking dependency detected" \
+	    -e "general protection fault:" \
+	    -e "BUG .* remaining" \
+	    -e "UBSAN:"
+}
+
 run_test()
 {
     local test_file=$(basename -s .ktest $0)
@@ -260,6 +277,8 @@ run_test()
     echo "|/bin/cp --sparse=always /dev/stdin $test_output/core.%e.PID%p.SIG%s.TIME%t" > /proc/sys/kernel/core_pattern
 
     $test_fn
+
+    check_dmesg
 }
 
 run_tests()
@@ -272,7 +291,7 @@ run_tests()
     echo
 
     for i in $@; do
-	echo "========= TEST   $i"
+	echo "========= TEST   $i" > /dev/kmsg
 	echo
 
 	local start=$(date '+%s')
@@ -283,16 +302,13 @@ run_tests()
 
 	pkill -P $$ >/dev/null || true
 
-	# XXX: check dmesg for warnings, oopses, slab corruption, etc. before
-	# signaling success
-
 	echo
 
 	if [[ $ret = 0 ]]; then
-	    echo "========= PASSED $i in $(($finish - $start))s"
+	    echo "========= PASSED $i in $(($finish - $start))s" > /dev/kmsg
 	    tests_passed+=($i)
 	else
-	    echo "========= FAILED $i in $(($finish - $start))s"
+	    echo "========= FAILED $i in $(($finish - $start))s" > /dev/kmsg
 	    tests_failed+=($i)
 
 	    # Try to clean up after a failed test so we can run the rest of
