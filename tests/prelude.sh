@@ -239,6 +239,7 @@ create_ktest_user()
 set_watchdog()
 {
     ktest_timeout=$1
+    ktest_timeout=$((ktest_timeout * ktest_timeout_multiplier))
 
     echo WATCHDOG $ktest_timeout
 }
