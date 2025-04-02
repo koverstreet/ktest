@@ -7,7 +7,6 @@ have_suspend=0
 case $ktest_arch in
     x86)
 	require-kernel-config SMP
-	require-kernel-config MCORE2	# optimize for core2
 	require-kernel-config IO_DELAY_0XED
 	require-kernel-config 64BIT=n
 	require-kernel-config ACPI	# way slower without it, do not know why
@@ -23,7 +22,6 @@ case $ktest_arch in
 	;;
     x86_64)
 	require-kernel-config SMP
-	require-kernel-config MCORE2	# optimize for core2
 	require-kernel-config IO_DELAY_0XED
 	#require-kernel-config IA32_EMULATION
 	require-kernel-config 64BIT
