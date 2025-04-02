@@ -200,6 +200,10 @@ update_files()
     install -m0644 "$MNT/etc/skel/.bashrc" "$MNT/root/"
     install -m0644 "$MNT/etc/skel/.profile" "$MNT/root/"
 
+    cat >> "$MNT/root/.bashrc" <<-ZZ
+    export PROMPT_COMMAND="history -a; \$PROMPT_COMMAND"
+ZZ
+
     mkdir -p "$MNT/var/log/core"
     chmod 777 "$MNT/var/log/core"
 
@@ -239,7 +243,9 @@ ZZ
     rm -f "$MNT/lib/udev/rules.d/*btrfs*"
     rm -f "$MNT/lib/udev/rules.d/*hdparm*"
 
-    echo $(hostname)-kvm >"$MNT/etc/hostname"
+    echo $(hostname)-kvm > "$MNT/etc/hostname"
+
+    ln -sf /ktest-out/.bash_history "$MNT/root/.bash_history"
 }
 
 update_packages()
@@ -247,6 +253,10 @@ update_packages()
     # systemd... !?
     mkdir -p "$MNT"/run/user/0
     cp /etc/resolv.conf "$MNT/etc/resolv.conf"
+
+    mkdir -p "$MNT"/etc/dpkg/dpkg.cfg.d/
+    echo force-unsafe-io > "$MNT"/etc/dpkg/dpkg.cfg.d/dpkg-unsafe
+
     _chroot "$MNT" mount -t proc none /proc
     _chroot "$MNT" apt-get -qq update
     _chroot "$MNT" apt-get -qq upgrade
@@ -254,23 +264,30 @@ update_packages()
     rm -f "$MNT/var/cache/apt/archives/*.deb"
 }
 
-trim_image()
+_umount_image()
 {
-    e2fsck -f "$1"
-    resize2fs -M "$1"			# shrinks the file
-    resize2fs "$1" "$IMAGE_SIZE"	# re-grows as sparse
+    umount --recursive "$MNT"
+    rmdir "$MNT"
+    trap '' EXIT
 }
 
 umount_image()
 {
-    # Unmount everything under $MNT
-    awk '{print $2}' /proc/mounts|
-	grep "^$MNT"|
-	sort -r|
-	xargs umount
+    _umount_image
 
-    rmdir "$MNT"
-    trap '' EXIT
+    e2fsck -f "$ktest_image".new
+    resize2fs -M "$ktest_image"	.new		# shrinks the file
+    resize2fs "$ktest_image".new "$IMAGE_SIZE"	# re-grows as sparse
+    mv "$ktest_image".new "$ktest_image"
+}
+
+mount_image()
+{
+    MNT=$(mktemp --tmpdir -d $(basename "$0")-XXXXXXXXXX)
+    trap '_umount_image; rm -f "$ktest_image".new' EXIT
+
+    cp "$ktest_image" "$ktest_image".new
+    mount "$ktest_image".new "$MNT"
 }
 
 cmd_update()
@@ -280,18 +297,22 @@ cmd_update()
 	exit 1
     fi
 
-    MNT=$(mktemp --tmpdir -d $(basename "$0")-XXXXXXXXXX)
-    trap 'umount_image' EXIT
-
-    cp "$ktest_image" "$ktest_image".new
-    mount "$ktest_image".new "$MNT"
-
+    mount_image
     update_packages
     update_files
-
     umount_image
-    trim_image "$ktest_image".new
-    mv "$ktest_image".new "$ktest_image"
+}
+
+cmd_update_files()
+{
+    if [[ ! -e $ktest_image ]]; then
+	echo "$ktest_image does not exist"
+	exit 1
+    fi
+
+    mount_image
+    update_files
+    umount_image
 }
 
 cmd_sync()
@@ -304,17 +325,16 @@ cmd_sync()
 	exit 1
     fi
 
-    MNT="$(mktemp --tmpdir -d $(basename "$0")-XXXXXXXXXX)"
-    trap 'umount_image' EXIT
-
-    mount "$ktest_image" "$MNT"
-
+    mount_image
     rm -rf "$MNT/workspace/$source_dir"
     mkdir -p "$MNT/workspace/$source_dir"
     rsync --archive -r "$source" "$MNT/workspace/$source_dir"
-
     umount_image
-    trim_image "$ktest_image"
+}
+
+cmd_init()
+{
+    (cd "$ktest_dir"; git submodule update --init debootstrap)
 }
 
 cmd_create()
@@ -330,12 +350,15 @@ cmd_create()
     fi
 
     MNT=$(mktemp --tmpdir -d $(basename "$0")-XXXXXXXXXX)
-    #trap 'umount_image; rm "$ktest_image"' EXIT
+    trap '_umount_image; rm -f "$ktest_image".new' EXIT
 
-    fallocate -l "$IMAGE_SIZE" "$ktest_image"
-    chmod 644 "$ktest_image"
-    mkfs.ext4 -F "$ktest_image"
-    mount "$ktest_image" "$MNT"
+    fallocate -l "$IMAGE_SIZE" "$ktest_image".new
+    chmod 644 "$ktest_image".new
+    mkfs.ext4 -F "$ktest_image".new
+    mount "$ktest_image".new "$MNT"
+
+    mkdir -p "$MNT"/etc/dpkg/dpkg.cfg.d/
+    echo force-unsafe-io > "$MNT"/etc/dpkg/dpkg.cfg.d/dpkg-unsafe
 
     DEBOOTSTRAP_DIR=$ktest_dir/debootstrap $debootstrap	\
 	--no-check-gpg					\
@@ -344,20 +367,15 @@ cmd_create()
 	--no-merged-usr					\
 	--foreign					\
 	sid "$MNT" "$MIRROR"
+    mkdir -p "$MNT"/etc/dpkg/dpkg.cfg.d/
+    echo force-unsafe-io > "$MNT"/etc/dpkg/dpkg.cfg.d/dpkg-unsafe
 
     _chroot "$MNT" /debootstrap/debootstrap --second-stage
     _chroot "$MNT" dpkg --configure -a
 
     update_packages
     update_files
-
     umount_image
-    trim_image "$ktest_image"
-}
-
-cmd_init()
-{
-    (cd "$ktest_dir"; git submodule update --init debootstrap)
 }
 
 if [[ $(type -t "$CMD") != function ]]; then
