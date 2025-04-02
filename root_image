@@ -333,6 +333,7 @@ cmd_create()
     #trap 'umount_image; rm "$ktest_image"' EXIT
 
     fallocate -l "$IMAGE_SIZE" "$ktest_image"
+    chmod 644 "$ktest_image"
     mkfs.ext4 -F "$ktest_image"
     mount "$ktest_image" "$MNT"
 
