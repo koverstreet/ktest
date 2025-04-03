@@ -276,7 +276,7 @@ umount_image()
     _umount_image
 
     e2fsck -f "$ktest_image".new
-    resize2fs -M "$ktest_image"	.new		# shrinks the file
+    resize2fs -M "$ktest_image".new		# shrinks the file
     resize2fs "$ktest_image".new "$IMAGE_SIZE"	# re-grows as sparse
     mv "$ktest_image".new "$ktest_image"
 }
