@@ -135,6 +135,8 @@ PACKAGES+=(multipath-tools sg3-utils srptools)
 # PuzzleFS support
 PACKAGES+=(capnproto jq)
 
+PACKAGES+=(erofs-utils squashfs-tools-ng)
+
 # ZFS support
 #PACKAGES+=("linux-headers-generic" dkms zfsutils-linux zfs-dkms)
 
