@@ -388,7 +388,9 @@ test_subvol_mv_snapshot()
     run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/sub1
+    bcachefs subvolume create /mnt/sub1/sub2
     bcachefs subvolume snapshot /mnt/ /mnt/snap1
+    bcachefs subvolume snapshot /mnt/sub1 /mnt/snap2
     mv /mnt/sub1 /mnt/sub2
     umount /mnt
 
