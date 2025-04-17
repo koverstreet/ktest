@@ -383,18 +383,32 @@ test_mkdir_mv_snapshot()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# Create a subvolume, snapshot its parent, rename it:
 test_subvol_mv_snapshot()
 {
     run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
-    bcachefs subvolume create /mnt/sub1
-    bcachefs subvolume create /mnt/sub1/sub2
-    bcachefs subvolume snapshot /mnt/ /mnt/snap1
-    bcachefs subvolume snapshot /mnt/sub1 /mnt/snap2
-    mv /mnt/sub1 /mnt/sub2
+    bcachefs subvolume create /mnt/sub
+    bcachefs subvolume snapshot /mnt/ /mnt/snap
+    mv /mnt/sub /mnt/sub-renamed
     umount /mnt
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+# Create a subvolume, snapshot it, rename it:
+test_subvol_mv_snapshot2()
+{
+    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    bcachefs subvolume create /mnt/sub
+    bcachefs subvolume snapshot /mnt/sub /mnt/snap
+    mv /mnt/sub /mnt/sub-renamed
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
 
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
