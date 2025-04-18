@@ -52,6 +52,22 @@ test_tiering()
     run_basic_tiering_test
 }
 
+test_tiering_misaligned()
+{
+    run_basic_tiering_test
+    run_basic_fio_test "$@"				\
+	--block_size=4k					\
+	--btree_node_size=32k				\
+	--bucket_size=61952				\
+	--label=ssd.ssd1 ${ktest_scratch_dev[0]}	\
+	--label=ssd.ssd2 ${ktest_scratch_dev[1]}	\
+	--label=hdd.hdd1 ${ktest_scratch_dev[2]}	\
+	--label=hdd.hdd2 ${ktest_scratch_dev[3]}	\
+	--foreground_target=ssd				\
+	--promote_target=ssd				\
+	--background_target=hdd
+}
+
 test_tiering_drop_alloc()
 {
     run_basic_tiering_test
