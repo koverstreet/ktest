@@ -13,7 +13,7 @@ fi
 config-mem	    8G
 config-scratch-devs 8G
 
-btree_node_size=8k
+btree_node_size=32k
 
 run_test_inner()
 {
@@ -26,13 +26,13 @@ run_test_inner()
     ln -sf /sys/fs/bcachefs/*/perf_test p
 
     for i in $@; do
-	echo test_$i		100k 1	> p
+	echo "test_$i 100k 1"	> p
     done
 
     umount /mnt
 }
 
-run_test()
+run_tests()
 {
     echo 1 > /sys/module/bcachefs/parameters/expensive_debug_checks
 
@@ -40,7 +40,7 @@ run_test()
     run_test_inner
 
     echo 0 > /sys/module/bcachefs/parameters/key_merging_disabled
-    run_test_inner
+    run_test_inner $@
 }
 
 list_tests()
