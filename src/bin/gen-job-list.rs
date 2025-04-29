@@ -5,7 +5,6 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 use std::process;
-use std::process::Stdio;
 use ci_cgi::{CiConfig, Userrc, RcTestGroup, ciconfig_read, git_get_commit, commitdir_get_results, lockfile_exists, commit_update_results_from_fs, subtest_full_name, test_stats, users::RcBranch};
 use ci_cgi::TestResultsMap;
 use file_lock::{FileLock, FileOptions};
@@ -252,8 +251,6 @@ fn fetch_remotes(rc: &CiConfig, repo: &git2::Repository) -> anyhow::Result<bool>
             .arg(&rc.ktest.linux_repo)
             .arg("fetch")
             .args(fetch)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
             .status()
             .expect(&format!("failed to execute fetch"));
         if !status.success() {
