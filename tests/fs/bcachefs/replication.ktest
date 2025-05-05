@@ -491,6 +491,28 @@ test_device_repeated_add_remove()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+test_recovery()
+{
+    set_watchdog 30
+    run_quiet "" bcachefs format -f		\
+	--errors=ro				\
+	${ktest_scratch_dev[@]}
+
+    for i in `seq 0 1`; do
+	mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+	run_fio_randrw &
+
+	sleep 5
+	$ktest_dir/tests/fs/xfstests/src/godown -f /mnt
+	wait
+
+	umount /mnt
+    done
+
+    bcachefs fsck -nyk ${ktest_scratch_dev[@]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 do_replicas_errors_test()
 {
     setup_tracing 'bcachefs:*'
