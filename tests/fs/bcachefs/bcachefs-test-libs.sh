@@ -94,16 +94,15 @@ antagonist_shrink()
 antagonist_expensive_debug_checks()
 {
     # This only exists if CONFIG_BCACHE_DEBUG is on
-    p=/sys/module/bcachefs/parameters/expensive_debug_checks
+    cd /sys/module/bcachefs/parameters
+    files="expensive_debug_checks debug_check_btree_locking debug_check_iterators debug_check_bset_lookups debug_check_btree_accounting debug_check_bkey_unpack"
 
-    if [ -f $p ]; then
-	while true; do
-	    echo 1 > $p
-	    sleep 5
-	    echo 0 > $p
-	    sleep 10
-	done
-    fi
+    while true; do
+	echo 1 |tee $files >& /dev/null || true
+	sleep 5
+	echo 0 |tee $files >& /dev/null || true
+	sleep 10
+    done
 }
 
 antagonist_trigger_gc()
