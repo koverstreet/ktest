@@ -14,8 +14,8 @@ if $ktest_interactive; then
     }
 fi
 
-
 require-kernel-config BCACHEFS_FS
+require-kernel-config-soft BCACHEFS_ASYNC_OBJECT_LISTS
 require-kernel-config UNICODE # casefolding
 
 if [[ ! -v NO_BCACHEFS_DEBUG ]]; then
