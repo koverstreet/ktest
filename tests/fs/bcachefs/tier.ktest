@@ -413,4 +413,33 @@ test_metadata_on_wrong_device_after_disk_add_v2()
     umount /mnt
 }
 
+test_recover_super()
+{
+    set_watchdog 60
+    run_quiet "" bcachefs format -f		\
+	--errors=panic				\
+	${ktest_scratch_dev[@]}
+    bcachefs show-super -l ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    cp -rx /usr /mnt/usr
+    umount /mnt
+
+    echo "Wiping super"
+    dd if=/dev/zero of=${ktest_scratch_dev[0]} bs=1M count=1 oflag=direct
+
+    echo "Attempting mount, should fail"
+    ! mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    echo "Recovering superblock"
+    bcachefs recover-super --src_device ${ktest_scratch_dev[1]} --dev_idx 0 -y ${ktest_scratch_dev[0]}
+
+    echo "Attempting mount, should succeed"
+    echo "Fixing errors because recovered device will no longer have a journal"
+    mount -t bcachefs -o fsck,fix_errors ${ktest_scratch_dev[0]} /mnt
+    umount /mnt
+
+    check_counters ${ktest_scratch_dev[0]}
+}
+
 main $@
