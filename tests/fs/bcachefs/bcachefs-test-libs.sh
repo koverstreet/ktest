@@ -22,6 +22,7 @@ if [[ ! -v NO_BCACHEFS_DEBUG ]]; then
     require-kernel-config BCACHEFS_DEBUG
     require-kernel-config BCACHEFS_LOCK_TIME_STATS
     require-kernel-config BCACHEFS_NO_LATENCY_ACCT=n
+    require-kernel-config BCACHEFS_TRANS_KMALLOC_TRACE
 else
     require-kernel-config BCACHEFS_NO_LATENCY_ACCT=y
 fi
