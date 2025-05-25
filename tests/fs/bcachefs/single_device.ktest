@@ -1914,4 +1914,20 @@ test_recover_super()
     check_counters ${ktest_scratch_dev[0]}
 }
 
+# Check that we can mount multiple single device filesystems with the same UUID
+test_single_device()
+{
+    run_quiet "" bcachefs format --single_device -f --no_initialize ${ktest_scratch_dev[0]}
+
+    dd if=${ktest_scratch_dev[0]} of=${ktest_scratch_dev[1]} bs=1M count=8 oflag=direct
+
+    mkdir -p /mnt2
+
+    mount  ${ktest_scratch_dev[0]} /mnt
+    mount  ${ktest_scratch_dev[1]} /mnt2
+
+    umount /mnt2
+    umount /mnt
+}
+
 main "$@"
