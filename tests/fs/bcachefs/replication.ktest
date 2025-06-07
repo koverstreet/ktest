@@ -319,6 +319,29 @@ test_device_add_label_compound()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+test_device_add_remount()
+{
+    # Test adding a device, unmounting and mounting again
+    # Caught bugs:
+    #   - wrong fs uuid for second device and it's not found by mount, despite correct superlock.
+
+    run_quiet "" bcachefs format -f --discard ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    bcachefs device add -f /mnt ${ktest_scratch_dev[1]}
+    umount /mnt
+
+    bcachefs show-super ${ktest_scratch_dev[0]}
+    bcachefs show-super ${ktest_scratch_dev[1]}
+    lsblk -f
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_device_set_state()
 {
     set_watchdog 120
