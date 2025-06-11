@@ -339,7 +339,7 @@ test_merge_torture_flakey()
     local n=40M
 
     local BLK_DEV_SIZE=`blockdev --getsz ${ktest_scratch_dev[0]}`
-    local FLAKEY_TABLE="0 $BLK_DEV_SIZE flakey ${ktest_scratch_dev[0]} 0 0 180"
+    local FLAKEY_TABLE="0 $BLK_DEV_SIZE flakey ${ktest_scratch_dev[0]} 0 180 0"
     local FLAKEY_TABLE_ERROR="0 $BLK_DEV_SIZE flakey ${ktest_scratch_dev[0]} 0 0 180 1 error_writes"
 
     dmsetup create flakey --table "$FLAKEY_TABLE"
