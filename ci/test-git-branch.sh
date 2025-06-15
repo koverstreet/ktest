@@ -63,6 +63,9 @@ JOBSERVER_LINUX_REPO=ssh://$JOBSERVER/$JOBSERVER_HOME/linux
 HOSTNAME=$(uname -n)
 WORKDIR=$(basename $(pwd))
 
+# do this once, don't have every subprocess get a new tmpdir
+get_tmpdir
+
 wait_for_server_mem()
 {
     ssh_retry $JOBSERVER $KTEST_DIR/ci/wait-for-mem.sh
