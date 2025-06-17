@@ -1953,8 +1953,7 @@ test_casefold_overlayfs()
     umount /mnt/merged
 
     echo "Test using casefolded dir - should fail"
-    ! mount -t overlay -o lowerdir=/mnt/lower,upperdir=/mnt/upper,workdir=/mnt/work overlay /mnt/merged
-    ! mount -t overlay -o lowerdir=/mnt/casefold,upperdir=/mnt/casefold,workdir=/mnt/work overlay /mnt/merged
+    ! mount -t overlay -o lowerdir=/mnt/casefold,upperdir=/mnt/dir/casefold,workdir=/mnt/work overlay /mnt/merged
 
     echo "Test using a dir with a casefold subdir - should mount"
     mount -t overlay -o lowerdir=/mnt/dir,upperdir=/mnt/upper,workdir=/mnt/work overlay /mnt/merged
