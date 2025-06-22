@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0
+
+#
+# Copyright (c) 2025, Amazon and/or its affiliates. All rights reserved.
+# Use is subject to license terms.
+#
+
+#
+# Mount Lustre and run a bulk fio on loop, as a simple stress test.
+#
+# Author: Timothy Day <timday@amazon.com>
+#
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/lustre-libs.sh"
+
+require-lustre-kernel-config
+require-lustre-debug-kernel-config
+
+config-mem 10G
+config-timeout 60
+
+test_llmount()
+{
+    setup_lustrefs
+
+    sleep 2
+
+    cd /mnt/lustre
+
+    for ((;;)); do
+	    fio --name=bulk_write_test \
+		--size=100M \
+		--bs=1M \
+		--rw=write \
+		--iodepth=32 \
+		--numjobs=$(nproc) \
+		--direct=1 \
+		--time_based \
+		--runtime=30 \
+		--group_reporting
+    done
+
+    sleep 2
+
+    cleanup_lustrefs
+}
+
+main "$@"
