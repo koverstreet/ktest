@@ -91,7 +91,7 @@ else
     if [[ -f /host/tmp/ktest-lustre.env ]]; then
 	eval $(cat /host/tmp/ktest-lustre.env)
     else
-	FSTYPE="mem"
+	FSTYPE="wbcfs"
     fi
 fi
 set -u
@@ -173,11 +173,12 @@ function setup_lustre_mgs()
 	    "$lustre_pkg_path/lustre/utils/mkfs.lustre" --mgs --fsname=lustre lustre-mgs/mgs
 	    mount -t lustre lustre-mgs/mgs /mnt/lustre-mgs
 	    ;;
-	mem)
-	    export OSD_MEM_TGT_TYPE="MGT"
-	    export OSD_MEM_INDEX="0"
-	    export OSD_MEM_MGS_NID="$(hostname -i)@tcp"
-	    run_tf "$lustre_pkg_path/lustre/utils/mount.lustre" -v /mnt/lustre-mgs
+	wbcfs)
+	    export OSD_WBC_TGT_TYPE="MGT"
+	    export OSD_WBC_INDEX="0"
+	    export OSD_WBC_MGS_NID="$(hostname -i)@tcp"
+	    export OSD_WBC_FSNAME="lustre"
+	    run_tf "$lustre_pkg_path/lustre/utils/mount.lustre" -v lustre-wbcfs /mnt/lustre-mgs
 	    ;;
 	*)
 	    echo "Unsupported OSD!"
@@ -198,7 +199,7 @@ function setup_lustrefs()
 
     FSTYPE="$FSTYPE" "$lustre_pkg_path/lustre/tests/llmount.sh"
 
-    # Disable identity upcall (for OSD mem)
+    # Disable identity upcall (for OSD wbcfs)
     "$LCTL" set_param mdt.*.identity_upcall=NONE
 
     mount -t lustre
