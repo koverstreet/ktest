@@ -18,7 +18,7 @@ checkdep bc
 
 ktest_njobs=$(nproc)
 ktest_precise=false
-ktest_compiler=gcc
+ktest_compiler="${CC:-gcc}"
 ktest_skip_kernel_config=false
 
 COVERAGE=""		# doing code coverage?
@@ -122,6 +122,14 @@ run_ktest()
     "$KTEST" "$arg" $KTESTARGS "$@"
 }
 
+map_clang_version() {
+    case "$ktest_compiler" in
+        clang) echo "1" ;;
+        clang-[0-9]*) echo "-${ktest_compiler#clang-}" ;;
+        *) echo "" ;;
+    esac
+}
+
 do_make()
 {
     if [[ -n $CROSS_COMPILE ]]; then
@@ -132,6 +140,7 @@ do_make()
     make --jobs="$ktest_njobs"			\
 	--directory="$ktest_kernel_source"    	\
 	CC="$ktest_compiler"			\
+	LLVM="$(map_clang_version)"		\
 	O="$ktest_kernel_build"			\
 	INSTALL_MOD_PATH="$ktest_kernel_binary"	\
 	"${ktest_kernel_make_append[@]}"	\

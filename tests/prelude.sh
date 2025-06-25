@@ -34,7 +34,7 @@ if [[ ! -v ktest_cpus ]]; then
     ktest_kernel_config_require=()
     ktest_kernel_config_require_soft=()
     ktest_qemu_append=()
-    ktest_compiler=gcc
+    ktest_compiler="${CC:-gcc}"
     ktest_allow_taint=false
 
     ktest_tests_unknown=false
