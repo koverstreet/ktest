@@ -1777,6 +1777,43 @@ test_kill_btree_node()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+test_kill_btree_root_autofix()
+{
+    set_watchdog 240
+    run_quiet "" bcachefs format -f --btree_node_size=64k ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    cp -rL /usr/bin /mnt
+    sync
+
+    cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys > /root/extents_before
+
+    umount /mnt
+    bcachefs list -m nodes ${ktest_scratch_dev[0]} > /root/nodes_before
+
+    bcachefs kill_btree_node -nextents:1 ${ktest_scratch_dev[0]}
+
+    echo "Running fsck"
+    # How to assert exit status equals something specific with -o errexit?
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys > /root/extents_after
+
+    umount /mnt
+    bcachefs list -m nodes ${ktest_scratch_dev[0]} > /root/nodes_after
+    #bcachefs fsck -y ${ktest_scratch_dev[0]} || true
+
+    echo
+    echo "Running fsck again; should be clean"
+
+    bcachefs fsck -yk ${ktest_scratch_dev[0]} || true
+    mount -t bcachefs -o fsck,fix_errors,verbose ${ktest_scratch_dev[0]} /mnt
+    diff -rq /usr/bin /mnt/bin
+    umount /mnt
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_kill_btree_root()
 {
     set_watchdog 240
@@ -1791,11 +1828,11 @@ test_kill_btree_root()
     umount /mnt
     bcachefs list -m nodes ${ktest_scratch_dev[0]} > /root/nodes_before
 
-    bcachefs kill_btree_node -nsnapshots -nsnapshot_trees -nsubvolumes ${ktest_scratch_dev[0]}
+    bcachefs kill_btree_node -nextents:1 -nsnapshots -nsnapshot_trees -nsubvolumes ${ktest_scratch_dev[0]}
 
     echo "Running fsck"
     # How to assert exit status equals something specific with -o errexit?
-    mount -t bcachefs -o fsck,fix_errors,verbose ${ktest_scratch_dev[0]} /mnt
+    mount -t bcachefs -o fsck,fix_errors ${ktest_scratch_dev[0]} /mnt
 
     cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys > /root/extents_after
 
