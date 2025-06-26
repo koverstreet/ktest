@@ -176,7 +176,8 @@ ktest_ssh()
 	    -o UserKnownHostsFile=/dev/null				\
 	    -o NoHostAuthenticationForLocalhost=yes			\
 	    -o ServerAliveInterval=2					\
-	    -o ControlMaster=no					\
+	    -o ControlMaster=no						\
+	    -o IdentitiesOnly=yes					\
 	)
 
     if [[ -f $ktest_out/vm/ssh_port ]]; then
