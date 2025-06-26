@@ -449,6 +449,7 @@ start_vm()
 
     [ "$(ulimit)" == "unlimited" ] || ulimit -n 65535
     qemu_cmd+=("${ktest_qemu_append[@]}")
+    qemu_cmd=("${ktest_qemu_prepend[@]}" "${qemu_cmd[@]}")
 
     set +o errexit
     save_env
