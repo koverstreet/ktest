@@ -264,9 +264,15 @@ function configure_lnet()
     "$LNETCTL" net show -v
 }
 
-function lustre_client_performance_tuning()
+function lustre_performance_tuning()
 {
     "$LCTL" set_param debug=0
+}
+
+function lustre_client_performance_tuning()
+{
+    lustre_performance_tuning
+
     "$LCTL" set_param llite.*.checksum_pages=0
     "$LCTL" set_param osc.*OST*.max_rpcs_in_flight=128
 }

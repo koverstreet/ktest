@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0
+
+#
+# Copyright (c) 2025, Amazon and/or its affiliates. All rights reserved.
+# Use is subject to license terms.
+#
+
+#
+# Mount a server with PCIe passthrough.
+#
+# Author: Timothy Day <timday@amazon.com>
+#
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/lustre-libs.sh"
+
+require-lustre-kernel-config
+require-lustre-efa-kernel-config
+
+config-mem 32G
+config-timeout 60
+config-cpus 64
+
+require-qemu-append -device vfio-pci,host=07:00.0
+require-qemu-append -device vfio-pci,host=09:00.0
+require-qemu-prepend numactl --cpunodebind=0 --membind=0
+
+test_llmount()
+{
+    local interface="eth1"
+    local mntpnt="/mnt/lustre"
+
+    configure_interface "$interface"
+    set_hostname_interface "$interface"
+
+    load_lustre_modules
+    configure_lnet "$interface"
+
+    setup_lustrefs
+    lustre_performance_tuning
+}
+
+main "$@"
