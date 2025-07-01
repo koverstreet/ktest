@@ -31,6 +31,7 @@ fi
 
 export LUSTRE="$lustre_pkg_path/lustre"
 export LCTL="$LUSTRE/utils/lctl"
+export LNETCTL="$LUSTRE/../lnet/utils/lnetctl"
 export RUNAS_ID="1000"
 
 # Update paths
@@ -43,6 +44,8 @@ set -u
 # Dump out all of the special Lustre variables
 function print_lustre_env() {
     echo "FSTYPE=$FSTYPE"
+    echo "FSNAME=$FSNAME"
+    echo "MGSNID=$MGSNID"
     echo "TESTSUITE=$TESTSUITE"
     echo "ONLY=$ONLY"
 }
@@ -83,7 +86,7 @@ EOF
 # Grab special Lustre environment variables
 # TODO: There's probably a better way to do this...
 set +u
-if [[ -n "$FSTYPE" || -n "$TESTSUITE" || -n "$ONLY" ]]; then
+if [[ -n "$FSTYPE" || -n "$FSNAME" || -n "$MGSNID" || -n "$TESTSUITE" || -n "$ONLY" ]]; then
     rm -f /tmp/ktest-lustre.env
     print_lustre_env > /tmp/ktest-lustre.env
 else
@@ -95,6 +98,30 @@ else
     fi
 fi
 set -u
+
+function configure_interface()
+{
+    local interface="$1"
+
+    echo >> /etc/network/interfaces
+    echo "auto $interface" >> /etc/network/interfaces
+    echo "iface $interface inet dhcp" >> /etc/network/interfaces
+
+    ip route del default
+    ifup "$interface"
+    dhclient "$interface"
+    ip route show
+}
+
+function set_hostname_interface()
+{
+    local interface="$1"
+    local local_ip="$(ip address show $interface | awk -F' ' '$1 == "inet" { print $2 }' | awk -F'/' '{ print $1 }')"
+    local host_name="$(hostname)"
+
+    sed -i '/$host_name/d' /etc/hosts
+    echo "$local_ip" "$host_name" >> /etc/hosts
+}
 
 function load_zfs_modules()
 {
@@ -153,6 +180,20 @@ function require-lustre-debug-kernel-config()
     require-kernel-config DEBUG_PI_LIST
 }
 
+function require-lustre-efa-kernel-config()
+{
+    require-kernel-config NETDEVICES
+    require-kernel-config PCI_MSI
+    require-kernel-config NET_VENDOR_AMAZON
+    require-kernel-config ETHERNET
+    require-kernel-config PCI
+    require-kernel-config AMAZON_DRIVER_UPDATES
+    require-kernel-config AMAZON_ENA_ETHERNET
+    require-kernel-config INFINIBAND
+    require-kernel-config INFINIBAND_USER_ACCESS
+    require-kernel-config AMAZON_EFA_INFINIBAND
+}
+
 function load_lustre_modules()
 {
     if [[ "$FSTYPE" =~ "zfs" ]]; then
@@ -190,6 +231,50 @@ function setup_lustre_mgs()
 function cleanup_lustre_mgs()
 {
     umount -t lustre /mnt/lustre-mgs
+}
+
+function configure_lnet()
+{
+    local efa_modpath="$LUSTRE/../lnet/klnds/efalnd/kefalnd.ko"
+    local efa_interface="$(ls -1 /sys/class/infiniband | head -n1)"
+    local eth_interface="$1"
+
+    # Install EFA if available
+    if [[ -f "$efa_modpath" ]]; then
+	insmod "$efa_modpath" ipif_name="$eth_interface"
+    fi
+
+    # Reset configuration
+    "$LNETCTL" set discovery 1
+    "$LNETCTL" lnet configure
+    "$LNETCTL" net del --net tcp || true
+
+    # Add our TCP interfaces
+    "$LNETCTL" net add --net tcp --if "$eth_interface" || true
+
+    # Add our EFA interfaces
+    if [[ -f "$efa_modpath" ]]; then
+	"$LNETCTL" net add --net efa \
+		   --if "$efa_interface" \
+		   --peer-credits 128 || true
+	"$LNETCTL" udsp add --src efa --priority 0
+    fi
+
+    # Dump config
+    "$LNETCTL" net show -v
+}
+
+function lustre_performance_tuning()
+{
+    "$LCTL" set_param debug=0
+}
+
+function lustre_client_performance_tuning()
+{
+    lustre_performance_tuning
+
+    "$LCTL" set_param llite.*.checksum_pages=0
+    "$LCTL" set_param osc.*OST*.max_rpcs_in_flight=128
 }
 
 function setup_lustrefs()

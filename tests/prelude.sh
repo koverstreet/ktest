@@ -142,6 +142,11 @@ require-qemu-append()
     ktest_qemu_append+=("$@")
 }
 
+require-qemu-prepend()
+{
+    ktest_qemu_prepend+=("$@")
+}
+
 require-kernel-append()
 {
     ktest_kernel_append+=("$1")
@@ -379,6 +384,7 @@ main()
 	    echo "ktest_kernel_config_require=(${ktest_kernel_config_require[@]})"
 	    echo "ktest_kernel_config_require_soft=(${ktest_kernel_config_require_soft[@]})"
 	    echo "ktest_qemu_append=(${ktest_qemu_append[@]})"
+	    echo "ktest_qemu_prepend=(${ktest_qemu_prepend[@]})"
 	    echo "ktest_allow_taint=$ktest_allow_taint"
 	    echo "ktest_tests_unknown=$ktest_tests_unknown"
 	    echo "ktest_kconfig_base=$ktest_kconfig_base"
