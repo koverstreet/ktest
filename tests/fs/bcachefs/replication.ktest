@@ -500,11 +500,11 @@ test_device_repeated_add_remove()
 
     for ii in {1..10}; do
         echo "add-remove run #$ii ----------------------------------------------------"
-        echo "bcachefs device add"
+        echo "bcachefs device add ${ktest_scratch_dev[1]}"
         bcachefs device add -f /mnt ${ktest_scratch_dev[1]}
-        echo "bcachefs device evacuate"
+        echo "bcachefs device evacuate ${ktest_scratch_dev[1]}"
         bcachefs device evacuate ${ktest_scratch_dev[1]}
-        echo "bcachefs device remove"
+        echo "bcachefs device remove ${ktest_scratch_dev[1]}"
         bcachefs device remove ${ktest_scratch_dev[1]}
     done
 
@@ -584,6 +584,193 @@ test_replicas_write_errors()
 test_replicas_read_errors()
 {
     do_replicas_errors_test error_reads
+}
+
+test_read_corrupt()
+{
+    setup_tracing
+    set_watchdog 180
+
+    echo 8 > /sys/module/bcachefs/parameters/read_corrupt_ratio
+
+    run_quiet "" bcachefs format -f			\
+	${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+
+    mount -t bcachefs -o degraded ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+
+    run_fio_randrw --continue_on_error=io
+    echo 0 > /sys/module/bcachefs/parameters/read_corrupt_ratio
+
+    # Check the read retry path for indirect extents:
+    #cp --reflink /mnt/fiotest /mnt/fiotest.reflinked
+    #dd if=/mnt/fiotest of=/dev/null bs=4k iflag=direct
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_btree_read_corrupt()
+{
+    setup_tracing
+    set_watchdog 180
+
+
+    run_quiet "" bcachefs format -f --replicas=2		\
+	${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+    run_fio_randrw --continue_on_error=io
+    umount /mnt
+
+    echo 4 > /sys/module/bcachefs/parameters/btree_read_corrupt_ratio
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+    echo 0 > /sys/module/bcachefs/parameters/btree_read_corrupt_ratio
+
+    dd if=/mnt/fiotest of=/dev/null bs=1M
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_kill_btree_node()
+{
+    set_watchdog 240
+    run_quiet "" bcachefs format -f --replicas=2 ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+    cp -rL /usr/bin /mnt
+    umount /mnt
+
+    # Doesn't yet work with the alloc btree:
+    for btree in extents ; do
+	echo "Killing a btree node in btree $btree "
+	local index=1
+
+	[[ $btree = freespace ]] && index=0
+
+	bcachefs kill_btree_node -d0 -n$btree:0:$index ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+
+	echo "Running fsck"
+	# How to assert exit status equals something specific with -o errexit?
+	mount -t bcachefs -o fsck ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+	echo "Checking contents"
+	diff -rq /usr/bin /mnt/bin
+	umount /mnt
+	#bcachefs fsck -y ${ktest_scratch_dev[0]} || true
+
+	echo
+	echo "Running fsck again; should be clean"
+
+	bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    done
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_read_corrupt_replicas()
+{
+    setup_tracing
+    set_watchdog 180
+
+    echo 64 > /sys/module/bcachefs/parameters/read_corrupt_ratio
+
+    run_quiet "" bcachefs format -f			\
+	--replicas=2					\
+	${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+
+    mount -t bcachefs -o degraded ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+
+    #gc_torture_workload
+    run_fio_randrw --continue_on_error=io
+
+    # Check the read retry path for indirect extents:
+    #cp --reflink /mnt/fiotest /mnt/fiotest.reflinked
+    #dd if=/mnt/fiotest of=/dev/null bs=4k iflag=direct
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+    echo 0 > /sys/module/bcachefs/parameters/read_corrupt_ratio
+    true
+}
+
+test_write_corrupt()
+{
+    setup_tracing
+    set_watchdog 180
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    echo 1 > /sys/module/bcachefs/parameters/write_corrupt_ratio
+    #gc_torture_workload
+    #run_fio_randrw --continue_on_error=io
+    dd if=/dev/zero of=/mnt/foo bs=1M count=1024 oflag=direct
+    echo 0 > /sys/module/bcachefs/parameters/write_corrupt_ratio
+
+    bcachefs device add -f --label=background /mnt ${ktest_scratch_dev[1]}
+
+    echo background > /sys/fs/bcachefs/*/options/background_target
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+
+    echo 0 > /sys/module/bcachefs/parameters/write_corrupt_ratio
+    true
+}
+
+test_evacuate_corrupted()
+{
+    setup_tracing
+    set_watchdog 180
+
+    run_quiet "" bcachefs format -f --replicas=2	\
+	${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+
+    echo 32 > /sys/module/bcachefs/parameters/write_corrupt_ratio
+    run_fio_randrw --continue_on_error=io
+    echo 0 > /sys/module/bcachefs/parameters/write_corrupt_ratio
+
+    bcachefs device evacuate	--force	${ktest_scratch_dev[1]}
+    bcachefs device remove	--force ${ktest_scratch_dev[1]}
+
+    run_fio_randrw --continue_on_error=io --verify_only=1
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+
+    # we expect lots of io_move_start_fail when we're degraded:
+    #bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_evacuate_errors()
+{
+    setup_tracing
+    set_watchdog 180
+
+    run_quiet "" bcachefs format -f --metadata_replicas=2   \
+	${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    run_fio_randrw --continue_on_error=io
+
+    #bcachefs device evacuate	/dev/mapper/flakey
+    bcachefs device remove	--force ${ktest_scratch_dev[1]}
+
+    run_fio_randrw --continue_on_error=io --verify_only=1
+    umount /mnt
+    true
 }
 
 test_cmd_fs_usage()
