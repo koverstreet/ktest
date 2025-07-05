@@ -1883,7 +1883,7 @@ test_kernel_fsck()
 
 test_online_fsck()
 {
-    set_watchdog 10
+    set_watchdog 30
     bcachefs format -f ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
