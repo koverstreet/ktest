@@ -624,7 +624,7 @@ test_btree_read_corrupt()
     run_fio_randrw --continue_on_error=io
     umount /mnt
 
-    echo 4 > /sys/module/bcachefs/parameters/btree_read_corrupt_ratio
+    echo 8 > /sys/module/bcachefs/parameters/btree_read_corrupt_ratio
     mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
     echo 0 > /sys/module/bcachefs/parameters/btree_read_corrupt_ratio
 
