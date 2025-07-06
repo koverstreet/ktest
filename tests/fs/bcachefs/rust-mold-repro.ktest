@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+config-rw-image ~/ssd/persistent-scratch
+
+test_rust_mold()
+{
+    mkdir -p /root/.cargo
+    cat > /root/.cargo/config.toml <<-ZZ
+[build]
+rustflags = [
+  "-Clinker=clang",
+  "-Clink-arg=-fuse-ld=/usr/bin/mold",
+]
+target-dir = "/mnt"
+ZZ
+
+    mount -t bcachefs /dev/vdb /mnt
+    cargo install /ktest-out/fd
+}
+
+main "$@"
