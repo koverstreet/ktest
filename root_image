@@ -81,12 +81,12 @@ PACKAGES=(kexec-tools less psmisc openssh-server curl		\
     hdparm mdadm lvm2						\
     btrfs-progs jfsutils nilfs-tools f2fs-tools			\
     bc attr gawk acl rsync git python3-docutils			\
-    stress-ng lsof xxd)
+    stress-ng lsof xxd zstd)
 
 # build tools:
 PACKAGES+=(build-essential make gcc g++ clang)
 PACKAGES+=(autoconf automake autopoint bison)
-PACKAGES+=(cargo)
+PACKAGES+=(cargo mold)
 PACKAGES+=(devscripts debhelper)
 
 # stress testing:
