@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+
+test_rust_mold()
+{
+    mkdir -p /root/.cargo
+    cat > /root/.cargo/config.toml <<-ZZ
+[build]
+rustflags = [
+  "-Clinker=clang",
+  "-Clink-arg=-fuse-ld=/usr/bin/mold",
+]
+target-dir = "/mnt/subvol"
+ZZ
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs /dev/vdb /mnt
+    bcachefs subvolume create /mnt/subvol
+
+    cp -r /ktest-out/fd /mnt/subvol
+    cd /mnt/subvol/fd
+
+    cargo install --path .
+
+    /root/.cargo/bin/fd
+}
+
+main "$@"
