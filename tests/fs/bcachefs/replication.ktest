@@ -837,6 +837,69 @@ test_rereplicate()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+test_rereplicate2()
+{
+    echo ":: format with replicas=1 (default)"
+    run_quiet "" bcachefs format -f		\
+        ${ktest_scratch_dev[0]}			\
+        ${ktest_scratch_dev[1]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+
+    echo ":: write to fs, while replicas=1"
+    touch /mnt/empty-file
+
+    echo ":: we should have some durability=1 data now"
+    bcachefs fs usage -h /mnt
+
+    echo ":: set replicas=2 and run rereplicate"
+    echo 2 > /sys/fs/bcachefs/*/options/data_replicas
+    echo 2 > /sys/fs/bcachefs/*/options/metadata_replicas
+    bcachefs data rereplicate /mnt
+
+    # echo ":: running rereplicate a second time seems to guarantee all data has durability=2"
+    # bcachefs data rereplicate /mnt
+
+    echo ":: all data should be replicated to both devices now, verifying..."
+    local fs_usage_out=$(bcachefs fs usage -h /mnt)
+    echo "$fs_usage_out"
+    local residual_durability_1_data=$(grep -E '^(btree|user):' <<<"$fs_usage_out" | awk '$3 == "1"')
+
+    umount /mnt
+
+    local dev_remove=
+    if ! [[ -n "$residual_durability_1_data" ]]; then
+	echo ":: no residual durability=1 data found"
+	dev_remove="vdb"
+        echo ":: we will simulate loss of device '$dev_remove' to verify proper replication"
+    else
+        echo ":: found residual durability=1 data:"
+        echo "$residual_durability_1_data"
+
+        local first_spof_dev=$(head -n1 <<<"$residual_durability_1_data" | grep -oP '\[\K[^\]]+' | awk '{print $1}')
+	dev_remove="$first_spof_dev"
+        echo ":: we will simulate loss of device '$dev_remove', which we suspect of being a single-point-of-failure"
+    fi
+
+    # we want to keep the other device
+    local dev_keep=
+    if [[ "$dev_remove" == "vdb" ]]; then
+        dev_keep="vdc"
+    elif [[ "$dev_remove" == "vdc" ]]; then
+        dev_keep="vdb"
+    else
+        exit 1
+    fi
+
+    echo ":: wipe the super-block on device '$dev_remove' to prevent auto-discovery durring mount"
+    dd if=/dev/zero of=/dev/$dev_remove bs=1M count=1 oflag=direct
+
+    echo ":: attempt degraded mount with only device '$dev_keep'"
+    mount -t bcachefs -o degraded,fsck,fix_errors /dev/$dev_keep /mnt
+
+    umount /mnt
+}
+
 disabled_test_device_add_faults()
 {
     setup_tracing 'bcachefs:*'
