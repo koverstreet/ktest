@@ -644,7 +644,7 @@ test_recovery()
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	--encrypted --no_passphrase		\
-	--bucket_size=8k				\
+	--bucket_size=64k			\
 	${ktest_scratch_dev[0]}
 
     for i in `seq 0 1`; do
