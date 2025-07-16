@@ -1322,7 +1322,24 @@ check_rsync_log()
     # Sample expected output:
     # .d..t...... ./
     # .d..t...... lost+found/
-    ! grep -E '^[^.]' $1
+    ! grep -v "cd+++++++++ lost+found/" $1| grep -E '^[^.]'
+}
+
+verify_trees_equal()
+{
+    local dir1=$1
+    local dir2=$2
+
+    rsync	--archive			\
+	--acls				\
+	--xattrs				\
+	--checksum				\
+	--hard-links			\
+	--dry-run				\
+	--itemize-changes		 	\
+	$dir1/ $dir2/ > /root/rsynclog-build
+
+    check_rsync_log /root/rsynclog-build
 }
 
 # build a filesystem from a source
@@ -1334,25 +1351,14 @@ build_from_fs()
     prepare_source_fs $1
 
     bcachefs format -f				\
-	--source=/mnt ${ktest_scratch_dev[1]} | tee /root/buildlog
+	--source=/mnt ${ktest_scratch_dev[1]}
 
     echo "Attempting to mount bcachefs filesystem"
 
     if true; then
 	mkdir -p /mnt2
 	mount -t bcachefs -o noexcl,nochanges,ro ${ktest_scratch_dev[1]} /mnt2
-
-	rsync	--archive			\
-	    --acls				\
-	    --xattrs				\
-	    --checksum				\
-	    --hard-links			\
-	    --dry-run				\
-	    --itemize-changes		 	\
-	    /mnt/ /mnt2/ > /root/rsynclog-build
-
-	check_rsync_log /root/rsynclog-build
-
+	verify_trees_equal /mnt /mnt2
 	umount /mnt2
 	echo "rsync passed"
     fi
@@ -2021,6 +2027,50 @@ test_casefold_overlayfs()
 
     umount /mnt
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
+}
+
+test_image_create()
+{
+    local IMAGE_FILE=/root/usr.image
+
+    check_image()
+    {
+	echo "--- FSCK IMAGE ---"
+	echo
+	bcachefs fsck -ny $IMAGE_FILE
+
+	ls -l $IMAGE_FILE
+
+	echo "--- MOUNT CHECK IMAGE ---"
+	echo
+	mount $IMAGE_FILE /mnt
+	verify_trees_equal /mnt $1
+	umount /mnt
+    }
+
+    #run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    #mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    rm -f $IMAGE_FILE
+
+    echo "--- CREATE IMAGE ---"
+    echo
+    #bcachefs image create --compression=zstd --source=/usr $IMAGE_FILE
+    bcachefs image create --source=/usr $IMAGE_FILE
+
+    check_image /usr
+
+    echo "--- UPDATE IMAGE /usr ---"
+    echo
+    bcachefs image update --source=/usr $IMAGE_FILE
+
+    check_image /usr
+
+    echo "--- UPDATE IMAGE /usr/bin ---"
+    echo
+    bcachefs image update --source=/usr/bin $IMAGE_FILE
+
+    check_image /usr/bin
 }
 
 main "$@"
