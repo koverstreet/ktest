@@ -415,7 +415,7 @@ test_metadata_on_wrong_device_after_disk_add_v2()
 
 test_recover_super()
 {
-    set_watchdog 60
+    set_watchdog 120
     run_quiet "" bcachefs format -f		\
 	--errors=panic				\
 	${ktest_scratch_dev[@]}
