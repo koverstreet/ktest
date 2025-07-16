@@ -425,10 +425,10 @@ test_device_set_state_offline()
     mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
 
     local fioout="$ktest_out/fio-out"
-    run_fio_randrw >"$fioout" 2>&1 &
+    run_fio_randrw --runtime=60 >"$fioout" 2>&1 &
     local fiopid=$!
 
-    sleep 1
+    sleep 10
 
     bcachefs device set-state --force	    ro ${ktest_scratch_dev[1]}
 
@@ -460,10 +460,10 @@ test_device_readd()
     mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
 
     local fioout="$ktest_out/fio-out"
-    run_fio_randrw >"$fioout" 2>&1 &
+    run_fio_randrw --runtime=60 >"$fioout" 2>&1 &
     local fiopid=$!
 
-    sleep 1
+    sleep 10
 
     echo -n "offlining ${ktest_scratch_dev[0]}... "
     bcachefs device offline --force	${ktest_scratch_dev[0]}
