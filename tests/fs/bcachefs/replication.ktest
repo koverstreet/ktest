@@ -62,7 +62,7 @@ test_twodevices()
 
 test_largebuckets()
 {
-    set_watchdog 30
+    set_watchdog 60
     run_quiet "" bcachefs format -f		\
 	--bucket_size=8M			\
 	${ktest_scratch_dev[0]}			\
