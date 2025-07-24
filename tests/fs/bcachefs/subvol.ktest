@@ -241,6 +241,58 @@ d_test_snapshots_fio()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+test_snapshots_while_stressed()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f \
+        --compression=zstd \
+        ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs -o verbose ${ktest_scratch_dev[0]} /mnt
+
+    echo ":: start background job writing to lots of small files"
+    local fioout="$ktest_out/fio-out"
+    mkdir /mnt/fio
+    fio --eta=always \
+        --name=snapshot_stress \
+        --directory=/mnt/fio \
+        --numjobs=3 \
+        --nrfiles=1000 \
+        --size=16M \
+        --file_service_type=random \
+        --rw=randwrite \
+        --time_based \
+        --runtime=60 \
+        >"$fioout" 2>&1 \
+        &
+    local fiopid=$!
+
+    local snapshots_dir=/mnt/snapshots
+    mkdir $snapshots_dir
+
+    echo ":: take frequent snapshots under load with interspersed removal of old snapshots"
+    local n=1
+    while [[ -d "/proc/$fiopid" ]]; do
+        echo -n ":: taking snapshot #$n... "
+        bcachefs subvolume snapshot --read-only "$snapshots_dir/$n"
+        echo "done"
+
+        if (( n % 3 == 0 )); then
+            bcachefs fs usage -h /mnt
+            local random_n=$(ls $snapshots_dir | shuf | head -n1)
+            echo -n ":: deleting snapshot #$random_n... "
+            bcachefs subvolume delete "$snapshots_dir/$random_n"
+            echo "done"
+        fi
+
+        sleep 1
+        ((n++))
+    done
+
+    umount /mnt
+}
+
 test_subvol_create()
 {
     run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
