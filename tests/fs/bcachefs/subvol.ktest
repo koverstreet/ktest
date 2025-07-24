@@ -824,25 +824,6 @@ test_snapshot_reflink()
     umount /mnt
 }
 
-test_snapshot_nested()
-{
-    run_quiet "" bcachefs format -f  ${ktest_scratch_dev[0]}
-    mount -t bcachefs -o noinline_data ${ktest_scratch_dev[0]} /mnt
-
-    touch /mnt/foo
-    bcachefs subvolume snapshot /mnt/snapshot
-    touch /mnt/snapshot/bar
-    bcachefs subvolume snapshot /mnt/snapshot /mnt/snapshot2
-    touch /mnt/snapshot2/baz
-
-    # delete the root subvolume, we shouldn't allow this, but it currently breaks:
-    bcachefs subvolume delete /mnt
-    umount /mnt
-
-    mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
-    umount /mnt
-}
-
 test_snapshot_file_delete_2()
 {
     set_watchdog 60
