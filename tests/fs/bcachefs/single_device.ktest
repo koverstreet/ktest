@@ -1786,7 +1786,10 @@ test_kill_btree_node()
 test_kill_btree_root_autofix()
 {
     set_watchdog 240
-    run_quiet "" bcachefs format -f --btree_node_size=64k ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f			\
+	--btree_node_size=64k				\
+	--encrypted --no_passphrase			\
+	${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     cp -rL /usr/bin /mnt
@@ -1797,7 +1800,7 @@ test_kill_btree_root_autofix()
     umount /mnt
     bcachefs list -m nodes ${ktest_scratch_dev[0]} > /root/nodes_before
 
-    bcachefs kill_btree_node -nextents:1 ${ktest_scratch_dev[0]}
+    bcachefs kill_btree_node -naccounting:1 -nextents:1 ${ktest_scratch_dev[0]}
 
     echo "Running fsck"
     # How to assert exit status equals something specific with -o errexit?
