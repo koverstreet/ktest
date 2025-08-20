@@ -60,6 +60,17 @@ check_bcachefs_leaks()
     done
 }
 
+check_bcachefs_errors()
+{
+    for i in $@; do
+	if bcachefs show-super -f errors $i|
+	    sed -n '/^errors /,${/^errors /!p;}'|
+	    grep -E '[a-z]'; then
+	    return 1
+	fi
+    done
+}
+
 expect_sysfs()
 {
     prefix=$1
@@ -159,7 +170,7 @@ bcachefs_antagonist()
     # Enable all bcachefs tracepoints - good for test coverage
     setup_tracing 'bcachefs:*'
 
-    # Or alternately, only enable events check_counters will want to dump:
+    # Or alternately, only enable events check_bcachefs_counters will want to dump:
     #local ev=/sys/kernel/tracing/events/bcachefs/
     #echo 1|tee "$ev"/*fail*/enable "$ev"/*restart*/enable "$ev"/*blocked*/enable
 
@@ -195,7 +206,7 @@ get_slowpath_counters()
 	grep -v  ' 0$' || true
 }
 
-check_counters()
+_check_bcachefs_counters()
 {
     local dev=$1
     local nr_commits=$(bcachefs show-super -f counters "$dev"|awk '/transaction_commit/ {print $2}')
@@ -248,12 +259,18 @@ check_counters()
     return $ret
 }
 
+check_bcachefs_counters()
+{
+    for dev in $@; do
+	_check_bcachefs_counters $dev
+    done
+}
+
 bcachefs_test_end_checks()
 {
     check_bcachefs_leaks
-    for dev in $@; do
-	check_counters $dev
-    done
+    check_bcachefs_errors $@
+    check_bcachefs_counters $@
 }
 
 fill_device()
@@ -345,8 +362,7 @@ run_basic_fio_test_counter_threshold()
     #umount /mnt
 
     bcachefs fsck -ny "${devs[@]}"
-    check_bcachefs_leaks
-    check_counters "${devs[0]}" "$ratio"
+    bcachefs_test_end_checks "${devs[0]}" "$ratio"
 }
 
 run_basic_fio_test()

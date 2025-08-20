@@ -180,7 +180,8 @@ test_extent_repair_overlapping()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+    check_bcachefs_leaks
+    check_bcachefs_counters ${ktest_scratch_dev[0]}
 }
 
 test_reflink3()
@@ -1780,7 +1781,8 @@ test_kill_btree_node()
 	bcachefs fsck -ny ${ktest_scratch_dev[0]}
     done
 
-    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+    check_bcachefs_leaks
+    check_bcachefs_counters ${ktest_scratch_dev[0]}
 }
 
 test_kill_btree_root_autofix()
@@ -1820,7 +1822,8 @@ test_kill_btree_root_autofix()
     diff -rq /usr/bin /mnt/bin
     umount /mnt
 
-    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+    check_bcachefs_leaks
+    check_bcachefs_counters ${ktest_scratch_dev[0]}
 }
 
 test_kill_btree_root()
@@ -1857,7 +1860,8 @@ test_kill_btree_root()
     diff -rq /usr/bin /mnt/bin
     umount /mnt
 
-    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+    check_bcachefs_leaks
+    check_bcachefs_counters ${ktest_scratch_dev[0]}
 }
 
 test_multimount()
@@ -1979,7 +1983,7 @@ test_recover_super()
     mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
     umount /mnt
 
-    check_counters ${ktest_scratch_dev[0]}
+    check_bcachefs_counters ${ktest_scratch_dev[0]}
 }
 
 # Check that we can mount multiple single device filesystems with the same UUID

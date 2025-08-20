@@ -632,7 +632,8 @@ test_btree_read_corrupt()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
-    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+    check_bcachefs_leaks
+    check_bcachefs_counters ${ktest_scratch_dev[0]}
 }
 
 test_kill_btree_node()
@@ -667,7 +668,8 @@ test_kill_btree_node()
 	bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
     done
 
-    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+    check_bcachefs_leaks
+    check_bcachefs_counters ${ktest_scratch_dev[0]}
 }
 
 test_read_corrupt_replicas()
@@ -1166,7 +1168,7 @@ do_scrub()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
-    check_counters ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_scrub()
