@@ -368,7 +368,7 @@ test_metadata_on_wrong_device_after_disk_add_v1()
         echo $i > /mnt/a$i
     done
 
-    btree_devs=$(bcachefs fs usage -h /mnt/ | grep -c ^btree:)
+    btree_devs=$(bcachefs fs usage -h --all /mnt/ | grep -c ^btree:)
 
     test $btree_devs -eq 1 || return 1
 
@@ -406,7 +406,7 @@ test_metadata_on_wrong_device_after_disk_add_v2()
     sync
     bcachefs fs usage -h /mnt
 
-    btree_devs=$(bcachefs fs usage -h /mnt/ | grep -c ^btree:)
+    btree_devs=$(bcachefs fs usage -h --all /mnt/ | grep -c ^btree:)
 
     test $btree_devs -eq 1 || return 1
 

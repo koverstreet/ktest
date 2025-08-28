@@ -863,7 +863,7 @@ test_rereplicate2()
     # bcachefs data rereplicate /mnt
 
     echo ":: all data should be replicated to both devices now, verifying..."
-    local fs_usage_out=$(bcachefs fs usage -h /mnt)
+    local fs_usage_out=$(bcachefs fs usage -h --all /mnt)
     echo "$fs_usage_out"
     local residual_durability_1_data=$(grep -E '^(btree|user):' <<<"$fs_usage_out" | awk '$3 == "1"')
 
