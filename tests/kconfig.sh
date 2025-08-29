@@ -208,7 +208,6 @@ require-kernel-config 9P_FS
 # KGDB:
 require-kernel-config KGDB
 require-kernel-config KGDB_SERIAL_CONSOLE
-require-kernel-config VMAP_STACK=n
 require-kernel-config RANDOMIZE_BASE=n
 require-kernel-config RANDOMIZE_MEMORY=n
 
