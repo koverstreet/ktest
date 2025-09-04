@@ -575,7 +575,7 @@ test_key_merge()
 
     dd if=/dev/zero of=/mnt/foo bs=8k count=128 oflag=direct
 
-    NR=$(cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys|wc -l)
+    NR=$(cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys|grep -vE '^ '|wc -l)
 
     [[ $NR -eq 4 ]]
 
@@ -596,7 +596,7 @@ test_key_merge_csum()
 
     cat /mnt/foo > /dev/null
 
-    NR=$(cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys|wc -l)
+    NR=$(cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys|grep -vE '^ '|wc -l)
 
     [[ $NR -le 16 ]]
 
