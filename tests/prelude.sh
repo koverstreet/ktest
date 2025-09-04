@@ -284,6 +284,7 @@ run_test()
     $test_fn
 
     check_dmesg
+    dmesg -C
 }
 
 run_tests()
