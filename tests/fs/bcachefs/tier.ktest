@@ -237,6 +237,35 @@ test_device_add()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+test_device_remove()
+{
+    set_watchdog 240
+    run_quiet "" bcachefs format -f					\
+	--replicas=2							\
+	--label=ssd ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}	\
+	--label=hdd ${ktest_scratch_dev[2]} ${ktest_scratch_dev[3]}	\
+	--foreground_target=ssd						\
+	--promote_target=ssd						\
+	--background_target=hdd
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    bcachefs device resize-journal ${ktest_scratch_dev[0]} 1512M
+    bcachefs device resize-journal ${ktest_scratch_dev[1]} 1512M
+    bcachefs device resize-journal ${ktest_scratch_dev[2]} 1512M
+    bcachefs device resize-journal ${ktest_scratch_dev[3]} 1512M
+
+    run_fio_randrw|tail -n200 &
+
+    sleep 5
+    bcachefs device remove -f ${ktest_scratch_dev[1]} /mnt
+
+    wait
+    umount /mnt
+
+    bcachefs fsck -n "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_mount_umount_torture()
 {
     set_watchdog 60
