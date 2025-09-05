@@ -1458,8 +1458,9 @@ test_migrate_from_xfs()
     migrate_from_fs xfs
 }
 
-require-kernel-config BTRFS_FS
-test_migrate_from_btrfs()
+#require-kernel-config BTRFS_FS
+# requires FIEMAP improvements
+d_test_migrate_from_btrfs()
 {
     migrate_from_fs btrfs
 }
