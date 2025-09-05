@@ -42,6 +42,8 @@ export BCACHEFS_KERNEL_ONLY=1
 
 bcachefs_mem_in_use()
 {
+    echo 1 > /sys/module/rcutree/parameters/do_rcu_barrier
+
     grep -v "0        0" /proc/allocinfo|grep fs/bcachefs/
 }
 
