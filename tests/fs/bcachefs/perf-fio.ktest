@@ -27,7 +27,6 @@ perf_mkfs()
     blkdiscard /dev/nvme0n1
 
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	--bucket_size=$btree_node_size		\
 	--btree_node_size=$btree_node_size	\
 	--metadata_checksum=none		\
@@ -189,7 +188,6 @@ ZZ
 
     if true; then
 	run_quiet "" bcachefs format -f		\
-	    --errors=panic			\
 	    --bucket_size=2M			\
 	    --data_checksum=none		\
 	    --nocow				\

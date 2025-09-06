@@ -22,7 +22,6 @@ test_ec_gc()
 
     local loops=100
 
-    # We need errors=panic since we're ignoring errors from fio:
     run_quiet "" bcachefs format -f		\
 	--replicas=2				\
 	"${ktest_scratch_dev[@]}"

@@ -13,9 +13,7 @@ require-make linuxquota
 
 test_usrquota_twodevices()
 {
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	${ktest_scratch_dev[@]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
 
     mount -t bcachefs -o usrquota,grpquota,prjquota ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
 
@@ -43,13 +41,7 @@ test_usrquota_twodevices()
 
 test_usrquota()
 {
-    if false; then
-	mkfs.xfs ${ktest_scratch_dev[0]}
-    else
-	bcachefs format -f			\
-	    --errors=panic			\
-	    ${ktest_scratch_dev[0]} >/dev/null
-    fi
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
 
     mount -t bcachefs -o usrquota,grpquota,prjquota ${ktest_scratch_dev[0]} /mnt
 
@@ -77,13 +69,7 @@ test_usrquota()
 
 test_grpquota()
 {
-    if false; then
-	mkfs.xfs ${ktest_scratch_dev[0]}
-    else
-	run_quiet "" bcachefs format -f		\
-	    --errors=panic			\
-	    ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} >/dev/null
-    fi
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
 
     mount -t bcachefs -o usrquota,grpquota,prjquota ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
 
@@ -101,9 +87,7 @@ test_grpquota()
 
 test_prjquota()
 {
-   run_quiet ""  bcachefs format -f	\
-	--errors=panic			\
-	${ktest_scratch_dev[0]} >/dev/null
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
 
     mount -t bcachefs -o usrquota,grpquota,prjquota ${ktest_scratch_dev[0]} /mnt
 
@@ -135,9 +119,7 @@ test_prjquota()
 
 test_prjquota_multidevices()
 {
-    run_quiet "" bcachefs format -f	\
-	--errors=panic			\
-	${ktest_scratch_dev[@]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
 
     mount -t bcachefs -o usrquota,grpquota,prjquota ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
 

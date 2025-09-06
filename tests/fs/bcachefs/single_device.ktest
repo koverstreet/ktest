@@ -45,7 +45,7 @@ test_punch()
 {
     set_watchdog 10
 
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     xfs_io -f /mnt/foo -c "pwrite -S 0x55 0 16384"
@@ -67,7 +67,7 @@ test_remount_ro_rw()
 {
     set_watchdog 10
 
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     echo "test: remount-ro"
@@ -86,7 +86,7 @@ test_mount_again_after_ebusy()
 {
     set_watchdog 10
 
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     echo "test: mount ro"
     mount -t bcachefs -o ro ${ktest_scratch_dev[0]} /mnt
 
@@ -107,7 +107,7 @@ test_mount_options()
     local dev=${ktest_scratch_dev[0]}
     set_watchdog 10
 
-    run_quiet "" bcachefs format -f --errors=panic $dev
+    run_quiet "" bcachefs format -f $dev
 
     echo "test: valid mount options"
     mount -t bcachefs -o metadata_checksum=crc64,metadata_target=$(basename $dev) $dev /mnt
@@ -143,7 +143,7 @@ test_extent_merge2()
 
     [[ -f $p ]] && echo 1 > $p
 
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     fallocate -o    0 -l 4096 /mnt/foo
@@ -162,7 +162,7 @@ test_extent_repair_overlapping()
 {
     set_watchdog 10
 
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
@@ -193,7 +193,7 @@ test_reflink3()
     # [2] https://wiki.gentoo.org/wiki/User:Sam/Memorable_bugs_I_like_to_reference#Bugs_found_by_Portage.27s_native_file_copying
     # [3] https://github.com/openzfs/zfs/issues/11900#issuecomment-927568640
     set_watchdog 60
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     prefix="reproducer_${BASHPID}_"
@@ -258,7 +258,7 @@ test_reflink2()
 test_reflink()
 {
     set_watchdog 60
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     run_fio_randrw --filesize=1000M &
@@ -352,7 +352,7 @@ test_merge_torture_flakey()
 	dmsetup resume flakey
     }
 
-    run_quiet "" bcachefs format -f --btree_node_size=32k --errors=panic /dev/mapper/flakey
+    run_quiet "" bcachefs format -f --btree_node_size=32k /dev/mapper/flakey
 
     for i in `seq 0 $loops`; do
 	echo "loop: $i"
@@ -405,7 +405,7 @@ d_test_merge_torture()
     local loops=$((($ktest_priority + 1) * 3))
     local n=10M
 
-    run_quiet "" bcachefs format -f --errors=panic --btree_node_size=8k --no_initialize ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f --btree_node_size=8k --no_initialize ${ktest_scratch_dev[0]}
 
     for i in `seq 0 $loops`; do
 	mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
@@ -524,9 +524,7 @@ test_split_compressed()
 test_fcollapse()
 {
     set_watchdog 30
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     dd if=/dev/zero of=/mnt/foo bs=4k count=4 oflag=direct
@@ -643,7 +641,6 @@ test_recovery()
 {
     set_watchdog 30
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	--encrypted --no_passphrase		\
 	--bucket_size=64k			\
 	${ktest_scratch_dev[0]}
@@ -683,7 +680,7 @@ test_recovery()
 test_lz4_zeros()
 {
     set_watchdog 30
-    run_quiet "" bcachefs format -f --errors=panic	\
+    run_quiet "" bcachefs format -f			\
 	--compression=lz4				\
 	--data_checksum=none				\
 	--bucket_size=2M				\
@@ -701,7 +698,7 @@ test_lz4_zeros()
 test_lz4_incompressible()
 {
     set_watchdog 120
-    run_quiet "" bcachefs format -f --errors=panic	\
+    run_quiet "" bcachefs format -f			\
 	--compression=lz4				\
 	--data_checksum=none				\
 	--bucket_size=2M				\
@@ -728,7 +725,6 @@ test_lz4_buffered()
     #bcachefs_antagonist
 
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	--compression=lz4			\
 	${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
@@ -765,7 +761,6 @@ test_zstd()
 test_background_compression()
 {
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	--background_compression=zstd	    	\
 	${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
@@ -779,9 +774,7 @@ test_background_compression()
 test_rebalance_scan()
 {
     setup_tracing 'bcachefs:*'
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     dd if=/dev/zero of=/mnt/foo bs=1M count=8 oflag=direct
@@ -874,7 +867,6 @@ run_copygc_torture()
     bcachefs_antagonist
 
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	--data_checksum=none			\
 	"$@" ${ktest_scratch_dev[0]}
 
@@ -971,7 +963,6 @@ test_partial_overwritten_extents()
     set_watchdog 10
 
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	--encrypted --no_passphrase		\
 	${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
@@ -1002,7 +993,6 @@ test_xattr()
 {
     set_watchdog 10
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
@@ -1033,9 +1023,7 @@ test_quota()
     set_watchdog 10
     bcachefs_antagonist
 
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs -o usrquota,grpquota,prjquota ${ktest_scratch_dev[0]} /mnt
 
     loops=$((($ktest_priority + 1) * 4))
@@ -1058,9 +1046,7 @@ test_nfs()
     set_watchdog 10
     mkdir /export1 /export2
 
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /export2
 
     echo "/export1  *(ro,insecure,all_squash,no_subtree_check)" >> /etc/exports
@@ -1092,9 +1078,7 @@ d_test_suspend()
 	#s2ram --no_kms --force
     )&
 
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     if false; then
@@ -1113,9 +1097,7 @@ test_journal_torture()
     set_watchdog 60
     bcachefs_antagonist
 
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     #enable_memory_faults
@@ -1137,7 +1119,6 @@ test_online_resize()
     bcachefs_antagonist
 
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	--fs_size=1G				\
 	${ktest_scratch_dev[0]}
 
@@ -1159,7 +1140,6 @@ test_offline_resize()
     bcachefs_antagonist
 
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	--fs_size=1G				\
 	${ktest_scratch_dev[0]}
 
@@ -1189,9 +1169,7 @@ test_offline_resize_lv()
     lvcreate -L 1G -n foo  vg
     dev=/dev/vg/foo
 
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	$dev
+    run_quiet "" bcachefs format -f $dev
 
     mount -t bcachefs $dev /mnt
     df -h /mnt
@@ -1212,9 +1190,7 @@ test_offline_resize_lv()
 test_sysfs()
 {
     set_watchdog 10
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     find -H /sys/fs/bcachefs/ -type f -perm -0400 -exec cat {} \; > /dev/null
@@ -1228,9 +1204,7 @@ test_sysfs()
 test_debugfs()
 {
     set_watchdog 30
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     dd if=/dev/zero of=/mnt/test1 bs=1k count=10240 oflag=direct
@@ -1247,9 +1221,7 @@ test_debugfs()
 test_set_option()
 {
     set_watchdog 10
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs set-fs-option --compression=zstd ${ktest_scratch_dev[0]}
@@ -1269,9 +1241,7 @@ test_set_option()
 
 disabled_test_swapfile()
 {
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     fallocate -l 1G /mnt/swapfile
@@ -1351,8 +1321,7 @@ build_from_fs()
 
     prepare_source_fs $1
 
-    bcachefs format -f				\
-	--source=/mnt ${ktest_scratch_dev[1]}
+    bcachefs format -f --source=/mnt ${ktest_scratch_dev[1]}
 
     echo "Attempting to mount bcachefs filesystem"
 
@@ -1504,9 +1473,7 @@ d_test_meta_write_faults()
 {
     setup_tracing 'bcachefs:*'
 
-    run_quiet "" bcachefs format -f		\
-	--errors=remount-ro			\
-	${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
 
     meta_write_fault_fn()
     {
@@ -1526,9 +1493,7 @@ d_test_meta_write_faults()
 test_long_name()
 {
     set_watchdog 20
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     local i=1
@@ -1548,9 +1513,7 @@ test_long_name()
 test_many_files()
 {
     set_watchdog 60
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     for i in {1..1000}; do
@@ -1570,9 +1533,7 @@ disabled_test_invalid_keys()
 {
     echo 1 > /sys/module/bcachefs/parameters/inject_invalid_keys
 
-    run_quiet "" bcachefs format -f		\
-	--errors=continue			\
-	${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     for i in {1..1000}; do
@@ -1591,7 +1552,6 @@ test_buffered_reads()
 {
     set_watchdog 60
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	--bucket_size=8M				\
 	--data_checksum=none			\
 	${ktest_scratch_dev[0]}
@@ -1612,7 +1572,6 @@ d_test_small_fs()
 {
     set_watchdog 60
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	--bucket_size=4k				\
 	--fs_size=512k				\
 	${ktest_scratch_dev[0]}
@@ -1638,7 +1597,6 @@ d_test_small_fsck()
 {
     set_watchdog 60
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	--fs_size=1M				\
 	${ktest_scratch_dev[0]}
 
@@ -1651,7 +1609,6 @@ test_gc()
 {
     set_watchdog 60
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	--compression=lz4			\
 	${ktest_scratch_dev[0]}
 
@@ -1673,7 +1630,6 @@ test_attr_inherit()
 {
     set_watchdog 60
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
@@ -1708,7 +1664,6 @@ test_setattr()
 {
     set_watchdog 60
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
@@ -1755,7 +1710,7 @@ test_dump()
 test_kill_btree_node()
 {
     set_watchdog 240
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     cp -a /usr /mnt
@@ -1921,7 +1876,6 @@ d_test_nocow_fragmented()
 {
     set_watchdog 60
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
@@ -1963,7 +1917,6 @@ test_recover_super()
 {
     set_watchdog 60
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	${ktest_scratch_dev[0]}
     bcachefs show-super -l ${ktest_scratch_dev[0]}
 

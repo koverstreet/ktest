@@ -11,7 +11,7 @@ config-timeout $(stress_timeout)
 
 test_fsmark()
 {
-    run_quiet "" bcachefs format -f --errors=panic /dev/sdb
+    run_quiet "" bcachefs format -f /dev/sdb
     mount -t bcachefs /dev/sdb /mnt
     cd /mnt
 

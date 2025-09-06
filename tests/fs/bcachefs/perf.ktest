@@ -28,7 +28,6 @@ n=20M
 perf_mkfs()
 {
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	--bucket_size=$btree_node_size		\
 	--btree_node_size=$btree_node_size	\
 	--metadata_checksum=none		\
