@@ -18,7 +18,6 @@ btree_node_size=32k
 run_test_inner()
 {
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	--bucket_size=$btree_node_size		\
 	--btree_node_size=$btree_node_size	\
 	${ktest_scratch_dev[0]}

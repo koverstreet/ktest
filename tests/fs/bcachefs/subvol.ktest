@@ -11,7 +11,7 @@ test_snapshots_simple()
 
     bcachefs_antagonist
 
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     pushd /mnt
@@ -49,7 +49,7 @@ test_files_many()
 {
     #bcachefs_antagonist
 
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     for i in $(seq 0 1000001); do
@@ -68,7 +68,7 @@ d_test_snapshots_many()
 {
     #bcachefs_antagonist
 
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     cd /mnt
@@ -93,7 +93,7 @@ test_dbench()
 
     NR_SNAPS=10
 
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     (
@@ -127,7 +127,7 @@ test_dbench()
 
 test_reflink()
 {
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     pushd /mnt
@@ -143,7 +143,7 @@ test_reflink()
 
 d_test_finsert()
 {
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     pushd /mnt
@@ -162,7 +162,7 @@ d_test_snapshots_fio()
     # so wait doesn't hang
     [[ $(jobs -p) != "" ]] && kill $(jobs -p)
 
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     fallocate -l500M /mnt/fiotest
@@ -295,7 +295,7 @@ test_snapshots_while_stressed()
 
 test_subvol_create()
 {
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/subvolume_1
 
@@ -311,7 +311,7 @@ test_subvol_create()
 
 test_subvol_delete()
 {
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/subvolume_1
     rm -rf /mnt/subvolume_1
@@ -327,7 +327,7 @@ test_subvol_create_delete()
 {
     bcachefs_antagonist
 
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     bcachefs subvolume create /mnt/foo
@@ -345,7 +345,7 @@ test_subvol_create_delete()
 
 test_subvol_snapshot_create()
 {
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
@@ -359,7 +359,7 @@ test_subvol_snapshot_create()
 
 test_subvol_snapshot_create_ro()
 {
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot -r /mnt/subvolume_1 /mnt/snapshot_1
@@ -375,7 +375,7 @@ test_subvol_snapshot_create_ro()
 
 test_subvol_snapshot_delete()
 {
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
@@ -390,7 +390,7 @@ test_subvol_snapshot_delete()
 
 test_subvol_snapshot_delete_create()
 {
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
@@ -406,7 +406,7 @@ test_subvol_snapshot_delete_create()
 
 d_test_subvol_snapshot_rm()
 {
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
@@ -423,7 +423,7 @@ d_test_subvol_snapshot_rm()
 # subvolume:
 test_mkdir_mv_snapshot()
 {
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     mkdir /mnt/dir1
     bcachefs subvolume snapshot /mnt/ /mnt/snap1
@@ -438,7 +438,7 @@ test_mkdir_mv_snapshot()
 # Create a subvolume, snapshot its parent, rename it:
 test_subvol_mv_snapshot()
 {
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/sub
     bcachefs subvolume snapshot /mnt/ /mnt/snap
@@ -453,7 +453,7 @@ test_subvol_mv_snapshot()
 # Create a subvolume, snapshot it, rename it:
 test_subvol_mv_snapshot2()
 {
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/sub
     bcachefs subvolume snapshot /mnt/sub /mnt/snap
@@ -468,7 +468,7 @@ test_subvol_mv_snapshot2()
 # Test moving a subvol to another subvol
 test_subvol_mv_subvol()
 {
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/sub1
     bcachefs subvolume create /mnt/sub2
@@ -482,7 +482,7 @@ test_subvol_mv_subvol()
 
 test_subvol_snapshot_reuse_snapshot_name()
 {
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
@@ -498,7 +498,7 @@ test_subvol_snapshot_reuse_snapshot_name()
 
 test_subvol_delete_snapshot_of_deleted_subvol()
 {
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
@@ -514,7 +514,7 @@ test_subvol_delete_snapshot_of_deleted_subvol()
 
 test_subvol_snapshot_delete_repeat()
 {
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     for i in $(seq 1 64); do
         bcachefs subvolume snapshot /mnt/$i
@@ -529,7 +529,7 @@ test_subvol_snapshot_delete_repeat()
 
 test_subvol_snapshot_delete_fio()
 {
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     for i in $(seq 1 10); do
@@ -552,7 +552,7 @@ test_subvol_snapshot_delete_fio()
 
 test_snapshot_copygc()
 {
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     for i in $(seq 1 4); do
@@ -568,7 +568,7 @@ test_snapshot_copygc()
 
 test_snapshot_many_overwrite()
 {
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     for i in $(seq 1 100); do
@@ -584,7 +584,7 @@ test_snapshot_many_overwrite()
 
 test_snapshot_prjquota()
 {
-    run_quiet "" bcachefs format -f --errors=panic --prjquota ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f --prjquota ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     echo foo > /mnt/test
@@ -659,7 +659,7 @@ run_snapshot_fio()
 
 test_snapshot_sums()
 {
-    run_quiet "" bcachefs format -f --errors=panic --prjquota ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f --prjquota ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     local i
@@ -690,7 +690,7 @@ test_snapshot_sums()
 
 test_snapshot_rw()
 {
-    run_quiet "" bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     local i
@@ -827,9 +827,7 @@ test_snapshot_reflink()
 test_snapshot_file_delete_2()
 {
     set_watchdog 60
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     local a=/mnt

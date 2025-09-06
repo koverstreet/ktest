@@ -36,7 +36,6 @@ array_setup()
     #echo 1 > /sys/module/bcachefs/parameters/debug_check_bkeys
 
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	--erasure_code				\
 	--replicas=3				\
 	${ktest_scratch_dev[@]}

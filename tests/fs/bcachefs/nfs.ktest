@@ -16,9 +16,7 @@ test_nfs()
 {
     mkdir -p /export1 /export2
 
-    run_quiet "" bcachefs format -f		\
-	--errors=panic				\
-	${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /export2
 
     echo "/export1  *(rw,insecure,no_root_squash,no_subtree_check)" >> /etc/exports

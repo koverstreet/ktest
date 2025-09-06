@@ -17,7 +17,6 @@ test_ec_small()
     bcachefs_antagonist
 
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	--erasure_code				\
 	--replicas=2				\
 	"${ktest_scratch_dev[@]}"
@@ -50,7 +49,6 @@ test_ec_umount()
     set_watchdog 180
 
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	--erasure_code				\
 	--replicas=2				\
 	"${ktest_scratch_dev[@]}"
@@ -127,7 +125,6 @@ test_ec_mixed_tiers()
     set_watchdog 240
 
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	--erasure_code				\
 	--compression=lz4			\
 	--replicas=2				\
@@ -168,9 +165,7 @@ test_ec_gc()
 
     local loops=$((($ktest_priority + 1) * 4))
 
-    # We need errors=panic since we're ignoring errors from fio:
     run_quiet "" bcachefs format -f		\
-	--errors=panic				\
 	--replicas=2				\
 	"${ktest_scratch_dev[@]}"
 
@@ -291,7 +286,7 @@ test_device_failed()
 {
     set_watchdog 240
 
-    run_quiet "" bcachefs format -f --errors=panic \
+    run_quiet "" bcachefs format -f		\
 	--erasure_code				\
 	--replicas=2				\
 	"${ktest_scratch_dev[@]}"
