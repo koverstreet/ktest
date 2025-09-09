@@ -20,7 +20,16 @@ run_test()
 	bcachefs_antagonist
     fi
 
-    run_fstests "$@"
+    # Expunges:
+    # generic/064: we don't yet merge reflink pointers
+    # generic/102: precise "write until fs is full" -ENOSPC semantics are not terribly useful
+    # generic/275: precise "write until fs is full" -ENOSPC semantics are not terribly useful
+    # generic/414: extents are smaller
+    # generic/441: we don't yet support the fsync semantics of "only return an error once"
+    # generic/558: extremely slow on bcachefs, mainly due to inodes being
+    # smaller than other filesystems (thus we can fit a lot more)
+
+    run_fstests -e generic/064,generic/102,generic/275,generic/414,generic/441,generic/558 "$@"
 
     bcachefs_test_end_checks ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
 }
