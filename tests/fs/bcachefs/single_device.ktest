@@ -110,13 +110,11 @@ test_mount_options()
     run_quiet "" bcachefs format -f $dev
 
     echo "test: valid mount options"
-    mount -t bcachefs -o metadata_checksum=crc64,metadata_target=$(basename $dev) $dev /mnt
-    mount -t bcachefs | grep --quiet metadata_checksum
-    mount -t bcachefs | grep --quiet metadata_target
+    mount -t bcachefs -o errors=panic $dev /mnt
+    mount -t bcachefs | grep --quiet errors=panic
 
     echo "test: valid remount options"
     mount -o remount,ro,errors=continue /mnt
-    mount -t bcachefs | grep --quiet metadata_target
     mount -t bcachefs | grep --quiet continue
     mount -t bcachefs | grep --quiet ro
     umount /mnt

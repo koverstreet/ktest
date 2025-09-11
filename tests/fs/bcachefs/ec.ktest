@@ -167,10 +167,11 @@ test_ec_gc()
 
     run_quiet "" bcachefs format -f		\
 	--replicas=2				\
+	--erasure_code				\
 	"${ktest_scratch_dev[@]}"
 
     devs="$(join_by : "${ktest_scratch_dev[@]}")"
-    mount -t bcachefs -o erasure_code $devs /mnt
+    mount -t bcachefs $devs /mnt
 
     bcachefs_antagonist
 

@@ -821,11 +821,8 @@ test_rereplicate()
 
     dd if=/dev/zero of=/mnt/test bs=1M count=1024 oflag=direct
 
-    umount /mnt
-    mount -t bcachefs -o metadata_replicas=2,data_replicas=2 ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
-
-    #echo 2 > /sys/fs/bcachefs/*/options/data_replicas
-    #echo 2 > /sys/fs/bcachefs/*/options/metadata_replicas
+    echo 2 > /sys/fs/bcachefs/*/options/metadata_replicas
+    echo 2 > /sys/fs/bcachefs/*/options/data_replicas
 
     bcachefs data rereplicate /mnt
 
@@ -1051,7 +1048,7 @@ test_replicas_gc()
     umount /mnt
 
     # test remount:
-    mount -t bcachefs -o fix_errors,erasure_code $devs /mnt
+    mount -t bcachefs $devs /mnt
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[@]}
