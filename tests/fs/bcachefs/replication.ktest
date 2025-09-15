@@ -1161,6 +1161,11 @@ do_scrub()
     if $offline; then
 	bcachefs device offline -f /dev/vdb
     fi
+    bcachefs data scrub /mnt || true
+
+    echo "Second scrub"
+
+    #perf record -a -o /root/perf.data -e bcachefs:error_throw --
     bcachefs data scrub /mnt
     umount /mnt
 
