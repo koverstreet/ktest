@@ -334,13 +334,14 @@ test_concurrent_all_device_removal()
     set_watchdog 120
 
     run_quiet "" bcachefs format -f			\
-       --label=ssd.ssd1 ${ktest_scratch_dev[0]}		\
-       --label=ssd.ssd2 ${ktest_scratch_dev[1]}		\
-       --label=hdd.hdd1 ${ktest_scratch_dev[2]}		\
-       --label=hdd.hdd2 ${ktest_scratch_dev[3]}		\
-       --metadata_replicas=3 \
-       --data_replicas=3 \
-       --promote_target=ssd
+	--label=ssd.ssd1 ${ktest_scratch_dev[0]}	\
+	--label=ssd.ssd2 ${ktest_scratch_dev[1]}	\
+	--label=hdd.hdd1 ${ktest_scratch_dev[2]}	\
+	--label=hdd.hdd2 ${ktest_scratch_dev[3]}	\
+	--replicas=2					\
+	--foreground_target=ssd				\
+	--promote_target=ssd				\
+	--background_target=hdd
 
     mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
 
