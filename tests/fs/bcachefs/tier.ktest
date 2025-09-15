@@ -249,10 +249,6 @@ test_device_remove()
 	--background_target=hdd
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
-    bcachefs device resize-journal ${ktest_scratch_dev[0]} 1512M
-    bcachefs device resize-journal ${ktest_scratch_dev[1]} 1512M
-    bcachefs device resize-journal ${ktest_scratch_dev[2]} 1512M
-    bcachefs device resize-journal ${ktest_scratch_dev[3]} 1512M
 
     run_fio_randrw|tail -n200 &
 
