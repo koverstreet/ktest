@@ -402,7 +402,7 @@ test_read_corrupt()
 
     umount /mnt
 
-    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
@@ -416,22 +416,23 @@ test_btree_read_corrupt()
        --label=ssd.ssd2 ${ktest_scratch_dev[1]}		\
        --label=hdd.hdd1 ${ktest_scratch_dev[2]}		\
        --label=hdd.hdd2 ${ktest_scratch_dev[3]}		\
-       --metadata_replicas=3 \
-       --data_replicas=3 \
-       --promote_target=ssd
+       --replicas=2					\
+       --foreground_target=ssd				\
+       --promote_target=ssd				\
+       --background_target=hdd
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     run_fio_randrw
     umount /mnt
 
     echo 8 > /sys/module/bcachefs/parameters/btree_read_corrupt_ratio
-    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     echo 0 > /sys/module/bcachefs/parameters/btree_read_corrupt_ratio
 
     dd if=/mnt/fiotest of=/dev/null bs=1M
     umount /mnt
 
-    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
     check_bcachefs_leaks
     check_bcachefs_counters ${ktest_scratch_dev[0]}
 }
