@@ -24,15 +24,15 @@ run_basic_tiering_test()
 
 test_tiering_torture()
 {
-    run_quiet "" bcachefs format -f		\
-	--block_size=4k				\
-	--bucket_size=8M				\
-	--label=ssd.ssd1 ${ktest_scratch_dev[0]}		\
-	--label=ssd.ssd2 ${ktest_scratch_dev[1]}		\
-	--label=hdd.hdd1 ${ktest_scratch_dev[2]}		\
-	--label=hdd.hdd2 ${ktest_scratch_dev[3]}		\
-	--foreground_target=ssd			\
-	--promote_target=ssd			\
+    run_quiet "" bcachefs format -f			\
+	--block_size=4k					\
+	--bucket_size=2M				\
+	--label=ssd.ssd1 ${ktest_scratch_dev[0]}	\
+	--label=ssd.ssd2 ${ktest_scratch_dev[1]}	\
+	--label=hdd.hdd1 ${ktest_scratch_dev[2]}	\
+	--label=hdd.hdd2 ${ktest_scratch_dev[3]}	\
+	--foreground_target=ssd				\
+	--promote_target=ssd				\
 	--background_target=hdd
 
     mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]}:${ktest_scratch_dev[3]} /mnt
