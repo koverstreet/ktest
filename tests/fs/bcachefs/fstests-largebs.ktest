@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 
-export MKFS_OPTIONS="--errors=ro --block_size=16k"
+# bs=16k and btree_node_size=64k breaks at shutdown time
+export MKFS_OPTIONS="--errors=ro --block_size=16k --btree_node_size=128k"
 
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/fstests.ktest
