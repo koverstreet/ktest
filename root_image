@@ -87,7 +87,7 @@ PACKAGES=(kexec-tools less psmisc openssh-server curl		\
 PACKAGES+=(build-essential make gcc g++ clang)
 PACKAGES+=(autoconf automake autopoint bison)
 PACKAGES+=(cargo mold)
-PACKAGES+=(devscripts debhelper)
+PACKAGES+=(devscripts debhelper sbuild dh-sequence-dkms dkms)
 
 # stress testing:
 PACKAGES+=(fio dbench bonnie++ fsmark)
