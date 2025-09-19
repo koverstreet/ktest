@@ -22,8 +22,9 @@ checkdep fallocate util-linux
 checkdep mkfs.ext4 e2fsprogs
 checkdep curl 
 
-IMAGE_SIZE="10G"
+IMAGE_SIZE="16G"
 MIRROR=https://deb.debian.org/debian/
+RELEASE=sid
 
 usage()
 {
@@ -368,7 +369,7 @@ cmd_create()
 	--exclude=$(join_by , "${EXCLUDE[@]}")		\
 	--no-merged-usr					\
 	--foreign					\
-	sid "$MNT" "$MIRROR"
+	$RELEASE "$MNT" "$MIRROR"
     mkdir -p "$MNT"/etc/dpkg/dpkg.cfg.d/
     echo force-unsafe-io > "$MNT"/etc/dpkg/dpkg.cfg.d/dpkg-unsafe
 
