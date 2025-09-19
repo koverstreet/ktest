@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+# migrate tests:
+require-kernel-config BLK_DEV_WRITE_MOUNTED
+
+config-scratch-devs 8G
+config-mem 8G
+
+# build a filesystem from a source
+
+build_from_fs()
+{
+    set_watchdog 180
+
+    prepare_source_fs $1
+
+    bcachefs format -f --source=/mnt ${ktest_scratch_dev[1]}
+
+    echo "Attempting to mount bcachefs filesystem"
+
+    if true; then
+	mkdir -p /mnt2
+	mount -t bcachefs -o noexcl,nochanges,ro ${ktest_scratch_dev[1]} /mnt2
+	verify_trees_equal /mnt /mnt2
+	umount /mnt2
+	echo "rsync passed"
+    fi
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[1]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[1]}
+}
+
+test_build_from_ext4()
+{
+    build_from_fs ext4
+}
+
+require-kernel-config XFS_FS
+test_build_from_xfs()
+{
+    build_from_fs xfs
+}
+
+require-kernel-config BTRFS_FS
+test_build_from_btrfs()
+{
+    build_from_fs btrfs
+}
+
+test_build_from_bcachefs()
+{
+    build_from_fs bcachefs
+}
+
+# migrate from other filesystems in place:
+
+migrate_from_fs()
+{
+    local fstype=$1
+
+    set_watchdog 180
+
+    prepare_source_fs $fstype
+
+    bcachefs migrate				\
+	--encrypted				\
+	--no_passphrase				\
+	-F -f /mnt | tee /root/migratelog
+    offset=$(grep -oE 'sb=[[:digit:]]+' /root/migratelog|head -n1|sed -e 's/sb=//')
+
+    umount /mnt
+    fsck.$fstype -n ${ktest_scratch_dev[0]}
+
+    echo "Attempting to mount bcachefs filesystem with superblock offset $offset"
+
+    if true; then
+	mkdir -p /mnt2
+	mount -t bcachefs -o noexcl,nochanges,ro,sb=$offset ${ktest_scratch_dev[0]} /mnt2
+
+	rsync	--archive			\
+	    --acls				\
+	    --xattrs				\
+	    --checksum				\
+	    --hard-links			\
+	    --exclude=/bcachefs			\
+	    --dry-run				\
+	    --itemize-changes		 	\
+	    /mnt/ /mnt2/ > /root/rsynclog-migrate
+
+	check_rsync_log /root/rsynclog-migrate
+
+	umount /mnt2
+	echo "rsync passed"
+    fi
+
+    mount -t bcachefs -o sb=$offset ${ktest_scratch_dev[0]} /mnt
+    umount /mnt
+
+    echo "Creating default superblock"
+    bcachefs migrate-superblock -d ${ktest_scratch_dev[0]} -o $offset
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    rm /mnt/old_migrated_filesystem
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_migrate_from_ext4()
+{
+    migrate_from_fs ext4
+}
+
+require-kernel-config XFS_FS
+test_migrate_from_xfs()
+{
+    migrate_from_fs xfs
+}
+
+#require-kernel-config BTRFS_FS
+# requires FIEMAP improvements
+d_test_migrate_from_btrfs()
+{
+    migrate_from_fs btrfs
+}
+
+d_test_migrate_from_bcachefs()
+{
+    migrate_from_fs bcachefs
+}
