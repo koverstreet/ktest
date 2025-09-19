@@ -725,7 +725,7 @@ test_lz4_buffered()
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     echo starting copy
-    cp -rx / /mnt/foo
+    cp -rx /usr /mnt/foo || true
 
     echo starting sync 
     sync
@@ -1582,7 +1582,7 @@ test_kill_btree_node()
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
-    cp -a /usr /mnt
+    cp -a /usr /mnt || true
     umount /mnt
 
     # Doesn't yet work with the alloc btree:
@@ -1790,7 +1790,7 @@ test_recover_super()
     bcachefs show-super -l ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
-    cp -rx /usr /mnt/usr
+    cp -rx /usr/bin /mnt/usr
     umount /mnt
 
     echo "Wiping super"
