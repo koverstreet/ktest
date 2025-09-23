@@ -7,7 +7,6 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../fstests.sh
 
-require-kernel-config BCACHEFS_POSIX_ACL
 require-kernel-config BCACHEFS_QUOTA
 require-kernel-config QUOTA
 
