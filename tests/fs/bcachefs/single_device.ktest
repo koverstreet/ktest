@@ -1569,11 +1569,16 @@ test_dump()
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
-
-    touch /mnt/a
-    touch /mnt/b
+    cp -r /usr/bin /mnt
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
     umount /mnt
-    bcachefs dump -o /tmp/sdb.qcow2 ${ktest_scratch_dev[0]}
+
+    bcachefs dump -o /tmp/dump ${ktest_scratch_dev[0]}
+    bcachefs undump /tmp/dump.qcow2
+
+    bcachefs fsck -ny /tmp/dump
+
+    rm /tmp/dump*
 }
 
 test_kill_btree_node()
