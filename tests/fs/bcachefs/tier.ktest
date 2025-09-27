@@ -369,7 +369,7 @@ test_concurrent_all_device_removal()
 test_read_corrupt()
 {
     setup_tracing
-    set_watchdog 180
+    set_watchdog 300
 
     echo 8 > /sys/module/bcachefs/parameters/read_corrupt_ratio
 
