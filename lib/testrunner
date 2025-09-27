@@ -25,6 +25,9 @@ ln -sf $ktest_out /ktest-out
 mkdir -p $(dirname $home)
 ln -sf /host/$home $home
 
+rm -rf /root/.cargo
+ln -s $HOME/.cargo /root/.cargo
+
 ktest_no_cleanup_tmpdir=1
 
 log_verbose "Testrunner starting"
