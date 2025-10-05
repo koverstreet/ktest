@@ -436,7 +436,6 @@ pub struct TestStats {
 
 use durations_capnp::durations;
 pub fn test_stats(durations: Option<&[u8]>, test: &str, subtest: &str) -> Option<TestStats> {
-
     if let Some(d) = durations {
         let mut d = d;
         let d_reader = serialize::read_message_from_flat_slice(&mut d, capnp::message::ReaderOptions::new()).ok();
@@ -465,7 +464,7 @@ pub fn test_stats(durations: Option<&[u8]>, test: &str, subtest: &str) -> Option
 
             // why does this happen? */
             if d_m_test.is_err() {
-                eprintln!("no test at idx {}/){}", m, d.len());
+                eprintln!("error binary searching for test stats: no test stats idx {}/{}", m, d.len());
                 return None;
             }
 
