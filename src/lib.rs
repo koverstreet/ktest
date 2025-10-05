@@ -462,17 +462,17 @@ pub fn test_stats(durations: Option<&[u8]>, test: &str, subtest: &str) -> Option
 
         let mut l = 0;
         let mut r = d.len();
-        let mut iters = 0;
 
         while l < r {
             let m = l + (r - l) / 2;
+
             let d_m = d.get(m);
             let d_m_test = d_m.get_test();
 
             // why does this happen? */
             if d_m_test.is_err() {
-                eprintln!("error binary searching for test stats: error {:?} at idx {}/{} iters {}",
-                    d_m_test, m, d.len(), iters);
+                eprintln!("error binary searching for test stats: error {:?} at idx {}/{}",
+                    d_m_test, m, d.len());
                 return None;
             }
 
@@ -481,15 +481,13 @@ pub fn test_stats(durations: Option<&[u8]>, test: &str, subtest: &str) -> Option
             use std::cmp::Ordering::*;
             match full_test.cmp(d_m_test) {
                 Less    => r = m,
+                Greater => l = m + 1,
                 Equal   => return Some(TestStats {
                     nr:         d_m.get_nr(),
                     passed:     d_m.get_passed(),
                     failed:     d_m.get_failed(),
                     duration:   d_m.get_duration() }),
-                Greater => l = m,
             }
-
-            iters += 1;
         }
     }
 
