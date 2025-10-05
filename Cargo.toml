@@ -22,7 +22,7 @@ memoize = "0.3.1"
 glob = "0.3.0"
 clap = { version = "4.0.32", features = ["derive"] }
 file-lock = "2.1.6"
-capnp = "0.19.*"
+capnp = "0.21.*"
 anyhow = "1.0.71"
 chrono = "0.4.26"
 memmap = "0.7.0"
@@ -30,4 +30,4 @@ serde_json = "1.0.132"
 reqwest = { version = "0.12.9", features = ["blocking"] }
 
 [build-dependencies]
-capnpc = "0.19.*"
+capnpc = "0.21.*"

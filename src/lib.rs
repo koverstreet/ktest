@@ -438,7 +438,13 @@ use durations_capnp::durations;
 pub fn test_stats(durations: Option<&[u8]>, test: &str, subtest: &str) -> Option<TestStats> {
     if let Some(d) = durations {
         let mut d = d;
-        let d_reader = serialize::read_message_from_flat_slice(&mut d, capnp::message::ReaderOptions::new()).ok();
+        
+        let options = capnp::message::ReaderOptions {
+            nesting_limit: 64,
+            traversal_limit_in_words: Some(1024 * 1024 * 64), //  64 MiB limit
+        };
+
+        let d_reader = serialize::read_message_from_flat_slice(&mut d, options).ok();
         let d = d_reader.as_ref().map(|x| x.get_root::<durations::Reader>().ok()).flatten();
         if d.is_none() {
             return None;
@@ -456,6 +462,7 @@ pub fn test_stats(durations: Option<&[u8]>, test: &str, subtest: &str) -> Option
 
         let mut l = 0;
         let mut r = d.len();
+        let mut iters = 0;
 
         while l < r {
             let m = l + (r - l) / 2;
@@ -464,7 +471,8 @@ pub fn test_stats(durations: Option<&[u8]>, test: &str, subtest: &str) -> Option
 
             // why does this happen? */
             if d_m_test.is_err() {
-                eprintln!("error binary searching for test stats: no test stats idx {}/{}", m, d.len());
+                eprintln!("error binary searching for test stats: error {:?} at idx {}/{} iters {}",
+                    d_m_test, m, d.len(), iters);
                 return None;
             }
 
@@ -480,6 +488,8 @@ pub fn test_stats(durations: Option<&[u8]>, test: &str, subtest: &str) -> Option
                     duration:   d_m.get_duration() }),
                 Greater => l = m,
             }
+
+            iters += 1;
         }
     }
 
