@@ -187,6 +187,7 @@ require-kernel-config TMPFS_XATTR
 require-kernel-config TMPFS_QUOTA
 require-kernel-config INOTIFY_USER
 require-kernel-config CONFIGFS_FS	# systemd
+require-kernel-config HUGETLBFS		# xfstests
 
 # Root filesystem:
 require-kernel-config EXT4_FS
