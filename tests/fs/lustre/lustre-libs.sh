@@ -148,6 +148,7 @@ function load_zfs_modules()
 function require-lustre-kernel-config()
 {
     # Minimal config required for Lustre to build
+    require-kernel-config TRANSPARENT_HUGEPAGE
     require-kernel-config QUOTA
     require-kernel-config KEYS
     require-kernel-config NETWORK_FILESYSTEMS
@@ -156,6 +157,15 @@ function require-lustre-kernel-config()
     require-kernel-config BITREVERSE
     require-kernel-config CRYPTO_DEFLATE
     require-kernel-config ZLIB_DEFLATE
+
+    # More tracing support!
+    require-kernel-config BPF_SYSCALL
+    require-kernel-config DEBUG_INFO_BTF
+    require-kernel-config DEBUG_INFO_BTF_MODULES
+    require-kernel-config BPF_JIT
+
+    # Profiling
+    require-kernel-config CONFIG_MEM_ALLOC_PROFILING
 }
 
 function require-lustre-debug-kernel-config()
