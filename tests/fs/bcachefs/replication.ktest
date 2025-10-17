@@ -1148,13 +1148,15 @@ do_scrub()
 
     set_watchdog 60
     run_quiet "" bcachefs format -f		\
-	--replicas=2				\
+	--encrypted --no_passphrase		\
+	--replicas=3				\
 	${ktest_scratch_dev[0]}			\
 	${ktest_scratch_dev[1]}			\
 	${ktest_scratch_dev[2]}
     mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
 
     dd if=/dev/urandom of=/mnt/test bs=1M count=1000 oflag=direct
+    md5sum /mnt/test > /root/md5sum.before
 
     dd if=/dev/zero of=/dev/vdd bs=1M seek=2 count=100 oflag=direct || true
 
@@ -1162,6 +1164,9 @@ do_scrub()
 	bcachefs device offline -f /dev/vdb
     fi
     bcachefs data scrub /mnt || true
+
+    md5sum /mnt/test > /root/md5sum.after
+    diff /root/md5sum.before /root/md5sum.after
 
     echo "Second scrub"
 
@@ -1181,6 +1186,37 @@ test_scrub()
 test_scrub_offline()
 {
     do_scrub true
+}
+
+test_self_healing()
+{
+    set_watchdog 60
+    run_quiet "" bcachefs format -f		\
+	--encrypted --no_passphrase		\
+	--replicas=2				\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}			\
+	${ktest_scratch_dev[2]}
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
+
+    dd if=/dev/urandom of=/mnt/test bs=1M count=1 oflag=direct
+    md5sum /mnt/test > /root/md5sum.before
+
+    dd if=/dev/zero of=${ktest_scratch_dev[2]} bs=1M seek=2 count=100 oflag=direct || true
+
+    echo  2 > /sys/module/bcachefs/parameters/force_read_device
+    dd if=/mnt/test of=/dev/null bs=1M iflag=direct
+    echo -1 > /sys/module/bcachefs/parameters/force_read_device
+
+    md5sum /mnt/test > /root/md5sum.after
+    diff /root/md5sum.before /root/md5sum.after
+
+    # Should find nothing to correct:
+    bcachefs data scrub /mnt
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 main "$@"
