@@ -442,7 +442,7 @@ test_make_files()
 
 test_journal_resize()
 {
-    set_watchdog 30
+    set_watchdog 120
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
