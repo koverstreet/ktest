@@ -195,10 +195,6 @@ do_remove_test()
 	echo -n "evacuating ${ktest_scratch_dev[0]}... "
 	bcachefs device evacuate	${ktest_scratch_dev[0]}
 	echo "done"
-
-	echo -n "evacuating ${ktest_scratch_dev[0]}... "
-	bcachefs device evacuate	${ktest_scratch_dev[0]}
-	echo "done"
     fi
 
     bcachefs fs usage -h /mnt
@@ -824,7 +820,11 @@ test_rereplicate()
     echo 2 > /sys/fs/bcachefs/*/options/metadata_replicas
     echo 2 > /sys/fs/bcachefs/*/options/data_replicas
 
-    bcachefs data rereplicate /mnt
+    if [[ `cat /sys/module/bcachefs/parameters/version` -lt 1057 ]]; then
+	bcachefs data rereplicate /mnt
+    else
+	bcachefs reconcile wait -t replicas /mnt
+    fi
 
     bcachefs fs usage -h /mnt
     umount /mnt
@@ -854,10 +854,12 @@ test_rereplicate2()
     echo ":: set replicas=2 and run rereplicate"
     echo 2 > /sys/fs/bcachefs/*/options/data_replicas
     echo 2 > /sys/fs/bcachefs/*/options/metadata_replicas
-    bcachefs data rereplicate /mnt
 
-    # echo ":: running rereplicate a second time seems to guarantee all data has durability=2"
-    # bcachefs data rereplicate /mnt
+    if [[ `cat /sys/module/bcachefs/parameters/version` -lt 1057 ]]; then
+	bcachefs data rereplicate /mnt
+    else
+	bcachefs reconcile wait -t replicas /mnt
+    fi
 
     echo ":: all data should be replicated to both devices now, verifying..."
     local fs_usage_out=$(bcachefs fs usage -h --all /mnt)
@@ -1069,7 +1071,11 @@ test_replace_replica()
 
     bcachefs device set-state --force failed ${ktest_scratch_dev[1]}
 
-    bcachefs data rereplicate /mnt
+    if [[ `cat /sys/module/bcachefs/parameters/version` -lt 1057 ]]; then
+	bcachefs data rereplicate /mnt
+    else
+	bcachefs reconcile wait -t replicas /mnt
+    fi
 
     umount /mnt
 
