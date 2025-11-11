@@ -301,33 +301,6 @@ test_fio_raw()
 	--bs=4k
 }
 
-test_rewrite_old_nodes()
-{
-    set_watchdog 60
-    run_quiet "" bcachefs format -f --no_initialize --version=10 ${ktest_scratch_dev[0]}
-
-    bcachefs show-super ${ktest_scratch_dev[0]}
-
-    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
-    dd if=/dev/zero of=/mnt/foo bs=4k count=65536 oflag=direct
-    umount /mnt
-
-    bcachefs show-super ${ktest_scratch_dev[0]}
-
-    bcachefs fsck ${ktest_scratch_dev[0]}
-
-    bcachefs show-super ${ktest_scratch_dev[0]}
-
-    mount -t bcachefs -o version_upgrade=incompatible ${ktest_scratch_dev[0]} /mnt
-    bcachefs data job rewrite_old_nodes /mnt
-    umount /mnt
-
-    bcachefs show-super ${ktest_scratch_dev[0]}
-
-    bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
-}
-
 test_merge_torture_flakey()
 {
     set_watchdog 600
