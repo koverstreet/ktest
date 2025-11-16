@@ -26,7 +26,7 @@ test_stress_ng()
     set_watchdog 300
     setup_tracing 'bcachefs:*'
 
-    run_quiet "" bcachefs format --no_initialize --version=11 -f ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     cd /mnt
     stress-ng  -v -t 60 --class filesystem --all 1 || true
