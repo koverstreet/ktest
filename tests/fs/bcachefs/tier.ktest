@@ -206,6 +206,8 @@ test_tiering_variable_buckets()
 
 test_tiering_variable_buckets_replicas()
 {
+    setup_tracing 'bcachefs:data_update bcachefs:data_update_key_fail'
+
     run_basic_fio_test					\
 	--replicas=2					\
 	--label=ssd --bucket_size=32k	${ktest_scratch_dev[0]}	\
@@ -240,6 +242,8 @@ test_device_add()
 test_device_remove()
 {
     set_watchdog 240
+    setup_tracing 'bcachefs:trans_restart_relock'
+
     run_quiet "" bcachefs format -f					\
 	--replicas=2							\
 	--label=ssd ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}	\
@@ -368,8 +372,10 @@ test_concurrent_all_device_removal()
 
 test_read_corrupt()
 {
-    setup_tracing
+    [[ ! -f /sys/module/bcachefs/parameters/read_corrupt_ratio ]] && return 0
+
     set_watchdog 300
+    setup_tracing
 
     echo 8 > /sys/module/bcachefs/parameters/read_corrupt_ratio
 
@@ -408,6 +414,8 @@ test_read_corrupt()
 
 test_btree_read_corrupt()
 {
+    [[ ! -f /sys/module/bcachefs/parameters/btree_read_corrupt_ratio ]] && return 0
+
     setup_tracing
     set_watchdog 180
 
