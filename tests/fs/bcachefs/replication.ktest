@@ -355,7 +355,7 @@ test_device_set_state()
 
     sleep 1
 
-    for state in ro failed spare; do
+    for state in ro evacuating spare; do
 	echo "setting state $state"
 	bcachefs device set-state --force $state    ${ktest_scratch_dev[1]}
 
@@ -1079,7 +1079,7 @@ test_replace_replica()
 
     bcachefs device add -f /mnt ${ktest_scratch_dev[2]}
 
-    bcachefs device set-state --force failed ${ktest_scratch_dev[1]}
+    bcachefs device set-state --force evacuating ${ktest_scratch_dev[1]}
 
     if [[ `cat /sys/module/bcachefs/parameters/version` -lt 1057 ]]; then
 	bcachefs data rereplicate /mnt

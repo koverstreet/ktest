@@ -300,7 +300,7 @@ test_device_failed()
 
     sleep 1
 
-    bcachefs device set-state -f failed ${ktest_scratch_dev[0]}
+    bcachefs device set-state -f evacuating ${ktest_scratch_dev[0]}
 
     if ! wait $fiopid; then
 	cat "$fioout"
