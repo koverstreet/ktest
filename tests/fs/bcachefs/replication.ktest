@@ -708,7 +708,7 @@ test_read_corrupt_replicas()
 
 test_write_corrupt()
 {
-    setup_tracing
+    [[ ! -f /sys/module/bcachefs/parameters/write_corrupt_ratio ]] && return 0
     set_watchdog 180
 
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
@@ -736,8 +736,10 @@ test_write_corrupt()
 
 test_evacuate_corrupted()
 {
-    setup_tracing
+    [[ ! -f /sys/module/bcachefs/parameters/write_corrupt_ratio ]] && return 0
+
     set_watchdog 180
+    setup_tracing
 
     run_quiet "" bcachefs format -f --replicas=2	\
 	${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
@@ -1206,6 +1208,8 @@ test_scrub_offline()
 
 test_self_healing()
 {
+    [[ ! -f /sys/module/bcachefs/parameters/force_read_device ]] && return 0
+
     set_watchdog 60
     run_quiet "" bcachefs format -f		\
 	--encrypted --no_passphrase		\
