@@ -95,6 +95,10 @@ else
 	eval $(cat /host/tmp/ktest-lustre.env)
     else
 	FSTYPE="wbcfs"
+	FSNAME=""
+	MGSNID=""
+	TESTSUITE=""
+	ONLY=""
     fi
 fi
 set -u
