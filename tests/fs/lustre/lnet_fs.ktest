@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0
+
+#
+# Copyright (c) 2025, Amazon and/or its affiliates. All rights reserved.
+# Use is subject to license terms.
+#
+
+#
+# Setup a local LNet block device (for network testing) and
+# format it with a filesystem.
+#
+# Author: Timothy Day <timday@amazon.com>
+#
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/lustre-libs.sh"
+
+require-lustre-kernel-config
+require-lustre-debug-kernel-config
+
+config-mem 10G
+config-timeout 60
+
+test_llmount()
+{
+    load_lustre_modules
+
+    "$LNETCTL" net show -v
+
+    insmod "$LUSTRE/../lnet/lnet_io/lnet_target.ko"
+    sleep 1
+    insmod "$LUSTRE/../lnet/lnet_io/lnet_host.ko"
+
+    mkdir -p /mnt/lnet_fs
+    mkfs -t ext4 /dev/blkram
+    mount /dev/blkram /mnt/lnet_fs
+
+    cd /mnt/lnet_fs
+
+    fio --name=bulk_write_test \
+	--size=10M \
+	--bs=1M \
+	--rw=write \
+	--numjobs=4 \
+	--direct=1 \
+	--verify=crc32
+
+    "$LNETCTL" net show -v
+
+    if [[ "$ktest_interactive" != "true" ]]; then
+	rmmod lnet_host
+	rmmod lnet_target
+    fi
+}
+
+main "$@"

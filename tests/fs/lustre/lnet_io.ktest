@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0
+
+#
+# Copyright (c) 2025, Amazon and/or its affiliates. All rights reserved.
+# Use is subject to license terms.
+#
+
+#
+# Setup a local LNet block device (for network testing).
+#
+# Author: Timothy Day <timday@amazon.com>
+#
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/lustre-libs.sh"
+
+require-git https://github.com/axboe/fio "../../fio"
+
+require-lustre-kernel-config
+
+config-mem 32G
+config-timeout 60
+
+test_llmount()
+{
+    run_quiet "configuring $(basename $i)" "$ktest_dir/tests/fio/configure"
+    run_quiet "building $(basename $i)" make -j "$ktest_cpus" -C "$ktest_dir/tests/fio"
+
+    load_lustre_modules
+
+    configure_lnet "eth0"
+
+    insmod "$LUSTRE/../lnet/lnet_blk/lnet_target.ko" size_mb=1000
+    sleep 1
+    insmod "$LUSTRE/../lnet/lnet_blk/lnet_host.ko" host_nid="0@lo" target_nid="0@lo" size_mb=1000
+
+    lustre_performance_tuning
+
+    # Test for batching...
+    "$ktest_dir/tests/fio/t/io_uring" -d1024 -s32 -r5 /dev/lnetblk
+
+    # Regular IO test...
+    fio --name=randwrite \
+	--ioengine=io_uring \
+	--iodepth=1024 \
+	--rw=randwrite \
+	--direct=1 \
+	--size=100M \
+	--bs=4k \
+	--numjobs=1 \
+	--group_reporting \
+	--time_based \
+	--runtime=5 \
+	--filename=/dev/lnetblk
+
+    "$LNETCTL" net show -v
+
+    if [[ "$ktest_interactive" != "true" ]]; then
+	rmmod lnet_host
+	rmmod lnet_target
+    fi
+}
+
+main "$@"

@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0
+
+#
+# Copyright (c) 2025, Amazon and/or its affiliates. All rights reserved.
+# Use is subject to license terms.
+#
+
+#
+# Run xfstests on Lustre...
+#
+# Author: Timothy Day <timday@amazon.com>
+#
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/lustre-libs.sh"
+
+require-git https://github.com/kdave/xfstests.git "../../xfstests"
+
+require-lustre-kernel-config
+require-lustre-debug-kernel-config
+
+config-mem 10G
+config-timeout 60
+
+test_fstests()
+{
+    run_quiet "building $(basename $i)" make -j "$ktest_cpus" -C "$ktest_dir/tests/xfstests"
+
+    export FSTYP=lustre
+    export TEST_DIR="/mnt/lustreA"
+    export TEST_DEV="$(hostname -i)@tcp:/lustre/test"
+    export SCRATCH_MNT="/mnt/lustreB"
+    export SCRATCH_DEV="$(hostname -i)@tcp:/lustre/scratch"
+    export RESULT_BASE=/ktest-out/xfstests
+    export LOGGER_PROG=true
+
+    setup_lustrefs
+    mkdir -p /mnt/lustre/test
+    mkdir -p /mnt/lustre/scratch
+    mkdir -p /mnt/lustreA
+    mkdir -p /mnt/lustreB
+    umount /mnt/lustre
+    touch /sbin/mkfs.lustre
+    echo "#!/bin/bash" >> /sbin/mkfs.lustre
+    chmod +x /sbin/mkfs.lustre
+
+    cd "$ktest_dir/tests/xfstests"
+    ./check
+}
+
+main "$@"
