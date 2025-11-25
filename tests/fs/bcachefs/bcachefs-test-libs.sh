@@ -220,7 +220,8 @@ get_slowpath_counters()
 _check_bcachefs_counters()
 {
     local dev=$1
-    local nr_commits=$(bcachefs show-super -f counters "$dev"|awk '/transaction_commit/ {print $2}')
+    local nr_commits=$(bcachefs show-super --field-only counters "$dev"|awk '/\<transaction_commit\>/ {print $2}')
+    local nr_data_update=$(bcachefs show-super --field-only counters "$dev"|awk '/\<data_update\>/ {print $2}')
     local ratio=20
     local ret=0
 
@@ -239,6 +240,10 @@ _check_bcachefs_counters()
 	local nr="${linea[1]}"
 
 	local max_fail=$((nr_commits / ratio))
+
+	if echo $event|grep -q data_update; then
+	    max_fail=$((nr_data_update / ratio))
+	fi
 
 	max_fail=$((max_fail + 100))
 
@@ -263,6 +268,7 @@ _check_bcachefs_counters()
     if [[ $ret = 1 ]]; then
 	echo "Max failed events:   $max_fail"
 	echo "Transaction commits: $nr_commits"
+	echo "Data update sectors: $nr_data_update"
     fi
 
     # some fstests do strange things that will cause this to fail - we don't particularly care:
