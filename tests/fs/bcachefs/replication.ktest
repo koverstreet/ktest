@@ -169,7 +169,7 @@ do_remove_test()
     offline=$1
     evacuate=$2
 
-    setup_tracing 'bcachefs:*'
+    setup_tracing `bcachefs_slowpath_tracepoints`
 
     run_quiet "" bcachefs format -f		\
 	--replicas=2				\
@@ -247,7 +247,7 @@ test_device_evacuate_online()
 test_device_add()
 {
     set_watchdog 240
-    #setup_tracing 'bcachefs:*'
+    setup_tracing `bcachefs_slowpath_tracepoints`
 
     run_quiet "" bcachefs format -f		\
 	--block_size=4k				\
@@ -537,7 +537,7 @@ do_replicas_errors_test()
     error_type=$1
 
     set_watchdog 180
-    setup_tracing 'bcachefs:*'
+    setup_tracing `bcachefs_slowpath_tracepoints`
 
     local p=/sys/module/bcachefs/parameters/verify_all_btree_replicas
     [[ -f $p ]] && echo 1 > $p
@@ -915,7 +915,7 @@ test_rereplicate2()
 
 disabled_test_device_add_faults()
 {
-    setup_tracing 'bcachefs:*'
+    setup_tracing `bcachefs_slowpath_tracepoints`
 
     run_quiet "" bcachefs format -f		\
 	--errors=remount-ro			\
@@ -939,7 +939,7 @@ disabled_test_device_add_faults()
 test_striping()
 {
     set_watchdog 60
-    setup_tracing 'bcachefs:*'
+    setup_tracing `bcachefs_slowpath_tracepoints`
 
     if false; then
 	run_quiet "" bcachefs format -f		\

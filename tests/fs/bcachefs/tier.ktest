@@ -142,7 +142,7 @@ test_promote()
 
 test_setattr()
 {
-    setup_tracing 'bcachefs:*'
+    setup_tracing `bcachefs_slowpath_tracepoints`
 
     run_quiet "" bcachefs format -f				\
 	--durability=0 --label=ssd ${ktest_scratch_dev[0]}	\

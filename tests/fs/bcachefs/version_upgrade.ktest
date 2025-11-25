@@ -9,8 +9,8 @@ config-image	$(dirname $(readlink -e ${BASH_SOURCE[0]}))/version-11.2-image
 
 test_upgrade()
 {
-    setup_tracing 'bcachefs:*'
     set_watchdog 60
+    setup_tracing `bcachefs_slowpath_tracepoints`
 
     bcachefs show-super /dev/vdb
     #bcachefs fsck /dev/vdb || true

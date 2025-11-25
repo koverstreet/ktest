@@ -24,7 +24,7 @@ test_wipe_btrfs()
 test_stress_ng()
 {
     set_watchdog 300
-    setup_tracing 'bcachefs:*'
+    setup_tracing `bcachefs_slowpath_tracepoints`
 
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
@@ -741,7 +741,7 @@ test_background_compression()
 
 test_rebalance_scan()
 {
-    setup_tracing 'bcachefs:*'
+    setup_tracing `bcachefs_slowpath_tracepoints`
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
@@ -1033,7 +1033,7 @@ d_test_suspend()
 {
     set_watchdog 10
 
-    #setup_tracing 'bcachefs:*'
+    setup_tracing `bcachefs_slowpath_tracepoints`
 
     (
 	p="/sys/power"
@@ -1284,7 +1284,7 @@ verify_trees_equal()
 # we don't currently have fault injection:
 d_test_init_faults()
 {
-    setup_tracing 'bcachefs:*'
+    setup_tracing `bcachefs_slowpath_tracepoints`
 
     run_quiet "" bcachefs format -f		\
 	--errors=remount-ro			\
@@ -1313,7 +1313,7 @@ d_test_init_faults()
 # we don't currently have fault injection:
 d_test_meta_write_faults()
 {
-    setup_tracing 'bcachefs:*'
+    setup_tracing `bcachefs_slowpath_tracepoints`
 
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
 

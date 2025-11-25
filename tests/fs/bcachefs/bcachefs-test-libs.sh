@@ -167,14 +167,24 @@ antagonist_cat_sysfs_debugfs()
     done
 }
 
+bcachefs_slowpath_event_filter()
+{
+    grep  -E '(fail|restart|blocked|full)'|
+	grep -vE '(btree_path|mem_realloced|trans_restart_injected|io_move_write_fail|and_poison|write_buffer_flush)'
+}
+
+bcachefs_slowpath_tracepoints()
+{
+    ls /sys/kernel/tracing/events/bcachefs|bcachefs_slowpath_event_filter
+}
+
 bcachefs_antagonist()
 {
-    # Enable all bcachefs tracepoints - good for test coverage
-    setup_tracing 'bcachefs:*'
+    # Enable tracepoints check_bcachefs_counters will want to see
+    setup_tracing `bcachefs_slowpath_tracepoints`
 
-    # Or alternately, only enable events check_bcachefs_counters will want to dump:
-    #local ev=/sys/kernel/tracing/events/bcachefs/
-    #echo 1|tee "$ev"/*fail*/enable "$ev"/*restart*/enable "$ev"/*blocked*/enable
+    # Enable all bcachefs tracepoints - good for test coverage, but very heavy
+    # setup_tracing bcachefs:*
 
     #echo 1 > /sys/module/bcachefs/parameters/expensive_debug_checks
     #echo 1 > /sys/module/bcachefs/parameters/debug_check_iterators
@@ -203,8 +213,7 @@ get_slowpath_counters()
     local dev=$1
 
     bcachefs show-super --field-only counters "$dev"|
-	grep  -E '(fail|restart|blocked|full)'|
-	grep -vE '(btree_path|mem_realloced|trans_restart_injected|io_move_write_fail|and_poison|write_buffer_flush)'|
+	bcachefs_slowpath_event_filter|
 	grep -v  ' 0$' || true
 }
 
