@@ -1129,6 +1129,7 @@ test_key_type_error()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    bcachefs reset-counters --counter=data_update_fail ${ktest_scratch_dev[0]}
     bcachefs reset-counters --counter=data_update_key_fail ${ktest_scratch_dev[0]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
