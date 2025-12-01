@@ -746,22 +746,24 @@ test_evacuate_corrupted()
     setup_tracing
 
     run_quiet "" bcachefs format -f --replicas=2	\
-	${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+	${ktest_scratch_dev[0]}				\
+	${ktest_scratch_dev[1]}				\
+	${ktest_scratch_dev[2]}
 
-    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     echo 32 > /sys/module/bcachefs/parameters/write_corrupt_ratio
     run_fio_randrw --continue_on_error=io
     echo 0 > /sys/module/bcachefs/parameters/write_corrupt_ratio
 
-    bcachefs device evacuate	--force	${ktest_scratch_dev[1]}
+    bcachefs device evacuate		${ktest_scratch_dev[1]}
     bcachefs device remove	--force ${ktest_scratch_dev[1]}
 
     run_fio_randrw --continue_on_error=io --verify_only=1
 
     umount /mnt
 
-    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
 
     # we expect lots of io_move_start_fail when we're degraded:
     #bcachefs_test_end_checks ${ktest_scratch_dev[0]}
