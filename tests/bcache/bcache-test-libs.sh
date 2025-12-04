@@ -6,6 +6,7 @@
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/../test-libs.sh
 
 require-git http://evilpiepirate.org/git/bcache-tools.git
+require-git http://evilpiepirate.org/git/xfstests.git ../xfstests
 require-make bcache-tools
 
 require-kernel-config MD
@@ -13,8 +14,6 @@ require-kernel-config BCACHE,BCACHE_DEBUG
 require-kernel-config AUTOFS_FS
 
 config-mem 2G
-
-require-make ../../ltp-fsx/
 
 if [[ $ktest_arch = x86 ]]; then
     require-kernel-config CRYPTO_CRC32C_INTEL
@@ -581,12 +580,14 @@ run_bonnie()
 
 run_fsx()
 {
+    run_quiet "building $(basename $i)" make -j $ktest_cpus -C "$ktest_dir/tests/xfstests"
+
     echo "=== start fsx at $(date)"
     numops=$((($ktest_priority + 1) * 300000))
 
     (
         for dev in $DEVICES; do
-            ltp-fsx -N $numops /mnt/$dev/foo &
+            "$ktest_dir/tests/xfstests/ltp/fsx" -N $numops /mnt/$dev/foo &
         done
 
         wait_all
