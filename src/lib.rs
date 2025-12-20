@@ -16,7 +16,7 @@ pub mod users;
 pub use users::Userrc;
 pub use users::RcTestGroup;
 
-pub fn git_get_commit(repo: &git2::Repository, reference: String) -> Result<git2::Commit, git2::Error> {
+pub fn git_get_commit(repo: &git2::Repository, reference: String) -> Result<git2::Commit<'_>, git2::Error> {
     let r = repo.revparse_single(&reference);
     if let Err(e) = r {
         eprintln!("Error from resolve_reference_from_short_name {} in {}: {}", reference, repo.path().display(), e);
