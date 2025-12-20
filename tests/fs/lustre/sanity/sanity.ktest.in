@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0
+
+#
+# Copyright (c) 2024, Amazon and/or its affiliates. All rights reserved.
+# Use is subject to license terms.
+#
+
+#
+# Author: Timothy Day <timday@amazon.com>
+#
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/../lustre-libs.sh"
+
+require-lustre-kernel-config
+require-lustre-debug-kernel-config
+
+config-mem 4G
+config-cpus 4
+config-timeout 60
+
+test_sanity-quick()
+{
+    tests=$(cat "$lustre_pkg_path/lustre/tests/sanity.sh" | grep run_test | awk '{ print $2 }' | xargs echo)
+    echo "${tests[@]}"
+    my_tests=$(split_array "${tests[@]}" BATCH INDEX)
+    echo "${my_tests[@]}"
+    test_list=$(join , ${my_tests[@]})
+    echo $test_list
+
+    setup_lustrefs
+
+    FSTYPE="$FSTYPE" "$lustre_pkg_path/lustre/tests/auster" -v sanity --only $test_list
+
+    cleanup_lustrefs
+}
+
+main "$@"

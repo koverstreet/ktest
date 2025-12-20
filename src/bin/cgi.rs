@@ -1,13 +1,16 @@
+use chrono::Duration;
+use regex::Regex;
 use std::collections::BTreeMap;
 use std::fmt::Write;
-use regex::Regex;
-use chrono::Duration;
 extern crate cgi;
 extern crate querystring;
 
-use ci_cgi::{CiConfig, Userrc, ciconfig_read, TestResultsMap, TestStatus, commitdir_get_results, git_get_commit, workers_get, update_lcov};
+use ci_cgi::{
+    ciconfig_read, commitdir_get_results, git_get_commit, update_lcov, workers_get, CiConfig,
+    TestResultsMap, TestStatus, Userrc,
+};
 
-const STYLESHEET:       &str = "bootstrap.min.css";
+const STYLESHEET: &str = "bootstrap.min.css";
 
 const COMMIT_CSS_JS:    &str =
 "
@@ -94,27 +97,27 @@ const COMMIT_FILTER:    &str =
 
 fn filter_results(r: TestResultsMap, tests_matching: &Regex) -> TestResultsMap {
     r.iter()
-        .filter(|i| tests_matching.is_match(&i.0) )
+        .filter(|i| tests_matching.is_match(&i.0))
         .map(|(k, v)| (k.clone(), *v))
         .collect()
 }
 
 struct Ci {
-    rc:                 CiConfig,
-    repo:               git2::Repository,
-    stylesheet:         String,
-    script_name:        String,
+    rc: CiConfig,
+    repo: git2::Repository,
+    stylesheet: String,
+    script_name: String,
 
-    user:               Option<String>,
-    branch:             Option<String>,
-    commit:             Option<String>,
-    tests_matching:     Regex,
+    user: Option<String>,
+    branch: Option<String>,
+    commit: Option<String>,
+    tests_matching: Regex,
 }
 
 struct CommitResults {
-    id:             String,
-    message:        String,
-    tests:          TestResultsMap,
+    id: String,
+    message: String,
+    tests: TestResultsMap,
 }
 
 fn branch_get_results(ci: &Ci) -> Result<Vec<CommitResults>, String> {
@@ -125,7 +128,7 @@ fn branch_get_results(ci: &Ci) -> Result<Vec<CommitResults>, String> {
 
         CommitResults {
             id,
-            message:    commit.message().unwrap().to_string(),
+            message: commit.message().unwrap().to_string(),
             tests,
         }
     }
@@ -153,8 +156,9 @@ fn branch_get_results(ci: &Ci) -> Result<Vec<CommitResults>, String> {
     }
 
     for commit in walk
-            .filter_map(|i| i.ok())
-            .filter_map(|i| ci.repo.find_commit(i).ok()) {
+        .filter_map(|i| i.ok())
+        .filter_map(|i| ci.repo.find_commit(i).ok())
+    {
         let r = commit_get_results(ci, &commit);
 
         if !r.tests.is_empty() {
@@ -174,7 +178,6 @@ fn branch_get_results(ci: &Ci) -> Result<Vec<CommitResults>, String> {
         }
     }
 
-    
     while !ret.is_empty() && ret[ret.len() - 1].tests.is_empty() {
         ret.pop();
     }
@@ -202,12 +205,16 @@ fn ci_log(ci: &Ci) -> cgi::Response {
 
     writeln!(&mut out, "<!DOCTYPE HTML>").unwrap();
     writeln!(&mut out, "<html><head><title>{}</title></head>", branch).unwrap();
-    writeln!(&mut out, "<link href=\"{}\" rel=\"stylesheet\">", ci.stylesheet).unwrap();
+    writeln!(
+        &mut out,
+        "<link href=\"{}\" rel=\"stylesheet\">",
+        ci.stylesheet
+    )
+    .unwrap();
 
     writeln!(&mut out, "<body>").unwrap();
     writeln!(&mut out, "<div class=\"container\">").unwrap();
     writeln!(&mut out, "<table class=\"table\">").unwrap();
-
 
     if multiple_test_view {
         writeln!(&mut out, "<tr>").unwrap();
@@ -227,7 +234,12 @@ fn ci_log(ci: &Ci) -> cgi::Response {
         for r in &commits {
             if !r.tests.is_empty() {
                 if nr_empty != 0 {
-                    writeln!(&mut out, "<tr> <td> ({} untested commits) </td> </tr>", nr_empty).unwrap();
+                    writeln!(
+                        &mut out,
+                        "<tr> <td> ({} untested commits) </td> </tr>",
+                        nr_empty
+                    )
+                    .unwrap();
                     nr_empty = 0;
                 }
 
@@ -240,16 +252,53 @@ fn ci_log(ci: &Ci) -> cgi::Response {
                 let duration: u64 = r.tests.iter().map(|x| x.1.duration).sum();
 
                 writeln!(&mut out, "<tr>").unwrap();
-                writeln!(&mut out, "<td> <a href=\"{}?user={}&branch={}&commit={}\">{}</a> </td>",
-                         ci.script_name, ci.user.as_ref().unwrap(),
-                         branch, r.id, &r.id.as_str()[..14]).unwrap();
+                writeln!(
+                    &mut out,
+                    "<td> <a href=\"{}?user={}&branch={}&commit={}\">{}</a> </td>",
+                    ci.script_name,
+                    ci.user.as_ref().unwrap(),
+                    branch,
+                    r.id,
+                    &r.id.as_str()[..14]
+                )
+                .unwrap();
                 writeln!(&mut out, "<td> {} </td>", &r.message[..subject_len]).unwrap();
-                writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::Passed)).unwrap();
-                writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::Failed)).unwrap();
-                writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::Notstarted)).unwrap();
-                writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::Notrun)).unwrap();
-                writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::Inprogress)).unwrap();
-                writeln!(&mut out, "<td> {} </td>", count(&r.tests, TestStatus::Unknown)).unwrap();
+                writeln!(
+                    &mut out,
+                    "<td> {} </td>",
+                    count(&r.tests, TestStatus::Passed)
+                )
+                .unwrap();
+                writeln!(
+                    &mut out,
+                    "<td> {} </td>",
+                    count(&r.tests, TestStatus::Failed)
+                )
+                .unwrap();
+                writeln!(
+                    &mut out,
+                    "<td> {} </td>",
+                    count(&r.tests, TestStatus::Notstarted)
+                )
+                .unwrap();
+                writeln!(
+                    &mut out,
+                    "<td> {} </td>",
+                    count(&r.tests, TestStatus::Notrun)
+                )
+                .unwrap();
+                writeln!(
+                    &mut out,
+                    "<td> {} </td>",
+                    count(&r.tests, TestStatus::Inprogress)
+                )
+                .unwrap();
+                writeln!(
+                    &mut out,
+                    "<td> {} </td>",
+                    count(&r.tests, TestStatus::Unknown)
+                )
+                .unwrap();
                 writeln!(&mut out, "<td> {} </td>", r.tests.len()).unwrap();
                 writeln!(&mut out, "<td> {}s </td>", duration).unwrap();
                 writeln!(&mut out, "</tr>").unwrap();
@@ -269,22 +318,48 @@ fn ci_log(ci: &Ci) -> cgi::Response {
         for r in &commits {
             if let Some(t) = r.tests.first_key_value() {
                 if nr_empty != 0 {
-                    writeln!(&mut out, "<tr> <td> ({} untested commits) </td> </tr>", nr_empty).unwrap();
+                    writeln!(
+                        &mut out,
+                        "<tr> <td> ({} untested commits) </td> </tr>",
+                        nr_empty
+                    )
+                    .unwrap();
                     nr_empty = 0;
                 }
 
                 let subject_len = r.message.find('\n').unwrap_or(r.message.len());
 
                 writeln!(&mut out, "<tr class={}>", t.1.status.table_class()).unwrap();
-                writeln!(&mut out, "<td> <a href=\"{}?branch={}&commit={}\">{}</a> </td>",
-                         ci.script_name, branch,
-                         r.id, &r.id.as_str()[..14]).unwrap();
+                writeln!(
+                    &mut out,
+                    "<td> <a href=\"{}?branch={}&commit={}\">{}</a> </td>",
+                    ci.script_name,
+                    branch,
+                    r.id,
+                    &r.id.as_str()[..14]
+                )
+                .unwrap();
                 writeln!(&mut out, "<td> {} </td>", &r.message[..subject_len]).unwrap();
                 writeln!(&mut out, "<td> {} </td>", t.1.status.to_str()).unwrap();
                 writeln!(&mut out, "<td> {}s </td>", t.1.duration).unwrap();
-                writeln!(&mut out, "<td> <a href=c/{}/{}/log.br>        log                 </a> </td>", &r.id, t.0).unwrap();
-                writeln!(&mut out, "<td> <a href=c/{}/{}/full_log.br>   full log            </a> </td>", &r.id, t.0).unwrap();
-                writeln!(&mut out, "<td> <a href=c/{}/{}>		        output directory    </a> </td>", &r.id, t.0).unwrap();
+                writeln!(
+                    &mut out,
+                    "<td> <a href=c/{}/{}/log.br>        log                 </a> </td>",
+                    &r.id, t.0
+                )
+                .unwrap();
+                writeln!(
+                    &mut out,
+                    "<td> <a href=c/{}/{}/full_log.br>   full log            </a> </td>",
+                    &r.id, t.0
+                )
+                .unwrap();
+                writeln!(
+                    &mut out,
+                    "<td> <a href=c/{}/{}>		        output directory    </a> </td>",
+                    &r.id, t.0
+                )
+                .unwrap();
                 writeln!(&mut out, "</tr>").unwrap();
             } else {
                 nr_empty += 1;
@@ -319,15 +394,22 @@ fn last_good_line(results: &Vec<CommitResults>, test: &str) -> String {
 
 fn log_link(out: &mut String, fname: &str, link: &str) {
     let onclick = format!(
-"fetch('{}')
+        "fetch('{}')
     .then(response => response.text())
     .then(text => {{
         document.getElementById('testlog').textContent = text;
   }});
   return false;
-", &fname);
+",
+        &fname
+    );
 
-    writeln!(out, "<td> <a href={} onclick=\"{}\"> {} </a> </td>", fname, onclick, link).unwrap();
+    writeln!(
+        out,
+        "<td> <a href={} onclick=\"{}\"> {} </a> </td>",
+        fname, onclick, link
+    )
+    .unwrap();
 }
 
 fn ci_commit(ci: &Ci) -> cgi::Response {
@@ -350,16 +432,38 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
     out.push_str(COMMIT_CSS_JS);
 
     writeln!(&mut out, "<div class=\"header\">").unwrap();
-    writeln!(&mut out, "<html><head><title>{}</title></head>", &message[..subject_len]).unwrap();
-    writeln!(&mut out, "<link href=\"{}\" rel=\"stylesheet\">", ci.stylesheet).unwrap();
+    writeln!(
+        &mut out,
+        "<html><head><title>{}</title></head>",
+        &message[..subject_len]
+    )
+    .unwrap();
+    writeln!(
+        &mut out,
+        "<link href=\"{}\" rel=\"stylesheet\">",
+        ci.stylesheet
+    )
+    .unwrap();
 
     writeln!(&mut out, "<body>").unwrap();
     writeln!(&mut out, "<div class=\"toplevel-container\">").unwrap();
 
     writeln!(&mut out, "<h3><th>{}</th></h3>", &message[..subject_len]).unwrap();
 
-    if ci.rc.ktest.output_dir.join(&first_commit.id).join("lcov").exists() {
-        writeln!(&mut out, "<p> <a href=c/{}/lcov> Code coverage </a> </p>", &first_commit.id).unwrap();
+    if ci
+        .rc
+        .ktest
+        .output_dir
+        .join(&first_commit.id)
+        .join("lcov")
+        .exists()
+    {
+        writeln!(
+            &mut out,
+            "<p> <a href=c/{}/lcov> Code coverage </a> </p>",
+            &first_commit.id
+        )
+        .unwrap();
     }
 
     out.push_str(COMMIT_FILTER);
@@ -371,16 +475,31 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
     writeln!(&mut out, "<table class=\"table no-wrap\">").unwrap();
     for (name, result) in &first_commit.tests {
         writeln!(&mut out, "<tr class={}>", result.status.table_class()).unwrap();
-        log_link(&mut out, &format!("c/{}/{}/log.br", &first_commit.id, name), name);
+        log_link(
+            &mut out,
+            &format!("c/{}/{}/log.br", &first_commit.id, name),
+            name,
+        );
         writeln!(&mut out, "<td> {}s </td>", result.duration).unwrap();
         writeln!(&mut out, "<td> {}  </td>", result.status.to_str()).unwrap();
         writeln!(&mut out, "<td> {}  </td>", last_good_line(&commits, name)).unwrap();
         if let Some(branch) = &ci.branch {
-            writeln!(&mut out, "<td> <a href={}?user={}&branch={}&test=^{}$> git log        </a> </td>",
-                     ci.script_name, ci.user.as_ref().unwrap(), &branch, name).unwrap();
+            writeln!(
+                &mut out,
+                "<td> <a href={}?user={}&branch={}&test=^{}$> git log        </a> </td>",
+                ci.script_name,
+                ci.user.as_ref().unwrap(),
+                &branch,
+                name
+            )
+            .unwrap();
         }
 
-        log_link(&mut out, &format!("c/{}/{}/full_log.br", &first_commit.id, name), "full");
+        log_link(
+            &mut out,
+            &format!("c/{}/{}/full_log.br", &first_commit.id, name),
+            "full",
+        );
 
         /*  We're not currently using this:
         writeln!(&mut out, "<td> <a href=c/{}/{}>		        output directory    </a> </td>", &first_commit.id, name).unwrap();
@@ -407,8 +526,15 @@ fn ci_list_branches(ci: &Ci, user: &Userrc, out: &mut String) {
     writeln!(out, "<div> <table class=\"table\">").unwrap();
 
     for (b, _) in &user.branch {
-        writeln!(out, "<tr> <th> <a href={}?user={}&branch={}>{}</a> </th> </tr>",
-                 ci.script_name, ci.user.as_ref().unwrap(), b, b).unwrap();
+        writeln!(
+            out,
+            "<tr> <th> <a href={}?user={}&branch={}>{}</a> </th> </tr>",
+            ci.script_name,
+            ci.user.as_ref().unwrap(),
+            b,
+            b
+        )
+        .unwrap();
     }
 
     writeln!(out, "</table> </div>").unwrap();
@@ -427,13 +553,18 @@ fn ci_user(ci: &Ci) -> cgi::Response {
 
     writeln!(&mut out, "<!DOCTYPE HTML>").unwrap();
     writeln!(&mut out, "<html><head><title>CI branch list</title></head>").unwrap();
-    writeln!(&mut out, "<link href=\"{}\" rel=\"stylesheet\">", ci.stylesheet).unwrap();
+    writeln!(
+        &mut out,
+        "<link href=\"{}\" rel=\"stylesheet\">",
+        ci.stylesheet
+    )
+    .unwrap();
 
     writeln!(&mut out, "<body>").unwrap();
 
     match u {
-        Ok(u)   => ci_list_branches(ci, &u, &mut out),
-        Err(e)  => writeln!(out, "error parsing user config: {}", e).unwrap(),
+        Ok(u) => ci_list_branches(ci, &u, &mut out),
+        Err(e) => writeln!(out, "error parsing user config: {}", e).unwrap(),
     }
 
     writeln!(&mut out, "</body>").unwrap();
@@ -445,12 +576,17 @@ fn ci_user(ci: &Ci) -> cgi::Response {
 fn ci_list_users(ci: &Ci, out: &mut String) {
     writeln!(out, "<div> <table class=\"table\">").unwrap();
     for (i, _) in &ci.rc.users {
-        writeln!(out, "<tr> <th> <a href={}?user={}>{}</a> </th> </tr>", ci.script_name, i, i).unwrap();
+        writeln!(
+            out,
+            "<tr> <th> <a href={}?user={}>{}</a> </th> </tr>",
+            ci.script_name, i, i
+        )
+        .unwrap();
     }
     writeln!(out, "</table> </div>").unwrap();
 }
 
-fn ci_worker_status(ci: &Ci, out: &mut String) -> Option<()>{
+fn ci_worker_status(ci: &Ci, out: &mut String) -> Option<()> {
     use chrono::prelude::Utc;
 
     let workers = workers_get(&ci.rc.ktest).ok()?;
@@ -465,7 +601,15 @@ fn ci_worker_status(ci: &Ci, out: &mut String) -> Option<()>{
     writeln!(out, "</tr>").unwrap();
 
     let now = Utc::now();
-    let tests_dir = ci.rc.ktest.ktest_dir.clone().into_os_string().into_string().unwrap() + "/tests/";
+    let tests_dir = ci
+        .rc
+        .ktest
+        .ktest_dir
+        .clone()
+        .into_os_string()
+        .into_string()
+        .unwrap()
+        + "/tests/";
 
     for w in workers {
         let elapsed = (now - w.starttime).max(Duration::zero());
@@ -475,10 +619,14 @@ fn ci_worker_status(ci: &Ci, out: &mut String) -> Option<()>{
         writeln!(out, "<td> {}.{}           </td>", w.hostname, w.workdir).unwrap();
         writeln!(out, "<td> {}~{}           </td>", w.branch, w.age).unwrap();
         writeln!(out, "<td> {}              </td>", tests).unwrap();
-        writeln!(out, "<td> {}:{:02}:{:02}  </td>",
+        writeln!(
+            out,
+            "<td> {}:{:02}:{:02}  </td>",
             elapsed.num_hours(),
             elapsed.num_minutes() % 60,
-            elapsed.num_seconds() % 60).unwrap();
+            elapsed.num_seconds() % 60
+        )
+        .unwrap();
         writeln!(out, "</tr>").unwrap();
     }
 
@@ -492,7 +640,12 @@ fn ci_home(ci: &Ci) -> cgi::Response {
 
     writeln!(&mut out, "<!DOCTYPE HTML>").unwrap();
     writeln!(&mut out, "<html><head><title>CI branch list</title></head>").unwrap();
-    writeln!(&mut out, "<link href=\"{}\" rel=\"stylesheet\">", ci.stylesheet).unwrap();
+    writeln!(
+        &mut out,
+        "<link href=\"{}\" rel=\"stylesheet\">",
+        ci.stylesheet
+    )
+    .unwrap();
 
     writeln!(&mut out, "<body>").unwrap();
 
@@ -507,9 +660,13 @@ fn ci_home(ci: &Ci) -> cgi::Response {
 }
 
 fn cgi_header_get(request: &cgi::Request, name: &str) -> String {
-    request.headers().get(name)
+    request
+        .headers()
+        .get(name)
         .map(|x| x.to_str())
-        .transpose().ok().flatten()
+        .transpose()
+        .ok()
+        .flatten()
         .map(|x| x.to_string())
         .unwrap_or(String::new())
 }

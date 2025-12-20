@@ -1,6 +1,6 @@
-use std::process;
-use ci_cgi::{ktestrc_read, commit_update_results_from_fs};
+use ci_cgi::{commit_update_results_from_fs, ktestrc_read};
 use clap::Parser;
+use std::process;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]

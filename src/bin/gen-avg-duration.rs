@@ -1,14 +1,14 @@
+use ci_cgi::{commitdir_get_results, ktestrc_read, Ktestrc, TestStatus};
 use std::collections::BTreeMap;
-use std::process;
 use std::fs::File;
-use ci_cgi::{Ktestrc, ktestrc_read, commitdir_get_results, TestStatus};
+use std::process;
 
 #[derive(Default, Debug)]
 struct TestDuration {
-    secs:       u64,
-    nr:         u64,
-    nr_passed:  u64,
-    nr_failed:  u64,
+    secs: u64,
+    nr: u64,
+    nr_passed: u64,
+    nr_failed: u64,
 }
 
 type TestDurationMap = BTreeMap<String, TestDuration>;
@@ -16,13 +16,14 @@ type TestDurationMap = BTreeMap<String, TestDuration>;
 fn read_duration_sums(rc: &Ktestrc) -> TestDurationMap {
     let mut durations: BTreeMap<String, TestDuration> = BTreeMap::new();
 
-    for i in std::fs::read_dir(&rc.output_dir).unwrap()
+    for i in std::fs::read_dir(&rc.output_dir)
+        .unwrap()
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.metadata().unwrap().is_dir())
         .filter_map(|e| e.file_name().into_string().ok())
-        .filter_map(|e| commitdir_get_results(rc, &e).ok()) {
-
+        .filter_map(|e| commitdir_get_results(rc, &e).ok())
+    {
         for (test, result) in i {
             let mut t = durations.get_mut(&test);
 
@@ -32,8 +33,8 @@ fn read_duration_sums(rc: &Ktestrc) -> TestDurationMap {
             }
             let t = t.unwrap();
 
-            t.secs      += result.duration;
-            t.nr        += 1;
+            t.secs += result.duration;
+            t.nr += 1;
             t.nr_passed += (result.status == TestStatus::Passed) as u64;
             t.nr_failed += (result.status == TestStatus::Failed) as u64;
         }
@@ -43,8 +44,8 @@ fn read_duration_sums(rc: &Ktestrc) -> TestDurationMap {
 }
 
 fn write_durations_capnp(rc: &Ktestrc, durations_in: TestDurationMap) {
-    use ci_cgi::durations_capnp::durations;
     use capnp::serialize;
+    use ci_cgi::durations_capnp::durations;
 
     let mut message = capnp::message::Builder::new_default();
     let root: durations::Builder = message.init_root();
@@ -60,8 +61,8 @@ fn write_durations_capnp(rc: &Ktestrc, durations_in: TestDurationMap) {
         duration_out.set_duration(duration_in.secs / duration_in.nr);
     }
 
-    let fname       = rc.output_dir.join("test_durations.capnp");
-    let fname_new   = rc.output_dir.join("test_durations.capnp.new");
+    let fname = rc.output_dir.join("test_durations.capnp");
+    let fname_new = rc.output_dir.join("test_durations.capnp.new");
 
     let mut out = File::create(&fname_new).unwrap();
 
@@ -69,7 +70,11 @@ fn write_durations_capnp(rc: &Ktestrc, durations_in: TestDurationMap) {
     drop(out);
     std::fs::rename(fname_new, &fname).unwrap();
 
-    println!("wrote durations for {} tests to {}", durations_in.len(), fname.display());
+    println!(
+        "wrote durations for {} tests to {}",
+        durations_in.len(),
+        fname.display()
+    );
 }
 
 fn main() {
@@ -83,4 +88,3 @@ fn main() {
     let durations = read_duration_sums(&ktestrc);
     write_durations_capnp(&ktestrc, durations);
 }
-
