@@ -1,14 +1,14 @@
-use std::fs::File;
-use memmap::MmapOptions;
-use std::process;
 use ci_cgi::{ciconfig_read, test_stats};
 use clap::Parser;
+use memmap::MmapOptions;
+use std::fs::File;
+use std::process;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    test:       String,
-    subtest:    String,
+    test: String,
+    subtest: String,
 }
 
 fn main() {
@@ -23,7 +23,9 @@ fn main() {
     let rc = rc.ktest;
 
     let durations_file = File::open(rc.output_dir.join("test_durations.capnp")).ok();
-    let durations_map = durations_file.map(|x| unsafe { MmapOptions::new().map(&x).ok() } ).flatten();
+    let durations_map = durations_file
+        .map(|x| unsafe { MmapOptions::new().map(&x).ok() })
+        .flatten();
     let durations = durations_map.as_ref().map(|x| x.as_ref());
 
     println!("{:?}", test_stats(durations, &args.test, &args.subtest));

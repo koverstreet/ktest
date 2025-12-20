@@ -33,8 +33,8 @@ fn generate_lustre_sanity_tests() {
         return;
     }
 
-    let template_content = fs::read_to_string(template_path)
-        .expect("Failed to read sanity.ktest.in template");
+    let template_content =
+        fs::read_to_string(template_path).expect("Failed to read sanity.ktest.in template");
 
     for i in 1..=50 {
         let output_path = format!("{}/sanity-{}.ktest", output_dir, i);

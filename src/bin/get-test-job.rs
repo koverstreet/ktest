@@ -1,33 +1,35 @@
 extern crate libc;
+use chrono::Utc;
+use ci_cgi::{
+    ciconfig_read, commit_update_results_from_fs, lockfile_exists, subtest_full_name, Ktestrc,
+};
+use ci_cgi::{test_stats, workers_update, Worker};
+use clap::Parser;
+use file_lock::{FileLock, FileOptions};
 use std::collections::HashSet;
 use std::fs::File;
 use std::process;
-use ci_cgi::{Ktestrc, ciconfig_read, lockfile_exists, commit_update_results_from_fs, subtest_full_name};
-use ci_cgi::{Worker, workers_update, test_stats};
-use file_lock::{FileLock, FileOptions};
-use chrono::Utc;
-use clap::Parser;
 
 #[derive(Debug)]
 struct TestJob {
-    branch:     String,
-    commit:     String,
-    age:        u64,
-    test:       String,
-    subtests:   Vec<String>,
+    branch: String,
+    commit: String,
+    age: u64,
+    test: String,
+    subtests: Vec<String>,
 }
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     #[arg(short, long)]
-    dry_run:    bool,
+    dry_run: bool,
 
     #[arg(short, long)]
-    verbose:    bool,
+    verbose: bool,
 
-    hostname:   String,
-    workdir:    String,
+    hostname: String,
+    workdir: String,
 }
 
 use memmap::MmapOptions;
@@ -46,7 +48,8 @@ fn get_test_job(args: &Args, rc: &Ktestrc, durations: Option<&[u8]>) -> Option<T
     let file = OpenOptions::new()
         .read(true)
         .write(true)
-        .open(rc.output_dir.join("jobs")).unwrap();
+        .open(rc.output_dir.join("jobs"))
+        .unwrap();
     let mut len = file.metadata().unwrap().len();
     if len == 0 {
         eprintln!("get-test-job: No test job available");
@@ -72,12 +75,12 @@ fn get_test_job(args: &Args, rc: &Ktestrc, durations: Option<&[u8]>) -> Option<T
         }
 
         let mut fields = job.split(' ');
-        let branch      = fields.next().unwrap();
-        let commit      = fields.next().unwrap();
-        let age_str     = fields.next().unwrap();
-        let age         = str::parse::<u64>(age_str).unwrap();
-        let test        = fields.next().unwrap();
-        let subtest     = fields.next().unwrap();
+        let branch = fields.next().unwrap();
+        let commit = fields.next().unwrap();
+        let age_str = fields.next().unwrap();
+        let age = str::parse::<u64>(age_str).unwrap();
+        let test = fields.next().unwrap();
+        let subtest = fields.next().unwrap();
 
         if ret.is_some() && !commit_test_matches(&ret, commit, test) {
             if args.verbose {
@@ -98,14 +101,22 @@ fn get_test_job(args: &Args, rc: &Ktestrc, durations: Option<&[u8]>) -> Option<T
 
         if duration_sum != 0 && duration_sum + duration_secs > rc.subtest_duration_max {
             if args.verbose {
-                eprintln!("get-test-job: have {} > {} seconds of work, breaking",
-                          duration_sum + duration_secs, rc.subtest_duration_max);
+                eprintln!(
+                    "get-test-job: have {} > {} seconds of work, breaking",
+                    duration_sum + duration_secs,
+                    rc.subtest_duration_max
+                );
             }
             break;
         }
 
-        if !lockfile_exists(rc, &commit, &subtest_full_name(&test, &subtest),
-                            !args.dry_run, &mut commits_updated) {
+        if !lockfile_exists(
+            rc,
+            &commit,
+            &subtest_full_name(&test, &subtest),
+            !args.dry_run,
+            &mut commits_updated,
+        ) {
             if args.verbose {
                 eprintln!("get-test-job: test {} already in progress", job);
             }
@@ -116,11 +127,11 @@ fn get_test_job(args: &Args, rc: &Ktestrc, durations: Option<&[u8]>) -> Option<T
             r.subtests.push(subtest.to_string());
         } else {
             ret = Some(TestJob {
-                branch:     branch.to_string(),
-                commit:     commit.to_string(),
-                test:       test.to_string(),
+                branch: branch.to_string(),
+                commit: commit.to_string(),
+                test: test.to_string(),
                 age,
-                subtests:   vec![subtest.to_string()],
+                subtests: vec![subtest.to_string()],
             });
         }
 
@@ -159,11 +170,14 @@ fn main() {
     rc.verbose = std::cmp::max(rc.verbose, args.verbose);
 
     let durations_file = File::open(rc.output_dir.join("test_durations.capnp")).ok();
-    let durations_map = durations_file.map(|x| unsafe { MmapOptions::new().map(&x).ok() } ).flatten();
+    let durations_map = durations_file
+        .map(|x| unsafe { MmapOptions::new().map(&x).ok() })
+        .flatten();
     let durations = durations_map.as_ref().map(|x| x.as_ref());
 
     let lockfile = rc.output_dir.join("jobs.lock");
-    let filelock = FileLock::lock(lockfile, true, FileOptions::new().create(true).write(true)).unwrap();
+    let filelock =
+        FileLock::lock(lockfile, true, FileOptions::new().create(true).write(true)).unwrap();
 
     let job = get_test_job(&args, &rc, durations);
 
@@ -174,24 +188,30 @@ fn main() {
 
         println!("TEST_JOB {} {} {}", job.branch, job.commit, tests);
 
-        workers_update(&rc, Worker {
-            hostname:   args.hostname,
-            workdir:    args.workdir,
-            starttime:  Utc::now(),
-            branch:     job.branch.clone(),
-            age:        job.age,
-            commit:     job.commit.clone(),
-            tests:      tests.clone(),
-        });
+        workers_update(
+            &rc,
+            Worker {
+                hostname: args.hostname,
+                workdir: args.workdir,
+                starttime: Utc::now(),
+                branch: job.branch.clone(),
+                age: job.age,
+                commit: job.commit.clone(),
+                tests: tests.clone(),
+            },
+        );
     } else {
-        workers_update(&rc, Worker {
-            hostname:   args.hostname,
-            workdir:    args.workdir,
-            starttime:  Utc::now(),
-            branch:     "".to_string(),
-            age:        0,
-            commit:     "".to_string(),
-            tests:      "".to_string(),
-        });
+        workers_update(
+            &rc,
+            Worker {
+                hostname: args.hostname,
+                workdir: args.workdir,
+                starttime: Utc::now(),
+                branch: "".to_string(),
+                age: 0,
+                commit: "".to_string(),
+                tests: "".to_string(),
+            },
+        );
     }
 }

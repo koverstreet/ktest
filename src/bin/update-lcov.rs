@@ -1,6 +1,6 @@
-use std::process;
 use ci_cgi::{ktestrc_read, update_lcov};
 use clap::Parser;
+use std::process;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -19,4 +19,3 @@ fn main() {
 
     update_lcov(&ktestrc, &args.commit);
 }
-

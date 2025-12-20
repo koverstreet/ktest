@@ -1,20 +1,18 @@
 extern crate libc;
-use std::process;
+use ci_cgi::{ciconfig_read, git_get_commit, CiConfig};
+use clap::Parser;
 use std::collections::HashSet;
 use std::fs::DirEntry;
-use ci_cgi::{CiConfig, ciconfig_read, git_get_commit};
-use clap::Parser;
+use std::process;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     #[arg(short, long)]
-    dry_run:    bool,
+    dry_run: bool,
 }
 
-fn branch_get_commits(repo: &git2::Repository,
-                      branch: &str,
-                      max_commits: u64) -> Vec<String> {
+fn branch_get_commits(repo: &git2::Repository, branch: &str, max_commits: u64) -> Vec<String> {
     let max_commits = max_commits.try_into().unwrap();
     let mut walk = repo.revwalk().unwrap();
     let reference = git_get_commit(&repo, branch.to_string());
@@ -36,8 +34,7 @@ fn branch_get_commits(repo: &git2::Repository,
         .collect()
 }
 
-fn get_live_commits(rc: &CiConfig) -> HashSet<String>
-{
+fn get_live_commits(rc: &CiConfig) -> HashSet<String> {
     let repo = git2::Repository::open(&rc.ktest.linux_repo);
     if let Err(e) = repo {
         eprintln!("Error opening {:?}: {}", rc.ktest.linux_repo, e);
@@ -48,12 +45,19 @@ fn get_live_commits(rc: &CiConfig) -> HashSet<String>
 
     let mut ret: HashSet<String> = HashSet::new();
 
-    for (user, userconfig) in rc.users.iter()
+    for (user, userconfig) in rc
+        .users
+        .iter()
         .filter(|u| u.1.is_ok())
-        .map(|(user, userconfig)| (user, userconfig.as_ref().unwrap())) {
-        for (branch, branch_config) in userconfig.branch.iter()  {
+        .map(|(user, userconfig)| (user, userconfig.as_ref().unwrap()))
+    {
+        for (branch, branch_config) in userconfig.branch.iter() {
             for test_group in branch_config.tests.iter() {
-                let max_commits = userconfig.test_group.get(test_group).map(|x| x.max_commits).unwrap_or(0);
+                let max_commits = userconfig
+                    .test_group
+                    .get(test_group)
+                    .map(|x| x.max_commits)
+                    .unwrap_or(0);
                 let userbranch = user.to_string() + "/" + branch;
                 for commit in branch_get_commits(&repo, &userbranch, max_commits) {
                     ret.insert(commit);
@@ -102,11 +106,16 @@ fn main() {
     let now = std::time::SystemTime::now();
     let older_than = now.checked_sub(std::time::Duration::new(3600, 0)).unwrap();
 
-    for d in rc.ktest.output_dir.read_dir().unwrap()
+    for d in rc
+        .ktest
+        .output_dir
+        .read_dir()
+        .unwrap()
         .filter_map(|d| d.ok())
         .filter(|d| !result_is_live(&commits, &d))
         .map(|d| d.path())
-        .filter(|d| d.metadata().unwrap().modified().unwrap() < older_than) {
+        .filter(|d| d.metadata().unwrap().modified().unwrap() < older_than)
+    {
         println!("Removing: {}", d.to_string_lossy());
 
         if !args.dry_run {

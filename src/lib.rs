@@ -1,31 +1,44 @@
-use std::collections::{BTreeMap, HashSet};
-use std::fs::{File, OpenOptions, create_dir_all, read_to_string};
-use std::io::ErrorKind;
-use std::io::prelude::*;
-use std::path::PathBuf;
-use std::time::SystemTime;
+use anyhow;
 use die::die;
 use serde_derive::Deserialize;
+use std::collections::{BTreeMap, HashSet};
+use std::fs::{create_dir_all, read_to_string, File, OpenOptions};
+use std::io::prelude::*;
+use std::io::ErrorKind;
+use std::path::PathBuf;
+use std::time::SystemTime;
 use toml;
-use anyhow;
 
-pub mod testresult_capnp;
-pub mod worker_capnp;
 pub mod durations_capnp;
+pub mod testresult_capnp;
 pub mod users;
-pub use users::Userrc;
+pub mod worker_capnp;
 pub use users::RcTestGroup;
+pub use users::Userrc;
 
-pub fn git_get_commit(repo: &git2::Repository, reference: String) -> Result<git2::Commit<'_>, git2::Error> {
+pub fn git_get_commit(
+    repo: &git2::Repository,
+    reference: String,
+) -> Result<git2::Commit<'_>, git2::Error> {
     let r = repo.revparse_single(&reference);
     if let Err(e) = r {
-        eprintln!("Error from resolve_reference_from_short_name {} in {}: {}", reference, repo.path().display(), e);
+        eprintln!(
+            "Error from resolve_reference_from_short_name {} in {}: {}",
+            reference,
+            repo.path().display(),
+            e
+        );
         return Err(e);
     }
 
     let r = r.unwrap().peel_to_commit();
     if let Err(e) = r {
-        eprintln!("Error from peel_to_commit {} in {}: {}", reference, repo.path().display(), e);
+        eprintln!(
+            "Error from peel_to_commit {} in {}: {}",
+            reference,
+            repo.path().display(),
+            e
+        );
         return Err(e);
     }
     r
@@ -33,14 +46,14 @@ pub fn git_get_commit(repo: &git2::Repository, reference: String) -> Result<git2
 
 #[derive(Deserialize)]
 pub struct Ktestrc {
-    pub linux_repo:             PathBuf,
-    pub output_dir:             PathBuf,
-    pub ktest_dir:              PathBuf,
-    pub users_dir:              PathBuf,
-    pub subtest_duration_max:   u64,
-    pub subtest_duration_def:   u64,
+    pub linux_repo: PathBuf,
+    pub output_dir: PathBuf,
+    pub ktest_dir: PathBuf,
+    pub users_dir: PathBuf,
+    pub subtest_duration_max: u64,
+    pub subtest_duration_def: u64,
     #[serde(default)]
-    pub verbose:                bool,
+    pub verbose: bool,
 }
 
 pub fn ktestrc_read() -> anyhow::Result<Ktestrc> {
@@ -51,21 +64,24 @@ pub fn ktestrc_read() -> anyhow::Result<Ktestrc> {
 }
 
 pub struct CiConfig {
-    pub ktest:              Ktestrc,
-    pub users:              BTreeMap<String, anyhow::Result<Userrc>>,
+    pub ktest: Ktestrc,
+    pub users: BTreeMap<String, anyhow::Result<Userrc>>,
 }
 
 pub fn ciconfig_read() -> anyhow::Result<CiConfig> {
     let mut rc = CiConfig {
-        ktest:  ktestrc_read()?,
-        users:  BTreeMap::new(),
+        ktest: ktestrc_read()?,
+        users: BTreeMap::new(),
     };
 
     for i in std::fs::read_dir(&rc.ktest.users_dir)?
         .filter_map(|x| x.ok())
-        .map(|i| i.path()){
-        rc.users.insert(i.file_stem().unwrap().to_string_lossy().to_string(),
-                        users::userrc_read(&i));
+        .map(|i| i.path())
+    {
+        rc.users.insert(
+            i.file_stem().unwrap().to_string_lossy().to_string(),
+            users::userrc_read(&i),
+        );
     }
 
     Ok(rc)
@@ -94,32 +110,32 @@ impl TestStatus {
 
     pub fn to_str(&self) -> &'static str {
         match self {
-            TestStatus::Inprogress  => "In progress",
-            TestStatus::Passed      => "Passed",
-            TestStatus::Failed      => "Failed",
-            TestStatus::Notrun      => "Not run",
-            TestStatus::Notstarted  => "Not started",
-            TestStatus::Unknown     => "Unknown",
+            TestStatus::Inprogress => "In progress",
+            TestStatus::Passed => "Passed",
+            TestStatus::Failed => "Failed",
+            TestStatus::Notrun => "Not run",
+            TestStatus::Notstarted => "Not started",
+            TestStatus::Unknown => "Unknown",
         }
     }
 
     pub fn table_class(&self) -> &'static str {
         match self {
-            TestStatus::Inprogress  => "table-secondary",
-            TestStatus::Passed      => "table-success",
-            TestStatus::Failed      => "table-danger",
-            TestStatus::Notrun      => "table-secondary",
-            TestStatus::Notstarted  => "table-secondary",
-            TestStatus::Unknown     => "table-secondary",
+            TestStatus::Inprogress => "table-secondary",
+            TestStatus::Passed => "table-success",
+            TestStatus::Failed => "table-danger",
+            TestStatus::Notrun => "table-secondary",
+            TestStatus::Notstarted => "table-secondary",
+            TestStatus::Unknown => "table-secondary",
         }
     }
 }
 
 #[derive(Copy, Clone, Debug)]
 pub struct TestResult {
-    pub status:     TestStatus,
-    pub starttime:  DateTime<Utc>,
-    pub duration:   u64,
+    pub status: TestStatus,
+    pub starttime: DateTime<Utc>,
+    pub duration: u64,
 }
 
 pub type TestResultsMap = BTreeMap<String, TestResult>;
@@ -131,9 +147,12 @@ fn commitdir_get_results_fs(ktestrc: &Ktestrc, commit_id: &str) -> TestResultsMa
         f.read_to_string(&mut status).ok()?;
 
         Some(TestResult {
-            status:     TestStatus::from_str(&status),
-            starttime:  f.metadata().ok()?.modified().ok()?.into(),
-            duration:   read_to_string(&testdir.path().join("duration")).unwrap_or("0".to_string()).parse().unwrap_or(0),
+            status: TestStatus::from_str(&status),
+            starttime: f.metadata().ok()?.modified().ok()?.into(),
+            duration: read_to_string(&testdir.path().join("duration"))
+                .unwrap_or("0".to_string())
+                .parse()
+                .unwrap_or(0),
         })
     }
 
@@ -152,10 +171,14 @@ fn commitdir_get_results_fs(ktestrc: &Ktestrc, commit_id: &str) -> TestResultsMa
     results
 }
 
-use testresult_capnp::test_results;
 use capnp::serialize;
+use testresult_capnp::test_results;
 
-fn results_to_capnp(ktestrc: &Ktestrc, commit_id: &str, results_in: &TestResultsMap) -> anyhow::Result<()> {
+fn results_to_capnp(
+    ktestrc: &Ktestrc,
+    commit_id: &str,
+    results_in: &TestResultsMap,
+) -> anyhow::Result<()> {
     let mut message = capnp::message::Builder::new_default();
     let results = message.init_root::<test_results::Builder>();
     let mut result_list = results.init_entries(results_in.len().try_into().unwrap());
@@ -168,8 +191,8 @@ fn results_to_capnp(ktestrc: &Ktestrc, commit_id: &str, results_in: &TestResults
         result.set_status(result_in.status);
     }
 
-    let fname       = ktestrc.output_dir.join(format!("{commit_id}.capnp"));
-    let fname_new   = ktestrc.output_dir.join(format!("{commit_id}.capnp.new"));
+    let fname = ktestrc.output_dir.join(format!("{commit_id}.capnp"));
+    let fname_new = ktestrc.output_dir.join(format!("{commit_id}.capnp.new"));
 
     let mut out = File::create(&fname_new).map(std::io::BufWriter::new)?;
     serialize::write_message(&mut out, &message)?;
@@ -183,22 +206,25 @@ pub fn commit_update_results_from_fs(ktestrc: &Ktestrc, commit_id: &str) {
     let results = commitdir_get_results_fs(&ktestrc, commit_id);
 
     results_to_capnp(ktestrc, commit_id, &results)
-        .map_err(|e| eprintln!("error generating capnp: {}", e)).ok();
+        .map_err(|e| eprintln!("error generating capnp: {}", e))
+        .ok();
 }
 
 pub fn commitdir_get_results(ktestrc: &Ktestrc, commit_id: &str) -> anyhow::Result<TestResultsMap> {
     let f = std::fs::read(ktestrc.output_dir.join(commit_id.to_owned() + ".capnp"))?;
 
-    let message_reader = serialize::read_message_from_flat_slice(&mut &f[..], capnp::message::ReaderOptions::new())?;
-    let entries = message_reader.get_root::<test_results::Reader>()?
+    let message_reader =
+        serialize::read_message_from_flat_slice(&mut &f[..], capnp::message::ReaderOptions::new())?;
+    let entries = message_reader
+        .get_root::<test_results::Reader>()?
         .get_entries()?;
 
     let mut results = BTreeMap::new();
     for e in entries {
         let r = TestResult {
-            status:     e.get_status()?,
-            starttime:  Utc.timestamp_opt(e.get_starttime(), 0).unwrap(),
-            duration:   e.get_duration()
+            status: e.get_status()?,
+            starttime: Utc.timestamp_opt(e.get_starttime(), 0).unwrap(),
+            duration: e.get_duration(),
         };
 
         results.insert(e.get_name()?.to_string()?, r);
@@ -211,13 +237,13 @@ use chrono::{DateTime, TimeZone, Utc};
 
 #[derive(Debug)]
 pub struct Worker {
-    pub hostname:       String,
-    pub workdir:        String,
-    pub starttime:      DateTime<Utc>,
-    pub branch:         String,
-    pub age:            u64,
-    pub commit:	        String,
-    pub tests:          String,
+    pub hostname: String,
+    pub workdir: String,
+    pub starttime: DateTime<Utc>,
+    pub branch: String,
+    pub age: u64,
+    pub commit: String,
+    pub tests: String,
 }
 
 pub type Workers = Vec<Worker>;
@@ -225,19 +251,24 @@ pub type Workers = Vec<Worker>;
 use worker_capnp::workers;
 
 fn workers_parse(f: Vec<u8>) -> anyhow::Result<Workers> {
-    let message_reader = serialize::read_message_from_flat_slice(&mut &f[..], capnp::message::ReaderOptions::new())?;
-    let entries = message_reader.get_root::<workers::Reader>()?
+    let message_reader =
+        serialize::read_message_from_flat_slice(&mut &f[..], capnp::message::ReaderOptions::new())?;
+    let entries = message_reader
+        .get_root::<workers::Reader>()?
         .get_entries()?;
 
-    let workers = entries.iter().map(|e| Worker {
-        hostname:   e.get_hostname().unwrap().to_string().unwrap(),
-        workdir:    e.get_workdir().unwrap().to_string().unwrap(),
-        starttime:  Utc.timestamp_opt(e.get_starttime(), 0).unwrap(),
-        branch:     e.get_branch().unwrap().to_string().unwrap(),
-        commit:     e.get_commit().unwrap().to_string().unwrap(),
-        age:        e.get_age(),
-        tests:      e.get_tests().unwrap().to_string().unwrap(),
-    }).collect();
+    let workers = entries
+        .iter()
+        .map(|e| Worker {
+            hostname: e.get_hostname().unwrap().to_string().unwrap(),
+            workdir: e.get_workdir().unwrap().to_string().unwrap(),
+            starttime: Utc.timestamp_opt(e.get_starttime(), 0).unwrap(),
+            branch: e.get_branch().unwrap().to_string().unwrap(),
+            commit: e.get_commit().unwrap().to_string().unwrap(),
+            age: e.get_age(),
+            tests: e.get_tests().unwrap().to_string().unwrap(),
+        })
+        .collect();
 
     Ok(workers)
 }
@@ -256,15 +287,20 @@ pub fn workers_update(rc: &Ktestrc, n: Worker) -> Option<()> {
     }
 
     let fname = rc.output_dir.join("workers.capnp");
-    let foptions = FileOptions::new().read(true).write(true).append(false).create(true);
+    let foptions = FileOptions::new()
+        .read(true)
+        .write(true)
+        .append(false)
+        .create(true);
 
     let mut filelock = FileLock::lock(fname, true, foptions)
-        .map_err(|e| eprintln!("error locking workers: {}", e)).ok()?;
+        .map_err(|e| eprintln!("error locking workers: {}", e))
+        .ok()?;
 
     let mut f = Vec::new();
     filelock.file.read_to_end(&mut f).ok()?;
 
-    let mut workers: Workers  = workers_parse(f)
+    let mut workers: Workers = workers_parse(f)
         .map_err(|e| eprintln!("error parsing workers: {}", e))
         .unwrap_or_default()
         .into_iter()
@@ -293,7 +329,8 @@ pub fn workers_update(rc: &Ktestrc, n: Worker) -> Option<()> {
     filelock.file.rewind().ok()?;
 
     serialize::write_message(&mut filelock.file, &message)
-        .map_err(|e| eprintln!("error writing workers: {}", e)).ok()?;
+        .map_err(|e| eprintln!("error writing workers: {}", e))
+        .ok()?;
 
     Some(())
 }
@@ -301,14 +338,18 @@ pub fn workers_update(rc: &Ktestrc, n: Worker) -> Option<()> {
 pub fn update_lcov(rc: &Ktestrc, commit_id: &str) -> Option<()> {
     let commit_dir = rc.output_dir.join(commit_id);
 
-    if !std::fs::remove_file(commit_dir.join("lcov-stale")).is_ok() { return Some(()); }
+    if !std::fs::remove_file(commit_dir.join("lcov-stale")).is_ok() {
+        return Some(());
+    }
 
     let lockfile = "/home/testdashboard/linux-1-lock";
-    let filelock = FileLock::lock(lockfile, true, FileOptions::new().create(true).write(true)).ok()?;
+    let filelock =
+        FileLock::lock(lockfile, true, FileOptions::new().create(true).write(true)).ok()?;
 
     let mut args = Vec::new();
 
-    let new_lcov: Vec<_> = std::fs::read_dir(&commit_dir).ok()?
+    let new_lcov: Vec<_> = std::fs::read_dir(&commit_dir)
+        .ok()?
         .filter_map(|d| d.ok())
         .filter_map(|d| d.file_name().into_string().ok())
         .filter(|d| d.starts_with("lcov.partial."))
@@ -337,9 +378,15 @@ pub fn update_lcov(rc: &Ktestrc, commit_id: &str) -> Option<()> {
         return Some(());
     }
 
-    std::fs::rename(commit_dir.join("lcov.info.new"), commit_dir.join("lcov.info")).ok()?;
+    std::fs::rename(
+        commit_dir.join("lcov.info.new"),
+        commit_dir.join("lcov.info"),
+    )
+    .ok()?;
 
-    for d in &new_lcov { std::fs::remove_file(commit_dir.join(d)).ok(); }
+    for d in &new_lcov {
+        std::fs::remove_file(commit_dir.join(d)).ok();
+    }
 
     let status = std::process::Command::new("git")
         .current_dir("/home/testdashboard/linux-1")
@@ -377,26 +424,37 @@ pub fn subtest_full_name(test: &str, subtest: &str) -> String {
     test
 }
 
-pub fn lockfile_exists(rc: &Ktestrc, commit: &str, test_name: &str, create: bool,
-                       commits_updated: &mut HashSet<String>) -> bool {
+pub fn lockfile_exists(
+    rc: &Ktestrc,
+    commit: &str,
+    test_name: &str,
+    create: bool,
+    commits_updated: &mut HashSet<String>,
+) -> bool {
     let lockfile = rc.output_dir.join(commit).join(test_name).join("status");
 
     let timeout = std::time::Duration::from_secs(3600);
     let metadata = std::fs::metadata(&lockfile);
 
     if let Ok(metadata) = metadata {
-        let elapsed = metadata.modified().unwrap()
+        let elapsed = metadata
+            .modified()
+            .unwrap()
             .elapsed()
             .unwrap_or(std::time::Duration::from_secs(0));
 
-        if metadata.is_file() &&
-           metadata.len() == 0 &&
-           elapsed > timeout &&
-           std::fs::remove_file(&lockfile).is_ok() {
-            eprintln!("Deleted stale lock file {:?}, mtime {:?} now {:?} elapsed {:?})",
-                      &lockfile, metadata.modified().unwrap(),
-                      SystemTime::now(),
-                      elapsed);
+        if metadata.is_file()
+            && metadata.len() == 0
+            && elapsed > timeout
+            && std::fs::remove_file(&lockfile).is_ok()
+        {
+            eprintln!(
+                "Deleted stale lock file {:?}, mtime {:?} now {:?} elapsed {:?})",
+                &lockfile,
+                metadata.modified().unwrap(),
+                SystemTime::now(),
+                elapsed
+            );
             commits_updated.insert(commit.to_string());
         }
     }
@@ -428,24 +486,27 @@ pub fn lockfile_exists(rc: &Ktestrc, commit: &str, test_name: &str, create: bool
 
 #[derive(Debug)]
 pub struct TestStats {
-    pub nr:             u64,
-    pub passed:         u64,
-    pub failed:         u64,
-    pub duration:       u64,
+    pub nr: u64,
+    pub passed: u64,
+    pub failed: u64,
+    pub duration: u64,
 }
 
 use durations_capnp::durations;
 pub fn test_stats(durations: Option<&[u8]>, test: &str, subtest: &str) -> Option<TestStats> {
     if let Some(d) = durations {
         let mut d = d;
-        
+
         let options = capnp::message::ReaderOptions {
             nesting_limit: 64,
             traversal_limit_in_words: Some(1024 * 1024 * 64), //  64 MiB limit
         };
 
         let d_reader = serialize::read_message_from_flat_slice(&mut d, options).ok();
-        let d = d_reader.as_ref().map(|x| x.get_root::<durations::Reader>().ok()).flatten();
+        let d = d_reader
+            .as_ref()
+            .map(|x| x.get_root::<durations::Reader>().ok())
+            .flatten();
         if d.is_none() {
             return None;
         }
@@ -471,8 +532,12 @@ pub fn test_stats(durations: Option<&[u8]>, test: &str, subtest: &str) -> Option
 
             // why does this happen? */
             if d_m_test.is_err() {
-                eprintln!("error binary searching for test stats: error {:?} at idx {}/{}",
-                    d_m_test, m, d.len());
+                eprintln!(
+                    "error binary searching for test stats: error {:?} at idx {}/{}",
+                    d_m_test,
+                    m,
+                    d.len()
+                );
                 return None;
             }
 
@@ -480,13 +545,16 @@ pub fn test_stats(durations: Option<&[u8]>, test: &str, subtest: &str) -> Option
 
             use std::cmp::Ordering::*;
             match full_test.cmp(d_m_test) {
-                Less    => r = m,
+                Less => r = m,
                 Greater => l = m + 1,
-                Equal   => return Some(TestStats {
-                    nr:         d_m.get_nr(),
-                    passed:     d_m.get_passed(),
-                    failed:     d_m.get_failed(),
-                    duration:   d_m.get_duration() }),
+                Equal => {
+                    return Some(TestStats {
+                        nr: d_m.get_nr(),
+                        passed: d_m.get_passed(),
+                        failed: d_m.get_failed(),
+                        duration: d_m.get_duration(),
+                    })
+                }
             }
         }
     }
