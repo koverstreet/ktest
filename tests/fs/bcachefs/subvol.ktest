@@ -852,4 +852,21 @@ test_snapshot_file_delete_2()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+test_insert_range()
+{
+    set_watchdog 60
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    bcachefs subvolume create /mnt/sub
+    dd if=/dev/urandom of=/mnt/sub/testf bs=1M count=1 seek=0 conv=notrunc
+    fallocate -i -l 4KiB -o 0 /mnt/sub/testf
+    bcachefs subvolume snapshot /mnt/sub /mnt/snap
+    fallocate -i -l 4KiB -o 0 /mnt/snap/testf
+
+    umount /mnt
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 main "$@"
