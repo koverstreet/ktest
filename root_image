@@ -13,7 +13,7 @@ debootstrap=$ktest_dir/debootstrap/debootstrap
 . "$ktest_dir/lib/util.sh"
 . "$ktest_dir/lib/common.sh"
 
-if [[ $(id -u) != 0 ]] ; then
+if [[ $(id -u) != 0 && "$1" != "sync" ]] ; then
     echo this script must be run as root
     exit 1
 fi
@@ -318,21 +318,19 @@ cmd_update_files()
     umount_image
 }
 
-cmd_sync()
-{
+cmd_sync() {
     local source="${1:-$(pwd)/}"
     local source_dir="$(basename "$source")"
+    local new_img="/tmp/ktest-out/$(basename $ktest_image).new"
 
-    if [[ ! -e "$ktest_image" ]]; then
-	echo "$ktest_image does not exist"
-	exit 1
-    fi
+    cp "$ktest_image" "$new_img"
 
-    mount_image
-    rm -rf "$MNT/workspace/$source_dir"
-    mkdir -p "$MNT/workspace/$source_dir"
-    rsync --archive -r "$source" "$MNT/workspace/$source_dir"
-    umount_image
+    # Remove old directory
+    guestfish -a "$new_img" -m /dev/sda:/ rm-rf "/workspace/"
+    guestfish -a "$new_img" -m /dev/sda:/ mkdir-p "/workspace/lustre-release"
+
+    # Copy new directory in
+    virt-copy-in -a "$new_img" "$source/." /workspace/lustre-release
 }
 
 cmd_init()
