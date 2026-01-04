@@ -292,7 +292,7 @@ function lustre_client_performance_tuning()
     "$LCTL" set_param osc.*OST*.max_rpcs_in_flight=128
 }
 
-function setup_lustrefs()
+function __setup_lustrefs()
 {
     print_lustre_env
     load_lustre_modules
@@ -305,11 +305,21 @@ function setup_lustrefs()
     mount -t lustre
 }
 
-function cleanup_lustrefs()
+function setup_lustrefs()
+{
+    run_quiet_with_status "SETUP LUSTRE" "DONE" __setup_lustrefs
+}
+
+function __cleanup_lustrefs()
 {
     if [[ "$ktest_interactive" != "true" ]]; then
 	FSTYPE="$FSTYPE" "$lustre_pkg_path/lustre/tests/llmountcleanup.sh"
     fi
+}
+
+function cleanup_lustrefs()
+{
+    run_quiet_with_status "CLEANUP LUSTRE" "DONE" __cleanup_lustrefs
 }
 
 split_array() {
