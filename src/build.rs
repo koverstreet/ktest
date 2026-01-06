@@ -1,6 +1,7 @@
 extern crate capnpc;
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 fn main() {
@@ -44,6 +45,17 @@ fn generate_lustre_sanity_tests() {
 
         fs::write(&output_path, content)
             .unwrap_or_else(|e| panic!("Failed to write {}: {}", output_path, e));
+
+        // Set executable bit (mode 0755)
+        let file = fs::File::open(&output_path)
+            .unwrap_or_else(|e| panic!("Failed to open {}: {}", output_path, e));
+        let mut perms = file
+            .metadata()
+            .unwrap_or_else(|e| panic!("Failed to get metadata for {}: {}", output_path, e))
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&output_path, perms)
+            .unwrap_or_else(|e| panic!("Failed to set permissions for {}: {}", output_path, e));
     }
 
     println!("cargo:rerun-if-changed={}", template_path);
