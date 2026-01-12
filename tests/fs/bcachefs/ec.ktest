@@ -62,6 +62,8 @@ test_ec_umount()
     done
 
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    # Test is too short for this to be meaningful:
+    bcachefs reset-counters --counter=trans_restart_would_deadlock ${ktest_scratch_dev[0]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
