@@ -372,6 +372,8 @@ test_device_set_state()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
+    # We expect IO error data update fails, from in flight write when the device goes RO
+    bcachefs reset-counters --counter=data_update_fail ${ktest_scratch_dev[0]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
@@ -406,6 +408,8 @@ test_device_ro()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
+    # We expect IO error data update fails, from in flight write when the device goes RO
+    bcachefs reset-counters --counter=data_update_fail ${ktest_scratch_dev[0]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
@@ -480,6 +484,8 @@ test_device_readd()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    # We expect IO error data update fails, from in flight write when the device goes RO
+    bcachefs reset-counters --counter=data_update_fail ${ktest_scratch_dev[0]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
