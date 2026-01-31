@@ -88,6 +88,7 @@ PACKAGES=(kexec-tools less psmisc openssh-server curl		\
 PACKAGES+=(build-essential make gcc g++ clang)
 PACKAGES+=(autoconf automake autopoint bison pahole)
 PACKAGES+=(cargo mold)
+PACKAGES+=(rustc rust-src rust-analyzer rust-bindgen)
 PACKAGES+=(devscripts debhelper sbuild dh-sequence-dkms dkms)
 
 # stress testing:

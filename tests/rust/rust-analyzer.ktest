@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/../test-libs.sh"
+
+config-mem 4G
+config-timeout $((20 * 60))
+
+kernel_src="/host$ktest_kernel_source"
+
+run_rust_analyzer()
+{
+    local test_file
+    local out_dir
+    local work_dir
+    local source_dir
+    local build_dir
+
+    test_file=$(basename -s .ktest "$0")
+    out_dir="/ktest-out/out/${test_file}.system"
+    work_dir="/ktest-out/work/${test_file}.system"
+    source_dir="$work_dir/source"
+    build_dir="$work_dir/build"
+
+    rm -rf "$work_dir"
+    mkdir -p "$out_dir" "$work_dir"
+
+    git -C "$kernel_src" worktree add --detach "$source_dir" HEAD
+
+    cleanup_worktree()
+    {
+        git -C "$kernel_src" worktree remove -f "$source_dir" >/dev/null 2>&1 || true
+    }
+
+    trap cleanup_worktree RETURN
+
+    run_one()
+    {
+        local label=$1
+        local ref=$2
+        local project
+        local start_ns
+        local end_ns
+
+        git -C "$source_dir" checkout --detach "$ref"
+
+        make -C "$source_dir" O="$build_dir" allmodconfig
+        "$source_dir/scripts/config" \
+            --file "$build_dir/.config" \
+            --enable CONFIG_RUST \
+            --enable CONFIG_RANDSTRUCT_NONE
+        make -C "$source_dir" O="$build_dir" olddefconfig
+        make -C "$source_dir" O="$build_dir" rust-analyzer
+
+        project="$build_dir/rust-project.json"
+        cp "$project" "$out_dir/rust-project.${label}.json"
+
+        start_ns=$(date +%s%N)
+        rust-analyzer analysis-stats "$project" \
+            > "$out_dir/analysis-stats.${label}.txt"
+        end_ns=$(date +%s%N)
+
+        echo "analysis-stats.${label}.elapsed_ms=$(((end_ns - start_ns) / 1000000))" \
+            >> "$out_dir/analysis-stats.${label}.txt"
+    }
+
+    run_one head HEAD
+    run_one base HEAD~1
+
+    diff -u "$out_dir/rust-project.base.json" "$out_dir/rust-project.head.json" \
+        > "$out_dir/rust-project.diff" || true
+}
+
+test_system()
+{
+    run_rust_analyzer
+}
+
+main "$@"
