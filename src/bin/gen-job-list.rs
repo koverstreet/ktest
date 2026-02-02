@@ -234,16 +234,22 @@ fn rc_test_jobs(
         .iter()
         .filter(|u| u.1.is_ok())
         .map(|(user, userconfig)| (user, userconfig.as_ref().unwrap()))
-        .flat_map(|(user, userconfig)| {
-            user_test_jobs(rc, durations, repo, &user, &userconfig, verbose)
+        .map(|(user, userconfig)| user_test_jobs(rc, durations, repo, &user, &userconfig, verbose))
+        .enumerate()
+        .flat_map(|(user_idx, jobs)| {
+            jobs.into_iter()
+                .rev()
+                .enumerate()
+                .map(move |(round_idx, job)| ((round_idx, user_idx), job))
         })
         .collect();
+    ret.sort_by_key(|(order, _)| *order);
 
-    /* sort by commit, dedup */
-
-    ret.sort();
-    ret.reverse();
-    ret
+    /*
+     * get-test-job scans from the end of the jobs file, so write in reverse of
+     * dispatch order.
+     */
+    ret.into_iter().map(|(_, job)| job).rev().collect()
 }
 
 fn write_test_jobs(rc: &CiConfig, jobs_in: Vec<TestJob>, verbose: bool) -> anyhow::Result<()> {
