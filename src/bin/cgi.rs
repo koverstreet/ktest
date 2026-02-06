@@ -702,16 +702,11 @@ fn ci_worker_status(ci: &Ci, out: &mut String) -> Option<()> {
 
     let workers = workers_get(&ci.rc.ktest).ok()?;
 
-    writeln!(out, "<h4>Workers</h4>").unwrap();
-    writeln!(out, "<div> <table class=\"table\">").unwrap();
-
-    writeln!(out, "<tr>").unwrap();
-    writeln!(out, "<th> Host.workdir   </th>").unwrap();
-    writeln!(out, "<th> User           </th>").unwrap();
-    writeln!(out, "<th> Commit         </th>").unwrap();
-    writeln!(out, "<th> Tests          </th>").unwrap();
-    writeln!(out, "<th> Elapsed time   </th>").unwrap();
-    writeln!(out, "</tr>").unwrap();
+    // Group workers by hostname
+    let mut by_host: BTreeMap<String, Vec<_>> = BTreeMap::new();
+    for w in workers {
+        by_host.entry(w.hostname.clone()).or_default().push(w);
+    }
 
     let now = Utc::now();
     let tests_dir = ci
@@ -724,36 +719,66 @@ fn ci_worker_status(ci: &Ci, out: &mut String) -> Option<()> {
         .unwrap()
         + "/tests/";
 
-    for w in workers {
-        let elapsed = (now - w.starttime).max(Duration::zero());
-        let tests = w.tests.strip_prefix(&tests_dir).unwrap_or(&w.tests);
+    writeln!(out, "<h4>Workers</h4>").unwrap();
 
-        writeln!(out, "<tr>").unwrap();
-        writeln!(out, "<td> {}.{}           </td>", w.hostname, w.workdir).unwrap();
-        if w.user.is_empty() {
-            writeln!(out, "<td> -              </td>").unwrap();
-        } else {
-            writeln!(
-                out,
-                "<td> <a href=\"{}?user={}\">{}</a> </td>",
-                ci.script_name, w.user, w.user
-            )
-            .unwrap();
-        }
-        writeln!(out, "<td> {}~{}           </td>", w.branch, w.age).unwrap();
-        writeln!(out, "<td> {}              </td>", tests).unwrap();
+    for (hostname, host_workers) in &by_host {
+        let running = host_workers.iter().filter(|w| !w.tests.is_empty()).count();
+        let total = host_workers.len();
+
+        writeln!(out, "<details>").unwrap();
         writeln!(
             out,
-            "<td> {}:{:02}:{:02}  </td>",
-            elapsed.num_hours(),
-            elapsed.num_minutes() % 60,
-            elapsed.num_seconds() % 60
+            "<summary><strong>{}</strong> ({} workers, {} running)</summary>",
+            hostname, total, running
         )
         .unwrap();
-        writeln!(out, "</tr>").unwrap();
-    }
 
-    writeln!(out, "</table> </div>").unwrap();
+        writeln!(out, "<table class=\"table\">").unwrap();
+        writeln!(out, "<tr>").unwrap();
+        writeln!(out, "<th> Workdir </th>").unwrap();
+        writeln!(out, "<th> User </th>").unwrap();
+        writeln!(out, "<th> Commit </th>").unwrap();
+        writeln!(out, "<th> Tests </th>").unwrap();
+        writeln!(out, "<th> Elapsed </th>").unwrap();
+        writeln!(out, "</tr>").unwrap();
+
+        for w in host_workers {
+            let elapsed = (now - w.starttime).max(Duration::zero());
+            let tests = w.tests.strip_prefix(&tests_dir).unwrap_or(&w.tests);
+
+            writeln!(out, "<tr>").unwrap();
+            writeln!(out, "<td> {} </td>", w.workdir).unwrap();
+            if w.user.is_empty() {
+                writeln!(out, "<td> - </td>").unwrap();
+            } else {
+                writeln!(
+                    out,
+                    "<td> <a href=\"{}?user={}\">{}</a> </td>",
+                    ci.script_name, w.user, w.user
+                )
+                .unwrap();
+            }
+            if w.branch.is_empty() {
+                writeln!(out, "<td> - </td>").unwrap();
+                writeln!(out, "<td> (idle) </td>").unwrap();
+            } else {
+                writeln!(out, "<td> {}~{} </td>", w.branch, w.age).unwrap();
+                writeln!(out, "<td> {} </td>", tests).unwrap();
+            }
+            writeln!(
+                out,
+                "<td> {}:{:02}:{:02} </td>",
+                elapsed.num_hours(),
+                elapsed.num_minutes() % 60,
+                elapsed.num_seconds() % 60
+            )
+            .unwrap();
+            writeln!(out, "</tr>").unwrap();
+        }
+
+        writeln!(out, "</table>").unwrap();
+        writeln!(out, "</details>").unwrap();
+    }
 
     Some(())
 }
