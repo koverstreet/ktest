@@ -1,10 +1,12 @@
 extern crate libc;
 use chrono::Utc;
 use ci_cgi::{
-    ciconfig_read, commit_update_results_from_fs, lockfile_exists, subtest_full_name,
-    CiConfig, Ktestrc,
+    ciconfig_read, commit_update_results_from_fs, lockfile_exists, subtest_full_name, CiConfig,
+    Ktestrc,
 };
-use ci_cgi::{test_stats, user_stats_get, user_stats_select_fair, user_stats_update, workers_update, Worker};
+use ci_cgi::{
+    test_stats, user_stats_get, user_stats_select_fair, user_stats_update, workers_update, Worker,
+};
 use clap::Parser;
 use file_lock::{FileLock, FileOptions};
 use std::collections::HashSet;
@@ -54,7 +56,10 @@ fn get_available_users(rc: &Ktestrc) -> Vec<String> {
         for entry in entries.filter_map(|e| e.ok()) {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if name_str.starts_with("jobs.") && !name_str.ends_with(".new") && !name_str.ends_with(".lock") {
+            if name_str.starts_with("jobs.")
+                && !name_str.ends_with(".new")
+                && !name_str.ends_with(".lock")
+            {
                 if let Some(user) = name_str.strip_prefix("jobs.") {
                     // Check if file is non-empty
                     if let Ok(metadata) = entry.metadata() {
@@ -181,7 +186,10 @@ fn get_test_job_for_user(
     if !args.dry_run && ret.is_some() {
         let r = file.set_len(len);
         if let Err(e) = r {
-            eprintln!("get-test-job: error truncating jobs file for {}: {}", user, e);
+            eprintln!(
+                "get-test-job: error truncating jobs file for {}: {}",
+                user, e
+            );
         }
     }
 

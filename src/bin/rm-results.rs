@@ -36,14 +36,20 @@ struct Args {
 fn get_commits_in_range(repo: &git2::Repository, range: &str) -> Result<HashSet<String>> {
     let commits = if range.contains("..") {
         let revspec = repo.revparse(range)?;
-        let from = revspec.from().ok_or_else(|| anyhow!("invalid range: missing 'from'"))?;
-        let to = revspec.to().ok_or_else(|| anyhow!("invalid range: missing 'to'"))?;
+        let from = revspec
+            .from()
+            .ok_or_else(|| anyhow!("invalid range: missing 'from'"))?;
+        let to = revspec
+            .to()
+            .ok_or_else(|| anyhow!("invalid range: missing 'to'"))?;
 
         let mut walk = repo.revwalk()?;
         walk.push(to.id())?;
         walk.hide(from.id())?;
 
-        walk.filter_map(|oid| oid.ok()).map(|oid| oid.to_string()).collect()
+        walk.filter_map(|oid| oid.ok())
+            .map(|oid| oid.to_string())
+            .collect()
     } else {
         let commit = repo.revparse_single(range)?.peel_to_commit()?;
         vec![commit.id().to_string()].into_iter().collect()
@@ -60,13 +66,19 @@ fn find_matching_results(
 
     let mut results = Vec::new();
 
-    for entry in output_dir.read_dir().context("reading output dir")?.filter_map(|e| e.ok()) {
+    for entry in output_dir
+        .read_dir()
+        .context("reading output dir")?
+        .filter_map(|e| e.ok())
+    {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
 
         // Skip non-commit entries
-        if dominated_by(&name_str, &["jobs.", "workers", "user_stats", "test_durations", "fetch"])
-            || name_str.ends_with(".lock")
+        if dominated_by(
+            &name_str,
+            &["jobs.", "workers", "user_stats", "test_durations", "fetch"],
+        ) || name_str.ends_with(".lock")
             || name_str.ends_with(".new")
             || name_str.ends_with(".capnp")
             || name_str.len() < 40
@@ -118,12 +130,16 @@ fn main() -> Result<()> {
         .with_context(|| format!("invalid test pattern '{}'", args.test))?;
 
     let rc = ciconfig_read().ok();
-    let output_dir = args.output_dir.clone()
+    let output_dir = args
+        .output_dir
+        .clone()
         .or_else(|| rc.as_ref().map(|r| r.ktest.output_dir.clone()))
         .ok_or_else(|| anyhow!("No output directory. Use --output-dir or configure output_dir."))?;
 
     let commits = if let Some(ref range) = args.commits {
-        let repo_path = args.repo.clone()
+        let repo_path = args
+            .repo
+            .clone()
             .or_else(|| rc.as_ref().map(|r| r.ktest.linux_repo.clone()))
             .ok_or_else(|| anyhow!("No repository. Use --repo or configure linux_repo."))?;
         let repo = git2::Repository::open(&repo_path)
@@ -146,9 +162,15 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    eprintln!("{} {} test results:",
-        if args.dry_run { "Would delete" } else { "Deleting" },
-        results.len());
+    eprintln!(
+        "{} {} test results:",
+        if args.dry_run {
+            "Would delete"
+        } else {
+            "Deleting"
+        },
+        results.len()
+    );
 
     let mut affected_commits: HashSet<String> = HashSet::new();
 
@@ -175,7 +197,10 @@ fn main() -> Result<()> {
         for commit in &affected_commits {
             commit_update_results(&output_dir, commit);
         }
-        eprintln!("Deleted {} results. Run gen-job-list to regenerate jobs.", results.len());
+        eprintln!(
+            "Deleted {} results. Run gen-job-list to regenerate jobs.",
+            results.len()
+        );
     }
 
     Ok(())

@@ -5,7 +5,11 @@ use std::thread::sleep;
 use std::time::Duration;
 
 #[derive(Parser)]
-#[command(author, version, about = "CI loop - periodically updates job lists and cleans results")]
+#[command(
+    author,
+    version,
+    about = "CI loop - periodically updates job lists and cleans results"
+)]
 struct Args {
     /// Seconds to sleep between iterations
     #[arg(long, default_value = "60")]

@@ -656,10 +656,12 @@ fn ci_list_users(ci: &Ci, out: &mut String) {
         let (recent, total) = user_stats
             .iter()
             .find(|s| &s.user == user)
-            .map(|s| (
-                format_duration(user_stats_recent(s) as u64),
-                format_duration(s.total_seconds)
-            ))
+            .map(|s| {
+                (
+                    format_duration(user_stats_recent(s) as u64),
+                    format_duration(s.total_seconds),
+                )
+            })
             .unwrap_or_else(|| ("-".to_string(), "-".to_string()));
 
         let nice = ci.rc.ktest.user_nice.get(user).copied().unwrap_or(0);
@@ -812,19 +814,25 @@ fn ci_scheduling_info(ci: &Ci, out: &mut String) -> Option<()> {
     }
 
     writeln!(out, "<h4>Scheduling Priority</h4>").unwrap();
-    writeln!(out, "<p>Next job will go to: <strong>{}</strong> (recent: {})</p>",
+    writeln!(
+        out,
+        "<p>Next job will go to: <strong>{}</strong> (recent: {})</p>",
         users_with_jobs[0].0,
         format_duration(users_with_jobs[0].1 as u64)
-    ).unwrap();
+    )
+    .unwrap();
 
     if users_with_jobs.len() > 1 {
-        writeln!(out, "<p><small>Queue order: {}</small></p>",
+        writeln!(
+            out,
+            "<p><small>Queue order: {}</small></p>",
             users_with_jobs
                 .iter()
                 .map(|(u, r, _)| format!("{} ({})", u, format_duration(*r as u64)))
                 .collect::<Vec<_>>()
                 .join(" → ")
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     Some(())

@@ -303,7 +303,10 @@ fn write_test_jobs(rc: &CiConfig, jobs_in: Vec<TestJob>, verbose: bool) -> anyho
         for entry in entries.filter_map(|e| e.ok()) {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if name_str.starts_with("jobs.") && !name_str.ends_with(".new") && !name_str.ends_with(".lock") {
+            if name_str.starts_with("jobs.")
+                && !name_str.ends_with(".new")
+                && !name_str.ends_with(".lock")
+            {
                 let user = name_str.strip_prefix("jobs.").unwrap();
                 if !jobs_by_user.contains_key(user) {
                     let _ = std::fs::remove_file(entry.path());

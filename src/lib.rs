@@ -253,8 +253,8 @@ pub struct Worker {
 #[derive(Debug, Clone)]
 pub struct UserStats {
     pub user: String,
-    pub total_seconds: u64,       // all-time runtime
-    pub recent_seconds: f64,      // time-decayed recent runtime
+    pub total_seconds: u64,  // all-time runtime
+    pub recent_seconds: f64, // time-decayed recent runtime
     pub last_updated: DateTime<Utc>,
 }
 
@@ -280,7 +280,11 @@ fn workers_parse(f: Vec<u8>) -> anyhow::Result<Workers> {
             hostname: e.get_hostname().unwrap().to_string().unwrap(),
             workdir: e.get_workdir().unwrap().to_string().unwrap(),
             starttime: Utc.timestamp_opt(e.get_starttime(), 0).unwrap(),
-            user: e.get_user().ok().and_then(|s| s.to_string().ok()).unwrap_or_default(),
+            user: e
+                .get_user()
+                .ok()
+                .and_then(|s| s.to_string().ok())
+                .unwrap_or_default(),
             branch: e.get_branch().unwrap().to_string().unwrap(),
             commit: e.get_commit().unwrap().to_string().unwrap(),
             age: e.get_age(),
@@ -422,8 +426,8 @@ pub fn user_stats_update(rc: &Ktestrc, user: &str, job_duration_secs: u64) -> Op
 
     if let Some(entry) = stats.iter_mut().find(|s| s.user == user) {
         // Decay recent_seconds to current time, then add new duration
-        entry.recent_seconds = decay_recent(entry.recent_seconds, entry.last_updated, now)
-            + duration as f64;
+        entry.recent_seconds =
+            decay_recent(entry.recent_seconds, entry.last_updated, now) + duration as f64;
         entry.total_seconds += duration;
         entry.last_updated = now;
     } else {
