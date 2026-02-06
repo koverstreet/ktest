@@ -278,12 +278,27 @@ check_dmesg()
 	    -e "UBSAN:"
 }
 
+ktest_in_vm()
+{
+    [[ -e /dev/kmsg ]] && [[ -w /dev/kmsg ]]
+}
+
+tee_kmsg()
+{
+    if ktest_in_vm; then
+	tee /dev/kmsg
+    else
+	cat
+    fi
+}
+
 run_test()
 {
     local test_file=$(basename -s .ktest $0)
     local test_name=$1
     local test_fn=test_$test_name
-    local test_output=/ktest-out/out/$test_file.$test_name
+    local out_base=${ktest_out:-/ktest-out}
+    local test_output=$out_base/out/$test_file.$test_name
 
     if [[ $(type -t $test_fn) != function ]]; then
 	echo "test $test_name does not exist"
@@ -291,12 +306,17 @@ run_test()
     fi
 
     mkdir -p $test_output
-    echo "|/bin/cp --sparse=always /dev/stdin $test_output/core.%e.PID%p.SIG%s.TIME%t" > /proc/sys/kernel/core_pattern
+
+    if ktest_in_vm; then
+	echo "|/bin/cp --sparse=always /dev/stdin $test_output/core.%e.PID%p.SIG%s.TIME%t" > /proc/sys/kernel/core_pattern
+    fi
 
     $test_fn
 
-    check_dmesg
-    dmesg -C
+    if ktest_in_vm; then
+	check_dmesg
+	dmesg -C
+    fi
 }
 
 run_tests()
@@ -309,8 +329,7 @@ run_tests()
     echo
 
     for i in $@; do
-	echo "========= TEST   $i" > /dev/kmsg
-	echo
+	echo "========= TEST   $i" | tee_kmsg
 
 	local start=$(date '+%s')
 	local ret=0
@@ -323,10 +342,10 @@ run_tests()
 	echo
 
 	if [[ $ret = 0 ]]; then
-	    echo "========= PASSED $i in $(($finish - $start))s" > /dev/kmsg
+	    echo "========= PASSED $i in $(($finish - $start))s" | tee_kmsg
 	    tests_passed+=($i)
 	else
-	    echo "========= FAILED $i in $(($finish - $start))s" > /dev/kmsg
+	    echo "========= FAILED $i in $(($finish - $start))s" | tee_kmsg
 	    tests_failed+=($i)
 
 	    # Try to clean up after a failed test so we can run the rest of
