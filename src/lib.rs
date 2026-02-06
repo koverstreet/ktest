@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::fs::{create_dir_all, read_to_string, File, OpenOptions};
 use std::io::prelude::*;
 use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use toml;
 
@@ -142,7 +142,7 @@ pub struct TestResult {
 
 pub type TestResultsMap = BTreeMap<String, TestResult>;
 
-fn commitdir_get_results_fs(ktestrc: &Ktestrc, commit_id: &str) -> TestResultsMap {
+fn commitdir_get_results_fs(output_dir: &Path, commit_id: &str) -> TestResultsMap {
     fn read_test_result(testdir: &std::fs::DirEntry) -> Option<TestResult> {
         let mut f = File::open(&testdir.path().join("status")).ok()?;
         let mut status = String::new();
@@ -160,9 +160,7 @@ fn commitdir_get_results_fs(ktestrc: &Ktestrc, commit_id: &str) -> TestResultsMa
 
     let mut results = BTreeMap::new();
 
-    let results_dir = ktestrc.output_dir.join(commit_id).read_dir();
-
-    if let Ok(results_dir) = results_dir {
+    if let Ok(results_dir) = output_dir.join(commit_id).read_dir() {
         for d in results_dir.filter_map(|i| i.ok()) {
             if let Some(r) = read_test_result(&d) {
                 results.insert(d.file_name().into_string().unwrap(), r);
@@ -177,7 +175,7 @@ use capnp::serialize;
 use testresult_capnp::test_results;
 
 fn results_to_capnp(
-    ktestrc: &Ktestrc,
+    output_dir: &Path,
     commit_id: &str,
     results_in: &TestResultsMap,
 ) -> anyhow::Result<()> {
@@ -193,8 +191,8 @@ fn results_to_capnp(
         result.set_status(result_in.status);
     }
 
-    let fname = ktestrc.output_dir.join(format!("{commit_id}.capnp"));
-    let fname_new = ktestrc.output_dir.join(format!("{commit_id}.capnp.new"));
+    let fname = output_dir.join(format!("{commit_id}.capnp"));
+    let fname_new = output_dir.join(format!("{commit_id}.capnp.new"));
 
     let mut out = File::create(&fname_new).map(std::io::BufWriter::new)?;
     serialize::write_message(&mut out, &message)?;
@@ -205,9 +203,12 @@ fn results_to_capnp(
 }
 
 pub fn commit_update_results_from_fs(ktestrc: &Ktestrc, commit_id: &str) {
-    let results = commitdir_get_results_fs(&ktestrc, commit_id);
+    commit_update_results(&ktestrc.output_dir, commit_id);
+}
 
-    results_to_capnp(ktestrc, commit_id, &results)
+pub fn commit_update_results(output_dir: &Path, commit_id: &str) {
+    let results = commitdir_get_results_fs(output_dir, commit_id);
+    results_to_capnp(output_dir, commit_id, &results)
         .map_err(|e| eprintln!("error generating capnp: {}", e))
         .ok();
 }
