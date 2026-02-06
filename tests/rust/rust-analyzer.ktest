@@ -5,7 +5,7 @@
 config-mem 4G
 config-timeout $((20 * 60))
 
-kernel_src="/host$ktest_kernel_source"
+#kernel_src="/host$ktest_kernel_source"
 
 run_rust_analyzer()
 {
