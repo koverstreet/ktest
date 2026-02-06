@@ -31,6 +31,7 @@ fn get_subtests(test_path: PathBuf) -> Vec<String> {
 
 #[derive(Debug)]
 pub struct TestJob {
+    user: String,
     branch: String,
     commit: String,
     age: u64,
@@ -171,6 +172,7 @@ fn branch_test_jobs(
             }
 
             ret.push(TestJob {
+                user: user.to_string(),
                 branch: branch.to_string(),
                 commit: commit.clone(),
                 age: age as u64,
@@ -253,26 +255,54 @@ fn write_test_jobs(rc: &CiConfig, jobs_in: Vec<TestJob>, verbose: bool) -> anyho
         eprint!("jobs: {:?}", jobs_in);
     }
 
-    let jobs_fname = rc.ktest.output_dir.join("jobs");
-    let jobs_fname_new = rc.ktest.output_dir.join("jobs.new");
-    let mut jobs_out = std::io::BufWriter::new(File::create(&jobs_fname_new)?);
-
+    // Group jobs by user
+    let mut jobs_by_user: BTreeMap<String, Vec<&TestJob>> = BTreeMap::new();
     for job in jobs_in.iter() {
-        jobs_out.write(job.branch.as_bytes())?;
-        jobs_out.write(b" ")?;
-        jobs_out.write(job.commit.as_bytes())?;
-        jobs_out.write(b" ")?;
-        jobs_out.write(job.age.to_string().as_bytes())?;
-        jobs_out.write(b" ")?;
-        jobs_out.write(job.test.as_bytes())?;
-        jobs_out.write(b" ")?;
-        jobs_out.write(job.subtest.as_bytes())?;
-        jobs_out.write(b"\n")?;
+        jobs_by_user
+            .entry(job.user.clone())
+            .or_insert_with(Vec::new)
+            .push(job);
     }
 
-    jobs_out.flush()?;
-    drop(jobs_out);
-    std::fs::rename(jobs_fname_new, jobs_fname)?;
+    // Write per-user job files
+    for (user, jobs) in jobs_by_user.iter() {
+        let jobs_fname = rc.ktest.output_dir.join(format!("jobs.{}", user));
+        let jobs_fname_new = rc.ktest.output_dir.join(format!("jobs.{}.new", user));
+        let mut jobs_out = std::io::BufWriter::new(File::create(&jobs_fname_new)?);
+
+        for job in jobs.iter() {
+            jobs_out.write(job.branch.as_bytes())?;
+            jobs_out.write(b" ")?;
+            jobs_out.write(job.commit.as_bytes())?;
+            jobs_out.write(b" ")?;
+            jobs_out.write(job.age.to_string().as_bytes())?;
+            jobs_out.write(b" ")?;
+            jobs_out.write(job.test.as_bytes())?;
+            jobs_out.write(b" ")?;
+            jobs_out.write(job.subtest.as_bytes())?;
+            jobs_out.write(b"\n")?;
+        }
+
+        jobs_out.flush()?;
+        drop(jobs_out);
+        std::fs::rename(&jobs_fname_new, &jobs_fname)?;
+        eprintln!("  {} jobs for user {}", jobs.len(), user);
+    }
+
+    // Clean up job files for users with no jobs
+    if let Ok(entries) = std::fs::read_dir(&rc.ktest.output_dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with("jobs.") && !name_str.ends_with(".new") && !name_str.ends_with(".lock") {
+                let user = name_str.strip_prefix("jobs.").unwrap();
+                if !jobs_by_user.contains_key(user) {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 

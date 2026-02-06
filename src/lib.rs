@@ -54,6 +54,8 @@ pub struct Ktestrc {
     pub subtest_duration_def: u64,
     #[serde(default)]
     pub verbose: bool,
+    #[serde(default)]
+    pub user_nice: BTreeMap<String, i64>,
 }
 
 pub fn ktestrc_read() -> anyhow::Result<Ktestrc> {
@@ -240,11 +242,25 @@ pub struct Worker {
     pub hostname: String,
     pub workdir: String,
     pub starttime: DateTime<Utc>,
+    pub user: String,
     pub branch: String,
     pub age: u64,
     pub commit: String,
     pub tests: String,
 }
+
+#[derive(Debug, Clone)]
+pub struct UserStats {
+    pub user: String,
+    pub total_seconds: u64,       // all-time runtime
+    pub recent_seconds: f64,      // time-decayed recent runtime
+    pub last_updated: DateTime<Utc>,
+}
+
+pub type AllUserStats = Vec<UserStats>;
+
+/// Half-life for recent runtime decay (24 hours)
+const RECENT_HALF_LIFE_SECS: f64 = 24.0 * 3600.0;
 
 pub type Workers = Vec<Worker>;
 
@@ -263,6 +279,7 @@ fn workers_parse(f: Vec<u8>) -> anyhow::Result<Workers> {
             hostname: e.get_hostname().unwrap().to_string().unwrap(),
             workdir: e.get_workdir().unwrap().to_string().unwrap(),
             starttime: Utc.timestamp_opt(e.get_starttime(), 0).unwrap(),
+            user: e.get_user().ok().and_then(|s| s.to_string().ok()).unwrap_or_default(),
             branch: e.get_branch().unwrap().to_string().unwrap(),
             commit: e.get_commit().unwrap().to_string().unwrap(),
             age: e.get_age(),
@@ -319,6 +336,7 @@ pub fn workers_update(rc: &Ktestrc, n: Worker) -> Option<()> {
         dst.set_hostname(&src.hostname);
         dst.set_workdir(&src.workdir);
         dst.set_starttime(src.starttime.timestamp());
+        dst.set_user(&src.user);
         dst.set_branch(&src.branch);
         dst.set_commit(&src.commit);
         dst.set_age(src.age);
@@ -333,6 +351,140 @@ pub fn workers_update(rc: &Ktestrc, n: Worker) -> Option<()> {
         .ok()?;
 
     Some(())
+}
+
+use worker_capnp::all_user_stats;
+
+fn user_stats_parse(f: Vec<u8>) -> anyhow::Result<AllUserStats> {
+    let message_reader =
+        serialize::read_message_from_flat_slice(&mut &f[..], capnp::message::ReaderOptions::new())?;
+    let entries = message_reader
+        .get_root::<all_user_stats::Reader>()?
+        .get_entries()?;
+
+    let stats = entries
+        .iter()
+        .map(|e| UserStats {
+            user: e.get_user().unwrap().to_string().unwrap(),
+            total_seconds: e.get_total_seconds(),
+            recent_seconds: e.get_recent_seconds(),
+            last_updated: Utc.timestamp_opt(e.get_last_updated(), 0).unwrap(),
+        })
+        .collect();
+
+    Ok(stats)
+}
+
+pub fn user_stats_get(rc: &Ktestrc) -> anyhow::Result<AllUserStats> {
+    let f = std::fs::read(rc.output_dir.join("user_stats.capnp"))?;
+    user_stats_parse(f)
+}
+
+/// Apply time decay to recent_seconds based on elapsed time
+fn decay_recent(recent: f64, last_updated: DateTime<Utc>, now: DateTime<Utc>) -> f64 {
+    let elapsed_secs = (now - last_updated).num_seconds().max(0) as f64;
+    let decay = (-elapsed_secs * std::f64::consts::LN_2 / RECENT_HALF_LIFE_SECS).exp();
+    recent * decay
+}
+
+/// Get recent runtime for a user, with decay applied to current time
+pub fn user_stats_recent(stats: &UserStats) -> f64 {
+    decay_recent(stats.recent_seconds, stats.last_updated, Utc::now())
+}
+
+/// Update stats for a user when a job is handed out
+pub fn user_stats_update(rc: &Ktestrc, user: &str, job_duration_secs: u64) -> Option<()> {
+    let fname = rc.output_dir.join("user_stats.capnp");
+    let foptions = FileOptions::new()
+        .read(true)
+        .write(true)
+        .append(false)
+        .create(true);
+
+    let mut filelock = FileLock::lock(&fname, true, foptions)
+        .map_err(|e| eprintln!("error locking user_stats: {}", e))
+        .ok()?;
+
+    let mut f = Vec::new();
+    filelock.file.read_to_end(&mut f).ok()?;
+
+    let mut stats: AllUserStats = if f.is_empty() {
+        Vec::new()
+    } else {
+        user_stats_parse(f)
+            .map_err(|e| eprintln!("error parsing user_stats: {}", e))
+            .unwrap_or_default()
+    };
+
+    let now = Utc::now();
+    let duration = job_duration_secs;
+
+    if let Some(entry) = stats.iter_mut().find(|s| s.user == user) {
+        // Decay recent_seconds to current time, then add new duration
+        entry.recent_seconds = decay_recent(entry.recent_seconds, entry.last_updated, now)
+            + duration as f64;
+        entry.total_seconds += duration;
+        entry.last_updated = now;
+    } else {
+        // New user
+        stats.push(UserStats {
+            user: user.to_string(),
+            total_seconds: duration,
+            recent_seconds: duration as f64,
+            last_updated: now,
+        });
+    }
+
+    // Write back
+    let mut message = capnp::message::Builder::new_default();
+    let stats_message = message.init_root::<all_user_stats::Builder>();
+    let mut stats_list = stats_message.init_entries(stats.len().try_into().unwrap());
+
+    for (idx, src) in stats.iter().enumerate() {
+        let mut dst = stats_list.reborrow().get(idx.try_into().unwrap());
+        dst.set_user(&src.user);
+        dst.set_total_seconds(src.total_seconds);
+        dst.set_recent_seconds(src.recent_seconds);
+        dst.set_last_updated(src.last_updated.timestamp());
+    }
+
+    filelock.file.set_len(0).ok()?;
+    filelock.file.rewind().ok()?;
+
+    serialize::write_message(&mut filelock.file, &message)
+        .map_err(|e| eprintln!("error writing user_stats: {}", e))
+        .ok()?;
+
+    Some(())
+}
+
+/// Select the user who should get the next job based on fairness (lowest effective recent runtime)
+/// The nice value scales effective runtime: nice=0 is normal, nice=1 doubles effective runtime, etc.
+pub fn user_stats_select_fair(
+    stats: &AllUserStats,
+    available_users: &[String],
+    rc: &Ktestrc,
+) -> Option<String> {
+    let now = Utc::now();
+    available_users
+        .iter()
+        .map(|u| {
+            let recent = stats
+                .iter()
+                .find(|s| &s.user == u)
+                .map(|s| decay_recent(s.recent_seconds, s.last_updated, now))
+                .unwrap_or(0.0); // New users get priority
+
+            // Apply nice: higher nice = higher effective runtime = lower priority
+            // Clamp multiplier to prevent negative nice from causing division issues
+            let nice = rc.user_nice.get(u).copied().unwrap_or(0);
+            let multiplier = (1.0 + nice as f64).max(0.1);
+            let effective = recent * multiplier;
+
+            (u, effective)
+        })
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(u, _)| u.clone())
 }
 
 pub fn update_lcov(rc: &Ktestrc, commit_id: &str) -> Option<()> {
