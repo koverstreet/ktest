@@ -283,10 +283,10 @@ ktest_in_vm()
     [[ -e /dev/kmsg ]] && [[ -w /dev/kmsg ]]
 }
 
-tee_kmsg()
+to_kmsg()
 {
     if ktest_in_vm; then
-	tee /dev/kmsg
+	cat > /dev/kmsg
     else
 	cat
     fi
@@ -329,7 +329,7 @@ run_tests()
     echo
 
     for i in $@; do
-	echo "========= TEST   $i" | tee_kmsg
+	echo "========= TEST   $i" | to_kmsg
 
 	local start=$(date '+%s')
 	local ret=0
@@ -342,10 +342,10 @@ run_tests()
 	echo
 
 	if [[ $ret = 0 ]]; then
-	    echo "========= PASSED $i in $(($finish - $start))s" | tee_kmsg
+	    echo "========= PASSED $i in $(($finish - $start))s" | to_kmsg
 	    tests_passed+=($i)
 	else
-	    echo "========= FAILED $i in $(($finish - $start))s" | tee_kmsg
+	    echo "========= FAILED $i in $(($finish - $start))s" | to_kmsg
 	    tests_failed+=($i)
 
 	    # Try to clean up after a failed test so we can run the rest of
