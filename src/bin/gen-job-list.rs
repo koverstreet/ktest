@@ -231,15 +231,24 @@ fn rc_test_jobs(
     repo: &git2::Repository,
     verbose: bool,
 ) -> Vec<TestJob> {
-    let mut ret: Vec<_> = rc
+    let mut ret: Vec<TestJob> = Vec::new();
+
+    let users: Vec<_> = rc
         .users
         .iter()
         .filter(|u| u.1.is_ok())
         .map(|(user, userconfig)| (user, userconfig.as_ref().unwrap()))
-        .flat_map(|(user, userconfig)| {
-            user_test_jobs(rc, durations, repo, &user, &userconfig, verbose)
-        })
         .collect();
+
+    eprintln!("Generating jobs for {} users...", users.len());
+
+    for (user, userconfig) in users {
+        let jobs = user_test_jobs(rc, durations, repo, &user, &userconfig, verbose);
+        if !jobs.is_empty() {
+            eprintln!("  {}: {} jobs", user, jobs.len());
+        }
+        ret.extend(jobs);
+    }
 
     /* sort by commit, dedup */
 
@@ -418,6 +427,19 @@ fn main() {
         process::exit(1);
     }
     let rc = rc.unwrap();
+
+    // Report users with broken configs
+    let broken_users: Vec<_> = rc
+        .users
+        .iter()
+        .filter_map(|(user, result)| result.as_ref().err().map(|e| (user, e)))
+        .collect();
+    if !broken_users.is_empty() {
+        eprintln!("Warning: {} users have config errors:", broken_users.len());
+        for (user, err) in broken_users {
+            eprintln!("  {}: {}", user, err);
+        }
+    }
 
     let repo = git2::Repository::open(&rc.ktest.linux_repo);
     if let Err(e) = repo {
