@@ -313,9 +313,37 @@ cmd_run()
 	ktest_kernel_config_require+=(GCOV_KERNEL)
     fi
 
-    run_quiet "building kernel" build_kernel
+    if ! $ktest_no_kbuild; then
+	run_quiet "building kernel" build_kernel
+    fi
 
-    start_vm
+    if $ktest_no_vm; then
+	run_tests_host
+    else
+	start_vm
+    fi
+}
+
+run_tests_host()
+{
+    local ret=0
+
+    mkdir -p "$ktest_out/out"
+
+    export ktest_kernel_source
+    export ktest_out
+
+    echo "Running tests on host: $ktest_tests"
+
+    "$ktest_test" run-tests $ktest_tests || ret=$?
+
+    if [[ $ret = 0 ]]; then
+	echo "TEST PASSED"
+    else
+	echo "TEST FAILED"
+    fi
+
+    return $ret
 }
 
 cmd_boot()

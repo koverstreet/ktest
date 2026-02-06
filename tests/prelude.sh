@@ -39,6 +39,8 @@ if [[ ! -v ktest_cpus ]]; then
 
     ktest_tests_unknown=false
     ktest_kconfig_base=
+    ktest_no_kbuild=false
+    ktest_no_vm=false
 
     BUILD_ON_HOST=""
 fi
@@ -230,6 +232,16 @@ config-compiler()
     ktest_compiler=$1
 }
 
+config-no-kbuild()
+{
+    ktest_no_kbuild=true
+}
+
+config-no-vm()
+{
+    ktest_no_vm=true
+}
+
 allow_taint()
 {
     ktest_allow_taint=true
@@ -389,6 +401,8 @@ main()
 	    echo "ktest_allow_taint=$ktest_allow_taint"
 	    echo "ktest_tests_unknown=$ktest_tests_unknown"
 	    echo "ktest_kconfig_base=$ktest_kconfig_base"
+	    echo "ktest_no_kbuild=$ktest_no_kbuild"
+	    echo "ktest_no_vm=$ktest_no_vm"
 	    ;;
 	init)
 	    create_ktest_user

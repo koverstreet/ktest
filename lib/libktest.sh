@@ -31,6 +31,8 @@ ktest_ssh_port=0
 ktest_networking=user
 ktest_dio=off
 ktest_nice=0
+ktest_no_kbuild=false
+ktest_no_vm=false
 
 checkdep socat
 checkdep brotli

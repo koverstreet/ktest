@@ -2,10 +2,9 @@
 
 . "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/../test-libs.sh"
 
-config-mem 4G
+config-no-kbuild
+config-no-vm
 config-timeout $((20 * 60))
-
-#kernel_src="/host$ktest_kernel_source"
 
 run_rust_analyzer()
 {
@@ -14,10 +13,11 @@ run_rust_analyzer()
     local work_dir
     local source_dir
     local build_dir
+    local kernel_src="$ktest_kernel_source"
 
     test_file=$(basename -s .ktest "$0")
-    out_dir="/ktest-out/out/${test_file}.system"
-    work_dir="/ktest-out/work/${test_file}.system"
+    out_dir="$ktest_out/out/${test_file}.system"
+    work_dir="$ktest_out/work/${test_file}.system"
     source_dir="$work_dir/source"
     build_dir="$work_dir/build"
 
