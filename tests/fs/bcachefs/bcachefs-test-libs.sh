@@ -10,7 +10,9 @@ if $ktest_interactive; then
     require-git https://evilpiepirate.org/git/bcachefs-tools.git
     init_build_bcachefs_tools() {
 	cd $ktest_dir/tests/fs/bcachefs/bcachefs-tools
-	make -j PREFIX=/usr install
+	local jobs=$(( $(nproc) / 2 ))
+	(( jobs < 1 )) && jobs=1
+	make -j$jobs PREFIX=/usr install
     }
 fi
 
