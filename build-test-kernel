@@ -159,6 +159,7 @@ run_tests_host()
     mkdir -p "$ktest_out/out"
 
     export ktest_kernel_source
+    export ktest_kernel_build
     export ktest_out
 
     echo "Running tests on host: $ktest_tests"

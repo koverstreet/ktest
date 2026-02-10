@@ -1,34 +1,24 @@
 #!/usr/bin/env bash
 
-. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/../test-libs.sh"
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/../prelude.sh"
 
-config-no-kbuild
+config-mem 4G
 config-no-vm
 config-timeout $((20 * 60))
 
+config-kconfig-base allmodconfig
+config-kbuild-target rust-analyzer
+
+require-kernel-config RUST
+require-kernel-config RANDSTRUCT_NONE
+
 test_system()
 {
-    local test_file
-    local out_dir
-    local build_dir
-    local source_dir="$ktest_kernel_source"
+    local test_file=$(basename -s .ktest "$0")
+    local out_dir="$ktest_out/out/${test_file}.system"
+    mkdir -p "$out_dir"
 
-    test_file=$(basename -s .ktest "$0")
-    out_dir="$ktest_out/out/${test_file}.system"
-    build_dir="$ktest_out/work/${test_file}.system/build"
-
-    rm -rf "$build_dir"
-    mkdir -p "$out_dir" "$build_dir"
-
-    make -C "$source_dir" O="$build_dir" allmodconfig
-    "$source_dir/scripts/config" \
-        --file "$build_dir/.config" \
-        --enable CONFIG_RUST \
-        --enable CONFIG_RANDSTRUCT_NONE
-    make -C "$source_dir" O="$build_dir" olddefconfig
-    make -C "$source_dir" O="$build_dir" rust-analyzer
-
-    local project="$build_dir/rust-project.json"
+    local project="$ktest_kernel_build/rust-project.json"
     cp "$project" "$out_dir/rust-project.json"
 
     local start_ns end_ns

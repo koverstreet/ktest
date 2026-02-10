@@ -552,8 +552,11 @@ configure_kernel()
 	fi
 
 	new_config
-    else
+    elif [[ -f $ktest_kconfig_base ]]; then
 	cp "$ktest_kconfig_base" "$kconfig"
+    else
+	# Make target (e.g. allmodconfig, defconfig)
+	do_make "$ktest_kconfig_base"
     fi
 
     log_verbose "kernel_config_require: ${ktest_kernel_config_require[@]}  ${ktest_kernel_config_require_soft[@]}"
@@ -589,44 +592,47 @@ build_kernel()
 	configure_kernel
     fi
 
-    case $KERNEL_ARCH in
-	mips)
-	    do_make -k vmlinuz
-	    ;;
-	*)
-	    do_make -k
-	    ;;
-    esac
+    if [[ -n "${ktest_kbuild_target:-}" ]]; then
+	do_make -k $ktest_kbuild_target
+    else
+	case $KERNEL_ARCH in
+	    mips)
+		do_make -k vmlinuz
+		;;
+	    *)
+		do_make -k
+		;;
+	esac
 
-    local BOOT=$ktest_kernel_build/arch/$KERNEL_ARCH/boot
+	local BOOT=$ktest_kernel_build/arch/$KERNEL_ARCH/boot
 
-    case $ktest_arch in
-	x86*)
-	    install -m0644 "$BOOT/bzImage"	"$ktest_kernel_binary/vmlinuz"
-	    ;;
-	aarch64)
-	    install -m0644 "$BOOT/Image"	"$ktest_kernel_binary/vmlinuz"
-	    ;;
-	mips)
-	    install -m0644 "$BOOT/vmlinux.strip"	"$ktest_kernel_binary/vmlinuz"
-	    #install -m0644 "$ktest_kernel_build/vmlinux"	"$ktest_kernel_binary/vmlinuz"
-	    ;;
-	default)
-	    echo "Don't know how to install kernel"
-	    exit 1
-	    ;;
-    esac
+	case $ktest_arch in
+	    x86*)
+		install -m0644 "$BOOT/bzImage"	"$ktest_kernel_binary/vmlinuz"
+		;;
+	    aarch64)
+		install -m0644 "$BOOT/Image"	"$ktest_kernel_binary/vmlinuz"
+		;;
+	    mips)
+		install -m0644 "$BOOT/vmlinux.strip"	"$ktest_kernel_binary/vmlinuz"
+		;;
+	    default)
+		echo "Don't know how to install kernel"
+		exit 1
+		;;
+	esac
 
-    install -m0644 "$ktest_kernel_build/vmlinux" "$ktest_kernel_binary/vmlinux"
-    install -m0644 "$ktest_kernel_build/.config" "$ktest_kernel_binary/config"
+	install -m0644 "$ktest_kernel_build/vmlinux" "$ktest_kernel_binary/vmlinux"
+	install -m0644 "$ktest_kernel_build/.config" "$ktest_kernel_binary/config"
 
-    # if there weren't actually any modules selected, make modules_install gets
-    # confused:
-    touch "$ktest_kernel_build/modules.order"
-    touch "$ktest_kernel_build/modules.builtin"
+	# if there weren't actually any modules selected, make modules_install gets
+	# confused:
+	touch "$ktest_kernel_build/modules.order"
+	touch "$ktest_kernel_build/modules.builtin"
 
-    do_make modules_install
+	do_make modules_install
 
-    local kernel_version=$(cat "$ktest_kernel_build/include/config/kernel.release")
-    $DEPMOD -b "$ktest_kernel_binary/" -v $kernel_version
+	local kernel_version=$(cat "$ktest_kernel_build/include/config/kernel.release")
+	$DEPMOD -b "$ktest_kernel_binary/" -v $kernel_version
+    fi
 }
