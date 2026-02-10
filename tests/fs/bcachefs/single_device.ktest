@@ -543,7 +543,12 @@ test_key_merge()
 
     NR=$(cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys|grep -vE '^ '|wc -l)
 
-    [[ $NR -eq 4 ]]
+    echo "extents after key merge (no csum): $NR"
+
+    # Without checksums, extents merge freely up to bucket boundaries.
+    # 128 x 8K writes = 1MB; with default bucket sizes >= 1MB this
+    # merges to a single extent.
+    [[ $NR -le 4 ]]
 
     umount /mnt
 
@@ -564,6 +569,10 @@ test_key_merge_csum()
 
     NR=$(cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys|grep -vE '^ '|wc -l)
 
+    echo "extents after key merge (crc32c): $NR"
+
+    # With checksums, merging is limited by encoded_extent_max (default 256K).
+    # 128 x 8K writes = 1MB; 1MB / 256K = 4 extents.
     [[ $NR -le 16 ]]
 
     umount /mnt
