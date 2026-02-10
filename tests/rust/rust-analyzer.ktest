@@ -6,75 +6,39 @@ config-no-kbuild
 config-no-vm
 config-timeout $((20 * 60))
 
-run_rust_analyzer()
+test_system()
 {
     local test_file
     local out_dir
-    local work_dir
-    local source_dir
     local build_dir
-    local kernel_src="$ktest_kernel_source"
+    local source_dir="$ktest_kernel_source"
 
     test_file=$(basename -s .ktest "$0")
     out_dir="$ktest_out/out/${test_file}.system"
-    work_dir="$ktest_out/work/${test_file}.system"
-    source_dir="$work_dir/source"
-    build_dir="$work_dir/build"
+    build_dir="$ktest_out/work/${test_file}.system/build"
 
-    rm -rf "$work_dir"
-    mkdir -p "$out_dir" "$work_dir"
+    rm -rf "$build_dir"
+    mkdir -p "$out_dir" "$build_dir"
 
-    git -C "$kernel_src" worktree add --detach "$source_dir" HEAD
+    make -C "$source_dir" O="$build_dir" allmodconfig
+    "$source_dir/scripts/config" \
+        --file "$build_dir/.config" \
+        --enable CONFIG_RUST \
+        --enable CONFIG_RANDSTRUCT_NONE
+    make -C "$source_dir" O="$build_dir" olddefconfig
+    make -C "$source_dir" O="$build_dir" rust-analyzer
 
-    cleanup_worktree()
-    {
-        local f=$(basename -s .ktest "$0")
-        git -C "$ktest_kernel_source" worktree remove -f \
-            "$ktest_out/work/${f}.system/source" >/dev/null 2>&1 || true
-    }
+    local project="$build_dir/rust-project.json"
+    cp "$project" "$out_dir/rust-project.json"
 
-    trap cleanup_worktree RETURN
+    local start_ns end_ns
+    start_ns=$(date +%s%N)
+    rust-analyzer analysis-stats "$project" \
+        > "$out_dir/analysis-stats.txt"
+    end_ns=$(date +%s%N)
 
-    run_one()
-    {
-        local label=$1
-        local ref=$2
-        local project
-        local start_ns
-        local end_ns
-
-        git -C "$source_dir" checkout --detach "$ref"
-
-        make -C "$source_dir" O="$build_dir" allmodconfig
-        "$source_dir/scripts/config" \
-            --file "$build_dir/.config" \
-            --enable CONFIG_RUST \
-            --enable CONFIG_RANDSTRUCT_NONE
-        make -C "$source_dir" O="$build_dir" olddefconfig
-        make -C "$source_dir" O="$build_dir" rust-analyzer
-
-        project="$build_dir/rust-project.json"
-        cp "$project" "$out_dir/rust-project.${label}.json"
-
-        start_ns=$(date +%s%N)
-        rust-analyzer analysis-stats "$project" \
-            > "$out_dir/analysis-stats.${label}.txt"
-        end_ns=$(date +%s%N)
-
-        echo "analysis-stats.${label}.elapsed_ms=$(((end_ns - start_ns) / 1000000))" \
-            >> "$out_dir/analysis-stats.${label}.txt"
-    }
-
-    run_one head HEAD
-    run_one base HEAD~1
-
-    diff -u "$out_dir/rust-project.base.json" "$out_dir/rust-project.head.json" \
-        > "$out_dir/rust-project.diff" || true
-}
-
-test_system()
-{
-    run_rust_analyzer
+    echo "elapsed_ms=$(((end_ns - start_ns) / 1000000))" \
+        >> "$out_dir/analysis-stats.txt"
 }
 
 main "$@"
