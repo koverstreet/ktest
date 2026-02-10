@@ -449,6 +449,41 @@ test_device_set_state_offline()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+test_device_set_state_rw_offline()
+{
+    # Reproducer for github #1044:
+    # Setting an offline device's state back to rw triggers a NULL pointer
+    # dereference in bch2_do_discards_work (bdev is NULL) and
+    # __bch2_journal_reclaim (ca->devs[] is NULL).
+
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f		\
+	--replicas=2				\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}			\
+	${ktest_scratch_dev[2]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
+
+    dd if=/dev/zero of=/mnt/test bs=1M count=128 oflag=direct
+
+    for state in ro evacuating; do
+	bcachefs device set-state --force $state ${ktest_scratch_dev[1]}
+	bcachefs device offline --force ${ktest_scratch_dev[1]}
+
+	# This should not crash:
+	bcachefs device set-state rw 1 /mnt
+
+	bcachefs device online ${ktest_scratch_dev[1]}
+    done
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_device_readd()
 {
     set_watchdog 120
