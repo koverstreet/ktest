@@ -852,6 +852,158 @@ test_snapshot_file_delete_2()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+test_subvol_list()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # Data in root subvol
+    dd if=/dev/zero of=/mnt/rootfile bs=1M count=2 oflag=direct
+
+    # "work" subvol with a chain of snapshots (deeply nested snapshot tree)
+    bcachefs subvolume create /mnt/work
+    dd if=/dev/zero of=/mnt/work/base bs=1M count=4 oflag=direct
+    bcachefs subvolume snapshot -r /mnt/work /mnt/work/snap1
+    dd if=/dev/zero of=/mnt/work/v2 bs=1M count=2 oflag=direct
+    bcachefs subvolume snapshot -r /mnt/work /mnt/work/snap2
+    dd if=/dev/zero of=/mnt/work/v3 bs=1M count=1 oflag=direct
+    bcachefs subvolume snapshot -r /mnt/work /mnt/work/snap3
+    dd if=/dev/zero of=/mnt/work/v4 bs=1M count=1 oflag=direct
+    bcachefs subvolume snapshot -r /mnt/work /mnt/work/snap4
+    dd if=/dev/zero of=/mnt/work/latest bs=1M count=1 oflag=direct
+
+    # Nested subvolumes with their own snapshots
+    bcachefs subvolume create /mnt/projects
+    bcachefs subvolume create /mnt/projects/alpha
+    dd if=/dev/zero of=/mnt/projects/alpha/data bs=1M count=3 oflag=direct
+    bcachefs subvolume create /mnt/projects/beta
+    dd if=/dev/zero of=/mnt/projects/beta/data bs=1M count=5 oflag=direct
+    bcachefs subvolume snapshot -r /mnt/projects /mnt/projects/backup
+
+    # Snapshot of root
+    bcachefs subvolume snapshot -r /mnt /mnt/snap-root
+
+    echo "=== flat (no snapshots) ==="
+    bcachefs subvolume list /mnt
+
+    echo ""
+    echo "=== flat (with snapshots) ==="
+    bcachefs subvolume list --snapshots /mnt
+
+    echo ""
+    echo "=== flat recursive ==="
+    bcachefs subvolume list -R /mnt
+
+    echo ""
+    echo "=== flat --sort=size ==="
+    bcachefs subvolume list -R --sort=size /mnt
+
+    echo ""
+    echo "=== flat --readonly --snapshots ==="
+    bcachefs subvolume list -R --readonly --snapshots /mnt
+
+    echo ""
+    echo "=== json ==="
+    bcachefs subvolume list --json /mnt
+
+    echo ""
+    echo "=== json (with snapshots, recursive) ==="
+    bcachefs subvolume list --json --snapshots -R /mnt
+
+    echo ""
+    echo "=== tree ==="
+    bcachefs subvolume list --tree /mnt
+
+    echo ""
+    echo "=== tree (with snapshots) ==="
+    bcachefs subvolume list --tree --snapshots /mnt
+
+    echo ""
+    echo "=== snapshot tree (root) ==="
+    bcachefs subvolume list-snapshots /mnt
+
+    echo ""
+    echo "=== snapshot tree (work - deep chain) ==="
+    bcachefs subvolume list-snapshots /mnt/work
+
+    echo ""
+    echo "=== snapshot tree (projects) ==="
+    bcachefs subvolume list-snapshots /mnt/projects
+
+    echo ""
+    echo "=== snapshots flat ==="
+    bcachefs subvolume list-snapshots --flat /mnt/work
+
+    echo ""
+    echo "=== snapshots flat --sort=size ==="
+    bcachefs subvolume list-snapshots --flat --sort=size /mnt/work
+
+    echo ""
+    echo "=== snapshots flat --readonly ==="
+    bcachefs subvolume list-snapshots --flat --readonly /mnt/work
+
+    echo ""
+    echo "=== snapshots json ==="
+    bcachefs subvolume list-snapshots --json /mnt/work
+
+    umount /mnt
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_subvol_list_stress()
+{
+    set_watchdog 300
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    local nr_subvols=20
+    local nr_snaps=10
+
+    # Create subvolumes with data
+    for ((i = 0; i < nr_subvols; i++)); do
+	bcachefs subvolume create /mnt/sv$i
+	dd if=/dev/zero of=/mnt/sv$i/data bs=64K count=1 oflag=direct 2>/dev/null
+
+	# Create snapshot chains of varying depth
+	local depth=$(( (i % nr_snaps) + 1 ))
+	for ((j = 0; j < depth; j++)); do
+	    dd if=/dev/zero of=/mnt/sv$i/v$j bs=64K count=1 oflag=direct 2>/dev/null
+	    bcachefs subvolume snapshot -r /mnt/sv$i /mnt/sv$i/snap$j
+	done
+    done
+
+    # Also snapshot root a few times
+    for ((i = 0; i < 5; i++)); do
+	dd if=/dev/zero of=/mnt/rootdata$i bs=64K count=1 oflag=direct 2>/dev/null
+	bcachefs subvolume snapshot -r /mnt /mnt/snap-root$i
+    done
+
+    bcachefs_antagonist
+
+    # Loop listing in various modes while antagonist runs
+    for ((iter = 0; iter < 20; iter++)); do
+	bcachefs subvolume list /mnt			> /dev/null
+	bcachefs subvolume list --snapshots /mnt	> /dev/null
+	bcachefs subvolume list -R /mnt			> /dev/null
+	bcachefs subvolume list --tree /mnt		> /dev/null
+	bcachefs subvolume list-snapshots /mnt		> /dev/null
+	bcachefs subvolume list-snapshots --flat /mnt	> /dev/null
+
+	# List from random subvolumes
+	for sv in sv0 sv5 sv10 sv15 sv19; do
+	    bcachefs subvolume list /mnt/$sv		> /dev/null
+	    bcachefs subvolume list --tree /mnt/$sv	> /dev/null
+	    bcachefs subvolume list-snapshots /mnt/$sv	> /dev/null
+	    bcachefs subvolume list-snapshots --flat /mnt/$sv > /dev/null
+	done
+    done
+
+    umount /mnt
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_insert_range()
 {
     set_watchdog 60
