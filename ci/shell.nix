@@ -1,8 +1,9 @@
-# CI worker build environment.
+# CI worker Rust environment.
 #
-# Provides all dependencies for kernel builds (including Rust) and test
-# execution. Replaces the build-related entries in configuration.nix so
-# CI machines can run a minimal NixOS config.
+# Provides the Rust toolchain with a merged sysroot (rust-src at the
+# path generate_rust_analyzer.py expects). System compilers (gcc, clang)
+# come from configuration.nix — do NOT add them here, as nix-shell's
+# cc-wrapper adds hardening flags that break kernel builds.
 #
 # Usage:
 #   ci/ci-worker [test-git-branch.sh args...]    # preferred
@@ -61,25 +62,17 @@ WRAPPER
   '';
 in
 
-pkgs.mkShell {
+pkgs.mkShellNoCC {
   nativeBuildInputs = with pkgs; [
-    # kernel build essentials
-    gnumake gcc clang binutils
-    flex bison bc
-    pkg-config pahole
-    elfutils ncurses openssl zlib
-
     # Rust for kernel (wrapped to include rust-src in sysroot)
     rustcWrapped cargo rust-bindgen rust-analyzer
-    llvmPackages.libclang llvmPackages.lld
 
-    # test infrastructure
-    qemu
-    brotli lcov
-    python3
-    gdb socat
-    perl
+    # Do NOT include llvmPackages.libclang in nativeBuildInputs — its
+    # setup hooks set LLVM environment variables that cause the system
+    # clang to warn about unused flags, which becomes fatal with -Werror.
+    # Set LIBCLANG_PATH directly instead.
   ];
 
+  LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
   RUST_LIB_SRC = "${rustSysroot}/lib/rustlib/src/rust/library";
 }
