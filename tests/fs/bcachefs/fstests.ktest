@@ -27,11 +27,13 @@ run_test()
     # generic/441: we don't yet support the fsync semantics of "only return an error once"
     # generic/558: extremely slow on bcachefs, mainly due to inodes being
     # smaller than other filesystems (thus we can fit a lot more)
+    # generic/559: duperemove dedupe test on 2GB identical data; ~4GB of
+    # comparison I/O (with decryption) exceeds 1200s timeout on CI VMs
     #
     # generic/219, generic/328, generic/762: quota failures that we don't care about yet
     # generic/757: dm logwrites test that needs to be tweaked for bcachefs, it doesn't purge the journal of entries from the future
 
-    run_fstests -e generic/064,generic/102,generic/275,generic/414,generic/441,generic/558,generic/219,generic/328,generic/762,generic/757 "$@"
+    run_fstests -e generic/064,generic/102,generic/275,generic/414,generic/441,generic/558,generic/559,generic/219,generic/328,generic/762,generic/757 "$@"
 
     bcachefs_test_end_checks ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
 }
