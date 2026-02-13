@@ -11,6 +11,7 @@ config-kbuild-target rust-analyzer
 
 require-kernel-config RUST
 require-kernel-config RANDSTRUCT_NONE
+require-kernel-config RANDSTRUCT=n
 
 test_system()
 {
