@@ -20,7 +20,7 @@ pkgs.mkShell {
 
     # Rust for kernel
     rustc cargo rust-bindgen rust-analyzer
-    llvmPackages.libclang
+    llvmPackages.libclang llvmPackages.lld
 
     # test infrastructure
     qemu
