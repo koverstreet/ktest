@@ -578,4 +578,95 @@ test_recover_super()
     check_bcachefs_counters ${ktest_scratch_dev[0]}
 }
 
+test_mv_cross_subvol_io_opts()
+{
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f			\
+	--label=ssd ${ktest_scratch_dev[0]}		\
+	--label=hdd ${ktest_scratch_dev[2]}		\
+	--foreground_target=ssd				\
+	--background_target=hdd
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[2]} /mnt
+
+    # Dest subvol: override targets so data should land on hdd
+    bcachefs subvolume create /mnt/dst
+    bcachefs set-file-option --foreground_target=hdd /mnt/dst
+    bcachefs set-file-option --background_target=hdd /mnt/dst
+
+    # Write test file in root subvol (data goes to ssd via foreground_target)
+    dd if=/dev/urandom of=/mnt/testfile bs=1M count=10 oflag=direct
+
+    # mv across subvolumes: rename returns EXDEV, coreutils falls back to
+    # copy_file_range (reflink) + unlink
+    mv /mnt/testfile /mnt/dst/testfile
+
+    # Verify data is still intact
+    md5sum /mnt/dst/testfile
+
+    # The destination reflink_p must have REFLINK_P_MAY_UPDATE_OPTIONS set
+    # so the reconciler can move data to match dst subvol's IO path options.
+    # Bug: bch2_remap_file_range() passes may_change_src_io_path_opts=false,
+    # so the flag never gets propagated to the destination.
+    umount /mnt
+
+    local devs=(${ktest_scratch_dev[0]} ${ktest_scratch_dev[2]})
+    local extents=$(bcachefs list -b extents "${devs[@]}")
+
+    if echo "$extents" | grep -q "reflink_p.*may_update_opts"; then
+	echo "PASS: reflink_p has may_update_opts"
+    elif echo "$extents" | grep -q reflink_p; then
+	echo "FAIL: reflink_p missing may_update_opts flag"
+	echo "Reconciler won't update IO path options after cross-subvol mv"
+	echo "$extents" | grep reflink_p
+	return 1
+    else
+	echo "No reflink_p found — mv did not use copy_file_range"
+    fi
+
+    bcachefs fsck -ny "${devs[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_reflink_option_propagate()
+{
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f			\
+	--label=ssd ${ktest_scratch_dev[0]}		\
+	--label=hdd ${ktest_scratch_dev[2]}		\
+	--foreground_target=ssd				\
+	--background_target=hdd
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[2]} /mnt
+
+    # Dst subvol with hdd targets — data should eventually move there
+    bcachefs subvolume create /mnt/dst
+    bcachefs set-file-option --foreground_target=hdd /mnt/dst
+    bcachefs set-file-option --background_target=hdd /mnt/dst
+
+    # Write test file in root subvol (goes to ssd via foreground_target)
+    dd if=/dev/urandom of=/mnt/testfile bs=1M count=10 oflag=direct
+
+    # Cross-subvol mv: coreutils uses copy_file_range (reflink) + unlink
+    # This creates reflink_p extents with REFLINK_P_MAY_UPDATE_OPTIONS set
+    mv /mnt/testfile /mnt/dst/testfile
+
+    # Propagate dst subvol's IO options to reflinked indirect extents
+    bcachefs reflink-option-propagate /mnt/dst/testfile
+
+    # --set-may-update should be harmless on already-flagged extents
+    bcachefs reflink-option-propagate --set-may-update /mnt/dst/testfile
+
+    # Verify data integrity
+    md5sum /mnt/dst/testfile
+
+    umount /mnt
+
+    local devs=(${ktest_scratch_dev[0]} ${ktest_scratch_dev[2]})
+    bcachefs fsck -ny "${devs[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 main $@
