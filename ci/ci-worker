@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# CI worker driver — runs test-git-branch.sh inside a nix shell with
+# all build dependencies (including Rust stdlib sources for kernel Rust
+# builds).
+#
+# Deploy this as the CI worker entry point instead of running
+# test-git-branch.sh directly.
+#
+# Usage: ci/ci-worker [test-git-branch.sh args...]
+
+set -euo pipefail
+
+KTEST_DIR=$(dirname "$(readlink -e "$0")")/..
+
+exec nix-shell "$KTEST_DIR/ci/shell.nix" \
+    --run "exec '$KTEST_DIR/ci/test-git-branch.sh' $(printf '%q ' "$@")"
