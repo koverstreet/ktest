@@ -1563,6 +1563,30 @@ test_dump()
     rm /tmp/dump*
 }
 
+test_dump_sanitize()
+{
+    set_watchdog 60
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    # Small files produce inline_data keys; /usr/bin gives dirents + extents
+    echo "sensitive data" > /mnt/secret.txt
+    cp -r /usr/bin /mnt
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+    umount /mnt
+
+    # Sanitize inline data — fsck should still pass
+    bcachefs dump -s data -o /tmp/dump ${ktest_scratch_dev[0]}
+    bcachefs undump /tmp/dump.qcow2
+    bcachefs fsck -ny /tmp/dump
+    rm /tmp/dump*
+
+    # Sanitize filenames too — dump/undump shouldn't crash
+    bcachefs dump -s filenames -o /tmp/dump ${ktest_scratch_dev[0]}
+    bcachefs undump /tmp/dump.qcow2
+    rm /tmp/dump*
+}
+
 test_kill_btree_node()
 {
     set_watchdog 240
