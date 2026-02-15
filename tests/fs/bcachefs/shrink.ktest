@@ -72,8 +72,6 @@ test_online_three_device_replicas_shrink()
     # format dev1 and dev2 to 1G, with replicas=2
     run_quiet "" bcachefs format -f		\
 	--replicas=2                        \
-	--data_replicas_required=2          \
-	--metadata_replicas_required=2      \
 	--fs_size=1G        				\
 	${ktest_scratch_dev[0]} --fs_size=1G ${ktest_scratch_dev[1]}
 
