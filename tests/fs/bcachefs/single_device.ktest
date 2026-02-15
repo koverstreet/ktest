@@ -1161,27 +1161,6 @@ test_online_grow()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
-test_online_empty_shrink()
-{
-    set_watchdog 60
-    bcachefs_antagonist
-
-    run_quiet "" bcachefs format -f		\
-	--fs_size=1G				\
-	${ktest_scratch_dev[0]}
-
-    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
-
-    df -h /mnt
-    bcachefs device resize ${ktest_scratch_dev[0]} 500M
-    df -h /mnt
-
-    umount /mnt
-
-    bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
-}
-
 test_offline_grow()
 {
     set_watchdog 60

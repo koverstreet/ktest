@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+require-kernel-config BCACHEFS_TESTS
+require-kernel-config BCACHEFS_QUOTA
+
+require-kernel-config MD
+require-kernel-config BLK_DEV_DM
+require-kernel-config DM_FLAKEY
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+
+
+test_online_empty_shrink()
+{
+    set_watchdog 60
+    bcachefs_antagonist
+
+    run_quiet "" bcachefs format -f		\
+	--fs_size=1G				\
+	${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    df -h /mnt
+    bcachefs device resize ${ktest_scratch_dev[0]} 500M
+    df -h /mnt
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+main "$@"
