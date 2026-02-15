@@ -51,7 +51,7 @@ test_online_two_device_data_shrink()
     dd if=/dev/urandom of=/mnt/foo bs=1M count=700 oflag=direct
 
     # add dev2
-    bcachefs device add /mnt ${ktest_scratch_dev[1]}
+    bcachefs device add -f /mnt ${ktest_scratch_dev[1]}
 
     # resize dev1 to minimum size -> should evacuate most data to dev2
     df -h /mnt
@@ -81,14 +81,12 @@ test_online_three_device_replicas_shrink()
     dd if=/dev/urandom of=/mnt/foo bs=1M count=700 oflag=direct
 
     # add dev3
-    bcachefs device add /mnt ${ktest_scratch_dev[2]}
+    bcachefs device add -f /mnt ${ktest_scratch_dev[2]}
 
     # resize dev1 to minimum size -> should evacuate most data to dev3 to ensure replicas are met
     df -h /mnt
     bcachefs device resize ${ktest_scratch_dev[0]} 256M
     df -h /mnt
-
-    bcachefs fs usage -h /mnt --all
 
     umount /mnt
 
