@@ -42,7 +42,6 @@ test_online_two_device_data_shrink()
     # format dev1 to 1G
     run_quiet "" bcachefs format -f		\
 	--fs_size=1G        				\
-	-l "bcachefs"				        \
 	${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
@@ -53,7 +52,7 @@ test_online_two_device_data_shrink()
     # add dev2
     bcachefs device add /mnt ${ktest_scratch_dev[1]}
 
-    # resize dev1 to 100M -> should evacuate most data to dev2
+    # resize dev1 to minimum size -> should evacuate most data to dev2
     df -h /mnt
     bcachefs device resize ${ktest_scratch_dev[0]} 256M
     df -h /mnt
@@ -62,8 +61,8 @@ test_online_two_device_data_shrink()
 
     umount /mnt
 
-    bcachefs fsck -ny /dev/disk/by-label/bcachefs
-    bcachefs_test_end_checks /dev/disk/by-label/bcachefs
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks "${ktest_scratch_dev[@]}"
 }
 
 main "$@"
