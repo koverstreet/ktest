@@ -11,6 +11,7 @@ require-kernel-config DM_FLAKEY
 
 config-scratch-devs 4G
 config-scratch-devs 4G
+config-scratch-devs 2G
 
 
 test_online_empty_shrink()
@@ -53,6 +54,38 @@ test_online_two_device_data_shrink()
     bcachefs device add /mnt ${ktest_scratch_dev[1]}
 
     # resize dev1 to minimum size -> should evacuate most data to dev2
+    df -h /mnt
+    bcachefs device resize ${ktest_scratch_dev[0]} 256M
+    df -h /mnt
+
+    umount /mnt
+
+    bcachefs fsck -ny "${ktest_scratch_dev[0]}" "${ktest_scratch_dev[1]}"
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}" "${ktest_scratch_dev[1]}"
+}
+
+test_online_three_device_replicas_shrink()
+{
+    set_watchdog 60
+    bcachefs_antagonist
+
+    # format dev1 and dev2 to 1G, with replicas=2
+    run_quiet "" bcachefs format -f		\
+	--replicas=2                        \
+	--data_replicas_required=2          \
+	--metadata_replicas_required=2      \
+	--fs_size=1G        				\
+	${ktest_scratch_dev[0]} --fs_size=1G ${ktest_scratch_dev[1]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # write 700M data
+    dd if=/dev/urandom of=/mnt/foo bs=1M count=700 oflag=direct
+
+    # add dev3
+    bcachefs device add /mnt ${ktest_scratch_dev[2]}
+
+    # resize dev1 to minimum size -> should evacuate most data to dev3 to ensure replicas are met
     df -h /mnt
     bcachefs device resize ${ktest_scratch_dev[0]} 256M
     df -h /mnt
