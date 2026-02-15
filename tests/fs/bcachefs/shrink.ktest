@@ -42,6 +42,7 @@ test_online_two_device_data_shrink()
     # format dev1 to 1G
     run_quiet "" bcachefs format -f		\
 	--fs_size=1G        				\
+	-l "bcachefs"				        \
 	${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
@@ -61,8 +62,8 @@ test_online_two_device_data_shrink()
 
     umount /mnt
 
-    bcachefs fsck -ny ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}
-    bcachefs_test_end_checks ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}
+    bcachefs fsck -ny /dev/disk/by-label/bcachefs
+    bcachefs_test_end_checks /dev/disk/by-label/bcachefs
 }
 
 main "$@"
