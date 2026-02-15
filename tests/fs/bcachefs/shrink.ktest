@@ -61,8 +61,8 @@ test_online_two_device_data_shrink()
 
     umount /mnt
 
-    bcachefs fsck -ny ${ktest_scratch_dev[0]}
-    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}
 }
 
 main "$@"
