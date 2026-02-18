@@ -177,7 +177,7 @@ fn branch_test_jobs(
                 commit: commit.clone(),
                 age: age as u64,
                 nice,
-                duration: stats.map_or(rc.ktest.subtest_duration_def, |s| s.duration),
+                duration: stats.map_or(rc.ktest.subtest_duration_def.unwrap_or(30), |s| s.duration),
                 test: test_name.to_string(),
                 subtest,
             });

@@ -137,15 +137,15 @@ fn get_test_job_for_user(
         let duration_secs = if let Some(s) = stats {
             s.duration
         } else {
-            rc.subtest_duration_def
+            rc.subtest_duration_def.unwrap_or(30)
         };
 
-        if duration_sum != 0 && duration_sum + duration_secs > rc.subtest_duration_max {
+        if duration_sum != 0 && duration_sum + duration_secs > rc.subtest_duration_max.unwrap_or(600) {
             if args.verbose {
                 eprintln!(
                     "get-test-job: have {} > {} seconds of work, breaking",
                     duration_sum + duration_secs,
-                    rc.subtest_duration_max
+                    rc.subtest_duration_max.unwrap_or(600)
                 );
             }
             break;

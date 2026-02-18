@@ -50,9 +50,17 @@ pub struct Ktestrc {
     pub linux_repo: PathBuf,
     pub output_dir: PathBuf,
     pub ktest_dir: PathBuf,
-    pub users_dir: PathBuf,
-    pub subtest_duration_max: u64,
-    pub subtest_duration_def: u64,
+    #[serde(default)]
+    pub ci_url: Option<String>,
+    /// Git remote name for resolving branch refs (e.g. "bcachefs")
+    #[serde(default)]
+    pub ci_remote: Option<String>,
+    #[serde(default)]
+    pub users_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub subtest_duration_max: Option<u64>,
+    #[serde(default)]
+    pub subtest_duration_def: Option<u64>,
     #[serde(default)]
     pub verbose: bool,
     #[serde(default)]
@@ -77,14 +85,16 @@ pub fn ciconfig_read() -> anyhow::Result<CiConfig> {
         users: BTreeMap::new(),
     };
 
-    for i in std::fs::read_dir(&rc.ktest.users_dir)?
-        .filter_map(|x| x.ok())
-        .map(|i| i.path())
-    {
-        rc.users.insert(
-            i.file_stem().unwrap().to_string_lossy().to_string(),
-            users::userrc_read(&i),
-        );
+    if let Some(ref users_dir) = rc.ktest.users_dir {
+        for i in std::fs::read_dir(users_dir)?
+            .filter_map(|x| x.ok())
+            .map(|i| i.path())
+        {
+            rc.users.insert(
+                i.file_stem().unwrap().to_string_lossy().to_string(),
+                users::userrc_read(&i),
+            );
+        }
     }
 
     Ok(rc)
@@ -282,14 +292,104 @@ fn parse_test_results(f: &[u8]) -> anyhow::Result<CommitResultsCapnp> {
     })
 }
 
+/// Conditional HTTP fetch of one capnp file; updates local cache.
+/// Returns Ok(true) if data was fetched/cached, Ok(false) if 404.
+fn fetch_capnp_cached(
+    client: &reqwest::blocking::Client,
+    base_url: &str,
+    cache_dir: &Path,
+    commit_id: &str,
+) -> anyhow::Result<bool> {
+    let cache_path = cache_dir.join(format!("{}.capnp", commit_id));
+    let url = format!("{}/{}.capnp", base_url.trim_end_matches('/'), commit_id);
+
+    let mut req = client.get(&url);
+
+    // Conditional request if we have a cached copy
+    if let Ok(meta) = std::fs::metadata(&cache_path) {
+        if let Ok(mtime) = meta.modified() {
+            let dt: DateTime<Utc> = mtime.into();
+            req = req.header("If-Modified-Since",
+                dt.format("%a, %d %b %Y %H:%M:%S GMT").to_string());
+        }
+    }
+
+    let resp = req.send()?;
+    match resp.status().as_u16() {
+        304 => Ok(true),
+        200 => {
+            let bytes = resp.bytes()?;
+            let _ = std::fs::write(&cache_path, &bytes);
+            Ok(true)
+        }
+        404 => Ok(false),
+        s   => anyhow::bail!("HTTP {}: {}", s, url),
+    }
+}
+
+/// Prefetch capnp files for multiple commits in parallel.
+/// Uses HTTP/2 multiplexing over a shared client with 8 worker threads.
+/// Commits already cached are skipped entirely (cache invalidation
+/// happens via the freshness window on recent commits).
+fn prefetch_capnp(base_url: &str, cache_dir: &Path, commit_ids: &[String]) {
+    let _ = create_dir_all(cache_dir);
+
+    // Split: first N_FRESH commits get conditional requests (might still be updating),
+    // the rest only fetch if not cached at all.
+    const N_FRESH: usize = 5;
+
+    let to_fetch: Vec<(&str, bool)> = commit_ids.iter().enumerate()
+        .filter_map(|(i, id)| {
+            let cache_path = cache_dir.join(format!("{}.capnp", id));
+            let cached = cache_path.exists();
+
+            if i < N_FRESH {
+                // Recent: always check (conditional request if cached)
+                Some((id.as_str(), cached))
+            } else if cached {
+                None  // Old + cached: skip entirely
+            } else {
+                Some((id.as_str(), false))  // Old + not cached: fetch
+            }
+        })
+        .collect();
+
+    if to_fetch.is_empty() { return; }
+
+    let client = reqwest::blocking::Client::new();
+    let n_threads = 8.min(to_fetch.len()).max(1);
+    let chunk_size = to_fetch.len().div_ceil(n_threads).max(1);
+
+    std::thread::scope(|s| {
+        for chunk in to_fetch.chunks(chunk_size) {
+            let client = client.clone();
+            s.spawn(move || {
+                for &(id, _) in chunk {
+                    if let Err(e) = fetch_capnp_cached(&client, base_url, cache_dir, id) {
+                        eprintln!("warning: fetch {}: {}", &id[..12.min(id.len())], e);
+                    }
+                }
+            });
+        }
+    });
+}
+
+fn commit_read_capnp(ktestrc: &Ktestrc, commit_id: &str) -> anyhow::Result<Vec<u8>> {
+    Ok(std::fs::read(ktestrc.output_dir.join(format!("{}.capnp", commit_id)))?)
+}
+
 pub fn commitdir_get_results(ktestrc: &Ktestrc, commit_id: &str) -> anyhow::Result<TestResultsMap> {
-    let f = std::fs::read(ktestrc.output_dir.join(commit_id.to_owned() + ".capnp"))?;
-    Ok(parse_test_results(&f)?.tests)
+    Ok(parse_test_results(&commit_read_capnp(ktestrc, commit_id)?)?.tests)
 }
 
 pub fn commitdir_get_results_full(ktestrc: &Ktestrc, commit_id: &str) -> anyhow::Result<CommitResultsCapnp> {
-    let f = std::fs::read(ktestrc.output_dir.join(commit_id.to_owned() + ".capnp"))?;
-    parse_test_results(&f)
+    // For single-commit access, ensure cache is fresh
+    if let Some(ref base_url) = ktestrc.ci_url {
+        let _ = create_dir_all(&ktestrc.output_dir);
+        let client = reqwest::blocking::Client::new();
+        fetch_capnp_cached(&client, base_url, &ktestrc.output_dir, commit_id)?;
+    }
+    parse_test_results(&commit_read_capnp(ktestrc, commit_id)?)
 }
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -818,23 +918,30 @@ pub fn branch_get_results(
         return Err(format!("Error walking {}: {}", branch_or_commit, e));
     }
 
+    // Phase 1: collect commit IDs from git (cheap, no I/O beyond git)
+    let commits: Vec<(String, String)> = walk
+        .filter_map(|i| i.ok())
+        .filter_map(|i| repo.find_commit(i).ok())
+        .take(150)
+        .map(|c| (c.id().to_string(), c.message().unwrap_or("").to_string()))
+        .collect();
+
+    // Phase 2: prefetch all capnp files in parallel (HTTP/2 multiplexed)
+    if let Some(ref base_url) = ktest.ci_url {
+        let ids: Vec<String> = commits.iter().map(|(id, _)| id.clone()).collect();
+        prefetch_capnp(base_url, &ktest.output_dir, &ids);
+    }
+
+    // Phase 3: build results from cache (now all filesystem reads)
     let mut nr_empty = 0;
     let mut nr_commits = 0;
     let mut ret: Vec<CommitResults> = Vec::new();
 
-    for commit in walk
-        .filter_map(|i| i.ok())
-        .filter_map(|i| repo.find_commit(i).ok())
-    {
-        let id = commit.id().to_string();
+    for (id, message) in commits {
         let tests = commitdir_get_results(ktest, &id).unwrap_or(BTreeMap::new());
         let tests = filter_results(tests, tests_matching);
 
-        let r = CommitResults {
-            id,
-            message: commit.message().unwrap_or("").to_string(),
-            tests,
-        };
+        let r = CommitResults { id, message, tests };
 
         if !r.tests.is_empty() {
             nr_empty = 0;

@@ -1,7 +1,7 @@
 use ci_cgi::{
-    branch_get_results, branchlog_parse, ciconfig_read, commitdir_get_results_full,
-    count_status, format_duration, get_queue_stats, ktestrc_read, user_stats_get,
-    user_stats_recent, workers_get, BranchEntry, Ktestrc, TestStatus,
+    branch_get_results, ciconfig_read, commitdir_get_results_full,
+    count_status, format_duration, get_queue_stats, ktestrc_read, Ktestrc, user_stats_get,
+    user_stats_recent, workers_get, BranchEntry, TestStatus,
 };
 use clap::{Parser, Subcommand};
 
@@ -28,9 +28,8 @@ struct Args {
 enum Command {
     /// Branch log: commit list with pass/fail counts
     Log {
-        #[arg(long, default_value = "bcachefs")]
-        user: String,
-        #[arg(long, default_value = "bcachefs-testing")]
+        /// Git ref — branch name resolved against ci_remote,
+        /// or explicit remote/branch (e.g. bcachefs/bcachefs-testing)
         branch: String,
     },
     /// Commit detail: per-test status and duration
@@ -60,57 +59,59 @@ fn color_status(status: TestStatus) -> String {
     }
 }
 
-fn fetch_remote(base_url: &str, path: &str) -> anyhow::Result<Vec<u8>> {
-    let url = format!("{}/{}", base_url.trim_end_matches('/'), path);
-    let resp = reqwest::blocking::get(&url)?;
-    if !resp.status().is_success() {
-        anyhow::bail!("HTTP {}: {}", resp.status(), url);
+/// Resolve a branch name to a git ref, trying:
+/// 1. ci_remote/name (e.g. "bcachefs/bcachefs-testing") — preferred, tracks remote
+/// 2. The name as-is (e.g. explicit "bcachefs/bcachefs-testing", "HEAD", a commit hash)
+fn resolve_branch(repo: &git2::Repository, ktest: &Ktestrc, name: &str) -> anyhow::Result<String> {
+    // Try ci_remote/name first — we want the remote tracking branch, not a stale local
+    if let Some(ref remote) = ktest.ci_remote {
+        let with_remote = format!("{}/{}", remote, name);
+        if repo.revparse_single(&with_remote).is_ok() {
+            return Ok(with_remote);
+        }
     }
-    Ok(resp.bytes()?.to_vec())
+
+    // Fall back to as-is (explicit ref, commit hash, etc.)
+    if repo.revparse_single(name).is_ok() {
+        return Ok(name.to_string());
+    }
+
+    anyhow::bail!("can't resolve '{}' — try a full ref like 'remote/branch'", name)
 }
 
 fn cmd_log(
-    user: &str,
     branch: &str,
-    remote: Option<&str>,
-    ktest: Option<&Ktestrc>,
+    ktest: &Ktestrc,
     json: bool,
 ) -> anyhow::Result<()> {
-    let entries: Vec<BranchEntry> = if let Some(base_url) = remote {
-        let path = format!("branch.{}.{}.capnp", user, branch);
-        let data = fetch_remote(base_url, &path)?;
-        branchlog_parse(&data)?
-    } else {
-        let ktest = ktest.ok_or_else(|| anyhow::anyhow!("no local config and no --remote URL"))?;
+    unsafe {
+        git2::opts::set_verify_owner_validation(false)
+            .expect("set_verify_owner_validation should never fail");
+    }
 
-        unsafe {
-            git2::opts::set_verify_owner_validation(false)
-                .expect("set_verify_owner_validation should never fail");
-        }
+    let repo = git2::Repository::open(&ktest.linux_repo)?;
+    let gitref = resolve_branch(&repo, ktest, branch)?;
+    let all = regex::Regex::new("").unwrap();
+    let results = branch_get_results(&repo, ktest, None, None, Some(&gitref), &all)
+        .map_err(|e| anyhow::anyhow!(e))?;
 
-        let repo = git2::Repository::open(&ktest.linux_repo)?;
-        let all = regex::Regex::new("").unwrap();
-        let results = branch_get_results(&repo, ktest, Some(user), Some(branch), None, &all)
-            .map_err(|e| anyhow::anyhow!(e))?;
-
-        results.into_iter()
-            .filter(|r| !r.tests.is_empty())
-            .map(|r| {
-                let duration: u64 = r.tests.values().map(|t| t.duration).sum();
-                BranchEntry {
-                    commit_id: r.id,
-                    message: r.message,
-                    passed: count_status(&r.tests, TestStatus::Passed),
-                    failed: count_status(&r.tests, TestStatus::Failed),
-                    notrun: count_status(&r.tests, TestStatus::Notrun),
-                    notstarted: count_status(&r.tests, TestStatus::Notstarted),
-                    inprogress: count_status(&r.tests, TestStatus::Inprogress),
-                    unknown: count_status(&r.tests, TestStatus::Unknown),
-                    duration,
-                }
-            })
-            .collect()
-    };
+    let entries: Vec<BranchEntry> = results.into_iter()
+        .filter(|r| !r.tests.is_empty())
+        .map(|r| {
+            let duration: u64 = r.tests.values().map(|t| t.duration).sum();
+            BranchEntry {
+                commit_id: r.id,
+                message: r.message,
+                passed: count_status(&r.tests, TestStatus::Passed),
+                failed: count_status(&r.tests, TestStatus::Failed),
+                notrun: count_status(&r.tests, TestStatus::Notrun),
+                notstarted: count_status(&r.tests, TestStatus::Notstarted),
+                inprogress: count_status(&r.tests, TestStatus::Inprogress),
+                unknown: count_status(&r.tests, TestStatus::Unknown),
+                duration,
+            }
+        })
+        .collect();
 
     if json {
         let json_entries: Vec<serde_json::Value> = entries.iter().map(|e| {
@@ -131,7 +132,7 @@ fn cmd_log(
     }
 
     if entries.is_empty() {
-        println!("No results for {}/{}", user, branch);
+        println!("No results for {}", branch);
         return Ok(());
     }
 
@@ -165,19 +166,23 @@ fn cmd_log(
 
 fn cmd_show(
     commit: &str,
-    remote: Option<&str>,
-    ktest: Option<&Ktestrc>,
+    ktest: &Ktestrc,
     json: bool,
 ) -> anyhow::Result<()> {
-    if let Some(_base_url) = remote {
-        // For remote, we'd need the commit capnp to be served
-        // For now, just support local
-        anyhow::bail!("--remote not yet supported for 'show' (needs per-commit capnp serving)");
-    }
+    // Resolve short prefix to full hash via git
+    let commit = if commit.len() < 40 {
+        unsafe {
+            git2::opts::set_verify_owner_validation(false)
+                .expect("set_verify_owner_validation should never fail");
+        }
+        let repo = git2::Repository::open(&ktest.linux_repo)?;
+        let obj = repo.revparse_single(commit)?;
+        obj.id().to_string()
+    } else {
+        commit.to_string()
+    };
 
-    let ktest = ktest.ok_or_else(|| anyhow::anyhow!("no local config and no --remote URL"))?;
-
-    let full = commitdir_get_results_full(ktest, commit)?;
+    let full = commitdir_get_results_full(ktest, &commit)?;
 
     if json {
         let json_tests: Vec<serde_json::Value> = full.tests.iter().map(|(name, r)| {
@@ -349,24 +354,25 @@ fn cmd_summary(ktest: &Ktestrc, json: bool) -> anyhow::Result<()> {
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    // Try to read local config; it's optional for remote mode
-    let ktest = ktestrc_read().ok();
+    let mut ktest = ktestrc_read()
+        .map_err(|e| anyhow::anyhow!("failed to read /etc/ktest-ci.toml: {}", e))?;
 
-    let remote = args.remote.as_deref();
+    // --remote overrides ci_url from config
+    if let Some(url) = args.remote {
+        ktest.ci_url = Some(url);
+    }
 
     match args.command {
-        Command::Log { user, branch } => {
-            cmd_log(&user, &branch, remote, ktest.as_ref(), args.json)
+        Command::Log { branch } => {
+            cmd_log(&branch, &ktest, args.json)
         }
         Command::Show { commit } => {
-            cmd_show(&commit, remote, ktest.as_ref(), args.json)
+            cmd_show(&commit, &ktest, args.json)
         }
         Command::Workers => {
-            let ktest = ktest.ok_or_else(|| anyhow::anyhow!("workers requires local config (/etc/ktest-ci.toml)"))?;
             cmd_workers(&ktest, args.json)
         }
         Command::Summary => {
-            let ktest = ktest.ok_or_else(|| anyhow::anyhow!("summary requires local config (/etc/ktest-ci.toml)"))?;
             cmd_summary(&ktest, args.json)
         }
     }
