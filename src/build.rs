@@ -23,6 +23,12 @@ fn main() {
         .run()
         .expect("compiling schema");
 
+    capnpc::CompilerCommand::new()
+        .output_path(".")
+        .file("src/branchlog.capnp")
+        .run()
+        .expect("compiling schema");
+
     generate_lustre_sanity_tests();
 }
 

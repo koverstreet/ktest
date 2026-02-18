@@ -17,6 +17,8 @@ struct TestResult {
 
 struct TestResults {
     entries @0:		List(TestResult);
+    message @1:		Text;
+    commitId @2:	Text;
 }
 
 # vim: sts=4:sw=4
