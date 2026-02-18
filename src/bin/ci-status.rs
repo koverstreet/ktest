@@ -1,7 +1,7 @@
 use ci_cgi::{
     branch_get_results, ciconfig_read, commitdir_get_results_full,
-    count_status, format_duration, get_queue_stats, ktestrc_read, Ktestrc, user_stats_get,
-    user_stats_recent, workers_get, BranchEntry, TestStatus,
+    count_status, format_duration, get_queue_stats, ktestrc_read, Ktestrc, Userrc,
+    user_stats_get, user_stats_recent, workers_get, BranchEntry, TestStatus,
 };
 use clap::{Parser, Subcommand};
 
@@ -41,6 +41,12 @@ enum Command {
     Workers,
     /// One-line summary of test counts
     Summary,
+    /// List branches from CI user config
+    Branches,
+    /// Fetch CI user config from server
+    PullConfig,
+    /// Push CI user config to server
+    PushConfig,
 }
 
 // ANSI color helpers
@@ -351,6 +357,81 @@ fn cmd_summary(ktest: &Ktestrc, json: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn user_config_path(ktest: &Ktestrc) -> std::path::PathBuf {
+    ktest.output_dir.join("ci-user.toml")
+}
+
+fn ci_scp_path(ktest: &Ktestrc) -> anyhow::Result<String> {
+    let host = ktest.ci_host.as_deref()
+        .ok_or_else(|| anyhow::anyhow!("ci_host not set in config"))?;
+    Ok(format!("{}:ci.toml", host))
+}
+
+fn cmd_pull_config(ktest: &Ktestrc) -> anyhow::Result<()> {
+    let remote = ci_scp_path(ktest)?;
+    let dest = user_config_path(ktest);
+    let _ = std::fs::create_dir_all(&ktest.output_dir);
+
+    let status = std::process::Command::new("scp")
+        .arg(&remote)
+        .arg(&dest)
+        .status()?;
+
+    if !status.success() {
+        anyhow::bail!("scp {} failed — you may need to set up ~/ci.toml on the server", remote);
+    }
+
+    println!("Config saved to {}", dest.display());
+    Ok(())
+}
+
+fn cmd_push_config(ktest: &Ktestrc) -> anyhow::Result<()> {
+    let remote = ci_scp_path(ktest)?;
+    let src = user_config_path(ktest);
+
+    if !src.exists() {
+        anyhow::bail!("no local config at {} — run pull-config first", src.display());
+    }
+
+    let status = std::process::Command::new("scp")
+        .arg(&src)
+        .arg(&remote)
+        .status()?;
+
+    if !status.success() {
+        anyhow::bail!("scp failed");
+    }
+
+    println!("Config pushed to {}", remote);
+    Ok(())
+}
+
+fn cmd_branches(ktest: &Ktestrc, json: bool) -> anyhow::Result<()> {
+    let config_path = user_config_path(ktest);
+    let config = std::fs::read_to_string(&config_path)
+        .map_err(|_| anyhow::anyhow!("no user config — run `ci-status pull-config` first"))?;
+    let userrc: Userrc = toml::from_str(&config)?;
+
+    if json {
+        let branches: Vec<serde_json::Value> = userrc.branch.iter().map(|(name, b)| {
+            serde_json::json!({
+                "name": name,
+                "fetch": &b.fetch,
+                "tests": &b.tests,
+            })
+        }).collect();
+        println!("{}", serde_json::to_string_pretty(&branches)?);
+        return Ok(());
+    }
+
+    for (name, b) in &userrc.branch {
+        let tests = b.tests.join(", ");
+        println!("{:<40} {}", name, color_dim(&tests));
+    }
+
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
@@ -374,6 +455,15 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Summary => {
             cmd_summary(&ktest, args.json)
+        }
+        Command::Branches => {
+            cmd_branches(&ktest, args.json)
+        }
+        Command::PullConfig => {
+            cmd_pull_config(&ktest)
+        }
+        Command::PushConfig => {
+            cmd_push_config(&ktest)
         }
     }
 }

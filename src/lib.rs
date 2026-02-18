@@ -55,6 +55,9 @@ pub struct Ktestrc {
     /// Git remote name for resolving branch refs (e.g. "bcachefs")
     #[serde(default)]
     pub ci_remote: Option<String>,
+    /// SSH host for config pull/push (e.g. "evilpiepirate.org")
+    #[serde(default)]
+    pub ci_host: Option<String>,
     #[serde(default)]
     pub users_dir: Option<PathBuf>,
     #[serde(default)]
