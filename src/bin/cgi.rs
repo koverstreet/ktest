@@ -6,8 +6,9 @@ extern crate cgi;
 extern crate querystring;
 
 use ci_cgi::{
-    ciconfig_read, commitdir_get_results, git_get_commit, update_lcov, user_stats_get,
-    user_stats_recent, workers_get, CiConfig, TestResultsMap, TestStatus, Userrc,
+    branch_get_results, ciconfig_read, format_duration, get_queue_stats, last_good_line,
+    update_lcov, user_stats_get, user_stats_recent, workers_get, CiConfig, CommitResults,
+    TestResultsMap, TestStatus, Userrc,
 };
 
 const STYLESHEET: &str = "bootstrap.min.css";
@@ -95,13 +96,6 @@ const COMMIT_FILTER:    &str =
 </div>
 ";
 
-fn filter_results(r: TestResultsMap, tests_matching: &Regex) -> TestResultsMap {
-    r.iter()
-        .filter(|i| tests_matching.is_match(&i.0))
-        .map(|(k, v)| (k.clone(), *v))
-        .collect()
-}
-
 struct Ci {
     rc: CiConfig,
     repo: git2::Repository,
@@ -114,82 +108,22 @@ struct Ci {
     tests_matching: Regex,
 }
 
-struct CommitResults {
-    id: String,
-    message: String,
-    tests: TestResultsMap,
-}
-
-fn branch_get_results(ci: &Ci) -> Result<Vec<CommitResults>, String> {
-    fn commit_get_results(ci: &Ci, commit: &git2::Commit) -> CommitResults {
-        let id = commit.id().to_string();
-        let tests = commitdir_get_results(&ci.rc.ktest, &id).unwrap_or(BTreeMap::new());
-        let tests = filter_results(tests, &ci.tests_matching);
-
-        CommitResults {
-            id,
-            message: commit.message().unwrap().to_string(),
-            tests,
-        }
-    }
-
-    let mut nr_empty = 0;
-    let mut nr_commits = 0;
-    let mut ret: Vec<CommitResults> = Vec::new();
-
-    let branch_or_commit = if let Some(ref commit) = ci.commit {
-        commit.to_string()
-    } else {
-        ci.user.as_ref().unwrap().to_string() + "/" + ci.branch.as_ref().unwrap()
-    };
-    let mut walk = ci.repo.revwalk().unwrap();
-
-    let reference = git_get_commit(&ci.repo, branch_or_commit.clone());
-    if reference.is_err() {
-        /* XXX: return a 404 */
-        return Err(format!("commit not found"));
-    }
-    let reference = reference.unwrap();
-
-    if let Err(e) = walk.push(reference.id()) {
-        return Err(format!("Error walking {}: {}", branch_or_commit, e));
-    }
-
-    for commit in walk
-        .filter_map(|i| i.ok())
-        .filter_map(|i| ci.repo.find_commit(i).ok())
-    {
-        let r = commit_get_results(ci, &commit);
-
-        if !r.tests.is_empty() {
-            nr_empty = 0;
-        } else {
-            nr_empty += 1;
-            if nr_empty > 100 {
-                break;
-            }
-        }
-
-        ret.push(r);
-
-        nr_commits += 1;
-        if nr_commits > 50 {
-            break;
-        }
-    }
-
-    while !ret.is_empty() && ret[ret.len() - 1].tests.is_empty() {
-        ret.pop();
-    }
-
-    Ok(ret)
+fn ci_branch_get_results(ci: &Ci) -> Result<Vec<CommitResults>, String> {
+    branch_get_results(
+        &ci.repo,
+        &ci.rc.ktest,
+        ci.user.as_deref(),
+        ci.branch.as_deref(),
+        ci.commit.as_deref(),
+        &ci.tests_matching,
+    )
 }
 
 fn ci_log(ci: &Ci) -> cgi::Response {
     let mut out = String::new();
     let branch = ci.branch.as_ref().unwrap();
 
-    let commits = branch_get_results(ci);
+    let commits = ci_branch_get_results(ci);
     if let Err(e) = commits {
         return error_response(e);
     }
@@ -374,24 +308,6 @@ fn ci_log(ci: &Ci) -> cgi::Response {
     cgi::html_response(200, out)
 }
 
-fn last_good_line(results: &Vec<CommitResults>, test: &str) -> String {
-    for (idx, result) in results.iter().map(|i| i.tests.get(test)).enumerate() {
-        if let Some(result) = result {
-            if result.status == TestStatus::Passed {
-                return format!("{}", idx);
-            }
-
-            if result.status != TestStatus::Failed {
-                return format!("&gt;= {}", idx);
-            }
-        } else {
-            return format!("&gt;= {}", idx);
-        }
-    }
-
-    return format!("&gt;= {}", results.len());
-}
-
 fn log_link(out: &mut String, fname: &str, link: &str) {
     let onclick = format!(
         "fetch('{}')
@@ -415,7 +331,7 @@ fn log_link(out: &mut String, fname: &str, link: &str) {
 fn ci_commit(ci: &Ci) -> cgi::Response {
     let mut out = String::new();
 
-    let commits = branch_get_results(ci);
+    let commits = ci_branch_get_results(ci);
     if let Err(e) = commits {
         return error_response(e);
     }
@@ -573,67 +489,8 @@ fn ci_user(ci: &Ci) -> cgi::Response {
     cgi::html_response(200, out)
 }
 
-/// Count lines (jobs) in a user's job queue file
-fn count_user_jobs(ci: &Ci, user: &str) -> usize {
-    let jobs_file = ci.rc.ktest.output_dir.join(format!("jobs.{}", user));
-    std::fs::read_to_string(&jobs_file)
-        .map(|s| s.lines().filter(|l| !l.is_empty()).count())
-        .unwrap_or(0)
-}
-
-/// Get job queue statistics
-struct QueueStats {
-    pending_by_user: BTreeMap<String, usize>,
-    running_by_user: BTreeMap<String, usize>,
-    total_pending: usize,
-    total_running: usize,
-}
-
-fn get_queue_stats(ci: &Ci) -> QueueStats {
-    let mut stats = QueueStats {
-        pending_by_user: BTreeMap::new(),
-        running_by_user: BTreeMap::new(),
-        total_pending: 0,
-        total_running: 0,
-    };
-
-    // Count pending jobs per user
-    for (user, _) in &ci.rc.users {
-        let count = count_user_jobs(ci, user);
-        if count > 0 {
-            stats.pending_by_user.insert(user.clone(), count);
-            stats.total_pending += count;
-        }
-    }
-
-    // Count running jobs per user from workers
-    if let Ok(workers) = workers_get(&ci.rc.ktest) {
-        for w in workers {
-            if !w.user.is_empty() && !w.tests.is_empty() {
-                *stats.running_by_user.entry(w.user.clone()).or_insert(0) += 1;
-                stats.total_running += 1;
-            }
-        }
-    }
-
-    stats
-}
-
-/// Format seconds as human-readable duration
-fn format_duration(secs: u64) -> String {
-    if secs < 60 {
-        format!("{}s", secs)
-    } else if secs < 3600 {
-        format!("{}m", secs / 60)
-    } else if secs < 86400 {
-        format!("{:.1}h", secs as f64 / 3600.0)
-    } else {
-        format!("{:.1}d", secs as f64 / 86400.0)
-    }
-}
-
 fn ci_list_users(ci: &Ci, out: &mut String) {
-    let queue_stats = get_queue_stats(ci);
+    let queue_stats = get_queue_stats(&ci.rc);
     let user_stats = user_stats_get(&ci.rc.ktest).unwrap_or_default();
 
     writeln!(out, "<h4>Users</h4>").unwrap();
@@ -787,7 +644,7 @@ fn ci_worker_status(ci: &Ci, out: &mut String) -> Option<()> {
 
 fn ci_scheduling_info(ci: &Ci, out: &mut String) -> Option<()> {
     let stats = user_stats_get(&ci.rc.ktest).ok()?;
-    let queue_stats = get_queue_stats(ci);
+    let queue_stats = get_queue_stats(&ci.rc);
 
     // Get users with pending jobs, sorted by effective recent runtime (lowest first = next to run)
     // Effective = recent * (1 + nice), so higher nice = higher effective = lower priority

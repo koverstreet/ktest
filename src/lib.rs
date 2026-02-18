@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use toml;
 
+pub mod branchlog_capnp;
 pub mod durations_capnp;
 pub mod testresult_capnp;
 pub mod users;
@@ -177,10 +178,17 @@ use testresult_capnp::test_results;
 fn results_to_capnp(
     output_dir: &Path,
     commit_id: &str,
+    commit_message: Option<&str>,
     results_in: &TestResultsMap,
 ) -> anyhow::Result<()> {
     let mut message = capnp::message::Builder::new_default();
-    let results = message.init_root::<test_results::Builder>();
+    let mut results = message.init_root::<test_results::Builder>();
+
+    if let Some(msg) = commit_message {
+        results.reborrow().set_message(msg);
+    }
+    results.reborrow().set_commit_id(commit_id);
+
     let mut result_list = results.init_entries(results_in.len().try_into().unwrap());
 
     for (idx, (name, result_in)) in results_in.iter().enumerate() {
@@ -208,19 +216,53 @@ pub fn commit_update_results_from_fs(ktestrc: &Ktestrc, commit_id: &str) {
 
 pub fn commit_update_results(output_dir: &Path, commit_id: &str) {
     let results = commitdir_get_results_fs(output_dir, commit_id);
-    results_to_capnp(output_dir, commit_id, &results)
+    results_to_capnp(output_dir, commit_id, None, &results)
         .map_err(|e| eprintln!("error generating capnp: {}", e))
         .ok();
 }
 
-pub fn commitdir_get_results(ktestrc: &Ktestrc, commit_id: &str) -> anyhow::Result<TestResultsMap> {
-    let f = std::fs::read(ktestrc.output_dir.join(commit_id.to_owned() + ".capnp"))?;
+pub fn commit_update_results_with_message(
+    output_dir: &Path,
+    commit_id: &str,
+    message: &str,
+) {
+    let results = commitdir_get_results_fs(output_dir, commit_id);
+    results_to_capnp(output_dir, commit_id, Some(message), &results)
+        .map_err(|e| eprintln!("error generating capnp: {}", e))
+        .ok();
+}
 
+/// Rewrite an existing capnp file to add/update the commit message,
+/// preserving the test results from the capnp (not re-reading from filesystem).
+/// Used by migrate-capnp where commit dirs may have been GC'd.
+pub fn commit_capnp_set_message(
+    output_dir: &Path,
+    commit_id: &str,
+    message: &str,
+) -> anyhow::Result<()> {
+    let f = std::fs::read(output_dir.join(commit_id.to_owned() + ".capnp"))?;
+    let existing = parse_test_results(&f)?;
+    results_to_capnp(output_dir, commit_id, Some(message), &existing.tests)
+}
+
+pub struct CommitResultsCapnp {
+    pub message: String,
+    pub commit_id: String,
+    pub tests: TestResultsMap,
+}
+
+fn parse_test_results(f: &[u8]) -> anyhow::Result<CommitResultsCapnp> {
     let message_reader =
         serialize::read_message_from_flat_slice(&mut &f[..], capnp::message::ReaderOptions::new())?;
-    let entries = message_reader
-        .get_root::<test_results::Reader>()?
-        .get_entries()?;
+    let root = message_reader.get_root::<test_results::Reader>()?;
+
+    let message = root.get_message()
+        .ok().and_then(|s| s.to_string().ok())
+        .unwrap_or_default();
+    let commit_id = root.get_commit_id()
+        .ok().and_then(|s| s.to_string().ok())
+        .unwrap_or_default();
+    let entries = root.get_entries()?;
 
     let mut results = BTreeMap::new();
     for e in entries {
@@ -233,7 +275,21 @@ pub fn commitdir_get_results(ktestrc: &Ktestrc, commit_id: &str) -> anyhow::Resu
         results.insert(e.get_name()?.to_string()?, r);
     }
 
-    Ok(results)
+    Ok(CommitResultsCapnp {
+        message,
+        commit_id,
+        tests: results,
+    })
+}
+
+pub fn commitdir_get_results(ktestrc: &Ktestrc, commit_id: &str) -> anyhow::Result<TestResultsMap> {
+    let f = std::fs::read(ktestrc.output_dir.join(commit_id.to_owned() + ".capnp"))?;
+    Ok(parse_test_results(&f)?.tests)
+}
+
+pub fn commitdir_get_results_full(ktestrc: &Ktestrc, commit_id: &str) -> anyhow::Result<CommitResultsCapnp> {
+    let f = std::fs::read(ktestrc.output_dir.join(commit_id.to_owned() + ".capnp"))?;
+    parse_test_results(&f)
 }
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -717,4 +773,271 @@ pub fn test_stats(durations: Option<&[u8]>, test: &str, subtest: &str) -> Option
     }
 
     None
+}
+
+// Shared query functions (used by both CGI and CLI)
+
+use regex::Regex;
+
+pub fn filter_results(r: TestResultsMap, tests_matching: &Regex) -> TestResultsMap {
+    r.iter()
+        .filter(|i| tests_matching.is_match(&i.0))
+        .map(|(k, v)| (k.clone(), *v))
+        .collect()
+}
+
+pub struct CommitResults {
+    pub id: String,
+    pub message: String,
+    pub tests: TestResultsMap,
+}
+
+pub fn branch_get_results(
+    repo: &git2::Repository,
+    ktest: &Ktestrc,
+    user: Option<&str>,
+    branch: Option<&str>,
+    commit: Option<&str>,
+    tests_matching: &Regex,
+) -> Result<Vec<CommitResults>, String> {
+    let branch_or_commit = if let Some(commit) = commit {
+        commit.to_string()
+    } else {
+        format!("{}/{}", user.unwrap(), branch.unwrap())
+    };
+
+    let mut walk = repo.revwalk().unwrap();
+
+    let reference = git_get_commit(repo, branch_or_commit.clone());
+    if reference.is_err() {
+        return Err("commit not found".to_string());
+    }
+    let reference = reference.unwrap();
+
+    if let Err(e) = walk.push(reference.id()) {
+        return Err(format!("Error walking {}: {}", branch_or_commit, e));
+    }
+
+    let mut nr_empty = 0;
+    let mut nr_commits = 0;
+    let mut ret: Vec<CommitResults> = Vec::new();
+
+    for commit in walk
+        .filter_map(|i| i.ok())
+        .filter_map(|i| repo.find_commit(i).ok())
+    {
+        let id = commit.id().to_string();
+        let tests = commitdir_get_results(ktest, &id).unwrap_or(BTreeMap::new());
+        let tests = filter_results(tests, tests_matching);
+
+        let r = CommitResults {
+            id,
+            message: commit.message().unwrap_or("").to_string(),
+            tests,
+        };
+
+        if !r.tests.is_empty() {
+            nr_empty = 0;
+        } else {
+            nr_empty += 1;
+            if nr_empty > 100 {
+                break;
+            }
+        }
+
+        ret.push(r);
+
+        nr_commits += 1;
+        if nr_commits > 50 {
+            break;
+        }
+    }
+
+    while !ret.is_empty() && ret[ret.len() - 1].tests.is_empty() {
+        ret.pop();
+    }
+
+    Ok(ret)
+}
+
+pub struct QueueStats {
+    pub pending_by_user: BTreeMap<String, usize>,
+    pub running_by_user: BTreeMap<String, usize>,
+    pub total_pending: usize,
+    pub total_running: usize,
+}
+
+pub fn get_queue_stats(config: &CiConfig) -> QueueStats {
+    let mut stats = QueueStats {
+        pending_by_user: BTreeMap::new(),
+        running_by_user: BTreeMap::new(),
+        total_pending: 0,
+        total_running: 0,
+    };
+
+    for (user, _) in &config.users {
+        let jobs_file = config.ktest.output_dir.join(format!("jobs.{}", user));
+        let count = std::fs::read_to_string(&jobs_file)
+            .map(|s| s.lines().filter(|l| !l.is_empty()).count())
+            .unwrap_or(0);
+        if count > 0 {
+            stats.pending_by_user.insert(user.clone(), count);
+            stats.total_pending += count;
+        }
+    }
+
+    if let Ok(workers) = workers_get(&config.ktest) {
+        for w in workers {
+            if !w.user.is_empty() && !w.tests.is_empty() {
+                *stats.running_by_user.entry(w.user.clone()).or_insert(0) += 1;
+                stats.total_running += 1;
+            }
+        }
+    }
+
+    stats
+}
+
+pub fn format_duration(secs: u64) -> String {
+    if secs < 60 {
+        format!("{}s", secs)
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86400 {
+        format!("{:.1}h", secs as f64 / 3600.0)
+    } else {
+        format!("{:.1}d", secs as f64 / 86400.0)
+    }
+}
+
+pub fn last_good_line(results: &[CommitResults], test: &str) -> String {
+    for (idx, result) in results.iter().map(|i| i.tests.get(test)).enumerate() {
+        if let Some(result) = result {
+            if result.status == TestStatus::Passed {
+                return format!("{}", idx);
+            }
+
+            if result.status != TestStatus::Failed {
+                return format!(">= {}", idx);
+            }
+        } else {
+            return format!(">= {}", idx);
+        }
+    }
+
+    format!(">= {}", results.len())
+}
+
+// Branch log generation and parsing
+
+use branchlog_capnp::branch_log;
+
+pub struct BranchEntry {
+    pub commit_id: String,
+    pub message: String,
+    pub passed: u32,
+    pub failed: u32,
+    pub notrun: u32,
+    pub notstarted: u32,
+    pub inprogress: u32,
+    pub unknown: u32,
+    pub duration: u64,
+}
+
+pub fn count_status(tests: &TestResultsMap, status: TestStatus) -> u32 {
+    tests.iter().filter(|x| x.1.status == status).count() as u32
+}
+
+pub fn generate_branch_log(
+    repo: &git2::Repository,
+    ktest: &Ktestrc,
+    user: &str,
+    branch: &str,
+) -> anyhow::Result<Vec<BranchEntry>> {
+    let all = Regex::new("").unwrap();
+    let results = branch_get_results(repo, ktest, Some(user), Some(branch), None, &all)
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    Ok(results
+        .into_iter()
+        .filter(|r| !r.tests.is_empty())
+        .map(|r| {
+            let duration: u64 = r.tests.iter().map(|x| x.1.duration).sum();
+            BranchEntry {
+                commit_id: r.id,
+                message: r.message,
+                passed: count_status(&r.tests, TestStatus::Passed),
+                failed: count_status(&r.tests, TestStatus::Failed),
+                notrun: count_status(&r.tests, TestStatus::Notrun),
+                notstarted: count_status(&r.tests, TestStatus::Notstarted),
+                inprogress: count_status(&r.tests, TestStatus::Inprogress),
+                unknown: count_status(&r.tests, TestStatus::Unknown),
+                duration,
+            }
+        })
+        .collect())
+}
+
+pub fn write_branch_log(
+    output_dir: &Path,
+    user: &str,
+    branch: &str,
+    entries: &[BranchEntry],
+) -> anyhow::Result<()> {
+    let mut message = capnp::message::Builder::new_default();
+    let log = message.init_root::<branch_log::Builder>();
+    let mut list = log.init_entries(entries.len().try_into().unwrap());
+
+    for (idx, entry) in entries.iter().enumerate() {
+        let mut dst = list.reborrow().get(idx.try_into().unwrap());
+        dst.set_commit_id(&entry.commit_id);
+        dst.set_message(&entry.message);
+        dst.set_passed(entry.passed);
+        dst.set_failed(entry.failed);
+        dst.set_notrun(entry.notrun);
+        dst.set_notstarted(entry.notstarted);
+        dst.set_inprogress(entry.inprogress);
+        dst.set_unknown(entry.unknown);
+        dst.set_duration(entry.duration);
+    }
+
+    let fname = output_dir.join(format!("branch.{}.{}.capnp", user, branch));
+    let fname_new = output_dir.join(format!("branch.{}.{}.capnp.new", user, branch));
+
+    let mut out = File::create(&fname_new).map(std::io::BufWriter::new)?;
+    serialize::write_message(&mut out, &message)?;
+    out.into_inner()?;
+    std::fs::rename(fname_new, fname)?;
+
+    Ok(())
+}
+
+pub fn branchlog_parse(f: &[u8]) -> anyhow::Result<Vec<BranchEntry>> {
+    let message_reader =
+        serialize::read_message_from_flat_slice(&mut &f[..], capnp::message::ReaderOptions::new())?;
+    let entries = message_reader
+        .get_root::<branch_log::Reader>()?
+        .get_entries()?;
+
+    let result = entries
+        .iter()
+        .map(|e| BranchEntry {
+            commit_id: e.get_commit_id().unwrap().to_string().unwrap(),
+            message: e.get_message().unwrap().to_string().unwrap(),
+            passed: e.get_passed(),
+            failed: e.get_failed(),
+            notrun: e.get_notrun(),
+            notstarted: e.get_notstarted(),
+            inprogress: e.get_inprogress(),
+            unknown: e.get_unknown(),
+            duration: e.get_duration(),
+        })
+        .collect();
+
+    Ok(result)
+}
+
+pub fn branchlog_get(ktest: &Ktestrc, user: &str, branch: &str) -> anyhow::Result<Vec<BranchEntry>> {
+    let f = std::fs::read(ktest.output_dir.join(format!("branch.{}.{}.capnp", user, branch)))?;
+    branchlog_parse(&f)
 }
