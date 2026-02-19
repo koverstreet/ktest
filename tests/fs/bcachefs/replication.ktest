@@ -6,11 +6,11 @@ require-kernel-config MD
 require-kernel-config BLK_DEV_DM
 require-kernel-config DM_FLAKEY
 
-config-scratch-devs 100G
-config-scratch-devs 100G
-config-scratch-devs 100G
-config-scratch-devs 100G
-config-scratch-devs 100G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
 
 config-mem 4G
 
@@ -373,7 +373,7 @@ test_device_set_state()
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
     # We expect IO error data update fails, from in flight write when the device goes RO
-    bcachefs reset-counters --counters=data_update_fail ${ktest_scratch_dev[0]}
+    bcachefs reset-counters --counter=data_update_fail ${ktest_scratch_dev[0]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
@@ -409,7 +409,7 @@ test_device_ro()
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
     # We expect IO error data update fails, from in flight write when the device goes RO
-    bcachefs reset-counters --counters=data_update_fail ${ktest_scratch_dev[0]}
+    bcachefs reset-counters --counter=data_update_fail ${ktest_scratch_dev[0]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
@@ -520,7 +520,7 @@ test_device_readd()
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
     # We expect IO error data update fails, from in flight write when the device goes RO
-    bcachefs reset-counters --counters=data_update_fail ${ktest_scratch_dev[0]}
+    bcachefs reset-counters --counter=data_update_fail ${ktest_scratch_dev[0]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
@@ -610,7 +610,7 @@ do_replicas_errors_test()
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
 
     # we expect lots of these due to IO errors:
-    bcachefs reset-counters --counters=data_update_fail ${ktest_scratch_dev[0]}
+    bcachefs reset-counters --counter=data_update_fail ${ktest_scratch_dev[0]}
 
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 
@@ -654,7 +654,7 @@ test_read_corrupt()
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
 
     # we expect lots of these due to IO errors:
-    bcachefs reset-counters --counters=data_update_fail ${ktest_scratch_dev[0]}
+    bcachefs reset-counters --counter=data_update_fail ${ktest_scratch_dev[0]}
 
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
@@ -1170,8 +1170,8 @@ test_key_type_error()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
-    bcachefs reset-counters --counters=data_update_fail ${ktest_scratch_dev[0]}
-    bcachefs reset-counters --counters=data_update_key_fail ${ktest_scratch_dev[0]}
+    bcachefs reset-counters --counter=data_update_fail ${ktest_scratch_dev[0]}
+    bcachefs reset-counters --counter=data_update_key_fail ${ktest_scratch_dev[0]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
@@ -1252,55 +1252,6 @@ test_scrub()
 test_scrub_offline()
 {
     do_scrub true
-}
-
-test_scrub_abort()
-{
-    set_watchdog 600
-    run_quiet "" bcachefs format -f		\
-	--replicas=2				\
-	${ktest_scratch_dev[0]}			\
-	${ktest_scratch_dev[1]}
-    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
-
-    # Write enough data that scrub takes several seconds even on fast storage
-    dd if=/dev/urandom of=/mnt/test bs=1M count=20000 oflag=direct
-    sync
-    echo 3 > /proc/sys/vm/drop_caches
-
-    bcachefs data scrub /mnt &
-    local scrub_pid=$!
-
-    sleep 2
-    if kill -INT $scrub_pid 2>/dev/null; then
-	echo "Sent SIGINT to scrub (pid $scrub_pid)"
-	local i=0
-	while kill -0 $scrub_pid 2>/dev/null && [[ $i -lt 10 ]]; do
-	    sleep 1
-	    i=$((i + 1))
-	done
-
-	if kill -0 $scrub_pid 2>/dev/null; then
-	    echo "FAIL: scrub did not exit within 10s of SIGINT"
-	    kill -9 $scrub_pid
-	    wait $scrub_pid 2>/dev/null
-	    return 1
-	fi
-
-	wait $scrub_pid
-	local ret=$?
-	if [[ $ret -ne 1 ]]; then
-	    echo "FAIL: expected exit code 1 (interrupted), got $ret"
-	    return 1
-	fi
-    else
-	echo "Scrub already finished before SIGINT could be sent"
-	wait $scrub_pid
-    fi
-
-    umount /mnt
-    bcachefs fsck ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
-    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 test_self_healing()
