@@ -177,7 +177,7 @@ antagonist_cat_sysfs_debugfs()
 bcachefs_slowpath_event_filter()
 {
     grep  -E '(fail|restart|blocked|full)'|
-	grep -vE '(btree_path|mem_realloced|trans_restart_injected|io_move_write_fail|and_poison|write_buffer_flush)'
+	grep -vE '(btree_path|mem_realloced|trans_restart_injected|io_move_write_fail|and_poison|write_buffer_flush|journal_res_get_blocked)'
 }
 
 bcachefs_slowpath_tracepoints()
