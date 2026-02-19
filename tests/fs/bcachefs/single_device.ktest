@@ -916,7 +916,8 @@ test_large_buckets()
 test_small_nodes()
 {
     run_basic_fio_test				\
-	--bucket_size=256k				\
+	--block_size=512			\
+	--bucket_size=256k			\
 	--btree_node_size=4k			\
 	${ktest_scratch_dev[0]}
 }
