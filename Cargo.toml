@@ -28,6 +28,7 @@ chrono = "0.4.26"
 memmap = "0.7.0"
 serde_json = "1.0.132"
 reqwest = { version = "0.12.9", features = ["blocking"] }
+brotli = "7"
 
 [build-dependencies]
 capnpc = "0.21.*"

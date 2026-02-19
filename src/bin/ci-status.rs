@@ -4,6 +4,7 @@ use ci_cgi::{
     user_stats_get, user_stats_recent, workers_get, BranchEntry, TestStatus,
 };
 use clap::{Parser, Subcommand};
+use std::io::Read;
 
 #[derive(Parser)]
 #[command(about = "CLI interface for bcachefs CI test results")]
@@ -43,6 +44,17 @@ enum Command {
     Summary,
     /// List branches from CI user config
     Branches,
+    /// Fetch and display test log
+    Logs {
+        /// Commit hash (prefix ok)
+        commit: String,
+        /// Test name (or substring to filter).
+        /// If omitted, lists failed tests.
+        test: Option<String>,
+        /// Show full log instead of summary
+        #[arg(long, short)]
+        full: bool,
+    },
     /// Fetch CI user config from server
     PullConfig,
     /// Push CI user config to server
@@ -432,6 +444,115 @@ fn cmd_branches(ktest: &Ktestrc, json: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn decompress_brotli(data: &[u8]) -> anyhow::Result<String> {
+    let mut decoder = brotli::Decompressor::new(data, 4096);
+    let mut output = String::new();
+    decoder.read_to_string(&mut output)?;
+    Ok(output)
+}
+
+fn fetch_log(ktest: &Ktestrc, commit: &str, test: &str, full: bool) -> anyhow::Result<String> {
+    let filename = if full { "full_log.br" } else { "log.br" };
+
+    // Try local first
+    let local_path = ktest.output_dir.join(commit).join(test).join(filename);
+    if local_path.exists() {
+        let data = std::fs::read(&local_path)?;
+        return decompress_brotli(&data);
+    }
+
+    // Fall back to remote
+    let ci_url = ktest.ci_url.as_deref()
+        .ok_or_else(|| anyhow::anyhow!("no ci_url configured and log not found locally"))?;
+
+    let url = format!("{}/{}/{}/{}", ci_url, commit, test, filename);
+    let resp = reqwest::blocking::get(&url)?;
+
+    if !resp.status().is_success() {
+        anyhow::bail!("HTTP {} fetching {}", resp.status(), url);
+    }
+
+    let data = resp.bytes()?;
+    decompress_brotli(&data)
+}
+
+fn cmd_logs(
+    commit: &str,
+    test: Option<&str>,
+    full: bool,
+    ktest: &Ktestrc,
+) -> anyhow::Result<()> {
+    // Resolve short prefix to full hash
+    let commit = if commit.len() < 40 {
+        unsafe {
+            git2::opts::set_verify_owner_validation(false)
+                .expect("set_verify_owner_validation should never fail");
+        }
+        let repo = git2::Repository::open(&ktest.linux_repo)?;
+        let obj = repo.revparse_single(commit)?;
+        obj.id().to_string()
+    } else {
+        commit.to_string()
+    };
+
+    let results = commitdir_get_results_full(ktest, &commit)?;
+
+    match test {
+        Some(filter) => {
+            // Find matching test(s)
+            let matches: Vec<_> = results.tests.iter()
+                .filter(|(name, _)| name.contains(filter))
+                .collect();
+
+            if matches.is_empty() {
+                anyhow::bail!("no test matching '{}' for commit {}", filter, &commit[..12]);
+            }
+
+            if matches.len() > 1 {
+                // Multiple matches — list them
+                eprintln!("Multiple tests match '{}' — showing all:\n", filter);
+                for (name, r) in &matches {
+                    eprintln!("  {} {}", color_status(r.status), name);
+                }
+                eprintln!();
+
+                // If there's an exact match, use it; otherwise show the first failed one
+                let exact = matches.iter().find(|(name, _)| *name == filter);
+                let first_failed = matches.iter().find(|(_, r)| r.status == TestStatus::Failed);
+                let chosen = exact.or(first_failed).unwrap_or(&matches[0]);
+
+                eprintln!("Showing log for: {}\n", chosen.0);
+                let log = fetch_log(ktest, &commit, chosen.0, full)?;
+                print!("{}", log);
+            } else {
+                let (name, _) = matches[0];
+                let log = fetch_log(ktest, &commit, name, full)?;
+                print!("{}", log);
+            }
+        }
+        None => {
+            // No test specified — list failed tests
+            let mut failed: Vec<_> = results.tests.iter()
+                .filter(|(_, r)| r.status == TestStatus::Failed)
+                .collect();
+            failed.sort_by_key(|(name, _)| (*name).clone());
+
+            if failed.is_empty() {
+                println!("No failed tests for {}", &commit[..12]);
+                return Ok(());
+            }
+
+            println!("{} failed tests for {}:\n", failed.len(), &commit[..12]);
+            for (i, (name, r)) in failed.iter().enumerate() {
+                println!("  {:>3}. {} ({}s)", i + 1, name, r.duration);
+            }
+            println!("\nUse: ci-status logs {} <test-name-or-substring>", &commit[..12]);
+        }
+    }
+
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
@@ -455,6 +576,9 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Summary => {
             cmd_summary(&ktest, args.json)
+        }
+        Command::Logs { commit, test, full } => {
+            cmd_logs(&commit, test.as_deref(), full, &ktest)
         }
         Command::Branches => {
             cmd_branches(&ktest, args.json)
