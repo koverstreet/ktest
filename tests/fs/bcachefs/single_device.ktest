@@ -502,7 +502,7 @@ test_fcollapse()
     ls -l /mnt/foo
     echo
 
-    xfs_io -c "fcollapse 4k 2k" /mnt/foo
+    xfs_io -c "fcollapse 4k 4k" /mnt/foo
 
     echo "after fcollapse"
     cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys
@@ -525,7 +525,7 @@ test_finsert()
 
     cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys
 
-    xfs_io -c "finsert 1024 1024" /mnt/foo
+    xfs_io -c "finsert 4k 4k" /mnt/foo
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
@@ -1184,8 +1184,8 @@ test_debugfs()
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
-    dd if=/dev/zero of=/mnt/test1 bs=1k count=10240 oflag=direct
-    dd if=/dev/zero of=/mnt/test2 bs=1k count=10240 oflag=direct
+    dd if=/dev/zero of=/mnt/test1 bs=4k count=2560 oflag=direct
+    dd if=/dev/zero of=/mnt/test2 bs=4k count=2560 oflag=direct
 
     find -H /sys/kernel/debug/bcachefs/ -type f -perm -0400 -exec cat {} \; > /dev/null
 
