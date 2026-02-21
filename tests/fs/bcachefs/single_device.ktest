@@ -595,8 +595,8 @@ test_reconstruct_alloc()
     run_fio_randrw
     umount /mnt
 
-    echo "Running fsck --reconstruct_alloc"
-    fsck.bcachefs -ny --reconstruct_alloc ${ktest_scratch_dev[0]}  && rc=$? || rc=$? 
+    echo "Running fsck -o reconstruct_alloc"
+    fsck.bcachefs -ny -o reconstruct_alloc ${ktest_scratch_dev[0]}  && rc=$? || rc=$?
     if (( $rc != 0 && $rc != 1 )); then
 	echo "Bad exit status from fsck: $rc"
 	exit 1
