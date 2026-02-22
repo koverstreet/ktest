@@ -584,7 +584,7 @@ test_key_merge_csum()
 test_reconstruct_alloc()
 {
     set_watchdog 120
-    run_quiet "" bcachefs format -f --btree_node_size=16k ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f --btree_node_size=64k ${ktest_scratch_dev[0]}
 
     mount -t bcachefs -o reconstruct_alloc,fix_errors,fsck ${ktest_scratch_dev[0]} /mnt
 
