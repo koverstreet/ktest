@@ -1233,32 +1233,6 @@ disabled_test_swapfile()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
-prepare_source_fs()
-{
-    local fstype=$1
-
-    # prevent errors using rsync to verify, from other tests that didn't clean up:
-    rm -rf /mnt/*
-
-    if [[ $fstype = ext4 ]]; then
-	run_quiet "" mkfs.$fstype -F ${ktest_scratch_dev[0]}
-	mount -t $fstype -o user_xattr ${ktest_scratch_dev[0]} /mnt
-    else
-	run_quiet "" mkfs.$fstype -f ${ktest_scratch_dev[0]}
-	mount -t $fstype ${ktest_scratch_dev[0]} /mnt
-    fi
-
-    cp -a /usr /mnt
-
-    for i in /mnt/usr/bin/*; do
-    if [ ! -L $i ]; then
-	ln $i ${i}-migrate2
-    fi
-	setfattr -n user.foo -v test $i
-    done
-
-}
-
 check_rsync_log()
 {
     # rsync itemized output
