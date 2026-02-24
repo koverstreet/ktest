@@ -61,6 +61,82 @@ build_from_fs()
     bcachefs_test_end_checks ${ktest_scratch_dev[1]}
 }
 
+check_rsync_log()
+{
+    # rsync itemized output
+    # https://jhpce.jhu.edu/files/rsync-itemize-table/
+    # .: the item is not being updated (though it might have attributes that are being modified)
+
+    # We don't expect any lines to start with anything other than a dot
+    # Ideally the output should be empty, but the lost+found/ directory is
+    # ignored and the mountpoints themselves could have a modified time
+    # Sample expected output:
+    # .d..t...... ./
+    # .d..t...... lost+found/
+    ! grep -v "cd+++++++++ lost+found/" $1| grep -E '^[^.]'
+}
+
+verify_trees_equal()
+{
+    local dir1=$1
+    local dir2=$2
+
+    rsync	--archive			\
+	--acls				\
+	--xattrs				\
+	--checksum				\
+	--hard-links			\
+	--dry-run				\
+	--itemize-changes		 	\
+	$dir1/ $dir2/ > /root/rsynclog-build
+
+    check_rsync_log /root/rsynclog-build
+}
+
+test_image_create()
+{
+    local IMAGE_FILE=/root/usr.image
+
+    check_image()
+    {
+	echo "--- FSCK IMAGE ---"
+	echo
+	bcachefs fsck -ny $IMAGE_FILE
+
+	ls -l $IMAGE_FILE
+
+	echo "--- MOUNT CHECK IMAGE ---"
+	echo
+	mount $IMAGE_FILE /mnt
+	verify_trees_equal /mnt $1
+	umount /mnt
+    }
+
+    #run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    #mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    rm -f $IMAGE_FILE
+
+    echo "--- CREATE IMAGE ---"
+    echo
+    #bcachefs image create --compression=zstd --source=/usr $IMAGE_FILE
+    bcachefs image create --source=/usr $IMAGE_FILE
+
+    check_image /usr
+
+    echo "--- UPDATE IMAGE /usr ---"
+    echo
+    bcachefs image update --source=/usr $IMAGE_FILE
+
+    check_image /usr
+
+    echo "--- UPDATE IMAGE /usr/bin ---"
+    echo
+    bcachefs image update --source=/usr/bin $IMAGE_FILE
+
+    check_image /usr/bin
+}
+
 test_build_from_ext4()
 {
     build_from_fs ext4
