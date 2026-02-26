@@ -318,4 +318,45 @@ test_device_failed()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+test_ec_crash_recovery()
+{
+    set_watchdog 600
+
+    local loops=$((($ktest_priority + 1) * 20))
+
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	"${ktest_scratch_dev[@]}"
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
+
+    for i in $(seq 1 $loops); do
+	echo "=== crash recovery iteration $i/$loops ==="
+
+	mount -t bcachefs $devs /mnt
+
+	fio --eta=always			\
+	    --exitall_on_error=1		\
+	    --randrepeat=0			\
+	    --ioengine=libaio			\
+	    --iodepth=64			\
+	    --iodepth_batch=16			\
+	    --direct=1				\
+	    --numjobs=1				\
+	    --filename=/mnt/fiotest		\
+	    --filesize=3500M			\
+	    --name=randwrite			\
+	    --rw=randwrite			\
+	    --bsrange=4k-8k			\
+	    --runtime=2 || true
+
+	$ktest_dir/tests/fs/xfstests/src/godown -f /mnt
+
+	umount /mnt
+    done
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 main "$@"
