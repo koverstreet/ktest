@@ -320,6 +320,8 @@ test_device_failed()
 
 test_ec_crash_recovery()
 {
+    [[ -f /sys/module/bcachefs/parameters/journal_replay_slowpath_ratio ]] || exit 0
+
     set_watchdog 600
 
     local loops=$((($ktest_priority + 1) * 20))
