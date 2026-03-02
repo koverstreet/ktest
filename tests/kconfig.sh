@@ -295,5 +295,3 @@ require-kernel-config FAULT_INJECTION_CONFIGFG
 # Nix:
 require-kernel-config SECCOMP
 require-kernel-config SECCOMP_FILTER
-
-require-kernel-config RUST
