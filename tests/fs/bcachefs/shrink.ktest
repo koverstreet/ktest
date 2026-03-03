@@ -111,8 +111,6 @@ test_online_three_device_ec_shrink()
     # write 700M data
     dd if=/dev/urandom of=/mnt/foo bs=1M count=700 oflag=direct
 
-    bcachefs reconcile wait -t erasure_code /mnt
-
     # add dev3
     bcachefs device add -f /mnt ${ktest_scratch_dev[2]}
 
