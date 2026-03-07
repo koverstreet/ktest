@@ -211,6 +211,7 @@ migrate_from_fs()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs reset-counters --counters=data_update_fail ${ktest_scratch_dev[0]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
