@@ -315,6 +315,33 @@ test_device_add_label_compound()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+test_device_add_offline()
+{
+    # Test adding a device while the filesystem is not mounted,
+    # by passing a block device instead of a mountpoint.
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    dd if=/dev/urandom of=/mnt/test bs=1M count=64 oflag=direct
+    md5sum /mnt/test > /tmp/test.md5
+    umount /mnt
+
+    echo "Doing offline add"
+    bcachefs device add -f ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+
+    bcachefs show-super ${ktest_scratch_dev[0]}
+    bcachefs show-super ${ktest_scratch_dev[1]}
+
+    echo "Mounting multidevice"
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+    md5sum -c /tmp/test.md5
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_device_add_remount()
 {
     # Test adding a device, unmounting and mounting again
@@ -1229,7 +1256,7 @@ do_scrub()
     if $offline; then
 	bcachefs device offline -f /dev/vdb
     fi
-    bcachefs data scrub /mnt || true
+    bcachefs scrub /mnt || true
 
     md5sum /mnt/test > /root/md5sum.after
     diff /root/md5sum.before /root/md5sum.after
@@ -1237,7 +1264,7 @@ do_scrub()
     echo "Second scrub"
 
     #perf record -a -o /root/perf.data -e bcachefs:error_throw --
-    bcachefs data scrub /mnt
+    bcachefs scrub /mnt
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
@@ -1280,7 +1307,7 @@ test_self_healing()
     diff /root/md5sum.before /root/md5sum.after
 
     # Should find nothing to correct:
-    bcachefs data scrub /mnt
+    bcachefs scrub /mnt
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
