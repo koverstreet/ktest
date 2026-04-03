@@ -319,26 +319,31 @@ test_device_add_offline()
 {
     # Test adding a device while the filesystem is not mounted,
     # by passing a block device instead of a mountpoint.
+    # Uses 2 initial devices to verify superblock propagation —
+    # the add must discover and update all member devices.
 
-    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f		\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}
 
-    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
     dd if=/dev/urandom of=/mnt/test bs=1M count=64 oflag=direct
     md5sum /mnt/test > /tmp/test.md5
     umount /mnt
 
     echo "Doing offline add"
-    bcachefs device add -f ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    bcachefs device add -f ${ktest_scratch_dev[0]} ${ktest_scratch_dev[2]}
 
     bcachefs show-super ${ktest_scratch_dev[0]}
     bcachefs show-super ${ktest_scratch_dev[1]}
+    bcachefs show-super ${ktest_scratch_dev[2]}
 
     echo "Mounting multidevice"
-    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
     md5sum -c /tmp/test.md5
     umount /mnt
 
-    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
