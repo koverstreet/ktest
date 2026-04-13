@@ -91,6 +91,27 @@ shrink_run_fio_randrw()
 	"$@"
 }
 
+shrink_live_file_churn()
+{
+    local dir=$1
+    local iterations=$2
+    local size_mb=$3
+    local keep=$4
+
+    mkdir -p "$dir"
+
+    for i in $(seq 1 "$iterations"); do
+	local file="$dir/file.$i"
+
+	shrink_write_random_file "$file" "$size_mb"
+	mv "$file" "$file.done"
+
+	if (( i > keep )); then
+	    rm -f "$dir/file.$((i - keep)).done"
+	fi
+    done
+}
+
 shrink_verify_snapshots()
 {
     (
@@ -122,15 +143,51 @@ shrink_verify_checksums()
     )
 }
 
+shrink_populate_metadata_tree()
+{
+    local root=$1
+
+    mkdir -p "$root/a" "$root/b"
+
+    shrink_write_random_file "$root/a/regular.bin" 256
+    shrink_write_random_file "$root/a/evacuate.bin" 384
+    printf 'metadata survives shrink\n' > "$root/small.txt"
+
+    cp --reflink=always "$root/a/regular.bin" "$root/b/reflink.bin"
+    ln "$root/a/regular.bin" "$root/a/regular.hardlink"
+    ln "$root/small.txt" "$root/small.link"
+    ln -s small.txt "$root/link-to-small"
+
+    setfattr -n user.shrink_case -v metadata "$root"
+    setfattr -n user.shrink_payload -v primary "$root/a/regular.bin"
+
+    mv "$root/a/evacuate.bin" "$root/b/evacuate.bin"
+    mkdir "$root/b/renamed"
+    mv "$root/b/reflink.bin" "$root/b/renamed/reflink.bin"
+}
+
+shrink_verify_metadata_tree()
+{
+    local root=$1
+    local checksums=$2
+
+    shrink_verify_checksums "$checksums"
+
+    [[ $(stat -c '%h' "$root/a/regular.bin") = 2 ]]
+    [[ $(stat -c '%h' "$root/small.txt") = 2 ]]
+    [[ $(readlink "$root/link-to-small") = small.txt ]]
+    [[ $(getfattr --only-values -n user.shrink_case "$root" 2>/dev/null) = metadata ]]
+    [[ $(getfattr --only-values -n user.shrink_payload "$root/a/regular.bin" 2>/dev/null) = primary ]]
+}
+
 shrink_verify_xattrs_hardlinks()
 {
-    shrink_verify_checksums "$ktest_out/shrink-xattrs.md5"
+    shrink_verify_metadata_tree /mnt/tree "$ktest_out/shrink-xattrs.md5"
+}
 
-    [[ $(stat -c '%h' /mnt/tree/a/regular.bin) = 2 ]]
-    [[ $(stat -c '%h' /mnt/tree/small.txt) = 2 ]]
-    [[ $(readlink /mnt/tree/link-to-small) = small.txt ]]
-    [[ $(getfattr --only-values -n user.shrink_case /mnt/tree 2>/dev/null) = metadata ]]
-    [[ $(getfattr --only-values -n user.shrink_payload /mnt/tree/a/regular.bin 2>/dev/null) = primary ]]
+shrink_verify_replicas_metadata()
+{
+    shrink_verify_metadata_tree /mnt/tree "$ktest_out/shrink-replicas-metadata.md5"
 }
 
 shrink_verify_targeted_subdirs()
@@ -391,23 +448,7 @@ test_online_two_device_xattrs_hardlinks_shrink()
 
     shrink_mount "${devs[0]}"
 
-    mkdir -p /mnt/tree/a /mnt/tree/b
-
-    shrink_write_random_file /mnt/tree/a/regular.bin 256
-    shrink_write_random_file /mnt/tree/a/evacuate.bin 384
-    printf 'metadata survives shrink\n' > /mnt/tree/small.txt
-
-    cp --reflink=always /mnt/tree/a/regular.bin /mnt/tree/b/reflink.bin
-    ln /mnt/tree/a/regular.bin /mnt/tree/a/regular.hardlink
-    ln /mnt/tree/small.txt /mnt/tree/small.link
-    ln -s small.txt /mnt/tree/link-to-small
-
-    setfattr -n user.shrink_case -v metadata /mnt/tree
-    setfattr -n user.shrink_payload -v primary /mnt/tree/a/regular.bin
-
-    mv /mnt/tree/a/evacuate.bin /mnt/tree/b/evacuate.bin
-    mkdir /mnt/tree/b/renamed
-    mv /mnt/tree/b/reflink.bin /mnt/tree/b/renamed/reflink.bin
+    shrink_populate_metadata_tree /mnt/tree
 
     shrink_record_checksums "$ktest_out/shrink-xattrs.md5"	\
 	tree/a/regular.bin					\
@@ -468,6 +509,47 @@ test_online_three_device_targeted_subdirs_shrink()
     df -h /mnt
 
     shrink_finish shrink_verify_targeted_subdirs "${devs[@]}"
+}
+
+test_online_three_device_replicas_metadata_under_randrw_shrink()
+{
+    set_watchdog 240
+    bcachefs_antagonist
+    local devs=("${ktest_scratch_dev[0]}" "${ktest_scratch_dev[1]}" "${ktest_scratch_dev[2]}")
+
+    run_quiet "" bcachefs format -f		\
+	--replicas=2				\
+	--compression=lz4			\
+	--fs_size=1G				\
+	"${devs[0]}" --fs_size=1G "${devs[1]}"
+
+    shrink_mount "${devs[0]}"
+
+    shrink_populate_metadata_tree /mnt/tree
+    shrink_record_checksums "$ktest_out/shrink-replicas-metadata.md5"	\
+	tree/a/regular.bin						\
+	tree/b/evacuate.bin						\
+	tree/b/renamed/reflink.bin					\
+	tree/small.txt
+
+    bcachefs device add -f /mnt "${devs[2]}"
+
+    local liveout="$ktest_out/shrink-replicas-metadata-live.out"
+    shrink_live_file_churn /mnt/live 24 8 6 >"$liveout" 2>&1 &
+    local livepid=$!
+
+    sleep 2
+
+    df -h /mnt
+    bcachefs device resize "${devs[0]}" 512M
+    df -h /mnt
+
+    if ! wait $livepid; then
+	cat "$liveout"
+	return 1
+    fi
+
+    shrink_finish shrink_verify_replicas_metadata "${devs[@]}"
 }
 
 main "$@"
