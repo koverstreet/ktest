@@ -243,10 +243,7 @@ test_online_two_device_crypto_compression_shrink_under_randrw()
     shrink_finish "" "${devs[@]}"
 }
 
-# Mixed bucket sizes are a relevant shrink configuration, but this still trips
-# no_buckets_found during device reconcile today. Keep the reproducer around so
-# the scenario is easy to re-enable once the implementation is fixed.
-d_test_online_three_device_variable_buckets_shrink()
+test_online_three_device_variable_buckets_shrink()
 {
     set_watchdog 180
     bcachefs_antagonist
