@@ -296,6 +296,8 @@ test_device_remove_background()
     umount /mnt
 
     bcachefs fsck -n "${ktest_scratch_dev[@]}"
+    bcachefs reset-counters --counters=data_update_fail ${ktest_scratch_dev[0]}
+    bcachefs reset-counters --counters=bucket_alloc_fail ${ktest_scratch_dev[0]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
