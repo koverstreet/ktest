@@ -74,7 +74,7 @@ test_tiering_drop_alloc()
     # mount dropping all alloc info
 
     echo "dropping alloc:"
-    mount -t bcachefs -o reconstruct_alloc,fsck,fix_errors "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+    mount -t bcachefs -o dangerously_reconstruct_alloc,fsck,fix_errors "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
     umount /mnt
 
     echo "final fsck:"

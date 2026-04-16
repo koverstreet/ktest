@@ -446,7 +446,7 @@ test_drop_alloc()
     umount /mnt
 
     echo "reconstructing alloc:"
-    mount -t bcachefs -o reconstruct_alloc ${ktest_scratch_dev[0]} /mnt
+    mount -t bcachefs -o dangerously_reconstruct_alloc ${ktest_scratch_dev[0]} /mnt
     umount /mnt
 
     mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
@@ -586,7 +586,7 @@ test_reconstruct_alloc()
     set_watchdog 120
     run_quiet "" bcachefs format -f --btree_node_size=64k ${ktest_scratch_dev[0]}
 
-    mount -t bcachefs -o reconstruct_alloc,fix_errors,fsck ${ktest_scratch_dev[0]} /mnt
+    mount -t bcachefs -o dangerously_reconstruct_alloc,fix_errors,fsck ${ktest_scratch_dev[0]} /mnt
 
     umount /mnt
     bcachefs fsck -n ${ktest_scratch_dev[0]}
@@ -595,15 +595,15 @@ test_reconstruct_alloc()
     run_fio_randrw
     umount /mnt
 
-    echo "Running fsck -o reconstruct_alloc"
-    fsck.bcachefs -ny -o reconstruct_alloc ${ktest_scratch_dev[0]}  && rc=$? || rc=$?
+    echo "Running fsck -o dangerously_reconstruct_alloc"
+    fsck.bcachefs -ny -o dangerously_reconstruct_alloc ${ktest_scratch_dev[0]}  && rc=$? || rc=$?
     if (( $rc != 0 && $rc != 1 )); then
 	echo "Bad exit status from fsck: $rc"
 	exit 1
     fi
 
-    echo "Mounting with -o reconstruct_alloc"
-    mount -t bcachefs -o reconstruct_alloc,fix_errors,fsck ${ktest_scratch_dev[0]} /mnt
+    echo "Mounting with -o dangerously_reconstruct_alloc"
+    mount -t bcachefs -o dangerously_reconstruct_alloc,fix_errors,fsck ${ktest_scratch_dev[0]} /mnt
     umount /mnt
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
