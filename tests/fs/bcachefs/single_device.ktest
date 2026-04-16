@@ -1490,6 +1490,8 @@ test_mount_twice()
 
 test_dump()
 {
+    rm -f /tmp/dump*
+
     set_watchdog 60
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
 
@@ -1508,6 +1510,8 @@ test_dump()
 
 test_dump_sanitize()
 {
+    rm -f /tmp/dump*
+
     set_watchdog 60
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
 
