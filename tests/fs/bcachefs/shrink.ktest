@@ -303,6 +303,12 @@ verify_retarget_resize()
     assert_member_size_bytes "$retarget_resize_dev" "$retarget_resize_size_bytes"
 }
 
+verify_impossible_shrink()
+{
+    verify_checksums "$impossible_shrink_md5"
+    assert_resize_target_inactive "$impossible_shrink_dev"
+}
+
 verify_targeted_subdirs()
 {
     verify_checksums "$ktest_out/shrink-targets.md5"
@@ -386,6 +392,37 @@ test_online_three_device_replicas_shrink()
     df -h /mnt
 
     finish "" "${devs[@]}"
+}
+
+test_online_two_device_replicas_impossible_shrink()
+{
+    set_watchdog 420
+    bcachefs_antagonist
+    local devs=("${ktest_scratch_dev[0]}" "${ktest_scratch_dev[1]}")
+    local resizeout="$ktest_out/shrink-replicas-impossible.out"
+
+    run_quiet "" bcachefs format -f		\
+	--replicas=2				\
+	--fs_size=3G				\
+	"${devs[0]}" --fs_size=3G "${devs[1]}"
+
+    mount_mnt "${devs[0]}"
+
+    write_random_file /mnt/impossible.bin 768
+
+    impossible_shrink_md5="$ktest_out/shrink-replicas-impossible.md5"
+    impossible_shrink_dev="${devs[0]}"
+    record_checksums "$impossible_shrink_md5" impossible.bin
+
+    if bcachefs device resize "${devs[0]}" 256M >"$resizeout" 2>&1; then
+	echo "Impossible shrink unexpectedly succeeded"
+	cat "$resizeout"
+	return 1
+    fi
+
+    assert_resize_target_inactive "${devs[0]}"
+
+    finish verify_impossible_shrink "${devs[@]}"
 }
 
 test_online_three_device_ec_shrink()
