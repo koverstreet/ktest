@@ -85,14 +85,26 @@ wait_for_resize_to_start()
 {
     local pid=$1
     local output=$2
+    local i
 
-    sleep 5
-    if ! kill -0 "$pid" 2>/dev/null; then
+    # A long fixed sleep can miss the entire in-flight window once shrink gets
+    # faster. Give the ioctl only a brief head start, then act as soon as it is
+    # still alive so retarget/restart tests catch the live worker instead of a
+    # completed resize.
+    for i in $(seq 1 20); do
+	sleep 0.1
+
+	if kill -0 "$pid" 2>/dev/null; then
+	    return 0
+	fi
+
 	wait "$pid" || true
-	echo "Resize completed before retarget; test did not exercise in-flight target changes"
+	echo "Resize completed before the test observed persisted in-flight state"
 	cat "$output"
 	return 1
-    fi
+    done
+
+    return 0
 }
 
 wait_for_canceled_resize()
@@ -595,16 +607,9 @@ test_online_two_device_restart_resume_shrink()
     bcachefs device resize "${devs[0]}" 512M >"$resizeout" 2>&1 &
     local resizepid=$!
 
-    # target_nbuckets is committed near the start of shrink. Give the ioctl a
-    # short head start, then interrupt it so the restart path has to finish
-    # the persisted shrink on the next mount.
-    sleep 5
-    if ! kill -0 "$resizepid" 2>/dev/null; then
-	wait "$resizepid" || true
-	echo "Shrink completed before interruption; restart-resume test did not exercise resume"
-	cat "$resizeout"
-	return 1
-    fi
+    # Kill the ioctl after the target is safely persisted so the next mount
+    # has to resume the interrupted shrink.
+    wait_for_resize_to_start "$resizepid" "$resizeout"
 
     kill -TERM "$resizepid" 2>/dev/null || true
     wait "$resizepid" || true
