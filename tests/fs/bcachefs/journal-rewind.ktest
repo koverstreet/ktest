@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+config-timeout $(stress_timeout)
+
+# Get the rewind_limit seq from the journal — this is how far back we can safely rewind
+get_rewind_seq()
+{
+    bcachefs list_journal ${ktest_scratch_dev[0]} 2>/dev/null	|
+	grep 'rewind_limit'					|
+	tail -1							|
+	grep -o 'seq [0-9]*'					|
+	grep -o '[0-9]*' || true
+}
+
+get_last_seq()
+{
+    bcachefs list_journal -n1 ${ktest_scratch_dev[0]} 2>/dev/null |
+	grep -o 'last_seq [0-9]*'				|
+	head -1							|
+	grep -o '[0-9]*' || true
+}
+
+# Capture the seq of the most recent flush journal entry — flush entries
+# are the valid rewind targets. Caller should check target >= rewind_seq
+# if there's any risk of discards having advanced past it.
+get_latest_flush_seq()
+{
+    bcachefs list_journal -F -D ${ktest_scratch_dev[0]}			|
+	grep "journal entry"						|
+	tail -1								|
+	awk '{print $3}'
+}
+
+# Correctness test: verify journal rewind actually restores the fs to the
+# state at the target seq — pre-rewind data visible, post-rewind data gone.
+test_journal_rewind_basic()
+{
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+
+    # Phase 1: create the "before" state we want to rewind to
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    mkdir /mnt/before
+    echo "before-content-A" > /mnt/before/file_a
+    echo "before-content-B" > /mnt/before/file_b
+    echo "will-be-modified"  > /mnt/shared
+
+    sync
+    umount /mnt
+
+    local target_seq=$(get_latest_flush_seq)
+    echo "Rewind target seq: $target_seq"
+    [[ -n $target_seq ]] || { echo "FAIL: couldn't capture target seq"; return 1; }
+
+    # Phase 2: mount again, make changes we want rewound away
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    mkdir /mnt/after
+    echo "after-content-X"         > /mnt/after/file_x
+    echo "after-content-Y"         > /mnt/after/file_y
+    echo "modified-after-snapshot" > /mnt/shared
+    rm /mnt/before/file_b
+
+    sync
+    umount /mnt
+
+    # Phase 3: rewind
+    mount -t bcachefs -o journal_rewind=$target_seq,fix_errors \
+	${ktest_scratch_dev[0]} /mnt
+
+    # Phase 4: verify post-rewind state
+    local fail=0
+
+    # Before state must be intact
+    [[ -f /mnt/before/file_a ]]					|| { echo "FAIL: /mnt/before/file_a missing";           fail=1; }
+    [[ -f /mnt/before/file_b ]]					|| { echo "FAIL: /mnt/before/file_b missing (deleted after snapshot, should be restored)"; fail=1; }
+    [[ "$(cat /mnt/before/file_a 2>/dev/null)" = "before-content-A" ]] || { echo "FAIL: file_a content wrong"; fail=1; }
+    [[ "$(cat /mnt/before/file_b 2>/dev/null)" = "before-content-B" ]] || { echo "FAIL: file_b content wrong"; fail=1; }
+    [[ "$(cat /mnt/shared   2>/dev/null)" = "will-be-modified" ]]	|| { echo "FAIL: /mnt/shared should have pre-rewind content"; fail=1; }
+
+    # After state must be gone
+    [[ ! -d /mnt/after ]]					|| { echo "FAIL: /mnt/after still exists"; fail=1; }
+
+    umount /mnt
+
+    # Phase 5: offline fsck should be clean
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+
+    return $fail
+}
+
+test_journal_rewind_torture()
+{
+    set_watchdog 600
+
+    local iterations=10
+
+    run_quiet "" bcachefs format -f --discard --no_initialize \
+	${ktest_scratch_dev[0]}
+
+    for i in $(seq 1 $iterations); do
+	echo "=== Iteration $i/$iterations ==="
+
+	# Mount and run fio workload
+	mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+	run_fio_base				\
+	    --filesize=500M			\
+	    --loops=2				\
+	    --name=randrw			\
+	    --rw=randrw				\
+	    --bsrange=4k-1M
+
+	# Emergency shutdown — simulates crash
+	echo "Triggering emergency shutdown..."
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+	umount /mnt
+
+	# Find the rewind target
+	local rewind_seq=$(get_rewind_seq)
+	local last_seq=$(get_last_seq)
+
+	if [[ -n $rewind_seq ]]; then
+	    echo "Rewind limit: $rewind_seq, last_seq: $last_seq"
+	    echo "Rewinding to $rewind_seq..."
+
+	    # Mount with journal rewind
+	    mount -t bcachefs -o journal_rewind=$rewind_seq,fix_errors \
+		${ktest_scratch_dev[0]} /mnt
+
+	    # Scrub to verify data integrity
+	    echo "Running scrub..."
+	    bcachefs data scrub ${ktest_scratch_dev[0]}
+
+	    umount /mnt
+	else
+	    echo "No rewind_limit entry found (first iteration?), skipping rewind"
+
+	    # Still do a normal recovery mount + scrub
+	    mount -t bcachefs -o fix_errors ${ktest_scratch_dev[0]} /mnt
+	    bcachefs data scrub ${ktest_scratch_dev[0]}
+	    umount /mnt
+	fi
+
+	# Final fsck to make sure everything is consistent
+	bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    done
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+main "$@"
