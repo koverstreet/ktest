@@ -403,6 +403,9 @@ test_concurrent_all_device_removal()
     umount /mnt
 
     bcachefs reset-counters --counters=data_update_fail ${ktest_scratch_dev[0]}
+    bcachefs reset-counters --counters=data_update_fail ${ktest_scratch_dev[1]}
+    bcachefs reset-counters --counters=data_update_fail ${ktest_scratch_dev[2]}
+    bcachefs reset-counters --counters=data_update_fail ${ktest_scratch_dev[3]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
