@@ -46,11 +46,14 @@ bcachefs_mem_in_use()
 {
     echo 1 > /sys/module/rcutree/parameters/do_rcu_barrier
 
+    # check_for_deadlock's allocations are module lifetime, not fs:
+
     # We get spurious leaks from readpage_bio_extend; the pagecache likes to
     # hold onto folios way longer than it should
 
     grep -v "0        0" /proc/allocinfo|
 	grep fs/bcachefs/|
+	grep -v "func:bch2_check_for_deadlock"|
 	grep -v "func:readpage_bio_extend"
 }
 
