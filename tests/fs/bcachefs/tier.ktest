@@ -402,11 +402,8 @@ test_concurrent_all_device_removal()
     mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
     umount /mnt
 
-    bcachefs reset-counters --counters=data_update_fail ${ktest_scratch_dev[0]}
-    bcachefs reset-counters --counters=data_update_fail ${ktest_scratch_dev[1]}
-    bcachefs reset-counters --counters=data_update_fail ${ktest_scratch_dev[2]}
-    bcachefs reset-counters --counters=data_update_fail ${ktest_scratch_dev[3]}
-    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+    check_bcachefs_leaks
+    check_bcachefs_errors ${ktest_scratch_dev[0]}
 }
 
 test_read_corrupt()
