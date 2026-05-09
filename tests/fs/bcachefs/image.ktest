@@ -200,13 +200,14 @@ migrate_from_fs()
 	echo "rsync passed"
     fi
 
-    mount -t bcachefs -o sb=$offset ${ktest_scratch_dev[0]} /mnt
+    mount -t bcachefs -o sb=$offset,noreconcile_enabled ${ktest_scratch_dev[0]} /mnt
     umount /mnt
 
     echo "Creating default superblock"
     bcachefs migrate-superblock -d ${ktest_scratch_dev[0]} -o $offset
 
-    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    # avoid spurious reconcile fails on the file about to be deleted
+    mount -t bcachefs -o noreconcile_enabled ${ktest_scratch_dev[0]} /mnt
     rm /mnt/old_migrated_filesystem
     umount /mnt
 
