@@ -858,7 +858,6 @@ run_copygc_torture()
 	    --name=randwrite			\
 	    --stonewall				\
 	    --rw=randwrite			\
-	    --loops=$loops			\
 	    --bsrange=4k-128k
 
 	cur_size=$(stat -c '%s' /mnt/fiotest)
