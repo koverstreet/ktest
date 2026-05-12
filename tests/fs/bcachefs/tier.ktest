@@ -672,4 +672,51 @@ test_reflink_option_propagate()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# When an extent is made indirect, bch2_make_extent_indirect() must snapshot
+# the source inode's IO options onto the new reflink_v: a non-degraded data
+# extent carries no bch_extent_reconcile entry (the reconciler re-derives the
+# options from the inode each pass), but an indirect extent has no inode to
+# derive from, so without the snapshot the reconciler reconciles it against
+# the filesystem defaults instead - which can ENOSPC the fs trying to bring
+# every reflinked extent to the default replica count.
+test_reflink_inode_opts()
+{
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f			\
+	--data_replicas=1				\
+	${ktest_scratch_dev[0]}				\
+	${ktest_scratch_dev[1]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+
+    # A directory with a non-default (per-inode) data_replicas option;
+    # files created under it inherit it.
+    mkdir /mnt/d
+    bcachefs set-file-option --data_replicas=2 /mnt/d
+    dd if=/dev/urandom of=/mnt/d/foo bs=1M count=8 oflag=direct
+
+    # foo's extents match the inode option, so they carry no
+    # bch_extent_reconcile entry - the bug precondition.
+    cp --reflink /mnt/d/foo /mnt/d/bar
+    cmp /mnt/d/foo /mnt/d/bar
+
+    umount /mnt
+
+    local devs=(${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]})
+    local reflink_keys=$(bcachefs list -b reflink "${devs[@]}")
+    echo "$reflink_keys"
+
+    if echo "$reflink_keys" | grep -q "reconcile.*replicas=2 (inode)"; then
+	echo "PASS: reflink_v carries the inode's reconcile opts (data_replicas=2)"
+    else
+	echo "FAIL: reflink_v missing the inode's reconcile opts"
+	echo "  expected a reconcile entry with 'replicas=2 (inode)' on the reflink_v keys"
+	return 1
+    fi
+
+    bcachefs fsck -ny "${devs[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 main $@
