@@ -79,6 +79,42 @@ test_tiering_misaligned()
 	--background_target=hdd
 }
 
+test_foreground_target_durability_counts()
+{
+    set_watchdog 180
+
+    run_quiet "" bcachefs format -f			\
+	--block_size=4k					\
+	--bucket_size=256k				\
+	--data_replicas=2				\
+	--metadata_replicas=2				\
+	--label=ssd.ssd1 ${ktest_scratch_dev[0]}	\
+	--label=ssd.ssd2 ${ktest_scratch_dev[1]}	\
+	--label=hdd.hdd1 ${ktest_scratch_dev[2]}	\
+	--label=hdd.hdd2 ${ktest_scratch_dev[3]}	\
+	--foreground_target=ssd				\
+	--background_target=hdd
+
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+
+    dd if=/dev/zero of=/mnt/foreground-durable bs=4M count=1 oflag=direct status=progress
+    sync
+
+    timeout 30s bcachefs reconcile wait -t target /mnt || true
+
+    local fs_usage_out=$(bcachefs fs usage -h --all /mnt)
+    echo "$fs_usage_out"
+
+    if grep -q '^cached:' <<<"$fs_usage_out"; then
+	echo "durable foreground target copy became cached"
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_tiering_drop_alloc()
 {
     run_basic_tiering_test
