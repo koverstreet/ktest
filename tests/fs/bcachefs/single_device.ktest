@@ -79,6 +79,28 @@ test_remount_ro_rw()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+test_directory_stat_size_nonzero()
+{
+    set_watchdog 10
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    mkdir /mnt/dir
+    dir_size="$(stat -c '%s' /mnt/dir)"
+    root_size="$(stat -c '%s' /mnt)"
+
+    echo "bcachefs directory size: $dir_size"
+    echo "bcachefs root size: $root_size"
+
+    test "$dir_size" -gt 0
+    test "$root_size" -gt 0
+
+    umount /mnt
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_mount_again_after_ebusy()
 {
     set_watchdog 10
