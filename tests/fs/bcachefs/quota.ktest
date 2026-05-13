@@ -147,4 +147,29 @@ test_prjquota_multidevices()
     umount /mnt
 }
 
+test_prjquota_after_primary_device_remove()
+{
+    set_watchdog 180
+
+    run_quiet "" bcachefs format -f				\
+	--label=ssd.ssd1 ${ktest_scratch_dev[0]}		\
+	--label=hdd.hdd1 ${ktest_scratch_dev[1]}		\
+	--metadata_target=hdd					\
+	--foreground_target=hdd					\
+	--promote_target=hdd					\
+	--background_target=hdd
+
+    mount -t bcachefs -o usrquota,grpquota,prjquota		\
+	${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+
+    repquota -P -s /mnt
+    bcachefs device remove ${ktest_scratch_dev[0]} /mnt
+    repquota -P -s /mnt
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[1]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[1]}
+}
+
 main "$@"
