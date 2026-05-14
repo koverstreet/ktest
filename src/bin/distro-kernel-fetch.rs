@@ -368,11 +368,20 @@ impl DistroFetcher for DebianFetcher {
         let image = apt_stanza_to_pkgfile(img_stanza)
             .ok_or_else(|| anyhow!("{}: no Filename", img_name))?;
 
-        // Debian: arch-specific headers + common headers.
+        // Debian:
+        //   - arch-specific headers + common headers (always)
+        //   - linux-binary-<v>-<arch> + linux-modules-<v>-<arch> when present
+        //
+        // Forky/sid split the kernel image into a metapackage (`linux-image`)
+        // pointing at `linux-binary` (vmlinuz) + `linux-modules` (modules).
+        // Older releases (bookworm, trixie) ship everything in linux-image,
+        // and the binary/modules packages don't exist — silently skipped.
         let arch_hdr = format!("linux-headers-{}-{}", abi, src.arch);
         let common_hdr = format!("linux-headers-{}-common", abi);
+        let binary_pkg = format!("linux-binary-{}-{}", abi, src.arch);
+        let modules_pkg = format!("linux-modules-{}-{}", abi, src.arch);
         let mut headers = Vec::new();
-        for hdr in [&arch_hdr, &common_hdr] {
+        for hdr in [&arch_hdr, &common_hdr, &binary_pkg, &modules_pkg] {
             if let Some(stanza) = by_name.get(hdr.as_str()) {
                 if let Some(p) = apt_stanza_to_pkgfile(stanza) {
                     headers.push(p);
