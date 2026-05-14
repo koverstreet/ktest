@@ -18,7 +18,7 @@ setup_tracing()
     local t=/sys/kernel/tracing
 
     echo		> "$t"/trace
-    echo 8192		> "$t"/buffer_size_kb
+    echo 81920		> "$t"/buffer_size_kb
     echo $@		> "$t"/set_event
     echo trace_printk	> "$t"/trace_options
     #echo stacktrace	> "$t"/trace_options
@@ -98,6 +98,14 @@ stress_timeout()
 
 call_base_test()
 {
+    # build-test-kernel's `build` cmd sources a <variant>-base.sh purely to
+    # harvest its require-kernel-config declarations; it has no underlying
+    # test to dispatch to. Bail out before the re-source so the file is
+    # effectively a config overlay.
+    if [[ ${ktest_no_dispatch:-false} = true ]]; then
+	return 0
+    fi
+
     fname=$(basename ${BASH_SOURCE[2]})
     fname=${fname#$1-}
     shift

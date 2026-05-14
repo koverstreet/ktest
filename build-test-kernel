@@ -222,7 +222,11 @@ cmd_build()
 	    echo "build-test-kernel build: no such variant — $base_sh not found"
 	    exit 1
 	fi
-	. "$base_sh"
+	# Harvest config requirements only; suppress the *-base.sh's
+	# tail-call to call_base_test (which would re-source a sibling
+	# file based on BASH_SOURCE[2] — points at us, not a test).
+	ktest_no_dispatch=true . "$base_sh"
+	ktest_no_dispatch=false
     fi
 
     # Stage into a sibling of the final path so the publish step is one
