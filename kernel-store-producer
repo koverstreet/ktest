@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+#
+# kernel-store-producer — full producer cycle for a kernel-store host.
+#
+# Runs the three phases in order:
+#
+#   1. distro-kernel-fetch     fetch latest kernels from configured distros
+#   2. upstream-kernel-build   build configured upstream variants
+#   3. kernel-store-push       atomically rsync to configured farm workers
+#
+# Each phase is idempotent and memoized — only missing/new entries do work.
+# Phases are run unconditionally even if an earlier one fails, so a transient
+# fetch failure doesn't block the build of unrelated entries from a previous
+# fetch. Overall exit is nonzero iff any phase failed.
+#
+# Intended for scheduled invocation (systemd timer, cron, etc.); produces no
+# output on a fully up-to-date run.
+
+set -o nounset
+set -o pipefail
+set -o errtrace
+
+ktest_dir=$(dirname "$(readlink -f "$0")")
+
+ARCH=$(uname -m)
+case "$ARCH" in
+    aarch64) ARCH=arm64 ;;
+    x86_64)  ;;
+    *)       echo "kernel-store-producer: unsupported arch $ARCH" >&2; exit 1 ;;
+esac
+
+usage() {
+    cat <<EOF
+kernel-store-producer — run fetch + build + push for the kernel store.
+
+Usage: kernel-store-producer [options]
+
+  -a <arch>     architecture (default: $ARCH, derived from uname -m)
+  -h            this help
+EOF
+}
+
+while getopts "a:h" arg; do
+    case $arg in
+        a) ARCH=$OPTARG ;;
+        h) usage; exit 0 ;;
+        *) usage; exit 1 ;;
+    esac
+done
+
+failed=0
+run_phase() {
+    local name=$1; shift
+    echo "==> $name"
+    if ! "$@"; then
+        echo "kernel-store-producer: $name failed (exit $?)" >&2
+        failed=$((failed + 1))
+    fi
+}
+
+run_phase "distro-kernel-fetch"   "$ktest_dir/target/release/distro-kernel-fetch"
+run_phase "upstream-kernel-build" "$ktest_dir/upstream-kernel-build" -a "$ARCH"
+run_phase "kernel-store-push"     "$ktest_dir/kernel-store-push"
+
+if [[ $failed -gt 0 ]]; then
+    echo "kernel-store-producer: $failed phase(s) failed" >&2
+    exit 1
+fi
