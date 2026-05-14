@@ -210,12 +210,14 @@ bcachefs_antagonist()
 
     #enable_race_faults
 
-    antagonist_expensive_debug_checks &
-    antagonist_shrink &
-    antagonist_sync &
-    antagonist_trigger_gc &
-    antagonist_cat_sysfs_debugfs &
-    #antagonist_switch_str_hash &
+    if [[ ! -v NO_BCACHEFS_DEBUG ]]; then
+	antagonist_expensive_debug_checks &
+	antagonist_shrink &
+	antagonist_sync &
+	antagonist_trigger_gc &
+	antagonist_cat_sysfs_debugfs &
+	#antagonist_switch_str_hash &
+    fi
 }
 
 get_slowpath_counters()
