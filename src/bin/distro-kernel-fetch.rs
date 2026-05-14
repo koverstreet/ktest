@@ -1450,13 +1450,19 @@ fn nixos_denixify_tree(root: &Path) -> Result<()> {
                (install via `apt install patchelf` / `dnf install patchelf`)");
     }
 
-    // Canonical hosts of the dynamic linker. /lib64 is x86_64 SysV ABI;
-    // ld-musl is musl. We pick whatever ld.so the host has — that's what
-    // dkms-built modules would use anyway.
-    let host_ldso = ["/lib64/ld-linux-x86-64.so.2", "/lib/ld-linux-x86-64.so.2"]
-        .into_iter().map(Path::new).find(|p| p.exists())
-        .ok_or_else(|| anyhow!("no glibc dynamic linker on this host \
-                                (looked for /lib64/ld-linux-x86-64.so.2)"))?;
+    // Canonical paths of the host's glibc dynamic linker, keyed by
+    // current arch. /lib64 is x86_64 SysV ABI; ld-musl is musl. We pick
+    // whatever ld.so the host has — that's what dkms-built userspace
+    // helpers (fixdep, modpost, ...) would use anyway.
+    let ldso_candidates: &[&str] = match std::env::consts::ARCH {
+        "x86_64"  => &["/lib64/ld-linux-x86-64.so.2", "/lib/ld-linux-x86-64.so.2"],
+        "aarch64" => &["/lib/ld-linux-aarch64.so.1"],
+        "riscv64" => &["/lib/ld-linux-riscv64-lp64d.so.1"],
+        other     => bail!("no host glibc ld.so candidates known for arch {}", other),
+    };
+    let host_ldso = ldso_candidates.iter().map(Path::new).find(|p| p.exists())
+        .ok_or_else(|| anyhow!("no glibc dynamic linker on this host (tried {:?})",
+                               ldso_candidates))?;
 
     let mut shebangs_patched = 0usize;
     let mut elfs_patched = 0usize;
@@ -1757,15 +1763,21 @@ fn extract_nar_xz(archive: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Find the largest "vmlinuz*" or "bzImage*" file under `root`. The
-/// real kernel image is multi-MB; symlinks or stubs are smaller.
+/// Find the largest kernel-image file under `root`. The names that
+/// appear in distro packages: `vmlinuz*` (most x86 distros), `bzImage*`
+/// (occasionally on x86), `Image*` (arm64, and some nixos x86_64 too).
+/// The real image is multi-MB; symlinks or stubs are smaller.
 fn find_vmlinuz(root: &Path) -> Result<PathBuf> {
     let mut best: Option<(PathBuf, u64)> = None;
     for entry in walkdir::WalkDir::new(root).follow_links(false) {
         let entry = entry.context("walking for vmlinuz")?;
         if !entry.file_type().is_file() { continue }
         let name = entry.file_name().to_string_lossy();
-        if !(name.starts_with("vmlinuz") || name.starts_with("bzImage")) { continue }
+        let is_image = name.starts_with("vmlinuz")
+            || name.starts_with("bzImage")
+            || name == "Image" || name.starts_with("Image.")
+            || name == "zImage" || name.starts_with("zImage.");
+        if !is_image { continue }
         let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
         if size < 1024 * 1024 { continue }
         if best.as_ref().map(|(_, s)| size > *s).unwrap_or(true) {
@@ -1773,7 +1785,7 @@ fn find_vmlinuz(root: &Path) -> Result<PathBuf> {
         }
     }
     best.map(|(p, _)| p)
-        .ok_or_else(|| anyhow!("no vmlinuz found under {}", root.display()))
+        .ok_or_else(|| anyhow!("no vmlinuz/bzImage/Image found under {}", root.display()))
 }
 
 /// Find a `<something>/modules/<uname-r>` directory containing modules.order
