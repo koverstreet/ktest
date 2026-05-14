@@ -2095,10 +2095,28 @@ fn decompress_module(src: &Path, dst: &Path) -> Result<()> {
     }
 }
 
-/// Find /usr/lib/klibc-<hash>.so — the runtime interpreter for klibc binaries.
-fn klibc_interp_path() -> Result<PathBuf> {
-    for entry in fs::read_dir("/usr/lib")
-        .context("scanning /usr/lib for klibc interp")?
+/// Locate the lib dir containing klibc/bin/ and the klibc-<hash>.so interp.
+/// On Debian/Ubuntu/Fedora this is `/usr/lib/`; on NixOS the klibc package
+/// puts both under `$HOME/.nix-profile/lib/`. Probe a few candidates.
+fn klibc_lib_dir() -> Result<PathBuf> {
+    let mut candidates: Vec<PathBuf> = vec![PathBuf::from("/usr/lib")];
+    if let Some(home) = std::env::var_os("HOME") {
+        candidates.push(PathBuf::from(&home).join(".nix-profile/lib"));
+    }
+    candidates.push(PathBuf::from("/run/current-system/sw/lib"));
+    for c in &candidates {
+        if c.join("klibc/bin/sh").is_file() {
+            return Ok(c.clone());
+        }
+    }
+    bail!("klibc not found — tried {:?} (install klibc-utils + libklibc, \
+           or `nix profile install nixpkgs#klibc`)", candidates)
+}
+
+/// Find klibc-<hash>.so — the runtime interpreter for klibc binaries.
+fn klibc_interp_path(lib_dir: &Path) -> Result<PathBuf> {
+    for entry in fs::read_dir(lib_dir)
+        .with_context(|| format!("scanning {} for klibc interp", lib_dir.display()))?
     {
         let entry = entry?;
         let name = entry.file_name();
@@ -2107,7 +2125,7 @@ fn klibc_interp_path() -> Result<PathBuf> {
             return Ok(entry.path());
         }
     }
-    bail!("no /usr/lib/klibc-*.so found — apt install klibc-utils libklibc")
+    bail!("no klibc-*.so under {}", lib_dir.display())
 }
 
 /// Run `depmod` against the staged modules tree to produce modules.dep
@@ -2159,21 +2177,35 @@ fn generate_initramfs(stage: &Path, uname_r: &str) -> Result<()> {
     }
 
     // klibc tools + their shared interp.
-    let klibc_bin = Path::new("/usr/lib/klibc/bin");
+    use std::os::unix::fs::PermissionsExt;
+    let klibc_lib = klibc_lib_dir()?;
+    let klibc_bin = klibc_lib.join("klibc/bin");
+    let interp = klibc_interp_path(&klibc_lib)?;
+    // Path inside the cpio where the interp will live; klibc tools' DT_INTERP
+    // must match this exactly. On Debian the host already uses this path, so
+    // patchelf is a no-op; on NixOS the original interp is /nix/store/... and
+    // we have to rewrite.
+    let cpio_interp = format!("/usr/lib/{}", interp.file_name().unwrap().to_string_lossy());
     for tool in ["sh", "mount", "insmod", "mkdir", "run-init"] {
         let src = klibc_bin.join(tool);
         let dst = irfs.join("bin").join(tool);
         fs::copy(&src, &dst)
-            .with_context(|| format!("copying klibc {} (install klibc-utils?)", tool))?;
-        let mut perms = fs::metadata(&dst)?.permissions();
-        use std::os::unix::fs::PermissionsExt;
-        perms.set_mode(0o755);
-        fs::set_permissions(&dst, perms)?;
+            .with_context(|| format!("copying klibc {} from {}", tool, src.display()))?;
+        fs::set_permissions(&dst, fs::Permissions::from_mode(0o755))?;
+        let pe_status = Command::new("patchelf")
+            .args(["--set-interpreter", &cpio_interp])
+            .arg(&dst)
+            .status()
+            .with_context(|| format!("patchelf --set-interpreter on klibc {}", tool))?;
+        if !pe_status.success() {
+            bail!("patchelf --set-interpreter failed on klibc {}", tool);
+        }
     }
-    let interp = klibc_interp_path()?;
     let interp_dst = irfs.join("usr/lib").join(interp.file_name().unwrap());
     fs::copy(&interp, &interp_dst)
         .with_context(|| format!("copying klibc interp {}", interp.display()))?;
+    // Nix store files are 0444; ensure the cpio's copy is plain 0644.
+    fs::set_permissions(&interp_dst, fs::Permissions::from_mode(0o644))?;
 
     // Decompress + stage each module under /modules/ flat (no kernel/ prefix).
     for mod_name in &ordered {
@@ -2201,7 +2233,6 @@ fn generate_initramfs(stage: &Path, uname_r: &str) -> Result<()> {
     init.push_str("exec run-init /newroot /sbin/init\n");
     let init_path = irfs.join("init");
     fs::write(&init_path, init)?;
-    use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(&init_path, fs::Permissions::from_mode(0o755))?;
 
     // cpio (newc format) | gzip > <stage>/initramfs.
