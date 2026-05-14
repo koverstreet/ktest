@@ -36,6 +36,7 @@ usage()
     ktest_usage_cmds
     echo "  oldconfig           Run make oldconfig"
     echo "  config              Run make nconfig"
+    echo "  build               Build a kernel + publish to the kernel store"
     echo
     echo "  options:"
     ktest_usage_opts
@@ -46,6 +47,11 @@ usage()
     echo "      -c <dir>        enable coverage for this dir (only valid without -K)"
     echo "      -M <arg>        extra arguments to be passed to make when building the kernel"
     echo "      -K              keep existing kernel .config"
+    echo
+    echo " options for build-test-kernel build:"
+    echo "      -V <variant>    variant name; sources tests/<variant>-base.sh for"
+    echo "                        require-kernel-config entries (default = none)"
+    echo "      -D <dir>        destination (kernel store entry); atomic publish"
     echo
     ktest_usage_post
 }
@@ -59,7 +65,10 @@ fi
 CMD="$1"
 shift
 
-while getopts "k:Pc:M:Kh${ktest_args}" arg; do
+ktest_build_variant=""
+ktest_build_destdir=""
+
+while getopts "k:Pc:M:KV:D:h${ktest_args}" arg; do
     case $arg in
 	k)
 	    ktest_kernel_source="$OPTARG"
@@ -85,6 +94,12 @@ while getopts "k:Pc:M:Kh${ktest_args}" arg; do
 	    ;;
 	K)
 	    ktest_skip_kernel_config=true
+	    ;;
+	V)
+	    ktest_build_variant="$OPTARG"
+	    ;;
+	D)
+	    ktest_build_destdir="$OPTARG"
 	    ;;
 	h)
 	    usage
@@ -178,6 +193,99 @@ run_tests_host()
 cmd_boot()
 {
     cmd_run "$ktest_dir/boot.ktest"
+}
+
+# Build a kernel from $ktest_kernel_source and publish it as a kernel-store
+# entry at the path given by -S. The variant given by -V picks a config
+# overlay from tests/<variant>-base.sh (existing convention — same files
+# the test machinery sources for require-kernel-config); -V is optional
+# and a no-variant build just uses defconfig + whatever require-kernel-config
+# entries live in the test-libs the variants share.
+cmd_build()
+{
+    if [[ -z $ktest_build_destdir ]]; then
+	echo "build-test-kernel build: -D <destdir> required"
+	exit 1
+    fi
+
+    # test-libs.sh is the proper test-side entry point: sources prelude.sh
+    # (which initializes ktest_* variables configure_kernel / build_kernel
+    # reference) AND kconfig.sh (which provides per-arch base requirements
+    # including MODULES, SMP, ACPI, etc. — without it MODULES=n and OOT
+    # builds fail). cmd_run gets all this via parse_test_deps; cmd_build
+    # sources it directly. Idempotent via prelude's `[[ ! -v ... ]]` guards.
+    . "$ktest_dir/tests/test-libs.sh"
+
+    if [[ -n $ktest_build_variant && $ktest_build_variant != default ]]; then
+	local base_sh="$ktest_dir/tests/${ktest_build_variant}-base.sh"
+	if [[ ! -f $base_sh ]]; then
+	    echo "build-test-kernel build: no such variant — $base_sh not found"
+	    exit 1
+	fi
+	. "$base_sh"
+    fi
+
+    # Stage into a sibling of the final path so the publish step is one
+    # rename. Survives concurrent builders for the same target (last one
+    # wins; rename(2) is atomic).
+    local stage="${ktest_build_destdir}.work.$$"
+    rm -rf "$stage"
+    mkdir -p "$stage"
+    ktest_kernel_binary="$stage"
+
+    build_kernel
+
+    finalize_kernel_build "$stage"
+
+    mkdir -p "$(dirname "$ktest_build_destdir")"
+    rm -rf "$ktest_build_destdir"
+    mv "$stage" "$ktest_build_destdir"
+    echo "    [PUBLISH] $ktest_build_destdir"
+}
+
+# Round out a freshly-built kernel-store entry: write manifest.json, add
+# the uniform `build` top-level symlink, copy headers tree.
+finalize_kernel_build()
+{
+    local stage=$1
+    local version
+    version=$(cat "$ktest_kernel_build/include/config/kernel.release")
+
+    # Headers tree: copy the build-output dir (objects + .config +
+    # Module.symvers + generated includes) plus the source-side scripts/
+    # and include/ trees so OOT module builds have everything.
+    # For an in-tree build (source == build dir), this is a single copy;
+    # with O= they may be separate.
+    local hdrs="$stage/lib/modules/$version/build"
+    rm -rf "$hdrs"
+    mkdir -p "$hdrs"
+    # Build-dir contents (configs, Module.symvers, scripts/, arch/<a>/include/generated, ...)
+    (cd "$ktest_kernel_build" && tar -cf - \
+	--exclude='*.o' --exclude='*.o.cmd' --exclude='*.ko' --exclude='*.ko.cmd' \
+	--exclude='vmlinux*' --exclude='*.tmp_*' \
+	.) | (cd "$hdrs" && tar -xf -)
+    # Source-dir headers + script sources (only when O= split from source)
+    if [[ $(readlink -f "$ktest_kernel_source") != $(readlink -f "$ktest_kernel_build") ]]; then
+	(cd "$ktest_kernel_source" && tar -cf - \
+	    Makefile Kbuild Kconfig \
+	    include scripts arch tools 2>/dev/null \
+	    --exclude='*.o' --exclude='*.o.cmd') | (cd "$hdrs" && tar -xf - 2>/dev/null) || true
+    fi
+
+    ln -sfn "lib/modules/$version/build" "$stage/build"
+
+    cat > "$stage/manifest.json" <<EOF
+{
+  "manifest_version": 1,
+  "kind": "upstream",
+  "variant": "${ktest_build_variant:-default}",
+  "version": "$version",
+  "arch": "$ktest_arch",
+  "kernel_source": "$(readlink -f "$ktest_kernel_source")",
+  "kernel_source_rev": "$(cd "$ktest_kernel_source" 2>/dev/null && git rev-parse HEAD 2>/dev/null || echo unknown)",
+  "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
 }
 
 cmd_oldconfig()
