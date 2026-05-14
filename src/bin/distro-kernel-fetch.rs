@@ -440,6 +440,63 @@ fn debian_fixup(extracted: &Path, stage: &Path, version: &str) -> Result<()> {
     Ok(())
 }
 
+/// openSUSE's kernel build dir (under `linux-<v>-obj/<arch>/<flavor>/`) is
+/// pointed at by our `build` symlink. Its Makefile is two lines:
+///
+///   export KBUILD_OUTPUT = /usr/src/linux-<v>-obj/<arch>/<flavor>
+///   include ../../../linux-<v>/Makefile
+///
+/// The include is already self-relative and works for us; the KBUILD_OUTPUT
+/// path is absolute /usr/src/... and the source Makefile checks
+/// `realpath $(KBUILD_OUTPUT)` exists, which fails outside a SUSE install.
+/// Rewrite KBUILD_OUTPUT to `$(THIS_DIR)` — same pattern as the nixos and
+/// debian fixups.
+fn opensuse_fixup(stage: &Path) -> Result<()> {
+    // Follow the build symlink to find the obj-dir Makefile.
+    let build = stage.join("build");
+    let obj_dir = match fs::read_link(&build) {
+        Ok(target) => stage.join(target),
+        // No symlink? Already-real-dir layout (unexpected for opensuse) —
+        // nothing for us to rewrite.
+        Err(_) => return Ok(()),
+    };
+    let makefile = obj_dir.join("Makefile");
+    if !makefile.is_file() { return Ok(()) }
+    let text = fs::read_to_string(&makefile)
+        .with_context(|| format!("reading {}", makefile.display()))?;
+    if !text.contains("/usr/src/") { return Ok(()) }
+
+    // The KBUILD_OUTPUT path always names this very directory, so map any
+    // `/usr/src/linux-<...>-obj/<arch>/<flavor>` reference to $(THIS_DIR).
+    // Substituting the full prefix is more brittle than just replacing the
+    // common /usr/src/ root — for openSUSE the rest of the path is exactly
+    // the relative location of this Makefile, so /usr/src/ → $(THIS_DIR)/../
+    // doesn't quite work (would give $(THIS_DIR)/../linux-X-obj/<arch>/<f>
+    // which is wrong by 3 levels). Instead, replace the specific
+    // KBUILD_OUTPUT line with one that uses $(THIS_DIR) directly.
+    let mut out = String::with_capacity(text.len() + 200);
+    out.push_str(
+        "# Rewritten by distro-kernel-fetch — was /usr/src-anchored.\n\
+         THIS_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))\n",
+    );
+    for line in text.lines() {
+        if line.starts_with("export KBUILD_OUTPUT") || line.starts_with("KBUILD_OUTPUT") {
+            out.push_str("export KBUILD_OUTPUT := $(THIS_DIR)\n");
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(&makefile)?.permissions();
+    perms.set_mode(perms.mode() | 0o200);
+    fs::set_permissions(&makefile, perms)
+        .with_context(|| format!("chmod +w {}", makefile.display()))?;
+    fs::write(&makefile, out)
+        .with_context(|| format!("rewriting {}", makefile.display()))?;
+    Ok(())
+}
+
 struct DebianFetcher;
 impl DistroFetcher for DebianFetcher {
     fn latest_kernels(&self, src: &Source) -> Result<Vec<KernelPkg>> {
@@ -564,17 +621,55 @@ impl DistroFetcher for UbuntuFetcher {
         let image = apt_stanza_to_pkgfile(img_stanza)
             .ok_or_else(|| anyhow!("{}: no Filename", img_name))?;
 
-        // Ubuntu headers: `linux-headers-<abi>-generic` (flavor-specific build
-        // dir) + `linux-headers-<abi>` (common). The modules tree is in the
-        // image package for older releases; newer ones split it out into
-        // `linux-modules-<abi>-generic`.
+        // Ubuntu headers split into a flavor-specific arch package + a
+        // common (all-arch) header tree. The flavor pkg is always
+        // `linux-headers-<abi>-generic`; the common pkg's name varies:
+        //   - main archive kernel:  `linux-headers-<abi>`
+        //   - HWE kernel:           `linux-hwe-X.Y-headers-<abi>`
+        //                            (X.Y = major.minor of the abi)
+        //   - cloud variants:       `linux-aws-X.Y-headers-<abi>` etc.
+        // The arch package's stanza always Depends: on the common one as
+        // its first entry, but rather than parse Depends we scan by_name
+        // for any package whose name suffix is `-headers-<abi>` and isn't
+        // the flavor-specific one. Picks up the common variant regardless
+        // of HWE/cloud prefix.
         let flavor_hdr = format!("linux-headers-{}-generic", abi);
-        let common_hdr = format!("linux-headers-{}", abi);
         let modules_pkg = format!("linux-modules-{}-generic", abi);
         let modules_extra = format!("linux-modules-extra-{}-generic", abi);
+        // Find the common-headers package by matching the arch-headers
+        // stanza's `Source:` field — the flavor + common pkgs ship from
+        // the same source. Filtering by Source weeds out other arches'
+        // `<flavor>-headers-<abi>` packages that happen to land in this
+        // Packages list as Architecture: all (linux-riscv-X.Y on amd64,
+        // etc.).
+        let hdr_suffix = format!("-headers-{}", abi);
+        let flavor_stanza = by_name.get(flavor_hdr.as_str())
+            .ok_or_else(|| anyhow!("{}: flavor headers stanza missing", flavor_hdr))?;
+        let flavor_source = flavor_stanza.fields.get("Source")
+            .map(String::as_str);
+        let common_hdrs: Vec<&str> = by_name.iter()
+            .filter(|(name, stanza)| {
+                **name != flavor_hdr
+                && name.ends_with(&hdr_suffix)
+                && stanza.fields.get("Source").map(String::as_str) == flavor_source
+            })
+            .map(|(name, _)| *name)
+            .collect();
         let mut headers = Vec::new();
-        for hdr in [&flavor_hdr, &common_hdr, &modules_pkg, &modules_extra] {
-            if let Some(stanza) = by_name.get(hdr.as_str()) {
+        if let Some(stanza) = by_name.get(flavor_hdr.as_str()) {
+            if let Some(p) = apt_stanza_to_pkgfile(stanza) {
+                headers.push(p);
+            }
+        }
+        for name in &common_hdrs {
+            if let Some(stanza) = by_name.get(name) {
+                if let Some(p) = apt_stanza_to_pkgfile(stanza) {
+                    headers.push(p);
+                }
+            }
+        }
+        for name in [&modules_pkg, &modules_extra] {
+            if let Some(stanza) = by_name.get(name.as_str()) {
                 if let Some(p) = apt_stanza_to_pkgfile(stanza) {
                     headers.push(p);
                 }
@@ -2199,6 +2294,11 @@ fn fetch_and_convert(output: &Path, pkg: &KernelPkg) -> Result<()> {
         // install. See debian_fixup for the patchup.
         if pkg.distro == "debian" {
             debian_fixup(&extracted, &stage, &pkg.version)?;
+        }
+        // openSUSE: the obj/<arch>/<flavor>/Makefile hardcodes its
+        // KBUILD_OUTPUT to the system install path. Rewrite to self-relative.
+        if pkg.distro == "opensuse" {
+            opensuse_fixup(&stage)?;
         }
     }
     generate_initramfs(&stage, &pkg.version)
