@@ -1,0 +1,22 @@
+// kernel-store-push: list of farm workers to push the kernel store to.
+// Place this at $HOME/.ktest/farm-workers.json5 (override with -c).
+//
+// Each worker:
+//   target       ssh target ([user@]host[:port]); same string ssh takes
+//   remote_data  remote $KTEST_DATA equivalent (default "~/.ktest")
+//
+// The push is atomic per kernel-store entry: each entry is rsync'd to
+// <remote_data>/kernels/<dist>/<rel>/<arch>/.<version>.staging.<pid>/
+// then renamed onto <version>/ via mv -T (atomic on a single fs).
+// Entries already present on the worker (manifest.json exists) are
+// skipped — kernel-store entries are immutable once published.
+//
+// No deletions: a worker may accumulate older versions, cleaned up by
+// a separate scheduled prune.
+{
+    workers: [
+        {target: "worker1.evilpiepirate.org"},
+        {target: "worker2.evilpiepirate.org"},
+        // {target: "worker3.example.com", remote_data: "/var/lib/ktest"},
+    ],
+}

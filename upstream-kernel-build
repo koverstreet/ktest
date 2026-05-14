@@ -75,8 +75,8 @@ json5_to_json() {
 	s{(^|\s)//[^\n]*}{$1}gm;
 	# Drop trailing commas before } or ].
 	s/,(\s*[}\]])/$1/g;
-	# Quote unquoted object keys.
-	s/^(\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*):/$1"$2"$3:/gm;
+	# Quote unquoted object keys (multi-line and inline forms).
+	s/([\{,\[]\s*|^\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*):/$1"$2"$3:/gm;
     ' "$1"
 }
 
