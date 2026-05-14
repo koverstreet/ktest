@@ -260,20 +260,48 @@ finalize_kernel_build()
     # and include/ trees so OOT module builds have everything.
     # For an in-tree build (source == build dir), this is a single copy;
     # with O= they may be separate.
+    #
+    # Exclusions trim ~200MB off a default kernel build:
+    #   - non-target arch/ trees (we only need arch/$KERNEL_ARCH/ for
+    #     this kernel's OOT module builds; ~100MB across arm, arm64,
+    #     powerpc, mips, riscv, s390, etc.)
+    #   - tools/{perf,testing,selftests,bpf}/ — internal/standalone
+    #     userspace; not used by external module kbuild (~80MB)
+    #   - object files, .cmd dep files, archives — recreated on use
     local hdrs="$stage/lib/modules/$version/build"
     rm -rf "$hdrs"
     mkdir -p "$hdrs"
-    # Build-dir contents (configs, Module.symvers, scripts/, arch/<a>/include/generated, ...)
-    (cd "$ktest_kernel_build" && tar -cf - \
-	--exclude='*.o' --exclude='*.o.cmd' --exclude='*.ko' --exclude='*.ko.cmd' \
-	--exclude='vmlinux*' --exclude='*.tmp_*' \
-	.) | (cd "$hdrs" && tar -xf -)
-    # Source-dir headers + script sources (only when O= split from source)
+    # Exclude patterns: NO leading './' — we tar from both the build dir
+    # (with `.` so paths in the archive start with `./`) and the source
+    # dir (with explicit `arch tools include …` so paths start without
+    # leading dot). Tar's exclude matches both forms when the pattern is
+    # plain `arch/<a>`.
+    local non_arch_excludes=()
+    local a
+    for a in alpha arc arm arm64 csky hexagon loongarch m68k microblaze mips \
+	     nios2 openrisc parisc powerpc riscv s390 sh sparc um xtensa; do
+	[[ $a = $KERNEL_ARCH ]] && continue
+	non_arch_excludes+=("--exclude=arch/$a")
+    done
+    local tar_excludes=(
+	--exclude='*.o' --exclude='*.o.cmd' --exclude='*.ko' --exclude='*.ko.cmd'
+	--exclude='vmlinux*' --exclude='*.tmp_*' --exclude='built-in.a'
+	--exclude='tools/perf' --exclude='tools/testing'
+	--exclude='tools/selftests' --exclude='tools/bpf'
+	"${non_arch_excludes[@]}"
+    )
+    # Build-dir contents (configs, Module.symvers, scripts/, arch/<a>/include/generated, ...).
+    # tar's --exclude only applies to positional args that appear AFTER it on the
+    # command line — keep that order.
+    (cd "$ktest_kernel_build" && tar -cf - "${tar_excludes[@]}" .) \
+	| (cd "$hdrs" && tar -xf -)
+    # Source-dir headers + script sources (only when O= split from source).
     if [[ $(readlink -f "$ktest_kernel_source") != $(readlink -f "$ktest_kernel_build") ]]; then
 	(cd "$ktest_kernel_source" && tar -cf - \
+	    "${tar_excludes[@]}" \
 	    Makefile Kbuild Kconfig \
-	    include scripts arch tools 2>/dev/null \
-	    --exclude='*.o' --exclude='*.o.cmd') | (cd "$hdrs" && tar -xf - 2>/dev/null) || true
+	    include scripts arch tools 2>/dev/null) \
+	    | (cd "$hdrs" && tar -xf - 2>/dev/null) || true
     fi
 
     ln -sfn "lib/modules/$version/build" "$stage/build"
