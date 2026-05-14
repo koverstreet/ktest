@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+#
+# upstream-kernel-build — track upstream linux source trees, build N variants
+# per source, publish into the kernel store ($HOME/.ktest/kernels/upstream/).
+#
+# Drives build-test-kernel's `build` command under the hood. Config is
+# json5 (see upstream-builds.json5.example); state lives under $HOME/.ktest/:
+#
+#   upstream-srcs/<release>.git/             bare clones (one per source, fetched)
+#   upstream-builds/<release>-<variant>/     dedicated working clones
+#                                            (one per release×variant; sidesteps
+#                                             git's multi-process worktree races)
+#   kernels/upstream/<release>-<variant>/<arch>/<version>/   store entries
+#
+# Run periodically; memoized by manifest.json presence (a successful build
+# leaves a manifest, an interrupted one doesn't, so reruns retry only what's
+# missing).
+
+set -o nounset
+set -o errexit
+set -o errtrace
+
+ktest_dir=$(dirname "$(readlink -f "$0")")
+KTEST_DATA="${KTEST_DATA:-$HOME/.ktest}"
+CONFIG_PATH="$KTEST_DATA/upstream-builds.json5"
+ARCH="x86_64"
+DRY_RUN=false
+VERBOSE=false
+
+usage() {
+    cat <<EOF
+upstream-kernel-build — fetch + build configured upstream kernel sources.
+
+Usage: upstream-kernel-build [options]
+
+  -c <file>     config (default: $CONFIG_PATH)
+  -a <arch>     architecture (default: $ARCH)
+  -n            dry run (no fetch, no build)
+  -v            verbose
+  -h            this help
+EOF
+}
+
+while getopts "c:a:nvh" arg; do
+    case $arg in
+	c) CONFIG_PATH=$OPTARG ;;
+	a) ARCH=$OPTARG ;;
+	n) DRY_RUN=true ;;
+	v) VERBOSE=true ;;
+	h) usage; exit 0 ;;
+	*) usage; exit 1 ;;
+    esac
+done
+
+SRCS_DIR="$KTEST_DATA/upstream-srcs"
+BUILDS_DIR="$KTEST_DATA/upstream-builds"
+KERNELS_DIR="$KTEST_DATA/kernels/upstream"
+WORK_DIR="$KTEST_DATA/_work"
+
+log()   { echo "upstream-kernel-build: $*"; }
+vlog()  { $VERBOSE && echo "    $*" || true; }
+
+# JSON5 → JSON: strip // comments + trailing commas, quote unquoted
+# keys. We match // only when preceded by whitespace or at start-of-line,
+# so URLs like git:// inside strings survive. Good enough for short,
+# hand-edited config files; not a general parser.
+json5_to_json() {
+    # JSON5 → JSON via perl one-liner (sed -z's bracket classes don't
+    # treat \n as whitespace, which makes trailing-comma stripping a
+    # pain; perl just handles it). Adequate for short hand-edited
+    # configs; not a general parser.
+    perl -0777 -pe '
+	# Strip // comments — only when preceded by whitespace or at
+	# start-of-line, so URLs (git://, http://) survive.
+	s{(^|\s)//[^\n]*}{$1}gm;
+	# Drop trailing commas before } or ].
+	s/,(\s*[}\]])/$1/g;
+	# Quote unquoted object keys.
+	s/^(\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*):/$1"$2"$3:/gm;
+    ' "$1"
+}
+
+read_config() {
+    if [[ ! -f $CONFIG_PATH ]]; then
+	log "no config at $CONFIG_PATH"
+	exit 1
+    fi
+    json5_to_json "$CONFIG_PATH"
+}
+
+# Emit one tab-separated `release\tvariant\turl` line per build.
+list_builds() {
+    read_config | jq -r '
+	.sources as $s
+	| .builds | to_entries[]
+	| .key as $rel
+	| .value[]
+	| [$rel, ., $s[$rel] // "MISSING"] | @tsv
+    '
+}
+
+# Resolve a release name to its latest tag. Stable releases pick the
+# highest vX.Y.Z (no -rc); rc picks the highest vX.Y-rcN.
+resolve_tag() {
+    local release=$1
+    local bare="$SRCS_DIR/$release.git"
+    local pattern
+    case "$release" in
+	*rc*)    pattern='^v[0-9]+\.[0-9]+-rc[0-9]+$' ;;
+	*)       pattern='^v[0-9]+\.[0-9]+(\.[0-9]+)?$' ;;
+    esac
+    git -C "$bare" tag --sort=-v:refname \
+	| grep -E "$pattern" \
+	| head -1
+}
+
+ensure_bare_clone() {
+    local release=$1 url=$2
+    local dir="$SRCS_DIR/$release.git"
+    mkdir -p "$SRCS_DIR"
+    if [[ ! -d $dir ]]; then
+	log "cloning $url → $dir (first run, may take a while)"
+	$DRY_RUN || git clone --quiet --bare "$url" "$dir"
+    else
+	vlog "fetching $dir"
+	$DRY_RUN || git -C "$dir" fetch --quiet --tags --force origin
+    fi
+}
+
+# A dedicated working clone per (release, variant). `--reference <bare>`
+# shares object storage with the bare clone so we don't duplicate the
+# kernel's history on disk per variant; each clone has its own .git
+# state, so concurrent builds across variants don't race on refs/HEAD.
+ensure_build_repo() {
+    local release=$1 variant=$2
+    local bare="$SRCS_DIR/$release.git"
+    local dir="$BUILDS_DIR/$release-$variant"
+    mkdir -p "$BUILDS_DIR"
+    if [[ ! -d $dir/.git ]]; then
+	log "init build repo $dir"
+	$DRY_RUN || git clone --quiet --reference "$bare" --shared "$bare" "$dir"
+    fi
+}
+
+already_have() {
+    local release=$1 variant=$2 version=$3
+    [[ -f $KERNELS_DIR/$release-$variant/$ARCH/$version/manifest.json ]]
+}
+
+build_one() {
+    local release=$1 variant=$2 url=$3
+    local bare="$SRCS_DIR/$release.git"
+    local build_repo="$BUILDS_DIR/$release-$variant"
+
+    # On a dry-run the bare clone hasn't been fetched, so we can't
+    # resolve_tag. Report the intended action and bail without touching
+    # the filesystem.
+    if $DRY_RUN; then
+	log "would build upstream/$release-$variant (tag resolved at run time)"
+	return 0
+    fi
+
+    local tag
+    tag=$(resolve_tag "$release") || true
+    if [[ -z $tag ]]; then
+	log "no matching tag for release=$release (skipping $variant)"
+	return 0
+    fi
+    local version=${tag#v}
+
+    if already_have "$release" "$variant" "$version"; then
+	log "have upstream/$release-$variant/$ARCH/$version"
+	return 0
+    fi
+
+    ensure_build_repo "$release" "$variant"
+    git -C "$build_repo" fetch --quiet "$bare" "+refs/tags/$tag:refs/tags/$tag"
+    git -C "$build_repo" reset --quiet --hard "$tag"
+    git -C "$build_repo" clean -qfdx
+
+    local destdir="$KERNELS_DIR/$release-$variant/$ARCH/$version"
+    local workdir="$WORK_DIR/upstream-$release-$variant-$ARCH"
+    mkdir -p "$workdir"
+
+    log "building upstream/$release-$variant @ $tag → $destdir"
+    "$ktest_dir/build-test-kernel" build \
+	-V "$variant" \
+	-a "$ARCH" \
+	-k "$build_repo" \
+	-o "$workdir" \
+	-D "$destdir"
+}
+
+main() {
+    mkdir -p "$KERNELS_DIR" "$WORK_DIR"
+
+    # Phase 1: fetch every distinct source-tree referenced in the config.
+    declare -A seen_releases
+    while IFS=$'\t' read -r release _ url; do
+	if [[ -z ${seen_releases[$release]:-} ]]; then
+	    seen_releases[$release]=1
+	    if [[ $url = MISSING ]]; then
+		log "release '$release' has no sources entry"
+		exit 1
+	    fi
+	    ensure_bare_clone "$release" "$url"
+	fi
+    done < <(list_builds)
+
+    # Phase 2: build each (release, variant) that isn't already in the store.
+    local failed=0
+    while IFS=$'\t' read -r release variant url; do
+	if ! build_one "$release" "$variant" "$url"; then
+	    log "ERROR: $release/$variant"
+	    failed=$((failed + 1))
+	fi
+    done < <(list_builds)
+
+    if [[ $failed -gt 0 ]]; then
+	log "$failed build(s) failed"
+	exit 1
+    fi
+}
+
+main "$@"

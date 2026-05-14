@@ -1,0 +1,36 @@
+// upstream-kernel-build sources + variants.
+// Place this at $HOME/.ktest/upstream-builds.json5 (override with -c).
+//
+// `sources` maps a release name to a git URL. The release name is freeform
+// — `stable`, `rc`, `mainline`, whatever — and decides how tags get
+// resolved (see resolve_tag in upstream-kernel-build):
+//   - name == "stable" or ends in "-stable" → latest non-rc tag
+//   - name == "rc" or ends in "-rc"         → latest -rc tag
+//
+// `builds[<release>]` lists variant names to build for that release.
+// "default" = no overlay (tests/test-libs.sh + kconfig.sh defaults only);
+// every other name maps to tests/<variant>-base.sh (e.g. lockdep,
+// kasan, kcsan, kmsan, ubsan — the same files the test machinery
+// already uses for require-kernel-config).
+{
+    sources: {
+        stable: "git://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git",
+        rc:     "git://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git",
+    },
+
+    builds: {
+        // stable: build all the test-matrix variants (matches what
+        //         CI runs against today)
+        stable: [
+            "default",
+            "lockdep",
+            "kasan",
+            "kcsan",
+            "kmsan",
+            "ubsan",
+        ],
+
+        // rc: just track the tip — boot-only / smoke; no full debug matrix
+        rc: ["default"],
+    },
+}
