@@ -29,6 +29,14 @@ memmap = "0.7.0"
 serde_json = "1.0.132"
 reqwest = { version = "0.12.9", features = ["blocking"] }
 brotli = "7"
+flate2 = "1"
+quick-xml = "0.36"
+tar = "0.4"
+zstd = "0.13"
+json5 = "0.4"
+walkdir = "2"
+sha2 = "0.10"
+hex = "0.4"
 
 [build-dependencies]
 capnpc = "0.21.*"

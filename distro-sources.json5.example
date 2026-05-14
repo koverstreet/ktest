@@ -1,0 +1,78 @@
+// distro-kernel-fetch sources config.
+// Place this at $HOME/.ktest/distro-sources.json5 (or
+// /etc/ktest/distro-sources.json5 system-wide; --config overrides).
+//
+// Each `sources` entry is one (distro, release, arch) tuple to track.
+// distro-kernel-fetch polls the configured repo, finds the latest kernel
+// package, and converts it to ktest's canonical layout under
+// $HOME/.ktest/kernels/ (or /var/lib/ktest/kernels system-wide).
+//
+// Supported distros: debian, ubuntu, fedora, opensuse, centos, arch.
+// (Aliases: rhel/rocky/alma → centos; suse → opensuse.)
+//
+// NixOS not yet supported — its kernel-as-derivation model doesn't fit
+// the "fetch a binary package" shape; needs a separate approach.
+{
+    sources: [
+        // ---------- Debian (APT, Packages.gz, "-<arch>" naming) ----------
+        {
+            distro:   "debian",
+            release:  "bookworm",
+            arch:     "amd64",
+            repo_url: "https://deb.debian.org/debian",
+        },
+        {
+            distro:   "debian",
+            release:  "trixie",
+            arch:     "amd64",
+            repo_url: "https://deb.debian.org/debian",
+        },
+
+        // ---------- Ubuntu (APT, "-generic" naming) ----------
+        // Use *-updates pocket to track post-release kernels; the release
+        // pocket alone only carries the GA kernel.
+        {
+            distro:   "ubuntu",
+            release:  "noble-updates",
+            arch:     "amd64",
+            repo_url: "http://archive.ubuntu.com/ubuntu",
+        },
+
+        // ---------- Fedora (DNF, primary.xml.zst, kernel-core) ----------
+        {
+            distro:   "fedora",
+            release:  "42",
+            arch:     "x86_64",
+            repo_url: "https://dl.fedoraproject.org/pub/fedora/linux/updates/42/Everything/x86_64",
+        },
+
+        // ---------- openSUSE Leap (DNF, kernel-default) ----------
+        {
+            distro:   "opensuse",
+            release:  "15.6",
+            arch:     "x86_64",
+            repo_url: "https://download.opensuse.org/distribution/leap/15.6/repo/oss",
+        },
+
+        // ---------- CentOS Stream (RHEL-like, DNF, kernel-core) ----------
+        // Kernel split: kernel-core + kernel-modules-* live in BaseOS;
+        // kernel-devel lives in AppStream. List both.
+        {
+            distro:   "centos",
+            release:  "9-stream",
+            arch:     "x86_64",
+            repo_url: [
+                "https://mirror.stream.centos.org/9-stream/BaseOS/x86_64/os",
+                "https://mirror.stream.centos.org/9-stream/AppStream/x86_64/os",
+            ],
+        },
+
+        // ---------- Arch (Pacman, core.db tarball, rolling) ----------
+        {
+            distro:   "arch",
+            release:  "rolling",
+            arch:     "x86_64",
+            repo_url: "https://geo.mirror.pkgbuild.com",
+        },
+    ],
+}
