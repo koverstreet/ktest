@@ -7,72 +7,111 @@
 // package, and converts it to ktest's canonical layout under
 // $HOME/.ktest/kernels/ (or /var/lib/ktest/kernels system-wide).
 //
-// Supported distros: debian, ubuntu, fedora, opensuse, centos, arch.
+// Supported distros: debian, ubuntu, fedora, opensuse, centos, arch, nixos.
 // (Aliases: rhel/rocky/alma → centos; suse → opensuse.)
 //
-// NixOS not yet supported — its kernel-as-derivation model doesn't fit
-// the "fetch a binary package" shape; needs a separate approach.
+// We track BOTH the latest-stable and the newest-available (dev/rolling)
+// kernel per distro family — except where neither meets bcachefs's DKMS
+// floor of 6.16. Distros currently dropped for that reason:
+//   - debian bookworm (6.1), trixie (6.12)
+//   - opensuse leap 15.6 (6.4)
+//   - centos-stream 9 (5.14), 10 (6.12)
+//   - nixos release-25.11 stable kernel (6.12; -latest variant tracked instead)
+// They can be re-added when their kernels catch up, or for boot-only
+// (non-DKMS) testing if needed.
+//
+// NixOS notes:
+//   `release` is the Hydra jobset suffix:
+//     unstable         → unstable channel, linuxPackages_latest
+//     X.Y              → release-X.Y channel, linuxPackages (stable kernel)
+//     X.Y-latest       → release-X.Y channel, linuxPackages_latest (rolling kernel)
+//   `repo_url` is unused (hydra.nixos.org + cache.nixos.org are hard-coded);
+//   the field is kept for schema uniformity. `arch` is the short form
+//   (x86_64, aarch64); we map to Hydra's "x86_64-linux" etc. internally.
 {
     sources: [
-        // ---------- Debian (APT, Packages.gz, "-<arch>" naming) ----------
+        // ---------- Debian ----------
+        // forky (14, testing) — currently 7.0.x, will track Debian's
+        // testing-becoming-stable lifecycle
         {
             distro:   "debian",
-            release:  "bookworm",
-            arch:     "amd64",
-            repo_url: "https://deb.debian.org/debian",
-        },
-        {
-            distro:   "debian",
-            release:  "trixie",
+            release:  "forky",
             arch:     "amd64",
             repo_url: "https://deb.debian.org/debian",
         },
 
-        // ---------- Ubuntu (APT, "-generic" naming) ----------
-        // Use *-updates pocket to track post-release kernels; the release
-        // pocket alone only carries the GA kernel.
+        // ---------- Ubuntu ----------
+        // noble (24.04 LTS), -updates pocket has the HWE kernel
         {
             distro:   "ubuntu",
             release:  "noble-updates",
             arch:     "amd64",
             repo_url: "http://archive.ubuntu.com/ubuntu",
         },
+        // devel — symlinks to the current development release, always-newest
+        {
+            distro:   "ubuntu",
+            release:  "devel",
+            arch:     "amd64",
+            repo_url: "http://archive.ubuntu.com/ubuntu",
+        },
 
-        // ---------- Fedora (DNF, primary.xml.zst, kernel-core) ----------
+        // ---------- Fedora ----------
+        // 42 — older stable, kernel ~6.19
         {
             distro:   "fedora",
             release:  "42",
             arch:     "x86_64",
             repo_url: "https://dl.fedoraproject.org/pub/fedora/linux/updates/42/Everything/x86_64",
         },
+        // 44 — newest released stable
+        {
+            distro:   "fedora",
+            release:  "44",
+            arch:     "x86_64",
+            repo_url: "https://dl.fedoraproject.org/pub/fedora/linux/updates/44/Everything/x86_64",
+        },
+        // rawhide — Fedora's development branch, always-newest
+        {
+            distro:   "fedora",
+            release:  "rawhide",
+            arch:     "x86_64",
+            repo_url: "https://dl.fedoraproject.org/pub/fedora/linux/development/rawhide/Everything/x86_64/os",
+        },
 
-        // ---------- openSUSE Leap (DNF, kernel-default) ----------
+        // ---------- openSUSE ----------
+        // Tumbleweed — rolling, always-newest
         {
             distro:   "opensuse",
-            release:  "15.6",
+            release:  "tumbleweed",
             arch:     "x86_64",
-            repo_url: "https://download.opensuse.org/distribution/leap/15.6/repo/oss",
+            repo_url: "https://download.opensuse.org/tumbleweed/repo/oss",
         },
 
-        // ---------- CentOS Stream (RHEL-like, DNF, kernel-core) ----------
-        // Kernel split: kernel-core + kernel-modules-* live in BaseOS;
-        // kernel-devel lives in AppStream. List both.
-        {
-            distro:   "centos",
-            release:  "9-stream",
-            arch:     "x86_64",
-            repo_url: [
-                "https://mirror.stream.centos.org/9-stream/BaseOS/x86_64/os",
-                "https://mirror.stream.centos.org/9-stream/AppStream/x86_64/os",
-            ],
-        },
-
-        // ---------- Arch (Pacman, core.db tarball, rolling) ----------
+        // ---------- Arch ----------
+        // rolling — always-newest
         {
             distro:   "arch",
             release:  "rolling",
             arch:     "x86_64",
             repo_url: "https://geo.mirror.pkgbuild.com",
+        },
+
+        // ---------- NixOS ----------
+        // unstable channel, linuxPackages_latest — always-newest
+        {
+            distro:   "nixos",
+            release:  "unstable",
+            arch:     "x86_64",
+            repo_url: "https://cache.nixos.org",
+        },
+        // release-25.11 channel, linuxPackages_latest — rolling-latest kernel
+        // on the current stable channel (analogous to Ubuntu noble HWE)
+        {
+            distro:   "nixos",
+            release:  "25.11-latest",
+            arch:     "x86_64",
+            repo_url: "https://cache.nixos.org",
         },
     ],
 }

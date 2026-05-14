@@ -37,6 +37,8 @@ json5 = "0.4"
 walkdir = "2"
 sha2 = "0.10"
 hex = "0.4"
+nix-nar = "0.4"
+lzma-rs = "0.3"
 
 [build-dependencies]
 capnpc = "0.21.*"

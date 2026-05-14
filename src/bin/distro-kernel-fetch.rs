@@ -26,9 +26,7 @@
 //!   fedora, centos      — DNF (repomd.xml + primary.xml.{gz,zst}), kernel-core
 //!   opensuse            — DNF, kernel-default
 //!   arch                — Pacman (core.db tarball)
-//!
-//! NixOS deliberately not supported here — its kernel-as-derivation model
-//! doesn't fit "fetch a binary package". Needs a nix-eval driven companion.
+//!   nixos               — Hydra JSON + cache.nixos.org NAR (xz-decoded, nix-nar)
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
@@ -112,12 +110,20 @@ where D: serde::Deserializer<'de>
 
 /// One downloadable file, paired with its SHA256 from the repo metadata
 /// when available. `sha256` is None when the distro's metadata didn't
-/// expose it (rare — all currently-supported formats include checksums).
+/// expose it (rare — all currently-supported formats include checksums;
+/// nixos is the standing exception, see NixosFetcher).
+///
+/// `role` is an opaque distro-specific layout hint. The standard pipeline
+/// ignores it (extracts every file into one merged tree); distros whose
+/// kernels span multiple archives with non-overlapping placement (nixos)
+/// use it to pick where each one lands. None for everyone else.
 #[derive(Debug, Clone, Serialize)]
 struct PkgFile {
     url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    role: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -320,7 +326,7 @@ fn apt_stanza_to_pkgfile(s: &AptStanza) -> Option<PkgFile> {
     let filename = s.fields.get("Filename")?;
     let url = apt_url(&s.repo, filename);
     let sha256 = s.fields.get("SHA256").cloned();
-    Some(PkgFile { url, sha256 })
+    Some(PkgFile { url, sha256, role: None })
 }
 
 // ----------- Debian -----------
@@ -518,6 +524,7 @@ impl DnfPkg {
         PkgFile {
             url: format!("{}/{}", self.repo_base.trim_end_matches('/'), self.location),
             sha256: self.sha256.clone(),
+            role: None,
         }
     }
 }
@@ -919,12 +926,14 @@ impl DistroFetcher for ArchFetcher {
         let image = PkgFile {
             url: format!("{}/{}", kernel_base, kernel.filename),
             sha256: kernel.sha256.clone(),
+            role: None,
         };
         let mut headers = Vec::new();
         if let Some((base, h)) = headers_pkg {
             headers.push(PkgFile {
                 url: format!("{}/{}", base, h.filename),
                 sha256: h.sha256.clone(),
+                role: None,
             });
         }
         if headers.is_empty() {
@@ -943,6 +952,451 @@ impl DistroFetcher for ArchFetcher {
 }
 
 // ============================================================================
+// NixOS: Hydra job lookup + cache.nixos.org NAR fetch
+//
+// NixOS doesn't publish per-version binary packages from a repo index. Instead,
+// nixpkgs builds are tracked by Hydra (the nixpkgs CI), and the resulting store
+// paths are served as NAR archives by cache.nixos.org. To map "give me the
+// newest kernel on channel X" to a downloadable URL set:
+//
+//   1. Ask Hydra: GET /job/nixos/<jobset>/<attr>.<arch>/latest-finished →
+//      JSON with `buildoutputs.{out,modules,dev}.path` (store paths).
+//   2. For each store path, GET /<hash-part>.narinfo from cache.nixos.org →
+//      tells us the .nar.xz URL, compression, and integrity hash.
+//   3. Fetch+xz-decode each NAR, unpack with nix-nar.
+//
+// Three outputs per kernel:
+//   out      — bzImage + System.map + .config
+//   modules  — lib/modules/<v>/{kernel, modules.{dep,order,builtin,…}}
+//              plus dangling symlinks `build` and `source` pointing into
+//              /nix/store; we delete those and replace from the dev tree.
+//   dev      — the kernel build+source trees (Makefile, include/, scripts/,
+//              Module.symvers, plus pre-built objtool/fixdep).
+//
+// The dev tree comes from nix's binary cache, which means every script
+// inside it has a `#!/nix/store/<hash>-bash-X.Y/bin/sh` shebang and every
+// pre-built binary is linked against `/nix/store/<hash>-glibc/lib/ld-…`.
+// None of those paths exist on a non-nix host, so a bare `make modules` blows
+// up the moment it invokes pahole-version.sh or objtool. We post-process:
+//   - rewrite `#!/nix/store/<hash>-bash-X.Y/bin/sh` → `#!/bin/sh` in scripts
+//   - patchelf --set-interpreter on ELF binaries with /nix/store interps
+// Requires the `patchelf` host tool. With both fixups in place, OOT module
+// builds against these kernels work the same as on debian/fedora/etc.
+//
+// `release` mapping:
+//   "unstable"      → jobset `unstable`,            attr `linuxPackages_latest.kernel`
+//   "X.Y"           → jobset `release-X.Y`,         attr `linuxPackages.kernel`
+//                     (stable-on-stable; below DKMS floor for most releases)
+//   "X.Y-latest"    → jobset `release-X.Y`,         attr `linuxPackages_latest.kernel`
+// ============================================================================
+
+const NIXOS_HYDRA_BASE: &str = "https://hydra.nixos.org";
+const NIXOS_CACHE_BASE: &str = "https://cache.nixos.org";
+
+/// Resolve a `release` config value to (hydra jobset, hydra job attr prefix).
+/// The attr is the part before `.<arch>` — caller appends e.g. `.x86_64-linux`.
+fn nixos_jobset_attr(release: &str) -> (String, &'static str) {
+    if release == "unstable" {
+        ("unstable".to_string(), "nixpkgs.linuxPackages_latest.kernel")
+    } else if let Some(rel) = release.strip_suffix("-latest") {
+        (format!("release-{}", rel), "nixpkgs.linuxPackages_latest.kernel")
+    } else {
+        (format!("release-{}", release), "nixpkgs.linuxPackages.kernel")
+    }
+}
+
+/// Hydra system identifier: ktest config uses "x86_64" / "aarch64"; Hydra
+/// uses "x86_64-linux" / "aarch64-linux". Map.
+fn nixos_hydra_arch(arch: &str) -> Result<&'static str> {
+    match arch {
+        "x86_64"  => Ok("x86_64-linux"),
+        "aarch64" => Ok("aarch64-linux"),
+        a => bail!("nixos: unsupported arch `{}` (expected x86_64 or aarch64)", a),
+    }
+}
+
+#[derive(Debug)]
+struct HydraOutputs {
+    nixname: String,    // e.g. "linux-7.0.5"
+    out_path: String,   // /nix/store/<hash>-linux-X.Y.Z
+    modules_path: String,
+    dev_path: String,
+}
+
+/// `reqwest::blocking::get` follows redirects by default; Hydra historically
+/// redirects /job/nixos/trunk-combined/* → /job/nixos/unstable/*. We rely on
+/// the default redirect policy and add an explicit Accept header.
+fn nixos_fetch_hydra(jobset: &str, attr: &str, hydra_arch: &str) -> Result<HydraOutputs> {
+    let url = format!("{}/job/nixos/{}/{}.{}/latest-finished",
+                      NIXOS_HYDRA_BASE, jobset, attr, hydra_arch);
+    let client = reqwest::blocking::Client::builder()
+        .build()
+        .context("building reqwest client")?;
+    let resp = client.get(&url)
+        .header("Accept", "application/json")
+        .send()
+        .with_context(|| format!("GET {}", url))?;
+    if !resp.status().is_success() {
+        bail!("Hydra GET {}: HTTP {}", url, resp.status());
+    }
+    let body = resp.bytes()
+        .with_context(|| format!("reading Hydra body from {}", url))?;
+    let v: serde_json::Value = serde_json::from_slice(&body)
+        .with_context(|| format!("parsing Hydra JSON from {}", url))?;
+    let nixname = v["nixname"].as_str()
+        .ok_or_else(|| anyhow!("{}: missing nixname", url))?.to_string();
+    let outputs = &v["buildoutputs"];
+    let read = |key: &str| -> Result<String> {
+        outputs[key]["path"].as_str()
+            .map(str::to_string)
+            .ok_or_else(|| anyhow!("{}: missing buildoutputs.{}.path", url, key))
+    };
+    Ok(HydraOutputs {
+        nixname,
+        out_path:     read("out")?,
+        modules_path: read("modules")?,
+        dev_path:     read("dev")?,
+    })
+}
+
+/// One entry from a cache.nixos.org narinfo.
+#[derive(Debug)]
+struct NarInfo {
+    /// Full URL to the NAR (compressed). Decompression is inferred from the
+    /// suffix the same way `decompress_for_url` does it.
+    url: String,
+}
+
+/// Fetch and parse a narinfo for a /nix/store path. The hash-part is the
+/// 32-char base32 segment before the first `-`.
+///
+/// We deliberately don't return the FileHash for SHA256 verification: it's
+/// encoded in Nix's custom base32 alphabet (not the standard one), and we
+/// trust HTTPS-to-cache.nixos.org for integrity. The existing PkgFile.sha256
+/// is therefore None for nixos.
+fn nixos_fetch_narinfo(store_path: &str) -> Result<NarInfo> {
+    let hash = store_path.strip_prefix("/nix/store/")
+        .and_then(|s| s.split('-').next())
+        .ok_or_else(|| anyhow!("malformed store path: {}", store_path))?;
+    let url = format!("{}/{}.narinfo", NIXOS_CACHE_BASE, hash);
+    let bytes = http_get_bytes(&url)?;
+    let text = std::str::from_utf8(&bytes)
+        .with_context(|| format!("narinfo {}: not utf8", url))?;
+    let mut nar_url: Option<String> = None;
+    for line in text.lines() {
+        if let Some(v) = line.strip_prefix("URL: ") {
+            nar_url = Some(v.trim().to_string());
+        }
+    }
+    let nar_url = nar_url.ok_or_else(|| anyhow!("narinfo {}: no URL line", url))?;
+    Ok(NarInfo {
+        url: format!("{}/{}", NIXOS_CACHE_BASE, nar_url),
+    })
+}
+
+/// Unpack each NAR into a role-named subdir of `extracted/`, then assemble
+/// the canonical layout in `stage/`. NixOS-specific because the three NARs
+/// (out / modules / dev) place their content at different roots, with
+/// dangling symlinks from the modules tree to the dev store path that we
+/// need to rewrite.
+fn nixos_extract_and_layout(
+    downloaded: &[(&PkgFile, PathBuf)],
+    extracted: &Path,
+    stage: &Path,
+    version: &str,
+) -> Result<()> {
+    use std::collections::HashMap;
+    // 1. Index by role and extract.
+    let mut role_dir: HashMap<String, PathBuf> = HashMap::new();
+    for (file, path) in downloaded {
+        let role = file.role.as_deref()
+            .ok_or_else(|| anyhow!("nixos: PkgFile {} missing role", file.url))?;
+        let dst = extracted.join(role);
+        // nix-nar's Decoder::unpack refuses to write into an existing
+        // directory — it wants to mkdir it. Don't pre-create.
+        extract_nar_xz(path, &dst)
+            .with_context(|| format!("extracting nixos {} NAR", role))?;
+        role_dir.insert(role.to_string(), dst);
+    }
+    let get = |r: &str| -> Result<&Path> {
+        role_dir.get(r)
+            .map(PathBuf::as_path)
+            .ok_or_else(|| anyhow!("nixos: missing `{}` role in downloads", r))
+    };
+    let (out, modules, dev) = (get("out")?, get("modules")?, get("dev")?);
+
+    // 2. Place vmlinuz. nixpkgs's x86_64 kernel ships `bzImage` (not
+    //    `vmlinuz`); other arches differ (Image for arm64). find_vmlinuz
+    //    handles both name forms.
+    let vmlinuz = find_vmlinuz(out)
+        .with_context(|| format!("locating vmlinuz in nixos `out` ({})", out.display()))?;
+    rename_or_copy(&vmlinuz, &stage.join("vmlinuz"))
+        .context("placing nixos vmlinuz")?;
+
+    // 3. Place modules tree. The dangling symlinks `build` and `source`
+    //    inside lib/modules/<v>/ point into /nix/store; remove them before
+    //    moving so we can drop the real headers tree at build/ in step 4.
+    let mods_src = modules.join("lib").join("modules").join(version);
+    if !mods_src.is_dir() {
+        bail!("nixos modules NAR missing lib/modules/{} at {}",
+              version, modules.display());
+    }
+    for stale in ["build", "source"] {
+        let p = mods_src.join(stale);
+        if fs::symlink_metadata(&p).is_ok() {
+            // Could be a dangling symlink or (defensively) a real entry —
+            // remove_file handles symlinks regardless of target validity.
+            fs::remove_file(&p)
+                .or_else(|_| fs::remove_dir_all(&p))
+                .with_context(|| format!("removing nixos modules/{}", stale))?;
+        }
+    }
+    let mods_dst = stage.join("lib").join("modules").join(version);
+    fs::create_dir_all(mods_dst.parent().unwrap())?;
+    rename_or_copy(&mods_src, &mods_dst)
+        .context("placing nixos modules")?;
+
+    // 4. Place the build (and source) trees from the dev NAR. nixpkgs's
+    //    dev output lays its content out at
+    //      <root>/lib/modules/<v>/{build,source}/...
+    //    i.e. at the same path the modules tree's dangling symlinks pointed
+    //    to. We pull both trees up into stage/lib/modules/<v>/, replacing
+    //    the just-deleted dangling symlinks.
+    //
+    //    (The dev NAR also contains /vmlinux + /nix-support at NAR root —
+    //    those we drop. We're not building modules out of vmlinux, and
+    //    nix-support is just a propagated-build-inputs marker.)
+    let dev_inner = dev.join("lib").join("modules").join(version);
+    if !dev_inner.is_dir() {
+        bail!("nixos dev NAR missing lib/modules/{} at {}",
+              version, dev.display());
+    }
+    for kind in ["build", "source"] {
+        let src = dev_inner.join(kind);
+        if !src.exists() { continue }
+        let dst = mods_dst.join(kind);
+        rename_or_copy(&src, &dst)
+            .with_context(|| format!("placing nixos kernel.dev `{}` tree", kind))?;
+    }
+    // Sanity: the build tree must have at least a Makefile + Module.symvers
+    // — out-of-tree module builds depend on both.
+    let bd = mods_dst.join("build");
+    for required in ["Makefile", "Module.symvers"] {
+        if !bd.join(required).exists() {
+            bail!("nixos kernel.dev didn't yield {}/{} — layout changed?",
+                  bd.display(), required);
+        }
+    }
+
+    // The build/ Makefile is a stub that nix generates with absolute
+    // /nix/store/<hash>-linux-<v>-dev paths to KBUILD_OUTPUT and the real
+    // top-level source/Makefile. Those paths don't exist on our system
+    // (and even if they did, baking a host-side absolute path into a
+    // relocatable tree is fragile). Rewrite to be self-relative — the
+    // stub now resolves both KBUILD_OUTPUT and the source-Makefile-include
+    // off the stub's own directory.
+    let stub = bd.join("Makefile");
+    let stub_text = fs::read_to_string(&stub)
+        .with_context(|| format!("reading nixos build stub {}", stub.display()))?;
+    if stub_text.contains("/nix/store/") {
+        let rewritten = "\
+# Rewritten by distro-kernel-fetch (was a /nix/store-anchored stub).
+# Resolves KBUILD_OUTPUT + the source-Makefile-include off this stub's own
+# directory, so the tree works wherever it's been placed.
+THIS_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+export KBUILD_OUTPUT := $(THIS_DIR)
+include $(THIS_DIR)/../source/Makefile
+";
+        // Files unpacked from a NAR retain their /nix/store mode (0444 for
+        // regular files). Bump +w before writing.
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&stub)
+            .with_context(|| format!("stat {}", stub.display()))?.permissions();
+        perms.set_mode(perms.mode() | 0o200);
+        fs::set_permissions(&stub, perms)
+            .with_context(|| format!("chmod +w {}", stub.display()))?;
+        fs::write(&stub, rewritten)
+            .with_context(|| format!("rewriting nixos build stub {}", stub.display()))?;
+    }
+
+    // 5. De-nixify the build+source trees: rewrite /nix/store shebangs and
+    //    patchelf any ELF interpreters. Without this, `make modules` fails
+    //    on the first script (e.g. scripts/pahole-version.sh) or pre-built
+    //    binary (e.g. tools/objtool/objtool).
+    nixos_denixify_tree(&mods_dst)
+        .context("de-nixifying kernel.dev tree")?;
+
+    // 6. Standard uniform build symlink — relative path into our own tree.
+    create_build_symlink(stage, version)?;
+    Ok(())
+}
+
+/// Walk a tree and rewrite anything that depends on /nix/store paths:
+///   - File shebangs `#!/nix/store/<hash>-bash-X/bin/sh` → `#!/bin/sh`
+///   - ELF binaries with /nix/store interpreters → patchelf to /lib64/ld-…
+///
+/// We only touch files we'd otherwise leave intact: regular files (not
+/// symlinks), with a /nix/store-anchored first line (scripts) or PT_INTERP
+/// (binaries). Files unchanged in either dimension are skipped, including
+/// the kernel's actual .ko modules.
+fn nixos_denixify_tree(root: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    // Verify patchelf is on PATH up front — otherwise we'd half-fix the
+    // tree and fail in the middle.
+    let pe_check = Command::new("patchelf").arg("--version").output();
+    if pe_check.is_err() || !pe_check.unwrap().status.success() {
+        bail!("nixos kernel.dev fixup requires `patchelf` on PATH \
+               (install via `apt install patchelf` / `dnf install patchelf`)");
+    }
+
+    // Canonical hosts of the dynamic linker. /lib64 is x86_64 SysV ABI;
+    // ld-musl is musl. We pick whatever ld.so the host has — that's what
+    // dkms-built modules would use anyway.
+    let host_ldso = ["/lib64/ld-linux-x86-64.so.2", "/lib/ld-linux-x86-64.so.2"]
+        .into_iter().map(Path::new).find(|p| p.exists())
+        .ok_or_else(|| anyhow!("no glibc dynamic linker on this host \
+                                (looked for /lib64/ld-linux-x86-64.so.2)"))?;
+
+    let mut shebangs_patched = 0usize;
+    let mut elfs_patched = 0usize;
+
+    for entry in walkdir::WalkDir::new(root).follow_links(false) {
+        let entry = entry.context("walking tree for de-nixify")?;
+        if !entry.file_type().is_file() { continue }
+        let path = entry.path();
+
+        // Peek the first few bytes. ELF magic = "\x7fELF"; shebang = "#!".
+        let mut hdr = [0u8; 4];
+        let n = match fs::File::open(path).and_then(|mut f| std::io::Read::read(&mut f, &mut hdr)) {
+            Ok(n) => n,
+            Err(_) => continue,  // unreadable file — leave it alone
+        };
+        if n < 2 { continue }
+
+        let ensure_writable = |p: &Path| -> Result<()> {
+            let mut perms = fs::metadata(p)?.permissions();
+            if perms.mode() & 0o200 == 0 {
+                perms.set_mode(perms.mode() | 0o200);
+                fs::set_permissions(p, perms)?;
+            }
+            Ok(())
+        };
+
+        if &hdr[..2] == b"#!" {
+            // Shebang: read first line, check for /nix/store prefix, rewrite.
+            let text = match fs::read_to_string(path) {
+                Ok(t) => t,
+                Err(_) => continue,  // binary with #! prefix coincidence? leave.
+            };
+            let (first, rest) = match text.split_once('\n') {
+                Some(pair) => pair,
+                None       => (text.as_str(), ""),
+            };
+            if !first.starts_with("#!/nix/store/") { continue }
+            // The path after #! is `/nix/store/<hash>-<pkg>/bin/<binary>` plus
+            // optional args. Pick the binary name and route through /usr/bin/env
+            // — bash, perl, python3 all live in different places across distros;
+            // env handles the lookup and side-steps "is bash at /bin/bash or
+            // /usr/bin/bash?".
+            let cmd_line = first.trim_start_matches("#!").trim();
+            let (interp_path, args) = match cmd_line.split_once(char::is_whitespace) {
+                Some((p, a)) => (p, a.trim()),
+                None         => (cmd_line, ""),
+            };
+            let binary = Path::new(interp_path).file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("sh");
+            let new_first = if args.is_empty() {
+                format!("#!/usr/bin/env {}", binary)
+            } else {
+                // /usr/bin/env supports `-S` for arg splitting since coreutils 8.30;
+                // we conservatively pass through for shells that ignore extras.
+                format!("#!/usr/bin/env -S {} {}", binary, args)
+            };
+            ensure_writable(path)
+                .with_context(|| format!("chmod +w {}", path.display()))?;
+            let new_text = format!("{}\n{}", new_first, rest);
+            fs::write(path, new_text)
+                .with_context(|| format!("rewriting shebang in {}", path.display()))?;
+            shebangs_patched += 1;
+            continue;
+        }
+
+        if &hdr[..4] == b"\x7fELF" {
+            // Ask patchelf what the current interpreter is. If it's not a
+            // /nix/store path, no work to do (some .o files have no INTERP).
+            let out = Command::new("patchelf")
+                .args(["--print-interpreter"]).arg(path)
+                .output()
+                .with_context(|| format!("patchelf --print-interpreter {}",
+                                         path.display()))?;
+            if !out.status.success() { continue }
+            let interp = String::from_utf8_lossy(&out.stdout);
+            let interp = interp.trim();
+            if !interp.starts_with("/nix/store/") { continue }
+
+            ensure_writable(path)
+                .with_context(|| format!("chmod +w {}", path.display()))?;
+            let status = Command::new("patchelf")
+                .args(["--set-interpreter"])
+                .arg(host_ldso)
+                .arg(path)
+                .status()
+                .with_context(|| format!("patchelf --set-interpreter on {}",
+                                         path.display()))?;
+            if !status.success() {
+                bail!("patchelf failed on {}: exit {}", path.display(), status);
+            }
+            elfs_patched += 1;
+        }
+    }
+
+    if shebangs_patched + elfs_patched > 0 {
+        eprintln!("    de-nixify: rewrote {} shebangs, patched {} ELF interpreters",
+                  shebangs_patched, elfs_patched);
+    }
+    Ok(())
+}
+
+struct NixosFetcher;
+impl DistroFetcher for NixosFetcher {
+    fn latest_kernels(&self, src: &Source) -> Result<Vec<KernelPkg>> {
+        let (jobset, attr) = nixos_jobset_attr(&src.release);
+        let hydra_arch = nixos_hydra_arch(&src.arch)?;
+        let outs = nixos_fetch_hydra(&jobset, attr, hydra_arch)
+            .with_context(|| format!("Hydra lookup for nixos/{}", src.release))?;
+
+        // nixname is "linux-X.Y.Z"; uname -r inside the booted kernel is "X.Y.Z".
+        let version = outs.nixname.strip_prefix("linux-")
+            .ok_or_else(|| anyhow!("unexpected nixname `{}` (expected linux-X.Y.Z)",
+                                   outs.nixname))?
+            .to_string();
+
+        let out_nar = nixos_fetch_narinfo(&outs.out_path)?;
+        let modules_nar = nixos_fetch_narinfo(&outs.modules_path)?;
+        let dev_nar = nixos_fetch_narinfo(&outs.dev_path)?;
+
+        let tag = |info: NarInfo, role: &str| PkgFile {
+            url: info.url,
+            sha256: None,
+            role: Some(role.to_string()),
+        };
+
+        Ok(vec![KernelPkg {
+            distro: src.distro.clone(),
+            release: src.release.clone(),
+            arch: src.arch.clone(),
+            version,
+            image:   tag(out_nar, "out"),
+            headers: vec![
+                tag(modules_nar, "modules"),
+                tag(dev_nar, "dev"),
+            ],
+        }])
+    }
+}
+
+// ============================================================================
 // Dispatch
 // ============================================================================
 
@@ -956,10 +1410,7 @@ fn fetcher_for(distro: &str) -> Result<Box<dyn DistroFetcher>> {
         "opensuse" | "suse"
                     => Ok(Box::new(SuseFetcher)),
         "arch"      => Ok(Box::new(ArchFetcher)),
-        "nixos"     => Err(anyhow!(
-            "nixos not supported by distro-kernel-fetch: kernels are nixpkgs \
-             derivations, not binary packages. Use a nix-eval based path."
-        )),
+        "nixos"     => Ok(Box::new(NixosFetcher)),
         d => Err(anyhow!("unsupported distro: {}", d)),
     }
 }
@@ -1080,9 +1531,29 @@ fn extract_archive(archive: &Path, dst: &Path) -> Result<()> {
         let mut c = Command::new("tar");
         c.args(["-xzf", a, "-C", d]);
         run_extractor(c, fname)
+    } else if fname.ends_with(".nar.xz") {
+        extract_nar_xz(archive, dst)
     } else {
         bail!("unsupported archive extension: {}", fname)
     }
+}
+
+/// Decompress a `.nar.xz` and unpack the NAR into `dst`. The NAR's root
+/// becomes the contents of `dst` (directories/files/symlinks land directly
+/// under it). Compared to the deb/rpm/tar branches we don't shell out: xz
+/// and NAR are both in-process via crates.
+fn extract_nar_xz(archive: &Path, dst: &Path) -> Result<()> {
+    let xz_bytes = fs::read(archive)
+        .with_context(|| format!("reading {}", archive.display()))?;
+    let mut nar_bytes = Vec::with_capacity(xz_bytes.len() * 4);
+    lzma_rs::xz_decompress(&mut std::io::Cursor::new(&xz_bytes), &mut nar_bytes)
+        .with_context(|| format!("xz-decompressing {}", archive.display()))?;
+    let dec = nix_nar::Decoder::new(std::io::Cursor::new(&nar_bytes))
+        .with_context(|| format!("opening NAR {}", archive.display()))?;
+    dec.unpack(dst)
+        .with_context(|| format!("unpacking NAR {} -> {}",
+                                 archive.display(), dst.display()))?;
+    Ok(())
 }
 
 /// Find the largest "vmlinuz*" or "bzImage*" file under `root`. The
@@ -1575,10 +2046,12 @@ fn fetch_and_convert(output: &Path, pkg: &KernelPkg) -> Result<()> {
     fs::create_dir_all(&stage)?;
 
     // 1. Download all packages; verify SHA256 if metadata exposed it.
+    //    Pair each downloaded path with the original PkgFile so role hints
+    //    survive into the layout step.
     let files: Vec<&PkgFile> = std::iter::once(&pkg.image)
         .chain(pkg.headers.iter())
         .collect();
-    let mut downloaded = Vec::with_capacity(files.len());
+    let mut downloaded: Vec<(&PkgFile, PathBuf)> = Vec::with_capacity(files.len());
     for f in &files {
         let fname = f.url.rsplit('/').next().unwrap_or("download");
         let path = dl.join(fname);
@@ -1587,28 +2060,33 @@ fn fetch_and_convert(output: &Path, pkg: &KernelPkg) -> Result<()> {
             verify_sha256(&path, expected)
                 .with_context(|| format!("verifying {}", f.url))?;
         }
-        downloaded.push(path);
+        downloaded.push((f, path));
     }
 
-    // 2. Extract all packages into one tree.
-    for archive in &downloaded {
-        extract_archive(archive, &extracted)
-            .with_context(|| format!("extracting {}", archive.display()))?;
+    // 2+3. Extract and lay out. Most distros: one merged tree, then heuristic
+    //      find_vmlinuz/find_modules_dir/collect_headers. NixOS: per-role
+    //      placement because its three NARs (out/modules/dev) have
+    //      non-overlapping content and dangling symlinks to fix up.
+    if pkg.distro == "nixos" {
+        nixos_extract_and_layout(&downloaded, &extracted, &stage, &pkg.version)?;
+    } else {
+        for (_, archive) in &downloaded {
+            extract_archive(archive, &extracted)
+                .with_context(|| format!("extracting {}", archive.display()))?;
+        }
+        let vmlinuz = find_vmlinuz(&extracted)?;
+        rename_or_copy(&vmlinuz, &stage.join("vmlinuz"))
+            .context("placing vmlinuz")?;
+
+        let modules = find_modules_dir(&extracted)?;
+        let modules_dst = stage.join("lib").join("modules").join(&pkg.version);
+        fs::create_dir_all(modules_dst.parent().unwrap())?;
+        rename_or_copy(&modules, &modules_dst)
+            .context("placing modules")?;
+
+        collect_headers(&extracted, &stage, &pkg.version)?;
+        create_build_symlink(&stage, &pkg.version)?;
     }
-
-    // 3. Build canonical layout in stage/.
-    let vmlinuz = find_vmlinuz(&extracted)?;
-    rename_or_copy(&vmlinuz, &stage.join("vmlinuz"))
-        .context("placing vmlinuz")?;
-
-    let modules = find_modules_dir(&extracted)?;
-    let modules_dst = stage.join("lib").join("modules").join(&pkg.version);
-    fs::create_dir_all(modules_dst.parent().unwrap())?;
-    rename_or_copy(&modules, &modules_dst)
-        .context("placing modules")?;
-
-    collect_headers(&extracted, &stage, &pkg.version)?;
-    create_build_symlink(&stage, &pkg.version)?;
     generate_initramfs(&stage, &pkg.version)
         .with_context(|| format!("generating initramfs for {}", pkg.version))?;
 
