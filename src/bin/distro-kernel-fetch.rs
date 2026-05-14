@@ -347,6 +347,99 @@ fn debian_is_vanilla_image(name: &str, arch: &str) -> bool {
         && !abi.contains("-rt-")
 }
 
+/// Debian's headers tree assumes its `/usr/{src,lib}/` install layout — both
+/// in the Makefile's `include /usr/src/linux-headers-<v>-common/Makefile`
+/// directive and in the `scripts -> ../../lib/linux-kbuild-<abi>/scripts`
+/// symlinks. Outside that layout the build fails immediately. This runs
+/// after the standard canonicalize and rewires the tree to be self-contained:
+///
+///   1. Move the linux-kbuild-<abi> package's content (`scripts/`, `tools/`)
+///      from `<extracted>/usr/lib/linux-kbuild-<abi>/` into
+///      `<stage>/lib/linux-kbuild-<abi>/`, where the headers' relative
+///      `../../lib/linux-kbuild-<abi>/...` symlinks land.
+///   2. Add a `<stage>/src -> headers` symlink so the
+///      `lib/modules/<v>/build -> ../../../src/linux-headers-<v>-<arch>`
+///      symlink (Debian's usr-merge expects /lib resolves through /usr/lib
+///      to /usr/src; we collapse that to a one-hop alias) resolves.
+///   3. Rewrite the linux-headers-<v>-<arch>/Makefile to use self-relative
+///      paths (`$(THIS_DIR)`) instead of absolute `/usr/src/<...>` paths,
+///      so the tree builds regardless of where it gets mounted.
+fn debian_fixup(extracted: &Path, stage: &Path, version: &str) -> Result<()> {
+    // The version is `<abi>-<arch>`. The kbuild package is named
+    // `linux-kbuild-<abi>` (no arch suffix). Walk usr/lib/ to find it
+    // rather than re-derive the ABI — cheaper and more robust.
+    let usrlib = extracted.join("usr").join("lib");
+    let mut kbuild_dir: Option<PathBuf> = None;
+    if usrlib.is_dir() {
+        for entry in fs::read_dir(&usrlib).context("read_dir usr/lib")? {
+            let entry = entry?;
+            let name = entry.file_name();
+            if let Some(s) = name.to_str() {
+                if s.starts_with("linux-kbuild-") && entry.file_type()?.is_dir() {
+                    kbuild_dir = Some(entry.path());
+                    break;
+                }
+            }
+        }
+    }
+    if let Some(src) = kbuild_dir {
+        let stage_lib = stage.join("lib");
+        fs::create_dir_all(&stage_lib)
+            .with_context(|| format!("mkdir {}", stage_lib.display()))?;
+        let dst = stage_lib.join(src.file_name().unwrap());
+        rename_or_copy(&src, &dst)
+            .with_context(|| format!("placing linux-kbuild {} -> {}",
+                                     src.display(), dst.display()))?;
+    } else {
+        // Not fatal — older Debian releases (where headers shipped their
+        // own scripts) didn't have this split. Pre-forky bookworm/trixie
+        // we'd land here too. Continue without it; if the tree actually
+        // needs the kbuild content the Makefile rewrite below or a later
+        // build failure will surface it.
+    }
+
+    // Add stage/src symlink → stage/headers so lib/modules/<v>/build,
+    // which points at ../../../src/linux-headers-<v>-<arch>, resolves to
+    // the placed headers tree. On a real Debian system that symlink
+    // resolves through usr-merge (/lib -> /usr/lib, then ../../../src/X
+    // = /usr/src/X); our layout's flat, so the one-hop src→headers alias
+    // is the minimum to make those package symlinks resolve.
+    let src_link = stage.join("src");
+    if !src_link.exists() {
+        std::os::unix::fs::symlink("headers", &src_link)
+            .with_context(|| format!("creating {} -> headers", src_link.display()))?;
+    }
+
+    // Rewrite the headers Makefile. Debian's version is two lines:
+    //   KBUILD_OUTPUT=/usr/src/linux-headers-<v>-<arch>
+    //   include /usr/src/linux-headers-<v>-common/Makefile
+    // Substitute `/usr/src/` → `$(THIS_DIR)/../` (since the Makefile lives
+    // inside one of those /usr/src/linux-headers-<...> dirs, .. takes you
+    // up to the equivalent of /usr/src, where the sibling dirs sit).
+    let hdrs_amd64 = stage.join("headers")
+        .join(format!("linux-headers-{}", version));
+    let makefile = hdrs_amd64.join("Makefile");
+    if makefile.is_file() {
+        let text = fs::read_to_string(&makefile)
+            .with_context(|| format!("reading {}", makefile.display()))?;
+        if text.contains("/usr/src/") {
+            let rewritten = format!(
+                "# Rewritten by distro-kernel-fetch — was /usr/src-anchored.\n\
+                 THIS_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))\n\
+                 {}",
+                text.replace("/usr/src/", "$(THIS_DIR)/../"));
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&makefile)?.permissions();
+            perms.set_mode(perms.mode() | 0o200);
+            fs::set_permissions(&makefile, perms)
+                .with_context(|| format!("chmod +w {}", makefile.display()))?;
+            fs::write(&makefile, rewritten)
+                .with_context(|| format!("rewriting {}", makefile.display()))?;
+        }
+    }
+    Ok(())
+}
+
 struct DebianFetcher;
 impl DistroFetcher for DebianFetcher {
     fn latest_kernels(&self, src: &Source) -> Result<Vec<KernelPkg>> {
@@ -374,20 +467,33 @@ impl DistroFetcher for DebianFetcher {
         let image = apt_stanza_to_pkgfile(img_stanza)
             .ok_or_else(|| anyhow!("{}: no Filename", img_name))?;
 
-        // Debian:
-        //   - arch-specific headers + common headers (always)
-        //   - linux-binary-<v>-<arch> + linux-modules-<v>-<arch> when present
+        // Debian splits the kernel into up to FIVE packages we need to pull:
+        //   - linux-headers-<abi>-<arch>   arch-specific headers
+        //   - linux-headers-<abi>-common   shared header tree (full source tree
+        //                                  minus arch-specific bits)
+        //   - linux-kbuild-<abi>           kbuild infra: scripts/* + tools/*.
+        //                                  The headers packages' top-level
+        //                                  `scripts -> ../../lib/linux-kbuild-<abi>/scripts`
+        //                                  symlink expects this package at
+        //                                  /usr/lib/linux-kbuild-<abi>/ in the
+        //                                  extracted tree.
+        //   - linux-binary-<abi>-<arch>    vmlinuz (forky/sid only — split
+        //                                  out of linux-image into a separate
+        //                                  package; pre-forky linux-image
+        //                                  carries the binary itself, and
+        //                                  this package doesn't exist)
+        //   - linux-modules-<abi>-<arch>   /lib/modules/<v>/ (same split as
+        //                                  linux-binary above)
         //
-        // Forky/sid split the kernel image into a metapackage (`linux-image`)
-        // pointing at `linux-binary` (vmlinuz) + `linux-modules` (modules).
-        // Older releases (bookworm, trixie) ship everything in linux-image,
-        // and the binary/modules packages don't exist — silently skipped.
-        let arch_hdr = format!("linux-headers-{}-{}", abi, src.arch);
+        // Silently skip any of the binary/modules pair that doesn't exist —
+        // pre-forky releases ship them inside linux-image.
+        let arch_hdr   = format!("linux-headers-{}-{}", abi, src.arch);
         let common_hdr = format!("linux-headers-{}-common", abi);
+        let kbuild_pkg = format!("linux-kbuild-{}", abi);
         let binary_pkg = format!("linux-binary-{}-{}", abi, src.arch);
         let modules_pkg = format!("linux-modules-{}-{}", abi, src.arch);
         let mut headers = Vec::new();
-        for hdr in [&arch_hdr, &common_hdr, &binary_pkg, &modules_pkg] {
+        for hdr in [&arch_hdr, &common_hdr, &kbuild_pkg, &binary_pkg, &modules_pkg] {
             if let Some(stanza) = by_name.get(hdr.as_str()) {
                 if let Some(p) = apt_stanza_to_pkgfile(stanza) {
                     headers.push(p);
@@ -2086,6 +2192,14 @@ fn fetch_and_convert(output: &Path, pkg: &KernelPkg) -> Result<()> {
 
         collect_headers(&extracted, &stage, &pkg.version)?;
         create_build_symlink(&stage, &pkg.version)?;
+
+        // Debian: linux-kbuild is a separate package (scripts/, tools/) the
+        // headers symlinks point at; plus the headers Makefile hardcodes
+        // /usr/src/<...> include paths that don't exist outside a Debian
+        // install. See debian_fixup for the patchup.
+        if pkg.distro == "debian" {
+            debian_fixup(&extracted, &stage, &pkg.version)?;
+        }
     }
     generate_initramfs(&stage, &pkg.version)
         .with_context(|| format!("generating initramfs for {}", pkg.version))?;
