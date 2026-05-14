@@ -1278,8 +1278,28 @@ const INITRAMFS_SEED_MODULES: &[&str] = &[
     // Disk: virtio_pci enumerates PCI bus, virtio_blk drives /dev/vda
     "virtio_pci",
     "virtio_blk",
-    // Rootfs filesystem (debootstrap ext4 image, per ktest convention)
+    // hvc0 console — without this, distro kernels boot silently because
+    // they have no built-in console driver registered before pivot_root.
+    // With ktest's built-from-source kernel this is =y; for distro kernels
+    // it's a module that we need preloaded for kernel output to be visible.
+    "virtio_console",
+    // virtio_net — eth0 needs to exist before networking.service runs.
+    // After pivot_root, /lib/modules/<v>/ is empty (testrunner.service
+    // symlinks the host tree, but that runs After=multi-user.target),
+    // so udev's modprobe-on-coldplug can't auto-load it. Preload here.
+    "virtio_net",
+    // Rootfs filesystem (debootstrap ext4 image, per ktest convention).
+    // crc32c is requested by ext4 via request_module() at mount time for
+    // metadata-checksum support, which mkfs.ext4 has enabled by default
+    // for many years — but that runtime request is NOT a build-time
+    // dependency in modules.dep, so we list crc32c_generic explicitly.
+    "crc32c_generic",
     "ext4",
+    // configfs — the rootfs's fstab includes /sys/kernel/config, and
+    // local-fs.target depends on it. Without configfs, that mount fails,
+    // local-fs.target fails, systemd drops to emergency mode and we
+    // never reach multi-user.target.
+    "configfs",
     // 9p mount of host /  — needed by /etc/fstab in the guest rootfs which
     // mounts the host root at /host (libktest.sh's -virtfs mount_tag=host)
     "9pnet_virtio",

@@ -47,7 +47,7 @@ checkdep brotli
 
 # args:
 
-ktest_args="a:o:p:ISFLvxn:N:"
+ktest_args="a:k:o:p:ISFLvxn:N:"
 parse_ktest_arg()
 {
     local arg=$1
@@ -55,6 +55,9 @@ parse_ktest_arg()
     case $arg in
 	a)
 	    ktest_arch=$OPTARG
+	    ;;
+	k)
+	    ktest_kernel_name=$OPTARG
 	    ;;
 	o)
 	    ktest_out=$OPTARG
@@ -94,7 +97,11 @@ parse_args_post()
     parse_arch "$ktest_arch"
 
     ktest_out=$(readlink -f "$ktest_out")
-    ktest_kernel_binary="$ktest_out/kernel.$ktest_arch"
+    if [[ -n ${ktest_kernel_name:-} ]]; then
+	ktest_kernel_binary=$(resolve_kernel_name "$ktest_kernel_name") || exit 1
+    else
+	ktest_kernel_binary="$ktest_out/kernel.$ktest_arch"
+    fi
 
     if $ktest_interactive; then
 	ktest_kgdb=true
@@ -110,10 +117,87 @@ parse_args_post()
 ktest_usage_opts()
 {
     echo "      -a <arch>       architecture"
+    echo "      -k <name|path>  pre-built kernel to boot, by name or path"
+    echo "                       name: <distro>/<release>[/<arch>] resolved under"
+    echo "                       \$HOME/.ktest/kernels or /var/lib/ktest/kernels"
+    echo "                       path: a directory containing vmlinuz (+ optional initramfs)"
     echo "      -o <dir>        output directory; defaults to ./ktest-out"
     echo "      -n (user|vde)   Networking type to use"
     echo "      -x              bash debug statements"
     echo "      -h              display this help and exit"
+}
+
+# Resolve `<distro>/<release>` or `<distro>/<release>/<arch>` into a kernel-pkg
+# directory under $HOME/.ktest/kernels (preferred) or /var/lib/ktest/kernels
+# (system-wide). A literal path (starting with / or .) is passed through.
+resolve_kernel_name()
+{
+    local name="$1"
+
+    case "$name" in
+	/*|.*)
+	    echo "$name"
+	    return 0
+	    ;;
+    esac
+
+    local kernels_root="" candidate
+    for candidate in "$HOME/.ktest/kernels" "/var/lib/ktest/kernels"; do
+	if [[ -d $candidate ]]; then
+	    kernels_root="$candidate"
+	    break
+	fi
+    done
+
+    if [[ -z $kernels_root ]]; then
+	echo "no kernel store at \$HOME/.ktest/kernels or /var/lib/ktest/kernels;" >&2
+	echo "run distro-kernel-fetch to populate one" >&2
+	return 1
+    fi
+
+    local distro release arch
+    IFS=/ read -r distro release arch <<< "$name"
+
+    if [[ -z $release ]]; then
+	echo "kernel name '$name' must be <distro>/<release>[/<arch>]" >&2
+	return 1
+    fi
+
+    if [[ -z $arch ]]; then
+	case "$distro" in
+	    debian|ubuntu)  arch="amd64" ;;
+	    *)              arch="x86_64" ;;
+	esac
+    fi
+
+    local source_dir="$kernels_root/$distro/$release/$arch"
+    if [[ ! -d $source_dir ]]; then
+	echo "no kernel-pkg at $source_dir" >&2
+	echo "available:" >&2
+	find "$kernels_root" -maxdepth 3 -mindepth 3 -type d 2>/dev/null \
+	    | sed "s|^$kernels_root/||" | sort | sed 's|^|  |' >&2
+	return 1
+    fi
+
+    local versions=() v
+    for v in "$source_dir"/*/; do
+	[[ -d $v ]] && versions+=("${v%/}")
+    done
+
+    case ${#versions[@]} in
+	0)
+	    echo "no kernel versions under $source_dir" >&2
+	    return 1
+	    ;;
+	1)
+	    echo "${versions[0]}"
+	    ;;
+	*)
+	    echo "multiple kernel versions in $source_dir (expected one):" >&2
+	    printf '  %s\n' "${versions[@]}" >&2
+	    return 1
+	    ;;
+    esac
 }
 
 ktest_usage_run_opts()
@@ -306,6 +390,14 @@ start_vm()
     kernelargs+=(mitigations=off)
     kernelargs+=("ktest.dir=$ktest_dir")
     kernelargs+=(ktest.env=$(readlink -f "$ktest_out/vm/env"))
+
+    # Distro kernels register hvc0 (virtio_console) as a module rather than
+    # =y, so the kernel has no console at early boot unless we point it at
+    # the right one explicitly. Built-from-source ktest kernels have it =y
+    # and pick it automatically, so we only inject this for -k <name> mode.
+    if [[ -n ${ktest_kernel_name:-} ]]; then
+	kernelargs+=(console=hvc0)
+    fi
     $ktest_kgdb		&& kernelargs+=(kgdboc=ttyS0,115200 nokaslr)
     $ktest_verbose	|| kernelargs+=(quiet systemd.show_status=0 systemd.log-target=null)
     $ktest_crashdump	&& kernelargs+=(crashkernel=128M)
