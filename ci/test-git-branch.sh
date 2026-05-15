@@ -183,13 +183,19 @@ run_test_job() {
 
 	echo "Running test $TEST_PATH ${SUBTESTS[@]}"
 
-	# TODO: when KERNEL is set (kernel-store id), pass it to
-	# build-test-kernel so it runs against the prebuilt kernel
-	# instead of building from $REPO. The legacy build-from-repo
-	# path runs when KERNEL is "-" / empty.
+	# Dispatch: when KERNEL is set (kernel-store id), drive `ktest`
+	# directly against the prebuilt kernel — no kbuild step. Legacy
+	# build-from-repo path (KERNEL = "-" / empty) goes through
+	# build-test-kernel which builds the checked-out tree first.
+	if [[ -n $KERNEL && $KERNEL != "-" ]]; then
+	    TEST_CMD=(ktest -k "$KERNEL" run "$FULL_TEST_PATH" "${SUBTESTS[@]}")
+	else
+	    TEST_CMD=(build-test-kernel run -P "$FULL_TEST_PATH" "${SUBTESTS[@]}")
+	fi
+
 	$KTEST_DIR/lib/supervisor -T 1200 -f "$FULL_LOG" -S -F	\
 	    -b $TEST_NAME -o ktest-out/out				\
-	    -- build-test-kernel run -P $FULL_TEST_PATH ${SUBTESTS[@]} &
+	    -- "${TEST_CMD[@]}" &
 	wait
 
 	SUBTESTS_REMAINING=()
