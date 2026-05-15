@@ -6,15 +6,14 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../../test-libs.sh
 
-if $ktest_interactive; then
-    require-git https://evilpiepirate.org/git/bcachefs-tools.git
-    init_build_bcachefs_tools() {
-	cd $ktest_dir/tests/fs/bcachefs/bcachefs-tools
-	local jobs=$(( $(nproc) / 2 ))
-	(( jobs < 1 )) && jobs=1
-	make -j$jobs PREFIX=/usr install
-    }
-fi
+require-git https://evilpiepirate.org/git/bcachefs-tools.git
+init_build_bcachefs_tools() {
+    cd
+    local jobs=$(( $(nproc) / 2 ))
+    (( jobs < 1 )) && jobs=1
+    make -j$jobs -C $ktest_dir/tests/fs/bcachefs/bcachefs-tools PREFIX=/usr install
+    make -j$jobs -C $ktest_dir/tests/fs/bcachefs/bcachefs-tools PREFIX=/usr dkms-reload
+}
 
 require-kernel-config BCACHEFS_FS
 require-kernel-config-soft BCACHEFS_ASYNC_OBJECT_LISTS
