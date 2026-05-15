@@ -740,6 +740,36 @@ pub fn subtest_full_name(test: &str, subtest: &str) -> String {
     test
 }
 
+/// Sanitize a kernel-store id (e.g. "debian/forky") for use as a path
+/// component. Mirrors what test names get: `/` → `_` (using `_` rather
+/// than `.` so it stays visually distinct from `<test>.<subtest>`).
+pub fn sanitize_kernel(kernel: &str) -> String {
+    kernel.replace('/', "_")
+}
+
+/// The test-name passed to supervisor (-b) and used as the result-key
+/// prefix. Equals the dotted test path when no kernel is set; gets an
+/// `@<sanitized-kernel>` suffix otherwise. The kernel goes BEFORE the
+/// subtest so supervisor's `<basename>.<subtest>` layout still names
+/// the per-subtest dir consistently.
+pub fn test_name_with_kernel(test: &str, kernel: &str) -> String {
+    let test = test.to_owned();
+    let test = test.replace(".ktest", "");
+    let test = test.replace("/", ".");
+    if kernel.is_empty() {
+        test
+    } else {
+        format!("{}@{}", test, sanitize_kernel(kernel))
+    }
+}
+
+/// The result-key used for per-subtest result dirs + lockfiles:
+/// `<test>[@<kernel>].<subtest>`. Equal to subtest_full_name() when
+/// kernel is empty (preserves all existing on-disk results).
+pub fn subtest_result_key(test: &str, subtest: &str, kernel: &str) -> String {
+    format!("{}.{}", test_name_with_kernel(test, kernel), subtest)
+}
+
 pub fn lockfile_exists(
     rc: &Ktestrc,
     commit: &str,

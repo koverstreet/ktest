@@ -111,6 +111,14 @@ run_test_job() {
     TEST_NAME=${TEST_PATH%%.ktest}
     TEST_NAME=$(echo "$TEST_NAME"|tr / .)
 
+    # Per-subtest result dirs key off (test, kernel) so two kernels
+    # against the same commit don't clobber. `@<kernel>` suffix (with
+    # `/` → `_`) is appended when KERNEL is real; absent kernel keeps
+    # the legacy bare TEST_NAME and preserves existing on-disk results.
+    if [[ -n $KERNEL && $KERNEL != "-" ]]; then
+	TEST_NAME="${TEST_NAME}@${KERNEL//\//_}"
+    fi
+
     OUTPUT=$JOBSERVER_OUTPUT_DIR/$COMMIT
 
     if [[ -z $REPO ]]; then

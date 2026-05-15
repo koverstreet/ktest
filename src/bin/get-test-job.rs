@@ -1,7 +1,7 @@
 extern crate libc;
 use chrono::Utc;
 use ci_cgi::{
-    ciconfig_read, commit_update_results_from_fs, lockfile_exists, subtest_full_name, CiConfig,
+    ciconfig_read, commit_update_results_from_fs, lockfile_exists, subtest_result_key, CiConfig,
     Ktestrc,
 };
 use ci_cgi::{
@@ -162,7 +162,7 @@ fn get_test_job_for_user(
         if !lockfile_exists(
             rc,
             &commit,
-            &subtest_full_name(&test, &subtest),
+            &subtest_result_key(&test, &subtest, kernel),
             !args.dry_run,
             &mut commits_updated,
         ) {

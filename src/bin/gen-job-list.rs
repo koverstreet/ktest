@@ -4,7 +4,7 @@ use chrono::Utc;
 use ci_cgi::TestResultsMap;
 use ci_cgi::{
     ciconfig_read, commit_update_results_from_fs, commitdir_get_results, git_get_commit,
-    lockfile_exists, subtest_full_name, test_stats, users::RcBranch, CiConfig, RcTestGroup, Userrc,
+    lockfile_exists, subtest_result_key, test_stats, users::RcBranch, CiConfig, RcTestGroup, Userrc,
 };
 use clap::Parser;
 use file_lock::{FileLock, FileOptions};
@@ -147,22 +147,19 @@ fn branch_test_jobs(
             eprintln!("at commit {} age {}\nresults {:?}", &commit, age, results)
         }
 
-        for subtest in subtests
-            .iter()
-            .filter(|i| {
-                let full_subtest_name = subtest_full_name(&test_name, &i);
+        // Empty `branch_kernels` means "build the kernel from the
+        // checked-out repo at the commit" — emit one job per subtest
+        // with an empty kernel field. Otherwise fan out across the
+        // configured kernel-store entries. The (commit, test, subtest,
+        // kernel) tuple is the result-key, so kernels need separate
+        // have-result / lockfile checks.
+        let kernels: Vec<String> = if branch_kernels.is_empty() {
+            vec![String::new()]
+        } else {
+            branch_kernels.to_vec()
+        };
 
-                !have_result(&results, &full_subtest_name)
-                    && !lockfile_exists(
-                        &rc.ktest,
-                        &commit,
-                        &full_subtest_name,
-                        false,
-                        &mut commits_updated,
-                    )
-            })
-            .map(|i| i.clone())
-        {
+        for subtest in subtests.iter() {
             let mut nice = test_group.nice;
 
             let stats = test_stats(durations, test_name, &subtest);
@@ -179,17 +176,17 @@ fn branch_test_jobs(
                 }
             }
 
-            // Empty `branch_kernels` means "build the kernel from the
-            // checked-out repo at the commit" — emit one job with an
-            // empty kernel field. Otherwise fan out across the
-            // configured kernel-store entries.
             let duration = stats.map_or(rc.ktest.subtest_duration_def.unwrap_or(30), |s| s.duration);
-            let kernels: Vec<String> = if branch_kernels.is_empty() {
-                vec![String::new()]
-            } else {
-                branch_kernels.to_vec()
-            };
-            for kernel in kernels {
+
+            for kernel in &kernels {
+                let key = subtest_result_key(&test_name, subtest, kernel);
+                if have_result(&results, &key) {
+                    continue;
+                }
+                if lockfile_exists(&rc.ktest, &commit, &key, false, &mut commits_updated) {
+                    continue;
+                }
+
                 ret.push(TestJob {
                     user: user.to_string(),
                     repo: branch_repo.to_string(),
@@ -198,7 +195,7 @@ fn branch_test_jobs(
                     age: age as u64,
                     nice,
                     duration,
-                    kernel,
+                    kernel: kernel.clone(),
                     test: test_name.to_string(),
                     subtest: subtest.clone(),
                 });
