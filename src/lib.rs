@@ -770,6 +770,40 @@ pub fn subtest_result_key(test: &str, subtest: &str, kernel: &str) -> String {
     format!("{}.{}", test_name_with_kernel(test, kernel), subtest)
 }
 
+#[cfg(test)]
+mod kernel_key_tests {
+    use super::*;
+
+    #[test]
+    fn empty_kernel_preserves_legacy_format() {
+        // Bit-identical with subtest_full_name() — old on-disk results
+        // keep working unchanged.
+        assert_eq!(
+            subtest_result_key("fs/bcachefs/single_device.ktest", "first_thing", ""),
+            "fs.bcachefs.single_device.first_thing"
+        );
+        assert_eq!(
+            subtest_result_key("boot.ktest", "boot", ""),
+            "boot.boot"
+        );
+    }
+
+    #[test]
+    fn kernel_inserts_between_test_and_subtest() {
+        // `/` in kernel sanitized to `_` so the path component is safe;
+        // `@` separates from the test prefix; supervisor's
+        // `<basename>.<subtest>` layout still slots in cleanly.
+        assert_eq!(
+            subtest_result_key("fs/bcachefs/single_device.ktest", "first_thing", "debian/forky"),
+            "fs.bcachefs.single_device@debian_forky.first_thing"
+        );
+        assert_eq!(
+            subtest_result_key("boot.ktest", "boot", "upstream/stable-kasan"),
+            "boot@upstream_stable-kasan.boot"
+        );
+    }
+}
+
 pub fn lockfile_exists(
     rc: &Ktestrc,
     commit: &str,

@@ -61,3 +61,44 @@ pub fn userrc_read(path: &PathBuf) -> anyhow::Result<Userrc> {
 
     Ok(rc)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rcbranch_defaults_repo_and_empty_kernel_list() {
+        let toml = r#"
+            [test_group.t]
+            nice = 0
+            tests = ["boot.ktest"]
+
+            [branch."legacy"]
+            fetch = "linux master"
+            tests = ["t"]
+        "#;
+        let rc: Userrc = toml::from_str(toml).unwrap();
+        let b = &rc.branch["legacy"];
+        assert_eq!(b.repo, "linux");
+        assert!(b.kernel.is_empty());
+    }
+
+    #[test]
+    fn rcbranch_parses_repo_and_kernel_list() {
+        let toml = r#"
+            [test_group.t]
+            nice = 0
+            tests = ["boot.ktest"]
+
+            [branch."tools-distros"]
+            fetch = "bcachefs-tools master"
+            repo = "bcachefs-tools"
+            kernel = ["debian/forky", "upstream/stable-kasan"]
+            tests = ["t"]
+        "#;
+        let rc: Userrc = toml::from_str(toml).unwrap();
+        let b = &rc.branch["tools-distros"];
+        assert_eq!(b.repo, "bcachefs-tools");
+        assert_eq!(b.kernel, vec!["debian/forky", "upstream/stable-kasan"]);
+    }
+}
