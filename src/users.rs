@@ -29,10 +29,24 @@ impl Default for RcTestGroup {
     }
 }
 
+fn default_repo() -> String { "linux".to_string() }
+
 #[derive(Deserialize)]
 pub struct RcBranch {
     pub fetch: String,
     pub tests: Vec<String>,
+    /// Source repo name; the worker fetches from `$JOBSERVER:~/$repo`
+    /// and runs the test from a checkout of that tree. Defaults to
+    /// "linux" — the legacy build-test-kernel behavior.
+    #[serde(default = "default_repo")]
+    pub repo: String,
+    /// Kernel-store identifiers to run the tests under
+    /// (e.g. "debian/forky", "upstream/stable-kasan"). Each kernel
+    /// fans out a separate job per (commit × test × subtest). Empty
+    /// (the default) means "build the kernel from `repo` at `commit`",
+    /// i.e. the legacy build-test-kernel behavior.
+    #[serde(default)]
+    pub kernel: Vec<String>,
 }
 
 #[derive(Deserialize)]

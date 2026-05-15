@@ -32,11 +32,16 @@ fn get_subtests(test_path: PathBuf) -> Vec<String> {
 #[derive(Debug)]
 pub struct TestJob {
     user: String,
+    repo: String,
     branch: String,
     commit: String,
     age: u64,
     nice: u64,
     duration: u64,
+    /// Kernel-store identifier (e.g. "debian/forky"), or empty to mean
+    /// "build the kernel from `repo` at `commit`" — the legacy
+    /// build-test-kernel behavior.
+    kernel: String,
     test: String,
     subtest: String,
 }
@@ -53,6 +58,7 @@ impl Ord for TestJob {
             .cmp(&testjob_weight(other))
             .then(self.commit.cmp(&other.commit))
             .then(self.test.cmp(&other.test))
+            .then(self.kernel.cmp(&other.kernel))
             .then(self.duration.cmp(&other.duration))
     }
 }
@@ -91,6 +97,8 @@ fn branch_test_jobs(
     repo: &git2::Repository,
     user: &str,
     branch: &str,
+    branch_repo: &str,
+    branch_kernels: &[String],
     test_group: &RcTestGroup,
     test_path: &Path,
     verbose: bool,
@@ -171,16 +179,30 @@ fn branch_test_jobs(
                 }
             }
 
-            ret.push(TestJob {
-                user: user.to_string(),
-                branch: branch.to_string(),
-                commit: commit.clone(),
-                age: age as u64,
-                nice,
-                duration: stats.map_or(rc.ktest.subtest_duration_def.unwrap_or(30), |s| s.duration),
-                test: test_name.to_string(),
-                subtest,
-            });
+            // Empty `branch_kernels` means "build the kernel from the
+            // checked-out repo at the commit" — emit one job with an
+            // empty kernel field. Otherwise fan out across the
+            // configured kernel-store entries.
+            let duration = stats.map_or(rc.ktest.subtest_duration_def.unwrap_or(30), |s| s.duration);
+            let kernels: Vec<String> = if branch_kernels.is_empty() {
+                vec![String::new()]
+            } else {
+                branch_kernels.to_vec()
+            };
+            for kernel in kernels {
+                ret.push(TestJob {
+                    user: user.to_string(),
+                    repo: branch_repo.to_string(),
+                    branch: branch.to_string(),
+                    commit: commit.clone(),
+                    age: age as u64,
+                    nice,
+                    duration,
+                    kernel,
+                    test: test_name.to_string(),
+                    subtest: subtest.clone(),
+                });
+            }
         }
     }
 
@@ -207,12 +229,14 @@ fn user_test_jobs(
                 .tests
                 .iter()
                 .filter_map(|i| userconfig.test_group.get(i))
-                .map(move |testgroup| (branch, testgroup))
+                .map(move |testgroup| (branch, branchconfig, testgroup))
         })
-        .flat_map(move |(branch, testgroup)| {
+        .flat_map(move |(branch, branchconfig, testgroup)| {
             testgroup.tests.iter().flat_map(move |test| {
                 branch_test_jobs(
-                    rc, durations, repo, user, &branch, &testgroup, &test, verbose,
+                    rc, durations, repo, user, &branch,
+                    &branchconfig.repo, &branchconfig.kernel,
+                    &testgroup, &test, verbose,
                 )
             })
         })
@@ -280,11 +304,20 @@ fn write_test_jobs(rc: &CiConfig, jobs_in: Vec<TestJob>, verbose: bool) -> anyho
         let mut jobs_out = std::io::BufWriter::new(File::create(&jobs_fname_new)?);
 
         for job in jobs.iter() {
+            // Format: <repo> <branch> <commit> <age> <kernel-or-`-`> <test> <subtest>
+            // `-` is the sentinel for "no kernel" (build from repo);
+            // kernel-store identifiers always have a `/` in them so a
+            // bare `-` is unambiguous.
+            let kernel = if job.kernel.is_empty() { "-" } else { job.kernel.as_str() };
+            jobs_out.write(job.repo.as_bytes())?;
+            jobs_out.write(b" ")?;
             jobs_out.write(job.branch.as_bytes())?;
             jobs_out.write(b" ")?;
             jobs_out.write(job.commit.as_bytes())?;
             jobs_out.write(b" ")?;
             jobs_out.write(job.age.to_string().as_bytes())?;
+            jobs_out.write(b" ")?;
+            jobs_out.write(kernel.as_bytes())?;
             jobs_out.write(b" ")?;
             jobs_out.write(job.test.as_bytes())?;
             jobs_out.write(b" ")?;

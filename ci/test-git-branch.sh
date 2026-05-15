@@ -59,7 +59,6 @@ JOBSERVER=$1
 
 source <(ssh_retry $JOBSERVER cat .ktestrc)
 
-JOBSERVER_LINUX_REPO=ssh://$JOBSERVER/$JOBSERVER_HOME/linux
 HOSTNAME=$(uname -n)
 WORKDIR=$(basename $(pwd))
 
@@ -100,10 +99,12 @@ sync_git_repos() {
 }
 
 run_test_job() {
-    BRANCH="$1"
-    COMMIT="$2"
-    TEST_PATH="$3"
-    shift 3
+    REPO="$1"
+    BRANCH="$2"
+    COMMIT="$3"
+    KERNEL="$4"		# "-" = build from REPO (legacy); otherwise kernel-store id
+    TEST_PATH="$5"
+    shift 5
     SUBTESTS=("$@")
 
     FULL_TEST_PATH=${KTEST_DIR}/tests/$TEST_PATH
@@ -111,6 +112,11 @@ run_test_job() {
     TEST_NAME=$(echo "$TEST_NAME"|tr / .)
 
     OUTPUT=$JOBSERVER_OUTPUT_DIR/$COMMIT
+
+    if [[ -z $REPO ]]; then
+	echo "Error getting test job: need source repo"
+	exit 1
+    fi
 
     if [[ -z $BRANCH ]]; then
 	echo "Error getting test job: need git branch"
@@ -127,11 +133,23 @@ run_test_job() {
 	exit 1
     fi
 
-    echo "Running test $TEST_NAME for branch $BRANCH and commit $COMMIT"
+    if [[ -n $KERNEL && $KERNEL != "-" ]]; then
+	echo "Running test $TEST_NAME for $REPO branch $BRANCH commit $COMMIT under kernel $KERNEL"
+    else
+	echo "Running test $TEST_NAME for $REPO branch $BRANCH commit $COMMIT"
+    fi
 
     sync_git_repos
 
-    run_quiet "Fetching $COMMIT" git_fetch linux $COMMIT
+    # Each REPO has its own pre-cloned working tree at ~/$REPO; cd
+    # there so fetch/checkout/ktest-out all happen in the right place.
+    if [[ ! -d $HOME/$REPO ]]; then
+	echo "Error: no working tree for repo $REPO at $HOME/$REPO"
+	exit 1
+    fi
+    cd "$HOME/$REPO"
+
+    run_quiet "Fetching $COMMIT" git_fetch "$REPO" $COMMIT
     run_quiet "Checking out $COMMIT" git checkout -f FETCH_HEAD
 
     [[ $(git rev-parse HEAD) != $COMMIT ]] && exit 1
@@ -165,6 +183,10 @@ run_test_job() {
 
 	echo "Running test $TEST_PATH ${SUBTESTS[@]}"
 
+	# TODO: when KERNEL is set (kernel-store id), pass it to
+	# build-test-kernel so it runs against the prebuilt kernel
+	# instead of building from $REPO. The legacy build-from-repo
+	# path runs when KERNEL is "-" / empty.
 	$KTEST_DIR/lib/supervisor -T 1200 -f "$FULL_LOG" -S -F	\
 	    -b $TEST_NAME -o ktest-out/out				\
 	    -- build-test-kernel run -P $FULL_TEST_PATH ${SUBTESTS[@]} &
