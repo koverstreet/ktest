@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+
+config-mem 2G
+
+test_data_read_basic()
+{
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f --replicas=2	\
+	${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+
+    # Write known data
+    dd if=/dev/urandom of=/mnt/testfile bs=4k count=1 oflag=direct
+
+    # data-read should work on a healthy file
+    bcachefs data-read /mnt/testfile --len 4096
+
+    # Verify output matches direct read
+    bcachefs data-read /mnt/testfile --len 4096 --output /tmp/data_read_out
+    cmp /mnt/testfile /tmp/data_read_out
+
+    umount /mnt
+}
+
+test_data_read_poison()
+{
+    [[ ! -f /sys/module/bcachefs/parameters/read_corrupt_ratio ]] && return 0
+
+    set_watchdog 120
+
+    run_quiet "" bcachefs format -f --replicas=2	\
+	${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+
+    # Write known data
+    dd if=/dev/urandom of=/mnt/testfile bs=4k count=1 oflag=direct
+    cp /mnt/testfile /tmp/original
+
+    # Inject corruption to trigger poison
+    echo 1 > /sys/module/bcachefs/parameters/read_corrupt_device
+    dd if=/mnt/testfile of=/dev/null bs=4k iflag=direct 2>/dev/null || true
+    echo -1 > /sys/module/bcachefs/parameters/read_corrupt_device
+
+    # Normal read should still work (reads from good replica)
+    dd if=/mnt/testfile of=/tmp/normal_read bs=4k iflag=direct
+    cmp /tmp/original /tmp/normal_read
+
+    # Check that we got self-healing (extent should be poisoned on bad dev)
+    # data-read without --no-poison-check should still work (data is good)
+    bcachefs data-read /mnt/testfile --len 4096 --output /tmp/data_read_out
+    cmp /tmp/original /tmp/data_read_out
+
+    umount /mnt
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+}
+
+test_unpoison()
+{
+    [[ ! -f /sys/module/bcachefs/parameters/read_corrupt_ratio ]] && return 0
+
+    set_watchdog 120
+
+    # Single device — corruption with no good replica to fall back to
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    dd if=/dev/urandom of=/mnt/testfile bs=4k count=1 oflag=direct
+
+    # Deterministic corruption — every read from device 0 gets corrupted
+    echo 0 > /sys/module/bcachefs/parameters/read_corrupt_device
+    echo 1 > /sys/module/bcachefs/parameters/read_corrupt_ratio
+    dd if=/mnt/testfile of=/dev/null bs=4k iflag=direct 2>/dev/null || true
+    echo -1 > /sys/module/bcachefs/parameters/read_corrupt_device
+    echo 0 > /sys/module/bcachefs/parameters/read_corrupt_ratio
+
+    # Normal read should fail (poisoned, no good replica)
+    if dd if=/mnt/testfile of=/dev/null bs=4k iflag=direct 2>/dev/null; then
+	echo "ERROR: read of poisoned file should have failed"
+	exit 1
+    fi
+
+    # data-read with --no-poison-check should succeed
+    bcachefs data-read /mnt/testfile --len 4096 --no-poison-check --output /tmp/poison_read
+
+    # unpoison should clear the flag
+    bcachefs unpoison /mnt/testfile --yes-i-understand
+
+    # Normal read should now work
+    dd if=/mnt/testfile of=/dev/null bs=4k iflag=direct
+
+    umount /mnt
+}
+
+main "$@"
