@@ -9,7 +9,7 @@ build = "src/build.rs"
 
 [dependencies]
 cgi = "0.6"
-git2 = "0.16"
+git2 = { version = "0.16", default-features = false }
 querystring = "1.1.0"
 multimap = "0.8.3"
 die = "0.2.0"
@@ -27,7 +27,7 @@ anyhow = "1.0.71"
 chrono = "0.4.26"
 memmap = "0.7.0"
 serde_json = "1.0.132"
-reqwest = { version = "0.12.9", features = ["blocking"] }
+reqwest = { version = "0.12.9", default-features = false, features = ["blocking", "rustls-tls"] }
 brotli = "7"
 flate2 = "1"
 quick-xml = "0.36"
