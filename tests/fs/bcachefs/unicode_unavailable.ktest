@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Test bcachefs behavior when unicode/casefolding is not available
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config BCACHEFS_FS
+require-kernel-config UNICODE=n
+
+config-scratch-devs 4G
+
+# Non-casefolding fs should mount fine without unicode
+test_no_unicode_normal_fs()
+{
+    set_watchdog 30
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount ${ktest_scratch_dev[0]} /mnt
+
+    # Normal file operations should work
+    echo "hello" > /mnt/testfile
+    cat /mnt/testfile
+    mkdir /mnt/subdir
+    echo "world" > /mnt/subdir/another
+
+    umount /mnt
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+}
+
+# Enabling casefolding should fail gracefully without unicode
+test_no_unicode_casefold_fails()
+{
+    set_watchdog 30
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount ${ktest_scratch_dev[0]} /mnt
+
+    mkdir /mnt/test_dir
+
+    # Trying to enable casefolding should fail with clear error
+    ! bcachefs set-file-option --casefold /mnt/test_dir 2>&1 | tee /tmp/cf_error.txt
+
+    # Should mention casefolding/unicode in error
+    grep -qi "casefold\|unicode\|utf8" /tmp/cf_error.txt
+
+    umount /mnt
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+}
+
+main "$@"

@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config BCACHEFS_FS
+require-kernel-config UNICODE=m
+
+config-scratch-devs 4G
+
+# Basic casefolding test - unicode available
+test_casefold_basic()
+{
+    set_watchdog 30
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount ${ktest_scratch_dev[0]} /mnt
+
+    mkdir /mnt/casefold_dir
+    bcachefs set-file-option --casefold /mnt/casefold_dir
+
+    echo "hello" > /mnt/casefold_dir/TestFile
+
+    # Should be able to read with different case
+    cat /mnt/casefold_dir/testfile
+    cat /mnt/casefold_dir/TESTFILE
+
+    # Verify it's the same file
+    [[ $(cat /mnt/casefold_dir/TestFile) == $(cat /mnt/casefold_dir/testfile) ]]
+
+    umount /mnt
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+}
+
+# Test casefold_disabled mount option
+test_casefold_disabled()
+{
+    set_watchdog 30
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+
+    # Mount with casefold_disabled
+    mount -o casefold_disabled ${ktest_scratch_dev[0]} /mnt
+
+    mkdir /mnt/test_dir
+
+    # Trying to enable casefolding should fail
+    ! bcachefs set-file-option --casefold /mnt/test_dir 2>&1 | tee /dev/stderr | grep -q "casefolding"
+
+    umount /mnt
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+}
+
+# Test that casefolding fs feature is properly detected
+test_casefold_fs_feature()
+{
+    set_watchdog 30
+
+    # Create fs, enable casefolding on a dir, unmount
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount ${ktest_scratch_dev[0]} /mnt
+    mkdir /mnt/cf_dir
+    bcachefs set-file-option --casefold /mnt/cf_dir
+    echo "test" > /mnt/cf_dir/MixedCase
+    umount /mnt
+
+    # Remount - should work since unicode is available
+    mount ${ktest_scratch_dev[0]} /mnt
+    cat /mnt/cf_dir/mixedcase
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+}
+
+main "$@"
