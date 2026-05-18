@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+
+test_basic()
+{
+    set_watchdog 30
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    echo "hello world" > /mnt/foo
+    sync
+
+    umount /mnt
+
+    bcachefs list_journal ${ktest_scratch_dev[0]} > /tmp/lj_out
+
+    # Should have journal entries with headers
+    grep -q "journal entry" /tmp/lj_out
+    grep -q "bytes" /tmp/lj_out
+    grep -q "sectors" /tmp/lj_out
+    grep -q "version" /tmp/lj_out
+    grep -q "last seq" /tmp/lj_out
+    grep -q "flush" /tmp/lj_out
+    grep -q "written at" /tmp/lj_out
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_headers_only()
+{
+    set_watchdog 30
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    echo "hello world" > /mnt/foo
+    sync
+
+    umount /mnt
+
+    bcachefs list_journal -H ${ktest_scratch_dev[0]} > /tmp/lj_headers
+
+    # Headers should be present
+    grep -q "journal entry" /tmp/lj_headers
+
+    # btree_keys entries should NOT be present (those are sub-entries)
+    ! grep -q "btree_keys" /tmp/lj_headers
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_datetime()
+{
+    set_watchdog 30
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    echo "hello world" > /mnt/foo
+    sync
+
+    umount /mnt
+
+    bcachefs list_journal -D ${ktest_scratch_dev[0]} > /tmp/lj_datetime
+
+    # Should show journal entry lines with datetime info
+    grep -q "journal entry" /tmp/lj_datetime
+
+    # Should NOT have full headers (bytes/sectors/version lines)
+    ! grep -q "^  bytes" /tmp/lj_datetime
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_seq_range()
+{
+    set_watchdog 30
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # Generate several journal entries
+    for i in $(seq 1 10); do
+        echo "data $i" > /mnt/file$i
+        sync
+    done
+
+    umount /mnt
+
+    # Get all entries to find valid seq range
+    bcachefs list_journal -H ${ktest_scratch_dev[0]} > /tmp/lj_all
+
+    # Count entries
+    local all_count=$(grep -c "journal entry" /tmp/lj_all)
+    echo "Total journal entries: $all_count"
+    [[ $all_count -gt 2 ]]
+
+    # Extract first and last seq numbers
+    local first_seq=$(grep "journal entry" /tmp/lj_all | head -1 | awk '{print $3}')
+    local last_seq=$(grep "journal entry" /tmp/lj_all | tail -1 | awk '{print $3}')
+    echo "Seq range: $first_seq .. $last_seq"
+
+    # Filter to just one entry
+    bcachefs list_journal -s $last_seq ${ktest_scratch_dev[0]} > /tmp/lj_one
+    local one_count=$(grep -c "journal entry" /tmp/lj_one)
+    echo "Single seq entries: $one_count"
+    [[ $one_count -eq 1 ]]
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_nr_entries()
+{
+    set_watchdog 30
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    for i in $(seq 1 10); do
+        echo "data $i" > /mnt/file$i
+        sync
+    done
+
+    umount /mnt
+
+    # Get total entries
+    bcachefs list_journal -H ${ktest_scratch_dev[0]} > /tmp/lj_all
+    local all_count=$(grep -c "journal entry" /tmp/lj_all)
+    echo "Total entries: $all_count"
+
+    bcachefs list_journal -H -n 2 ${ktest_scratch_dev[0]} > /tmp/lj_n2
+    local count=$(grep -c "journal entry" /tmp/lj_n2)
+    echo "Entries with -n 2: $count"
+    [[ $count -le 3 ]]
+    [[ $count -lt $all_count ]]
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_btree_filter()
+{
+    set_watchdog 30
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    echo "hello world" > /mnt/foo
+    sync
+
+    umount /mnt
+
+    # Filter to extents only
+    bcachefs list_journal -b extents ${ktest_scratch_dev[0]} > /tmp/lj_extents
+
+    # Should have some output (we wrote a file, so there should be extent keys)
+    grep -q "journal entry" /tmp/lj_extents
+
+    # Negative filter: exclude extents
+    bcachefs list_journal -b -extents ${ktest_scratch_dev[0]} > /tmp/lj_no_extents
+
+    # Both should have journal entry headers
+    grep -q "journal entry" /tmp/lj_no_extents
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_flush_only()
+{
+    set_watchdog 30
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    echo "hello world" > /mnt/foo
+    sync
+
+    umount /mnt
+
+    # All entries
+    bcachefs list_journal -H ${ktest_scratch_dev[0]} > /tmp/lj_all
+
+    # Flush only
+    bcachefs list_journal -H -F ${ktest_scratch_dev[0]} > /tmp/lj_flush
+
+    # Flush-only should have <= all entries
+    local all_count=$(grep -c "journal entry" /tmp/lj_all)
+    local flush_count=$(grep -c "journal entry" /tmp/lj_flush)
+    echo "All: $all_count  Flush: $flush_count"
+    [[ $flush_count -le $all_count ]]
+    # At least one flush entry (unmount triggers a flush)
+    [[ $flush_count -ge 1 ]]
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_bkey_noval()
+{
+    set_watchdog 30
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    echo "hello world" > /mnt/foo
+    sync
+
+    umount /mnt
+
+    # With values (default)
+    bcachefs list_journal -V true ${ktest_scratch_dev[0]} > /tmp/lj_val
+    # Without values
+    bcachefs list_journal -V false ${ktest_scratch_dev[0]} > /tmp/lj_noval
+
+    # Both should produce output
+    grep -q "journal entry" /tmp/lj_val
+    grep -q "journal entry" /tmp/lj_noval
+
+    # No-val output should be shorter (no value data printed)
+    local val_lines=$(wc -l < /tmp/lj_val)
+    local noval_lines=$(wc -l < /tmp/lj_noval)
+    echo "With val: $val_lines lines  Without val: $noval_lines lines"
+    [[ $noval_lines -le $val_lines ]]
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_help()
+{
+    set_watchdog 10
+
+    # --help should print usage and exit successfully
+    bcachefs list_journal --help > /tmp/lj_help 2>&1 || true
+
+    grep -q "list_journal" /tmp/lj_help
+    grep -q "\-\-headers-only" /tmp/lj_help
+    grep -q "\-\-seq" /tmp/lj_help
+}
+
+main "$@"
