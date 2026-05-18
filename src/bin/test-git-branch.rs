@@ -193,9 +193,35 @@ fn unquote(s: &str) -> String {
         .to_string()
 }
 
-fn wait_for_server_mem(jobserver: &str, ktest_dir: &Path) {
-    let script = format!("{}/ci/wait-for-mem.sh", ktest_dir.display());
-    ssh_retry_run(jobserver, &[&script]);
+/// Wait until the jobserver has enough free memory to take on more
+/// work. Matches the old wait-for-mem.sh logic: poll /proc/meminfo,
+/// proceed once MemAvailable >= MemTotal/2.
+fn wait_for_server_mem(jobserver: &str) {
+    loop {
+        let out = ssh_retry_capture(jobserver, &["cat", "/proc/meminfo"]);
+        let text = String::from_utf8_lossy(&out.stdout);
+        if jobserver_has_mem(&text) {
+            return;
+        }
+        log!("{}: memory pressure, waiting", jobserver);
+        let n: u64 = rand::thread_rng().gen_range(0..20);
+        thread::sleep(Duration::from_secs(n));
+    }
+}
+
+fn jobserver_has_mem(meminfo: &str) -> bool {
+    let field = |name: &str| -> Option<u64> {
+        meminfo
+            .lines()
+            .find_map(|l| l.strip_prefix(name))
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|s| s.parse().ok())
+    };
+    match (field("MemTotal:"), field("MemAvailable:")) {
+        (Some(total), Some(available)) => available >= total / 2,
+        // Can't parse → don't block forever on a parse error.
+        _ => true,
+    }
 }
 
 /// Ask the jobserver for the next job for us. Returns Ok(None) when no
@@ -678,20 +704,16 @@ fn run_test_job(
     Ok(())
 }
 
-fn ktest_dir_from_exe() -> Result<PathBuf> {
-    // Binary lives in <ktest>/target/<profile>/test-git-branch.
-    let exe = env::current_exe().context("current_exe")?;
-    exe.parent()
-        .and_then(|p| p.parent())
-        .and_then(|p| p.parent())
-        .map(PathBuf::from)
-        .ok_or_else(|| anyhow!("can't derive ktest dir from {:?}", exe))
-}
+/// Path to the ktest source tree, baked in at build time. Lets the
+/// binary find tests/, lib/supervisor, etc. without scanning relative
+/// to its install location. Fine for now since every worker host
+/// builds locally via ci/ci-worker's nix-shell.
+const KTEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    let ktest_dir = ktest_dir_from_exe()?;
+    let ktest_dir = Path::new(KTEST_DIR);
     let rc = fetch_jobserver_rc(&args.jobserver)?;
     let hostname = hostname::get()
         .context("gethostname")?
@@ -724,9 +746,9 @@ fn main() -> Result<()> {
             job.repo, job.branch, job.commit, job.kernel, job.test_path, job.subtests
         );
 
-        wait_for_server_mem(&args.jobserver, &ktest_dir);
+        wait_for_server_mem(&args.jobserver);
 
-        if let Err(e) = run_test_job(&args.jobserver, &rc, &ktest_dir, &job, &hostname) {
+        if let Err(e) = run_test_job(&args.jobserver, &rc, ktest_dir, &job, &hostname) {
             log!(
                 "run_test_job failed for {} {} {} test {}: {:#}",
                 job.repo, job.branch, job.commit, job.test_path, e
