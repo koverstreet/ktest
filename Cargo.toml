@@ -15,7 +15,7 @@ multimap = "0.8.3"
 die = "0.2.0"
 libc = "0.2"
 toml = "0.5.9"
-serde = "1.0.145"
+serde = { version = "1.0.145", features = ["derive"] }
 serde_derive = "1.0.145"
 regex = "1"
 memoize = "0.3.1"
