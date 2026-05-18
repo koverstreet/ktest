@@ -11,8 +11,8 @@ init_build_bcachefs_tools() {
     cd
     local jobs=$(( $(nproc) / 2 ))
     (( jobs < 1 )) && jobs=1
-    make -j$jobs -C $ktest_dir/tests/fs/bcachefs/bcachefs-tools PREFIX=/usr install
-    make -j$jobs -C $ktest_dir/tests/fs/bcachefs/bcachefs-tools PREFIX=/usr dkms-reload
+    make -j$jobs -C "$ktest_deps_dir/bcachefs-tools" PREFIX=/usr install
+    make -j$jobs -C "$ktest_deps_dir/bcachefs-tools" PREFIX=/usr dkms-reload
 }
 
 require-kernel-config BCACHEFS_FS

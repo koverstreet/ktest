@@ -3,6 +3,8 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../lib/common.sh
 
+: "${ktest_deps_dir:=$HOME/.ktest/deps}"
+
 if [[ ! -v ktest_interactive ]]; then
     ktest_failfast=false
     ktest_interactive=false
@@ -61,25 +63,16 @@ require-git()
     local dir=$(basename $req)
     dir=${dir%%.git}
 
+    # Second-arg relative paths (e.g. "../xfstests") collapse to their
+    # basename — the deps dir is flat, with no hierarchy to step through.
     if [[ $# -ge 2 ]]; then
-	dir=$2
+	dir=$(basename "$2")
     fi
 
-    # In CI, $ktest_deps_dir overrides the default caller-relative
-    # placement — clones land in a worker-controlled state dir instead
-    # of polluting the ktest source tree. Relative paths in the second
-    # arg collapse to their basename in this mode, since the flat
-    # deps dir has no hierarchy to step through.
-    local base
-    if [[ -n ${ktest_deps_dir:-} ]]; then
-	base=$ktest_deps_dir
-	dir=$(basename "$dir")
-    else
-	base=$(dirname $(readlink -e "${BASH_SOURCE[1]}"))
-    fi
-    dir=$base/$dir
+    dir=$ktest_deps_dir/$dir
 
     if [[ ! -d $dir ]]; then
+	mkdir -p "$ktest_deps_dir"
 	git clone $req $dir
     fi
 }

@@ -16,6 +16,7 @@ export PATH=$PATH:/root/.cargo/bin
 ktest_dir="/host/$ktest_dir"
 ktest_tmp="/host/$ktest_tmp"
 ktest_out="/host/$ktest_out"
+ktest_deps_dir="/host/$ktest_deps_dir"
 
 rm -f /ktest /ktest-out
 ln -sf $ktest_dir /ktest
