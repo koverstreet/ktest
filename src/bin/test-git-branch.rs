@@ -7,11 +7,11 @@
 // Differences from the old script:
 //
 //  * State-dir model. Cwd is the worker's state dir, not a kernel clone.
-//    The repo named in the job is cloned into ./<repo>/ on demand, using
-//    a host-shared bare cache at $HOME/git/<repo>.git to keep
-//    re-clones cheap. Same-repo consecutive jobs keep the checkout and
-//    the kernel build cache; switching repos wipes the state dir
-//    (kernel build artifacts are keyed to a specific source tree).
+//    The repo named in the job is cloned into ./<repo>/ on demand.
+//    Same-repo consecutive jobs keep the checkout (just fetch +
+//    checkout the new commit) and the kernel build cache; switching
+//    repos wipes the state dir, since the per-arch kernel build
+//    artifacts are keyed to a specific source tree.
 //
 //  * $ktest_deps_dir is exported so require-git places test
 //    dependencies in the state dir instead of polluting the ktest
@@ -279,37 +279,6 @@ fn jobserver_repo_url(jobserver: &str, jobserver_home: &str, repo: &str) -> Stri
     format!("ssh://{}/{}/{}", jobserver, jobserver_home, repo)
 }
 
-/// Ensure $HOME/git/<repo>.git exists and is up to date. The bare cache
-/// is host-shared across all worker state dirs, so per-state-dir clones
-/// reference it instead of re-downloading the whole history.
-fn ensure_bare_cache(jobserver: &str, jobserver_home: &str, repo: &str) -> Result<PathBuf> {
-    let home = env::var("HOME").context("HOME not set in the worker's environment")?;
-    let bare = PathBuf::from(home).join("git").join(format!("{}.git", repo));
-
-    if !bare.exists() {
-        if let Some(parent) = bare.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("creating bare-cache parent dir {}", parent.display()))?;
-        }
-        let url = jobserver_repo_url(jobserver, jobserver_home, repo);
-        log!("Bare-cloning {} -> {}", url, bare.display());
-        run_check(Command::new("git").args(["clone", "--bare"]).arg(&url).arg(&bare))?;
-    } else {
-        log!("Updating bare cache {}", bare.display());
-        // Fetch failure here is not fatal — the cache may still satisfy
-        // the requested commit. Log and proceed.
-        let st = run_inherit(Command::new("git").arg("-C").arg(&bare).arg("fetch"))?;
-        if !st.success() {
-            log!(
-                "bare-cache fetch in {} failed (exit {:?}); proceeding with existing cache",
-                bare.display(),
-                st.code()
-            );
-        }
-    }
-    Ok(bare)
-}
-
 /// Recursively remove a single filesystem entry — directories via
 /// remove_dir_all, anything else (file or symlink) via remove_file. We
 /// never want to follow a symlink-to-dir into something we don't own.
@@ -332,11 +301,10 @@ fn wipe_state_dir() -> Result<()> {
     Ok(())
 }
 
-/// Place a checkout of <repo> at <commit> in ./<repo>/, sharing objects
-/// with the bare cache. If the directory already exists (same-repo
-/// consecutive jobs), just fetch and check out.
+/// Place a checkout of <repo> at <commit> in ./<repo>/. If the
+/// directory already exists (same-repo consecutive jobs), just fetch
+/// and check out.
 fn ensure_state_dir_checkout(
-    bare: &Path,
     jobserver: &str,
     jobserver_home: &str,
     repo: &str,
@@ -347,18 +315,11 @@ fn ensure_state_dir_checkout(
 
     if !checkout.exists() {
         log!("Cloning {} into {}", repo, checkout.display());
-        run_check(
-            Command::new("git")
-                .arg("clone")
-                .arg("--reference")
-                .arg(bare)
-                .arg(&url)
-                .arg(&checkout),
-        )?;
+        run_check(Command::new("git").arg("clone").arg(&url).arg(&checkout))?;
     }
 
     // Fetch the specific commit (it may not have been on a ref the
-    // initial clone pulled, or the cache may be stale).
+    // initial clone pulled).
     log!("Fetching {} {}", repo, commit);
     git_fetch_retry(&checkout, &url, commit)?;
 
@@ -606,8 +567,7 @@ fn run_test_job(
         wipe_state_dir()?;
     }
 
-    let bare = ensure_bare_cache(jobserver, &rc.jobserver_home, &job.repo)?;
-    ensure_state_dir_checkout(&bare, jobserver, &rc.jobserver_home, &job.repo, &job.commit)?;
+    ensure_state_dir_checkout(jobserver, &rc.jobserver_home, &job.repo, &job.commit)?;
 
     clean_ktest_out()?;
     fs::create_dir_all("ktest-out/out")?;
