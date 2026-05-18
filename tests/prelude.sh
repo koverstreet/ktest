@@ -65,7 +65,19 @@ require-git()
 	dir=$2
     fi
 
-    dir=$(dirname $(readlink -e "${BASH_SOURCE[1]}"))/$dir
+    # In CI, $ktest_deps_dir overrides the default caller-relative
+    # placement — clones land in a worker-controlled state dir instead
+    # of polluting the ktest source tree. Relative paths in the second
+    # arg collapse to their basename in this mode, since the flat
+    # deps dir has no hierarchy to step through.
+    local base
+    if [[ -n ${ktest_deps_dir:-} ]]; then
+	base=$ktest_deps_dir
+	dir=$(basename "$dir")
+    else
+	base=$(dirname $(readlink -e "${BASH_SOURCE[1]}"))
+    fi
+    dir=$base/$dir
 
     if [[ ! -d $dir ]]; then
 	git clone $req $dir
