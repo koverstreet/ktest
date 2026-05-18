@@ -40,6 +40,7 @@ hex = "0.4"
 nix-nar = "0.4"
 lzma-rs = "0.3"
 rand = "0.8"
+hostname = "0.4"
 
 [build-dependencies]
 capnpc = "0.21.*"
