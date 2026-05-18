@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+config-timeout $(stress_timeout)
+
+test_scrub_journal()
+{
+    set_watchdog 300
+
+    local BUCKET_SIZE_KB=512
+    local BUCKET_SIZE_SECTORS=$((BUCKET_SIZE_KB * 2))
+
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f		\
+	--errors=ro				\
+	--bucket_size=${BUCKET_SIZE_KB}k	\
+	--no_initialize				\
+	"$dev"
+
+    # Mount and write data — generates extent keys in the journal
+    mount -t bcachefs "$dev" /mnt
+
+    run_fio_base			\
+	--filesize=100M			\
+	--loops=2			\
+	--name=randrw			\
+	--rw=randrw			\
+	--bsrange=4k-256k
+
+    # Emergency shutdown — leaves unflushed journal entries
+    echo "Triggering emergency shutdown..."
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+    umount /mnt
+
+    # Get the seq of the 3rd-to-last flush entry — the start of the scrub window
+    local scrub_seq=$(bcachefs list_journal -F -D $dev|tail -n2|awk '{print $3}'|head -n1)
+    echo "Scrub window starts at seq $scrub_seq"
+
+    if [[ -z $scrub_seq ]]; then
+	echo "ERROR: No valid flush seq found in journal"
+	exit 1
+    fi
+
+    # Extract extent lines from journal entries in the scrub window
+    local extents=$(bcachefs list_journal -s "$scrub_seq.." -b extents "$dev") 2>/dev/null
+
+    if [[ -z $extents ]]; then
+	echo "ERROR: No extents found in journal scrub window"
+	exit 1
+    fi
+
+    # Parse raw sector offsets from extent lines
+    # Input: extent lines on stdin
+    # Output: one raw sector offset per line
+    local extent_sectors=$(echo "$extents" |
+	awk -v bsz="$BUCKET_SIZE_SECTORS" '
+	/ptr:/ {
+	    for (i = 1; i <= NF; i++) {
+		if (match($i, /^[0-9]+:[0-9]+:[0-9]+$/)) {
+		    split($i, parts, ":")
+		    bucket = parts[2] + 0
+		    offset = parts[3] + 0
+		    print bucket * bsz + offset
+		}
+	    }
+	}'
+    )
+
+    if [[ -z $extent_sectors ]]; then
+	echo "ERROR: No sector offsets parsed from extents"
+	exit 1
+    fi
+
+    local nr_total=$(echo "$extent_sectors" | wc -l)
+
+    # Corrupt a limited number of data blocks
+    local nr_corrupted=0
+    while read sector; do
+	dd if=/dev/urandom of="$dev" bs=512 seek="$sector" count=8 \
+	    conv=notrunc 2>/dev/null
+	nr_corrupted=$((nr_corrupted + 1))
+	[[ $nr_corrupted -ge 10 ]] && break
+    done <<< "$extent_sectors"
+
+    echo "Corrupted $nr_corrupted / $nr_total data extent locations"
+
+    # Mount with scrub_recent_journal_entries — should detect corruption
+    # and automatically rewind
+    echo "Mounting with scrub_recent_journal_entries=always..."
+    mount -t bcachefs -o scrub_recent_journal_entries=always,verbose "$dev" /mnt
+
+    # Verify scrub detected the corruption
+    if ! (dmesg | grep -q 'not honoring flush/FUA'); then
+	echo "ERROR: Scrub did not detect flush/FUA corruption"
+	exit 1
+    fi
+
+    echo "Scrub detected corruption and rewound automatically"
+
+    umount /mnt
+
+    # Final consistency check
+    bcachefs fsck -ny "$dev"
+
+    echo "Test passed: scrub detected corruption, rewind recovered"
+}
+
+main "$@"

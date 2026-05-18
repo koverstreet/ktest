@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+
+test_scrub_cancel()
+{
+    set_watchdog 60
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # Create some data to scrub
+    dd if=/dev/urandom of=/mnt/testfile bs=1M count=100 oflag=direct
+    sync
+
+    umount /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    echo "Starting scrub in background..."
+    bcachefs data scrub ${ktest_scratch_dev[0]} &
+    scrub_pid=$!
+
+    # Let it run briefly
+    sleep 2
+
+    echo "Sending SIGINT to scrub (pid $scrub_pid)..."
+    kill -INT $scrub_pid
+
+    echo "Waiting for scrub to exit (should be quick)..."
+    local start=$(date +%s)
+
+    # Wait with timeout
+    local timeout=10
+    while kill -0 $scrub_pid 2>/dev/null; do
+        sleep 0.1
+        local now=$(date +%s)
+        local elapsed=$((now - start))
+        if [[ $elapsed -gt $timeout ]]; then
+            echo "FAILED: scrub did not exit within ${timeout}s"
+            echo "Thread state:"
+            cat /proc/$scrub_pid/stack 2>/dev/null || true
+
+            # Check kernel side
+            echo "Moving contexts:"
+            cat /sys/fs/bcachefs/*/moving_ctxts 2>/dev/null || true
+
+            kill -9 $scrub_pid
+            wait $scrub_pid 2>/dev/null || true
+            umount /mnt
+            exit 1
+        fi
+    done
+
+    wait $scrub_pid || true
+    local end=$(date +%s)
+    echo "Scrub exited in $((end - start)) seconds"
+
+    umount /mnt
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+main "$@"
