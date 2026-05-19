@@ -201,6 +201,22 @@ build_one() {
 	aarch64|arm64)  debian_arch=arm64 ;;
 	*)              debian_arch=$ARCH ;;
     esac
+
+    # If the host is already Debian/Ubuntu and matches the target arch,
+    # the nspawn wrapper isn't needed — host scripts/* will be linked
+    # against the same libc + ld.so the workers run.
+    local host_distro=""
+    [[ -f /etc/os-release ]] && host_distro=$(. /etc/os-release && echo "$ID")
+    local host_debian_arch
+    host_debian_arch=$(dpkg --print-architecture 2>/dev/null || true)
+    if [[ ($host_distro = debian || $host_distro = ubuntu) &&
+	  $host_debian_arch = $debian_arch ]]; then
+	log "host is $host_distro/$host_debian_arch matching target — skipping nspawn"
+	"$ktest_dir/build-test-kernel" build \
+	    -V "$variant" -a "$ARCH" -k "$build_repo" -o "$workdir" -D "$destdir"
+	return
+    fi
+
     local rootfs=""
     for candidate in "$HOME/.ktest/root.$debian_arch" "/var/lib/ktest/root.$debian_arch"; do
 	[[ -f $candidate ]] && { rootfs=$candidate; break; }
