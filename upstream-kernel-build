@@ -223,6 +223,7 @@ build_one() {
 	--quiet \
 	--machine="$machine" \
 	--bind-ro="$ktest_dir" \
+	--bind-ro="$bare" \
 	--bind="$build_repo" \
 	--bind="$workdir" \
 	--bind="$(dirname "$destdir")" \
