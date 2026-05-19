@@ -623,10 +623,13 @@ fn run_test_job(
         ]);
         match &job.kernel {
             Some(k) => {
+                // ktest's arg parser takes the subcommand first
+                // (CMD="$1") and only then parses options, so -k
+                // must come *after* `run`.
                 cmd.arg(ktest_dir.join("ktest"))
+                    .arg("run")
                     .arg("-k")
                     .arg(k)
-                    .arg("run")
                     .arg(&test_path);
             }
             None => {
