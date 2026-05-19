@@ -276,7 +276,11 @@ fn parse_test_job(line: &str) -> Result<TestJob> {
 }
 
 fn jobserver_repo_url(jobserver: &str, jobserver_home: &str, repo: &str) -> String {
-    format!("ssh://{}/{}/{}", jobserver, jobserver_home, repo)
+    // scp-like syntax: git uses ssh transport, and the absolute path
+    // is unambiguous. The ssh:// URL form would produce a double
+    // slash for absolute JOBSERVER_HOME paths (ssh://host//abs/path),
+    // which git passes through verbatim and the remote rejects.
+    format!("{}:{}/{}", jobserver, jobserver_home, repo)
 }
 
 /// Recursively remove a single filesystem entry — directories via
