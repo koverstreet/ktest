@@ -212,6 +212,9 @@ build_one() {
 	return
     fi
 
+    # nspawn doesn't sanitize PATH — on NixOS hosts it leaks the host's
+    # nix-store PATH into the container, where none of the Debian binaries
+    # are reachable. Override with a Debian-sensible PATH.
     local machine="ktest-build-$$-$release-$variant"
     sudo systemd-nspawn \
 	--image="$rootfs" \
@@ -224,7 +227,8 @@ build_one() {
 	--bind="$workdir" \
 	--bind="$(dirname "$destdir")" \
 	--setenv=HOME=/root \
-	/usr/bin/env bash -c "
+	--setenv=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+	/bin/bash -c "
 	    set -e
 	    git config --global --add safe.directory '$build_repo'
 	    '$ktest_dir/build-test-kernel' build \
