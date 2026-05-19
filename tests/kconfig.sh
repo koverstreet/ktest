@@ -208,10 +208,6 @@ require-kernel-config TMPFS
 require-kernel-config TMPFS_POSIX_ACL
 require-kernel-config TMPFS_XATTR
 require-kernel-config TMPFS_QUOTA
-
-# testrunner overlays /lib/modules/<kver> with a tmpfs upper so DKMS
-# install and depmod can write without touching the host store.
-require-kernel-config OVERLAY_FS
 require-kernel-config INOTIFY_USER
 require-kernel-config CONFIGFS_FS	# systemd
 require-kernel-config HUGETLBFS		# xfstests
