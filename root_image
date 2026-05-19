@@ -87,7 +87,7 @@ PACKAGES=(kexec-tools less psmisc openssh-server curl		\
 
 # build tools:
 PACKAGES+=(build-essential make gcc g++ clang)
-PACKAGES+=(autoconf automake autopoint bison pahole)
+PACKAGES+=(autoconf automake autopoint bison flex pahole)
 PACKAGES+=(cargo mold)
 PACKAGES+=(rustc rust-src rust-analyzer librust-bindgen-dev bindgen)
 PACKAGES+=(devscripts debhelper sbuild dh-sequence-dkms dkms)
