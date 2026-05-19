@@ -3,11 +3,6 @@
 . "$ktest_dir/lib/util.sh"
 . "$ktest_dir/lib/parse-test.sh"
 
-if [[ $(id -u) = 0 ]] ; then
-    echo $0 should not be run as root
-    exit 1
-fi
-
 ktest_root_image=""	# virtual machine root filesystem
                         #       set with: -i <path>
                         #       defaults: /var/lib/ktest/root
@@ -355,6 +350,11 @@ get_unused_port()
 
 start_vm()
 {
+    if [[ $(id -u) = 0 ]]; then
+	echo "$0: refusing to start qemu as root" >&2
+	exit 1
+    fi
+
     log_verbose "ktest_arch=$ktest_arch"
 
     checkdep $QEMU_BIN $QEMU_PACKAGE
