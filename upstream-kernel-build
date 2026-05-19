@@ -173,12 +173,7 @@ build_one() {
 
     local destdir="$KERNELS_DIR/$release-$variant/$ARCH/$version"
 
-    if $FORCE && [[ -d $destdir ]]; then
-	log "force: removing $destdir"
-	rm -rf "$destdir"
-    fi
-
-    if already_have "$release" "$variant" "$version"; then
+    if ! $FORCE && already_have "$release" "$variant" "$version"; then
 	log "have upstream/$release-$variant/$ARCH/$version"
 	return 0
     fi
@@ -218,9 +213,15 @@ build_one() {
     [[ -f /etc/os-release ]] && host_distro=$(. /etc/os-release && echo "$ID")
     local host_debian_arch
     host_debian_arch=$(dpkg --print-architecture 2>/dev/null || true)
+    # On force rebuild, wipe any existing entry. nspawn writes files as
+    # root, so the wipe needs the same privilege context — defer the rm
+    # to inside the nspawn shell for the nspawn path; for host-fallback
+    # the existing files are user-owned (nspawn was never available) so
+    # plain rm works.
     if [[ ($host_distro = debian || $host_distro = ubuntu) &&
 	  $host_debian_arch = $debian_arch ]]; then
 	log "host is $host_distro/$host_debian_arch matching target — skipping nspawn"
+	$FORCE && rm -rf "$destdir"
 	"$ktest_dir/build-test-kernel" build \
 	    -V "$variant" -a "$ARCH" -k "$build_repo" -o "$workdir" -D "$destdir"
 	return
@@ -232,10 +233,14 @@ build_one() {
     done
     if [[ -z $rootfs ]]; then
 	log "no Debian root image (root.$debian_arch) found; falling back to host build"
+	$FORCE && rm -rf "$destdir"
 	"$ktest_dir/build-test-kernel" build \
 	    -V "$variant" -a "$ARCH" -k "$build_repo" -o "$workdir" -D "$destdir"
 	return
     fi
+
+    local pre_cmd=""
+    $FORCE && pre_cmd="rm -rf '$destdir';"
 
     # nspawn doesn't sanitize PATH — on NixOS hosts it leaks the host's
     # nix-store PATH into the container, where none of the Debian binaries
@@ -256,6 +261,7 @@ build_one() {
 	--setenv=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
 	/bin/bash -c "
 	    set -e
+	    $pre_cmd
 	    git config --global --add safe.directory '$build_repo'
 	    '$ktest_dir/build-test-kernel' build \
 		-V '$variant' -a '$ARCH' \
