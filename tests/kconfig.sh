@@ -97,6 +97,28 @@ require-kernel-config COMPACTION	# virtfs doesn't do well without it
 # when the bcachefs DKMS module is built against the running kernel.
 require-kernel-config KEYS
 
+# bcachefs DKMS deps. When bcachefs is in-tree these are auto-selected
+# from fs/bcachefs/Kconfig; for DKMS the host kernel has to provide them
+# so the module's symbol references resolve at insmod time. Mirror that
+# list here.
+require-kernel-config EXPORTFS
+require-kernel-config CRC32
+require-kernel-config CRC64
+require-kernel-config LZ4_COMPRESS
+require-kernel-config LZ4_DECOMPRESS
+require-kernel-config LZ4HC_COMPRESS
+require-kernel-config ZLIB_DEFLATE
+require-kernel-config ZLIB_INFLATE
+require-kernel-config ZSTD_COMPRESS
+require-kernel-config ZSTD_DECOMPRESS
+require-kernel-config CRYPTO_LIB_SHA256
+require-kernel-config CRYPTO_LIB_CHACHA
+require-kernel-config CRYPTO_LIB_POLY1305
+require-kernel-config RAID6_PQ
+require-kernel-config XOR_BLOCKS
+require-kernel-config XXHASH
+require-kernel-config SYMBOLIC_ERRNAME
+
 require-kernel-config PROC_KCORE	# XXX Needed?
 
 require-kernel-config TTY
