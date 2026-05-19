@@ -92,6 +92,11 @@ require-kernel-config BINFMT_SCRIPT
 
 require-kernel-config COMPACTION	# virtfs doesn't do well without it
 
+# bcachefs encryption uses the kernel keyring; also stops linux/keys.h's
+# !CONFIG_KEYS macro stubs from colliding with bkey_ops.key_validate
+# when the bcachefs DKMS module is built against the running kernel.
+require-kernel-config KEYS
+
 require-kernel-config PROC_KCORE	# XXX Needed?
 
 require-kernel-config TTY
@@ -215,7 +220,7 @@ require-kernel-config RANDOMIZE_MEMORY=n
 # Profiling:
 require-kernel-config PROFILING
 require-kernel-config JUMP_LABEL
-require-kernel-config-soft MEM_ALLOC_PROFILING
+#require-kernel-config-soft MEM_ALLOC_PROFILING
 require-kernel-config SHRINKER_DEBUG
 
 # iotop:
@@ -290,7 +295,7 @@ require-kernel-config FAIL_MAKE_REQUEST
 require-kernel-config FAIL_IO_TIMEOUT
 require-kernel-config FAIL_FUTEX
 require-kernel-config FAULT_INJECTION_DEBUG_FS
-require-kernel-config FAULT_INJECTION_CONFIGFG
+require-kernel-config FAULT_INJECTION_CONFIGFS
 
 # Nix:
 require-kernel-config SECCOMP
