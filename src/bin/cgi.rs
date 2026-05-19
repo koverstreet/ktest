@@ -758,17 +758,28 @@ cgi::cgi_main! {|request: cgi::Request| -> cgi::Response {
             .expect("set_verify_owner_validation should never fail");
     }
 
-    let repo = git2::Repository::open(&rc.ktest.linux_repo);
-    if let Err(e) = repo {
-        return error_response(format!("error opening repository {:?}: {}", rc.ktest.linux_repo, e));
-    }
-    let repo = repo.unwrap();
-
     let query = cgi_header_get(&request, "x-cgi-query-string");
     let query: std::collections::HashMap<_, _> =
         querystring::querify(&query).into_iter().collect();
 
     let tests_matching = query.get("test").unwrap_or(&"");
+
+    /* The dashboard handles multiple repos (linux, bcachefs-tools, ...) —
+     * pick the right one for the current (user, branch) request. Mirrors
+     * gen-job-list's per-branch repo lookup. */
+    let repo_path = (|| -> Option<&std::path::Path> {
+        let user = query.get("user")?;
+        let branch = query.get("branch")?;
+        let userrc = rc.users.get(*user)?.as_ref().ok()?;
+        let branchconfig = userrc.branch.get(*branch)?;
+        rc.ktest.repo_path(&branchconfig.repo)
+    })().unwrap_or(rc.ktest.linux_repo.as_path());
+
+    let repo = git2::Repository::open(repo_path);
+    if let Err(e) = repo {
+        return error_response(format!("error opening repository {:?}: {}", repo_path, e));
+    }
+    let repo = repo.unwrap();
 
     let ci = Ci {
         rc:                 rc,
