@@ -29,9 +29,6 @@ ktest_nice=0
 ktest_no_kbuild=false
 ktest_no_vm=false
 
-checkdep socat
-checkdep brotli
-
 # config files:
 [[ -f $ktest_dir/ktestrc ]]	&& . "$ktest_dir/ktestrc"
 [[ -f /etc/ktestrc ]]		&& . /etc/ktestrc
@@ -357,6 +354,7 @@ start_vm()
 
     log_verbose "ktest_arch=$ktest_arch"
 
+    checkdep socat
     checkdep $QEMU_BIN $QEMU_PACKAGE
     check_root_image_exists
 
