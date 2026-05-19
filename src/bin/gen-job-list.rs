@@ -94,7 +94,6 @@ fn have_result(results: &TestResultsMap, subtest: &str) -> bool {
 fn branch_test_jobs(
     rc: &CiConfig,
     durations: Option<&[u8]>,
-    repo: &git2::Repository,
     user: &str,
     branch: &str,
     branch_repo: &str,
@@ -106,6 +105,21 @@ fn branch_test_jobs(
     let test_name = &test_path.to_string_lossy();
     let full_test_path = rc.ktest.ktest_dir.join("tests").join(test_path);
     let mut ret = Vec::new();
+
+    let path = match rc.ktest.repo_path(branch_repo) {
+        Some(p) => p,
+        None => {
+            eprintln!("no path configured for repo {}", branch_repo);
+            return ret;
+        }
+    };
+    let repo = match git2::Repository::open(path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error opening {:?}: {}", path, e);
+            return ret;
+        }
+    };
 
     let subtests = get_subtests(full_test_path);
 
@@ -213,7 +227,6 @@ fn branch_test_jobs(
 fn user_test_jobs(
     rc: &CiConfig,
     durations: Option<&[u8]>,
-    repo: &git2::Repository,
     user: &str,
     userconfig: &Userrc,
     verbose: bool,
@@ -231,7 +244,7 @@ fn user_test_jobs(
         .flat_map(move |(branch, branchconfig, testgroup)| {
             testgroup.tests.iter().flat_map(move |test| {
                 branch_test_jobs(
-                    rc, durations, repo, user, &branch,
+                    rc, durations, user, &branch,
                     &branchconfig.repo, &branchconfig.kernel,
                     &testgroup, &test, verbose,
                 )
@@ -249,7 +262,6 @@ fn user_test_jobs(
 fn rc_test_jobs(
     rc: &CiConfig,
     durations: Option<&[u8]>,
-    repo: &git2::Repository,
     verbose: bool,
 ) -> Vec<TestJob> {
     let mut ret: Vec<TestJob> = Vec::new();
@@ -264,7 +276,7 @@ fn rc_test_jobs(
     eprintln!("Generating jobs for {} users...", users.len());
 
     for (user, userconfig) in users {
-        let jobs = user_test_jobs(rc, durations, repo, &user, &userconfig, verbose);
+        let jobs = user_test_jobs(rc, durations, &user, &userconfig, verbose);
         if !jobs.is_empty() {
             eprintln!("  {}: {} jobs", user, jobs.len());
         }
@@ -348,37 +360,49 @@ fn write_test_jobs(rc: &CiConfig, jobs_in: Vec<TestJob>, verbose: bool) -> anyho
     Ok(())
 }
 
-fn fetch_remotes(rc: &CiConfig, repo: &git2::Repository) -> anyhow::Result<bool> {
+fn fetch_remotes(rc: &CiConfig) -> anyhow::Result<bool> {
     fn fetch_branch(
         rc: &CiConfig,
-        repo: &git2::Repository,
         user: &str,
         branch: &str,
         branchconfig: &RcBranch,
-    ) -> Result<(), git2::Error> {
+    ) -> anyhow::Result<()> {
+        let path = match rc.ktest.repo_path(&branchconfig.repo) {
+            Some(p) => p,
+            None => {
+                eprintln!("no path configured for repo {}", branchconfig.repo);
+                return Ok(());
+            }
+        };
         let fetch = branchconfig.fetch.split_whitespace().map(|i| OsStr::new(i));
 
         let status = std::process::Command::new("git")
             .arg("-C")
-            .arg(&rc.ktest.linux_repo)
+            .arg(path)
             .arg("fetch")
             .args(fetch)
             .status()
             .expect(&format!("failed to execute fetch"));
         if !status.success() {
-            eprintln!("fetch error for {}: {}", branchconfig.fetch, status);
+            eprintln!("fetch error for {} in {:?}: {}", branchconfig.fetch, path, status);
             return Ok(());
         }
+
+        let repo = git2::Repository::open(path)
+            .map_err(|e| {
+                eprintln!("error opening {:?}: {}", path, e);
+                e
+            })?;
 
         let fetch_head = repo
             .revparse_single("FETCH_HEAD")
             .map_err(|e| {
-                eprintln!("error parsing FETCH_HEAD: {}", e);
+                eprintln!("error parsing FETCH_HEAD in {:?}: {}", path, e);
                 e
             })?
             .peel_to_commit()
             .map_err(|e| {
-                eprintln!("error getting FETCH_HEAD: {}", e);
+                eprintln!("error getting FETCH_HEAD in {:?}: {}", path, e);
                 e
             })?;
 
@@ -407,7 +431,7 @@ fn fetch_remotes(rc: &CiConfig, repo: &git2::Repository) -> anyhow::Result<bool>
         .map(|(user, userconfig)| (user, userconfig.as_ref().unwrap()))
     {
         for (branch, branchconfig) in &userconfig.branch {
-            fetch_branch(rc, repo, user, branch, branchconfig).ok();
+            fetch_branch(rc, user, branch, branchconfig).ok();
         }
     }
     eprintln!(" done");
@@ -420,8 +444,8 @@ fn fetch_remotes(rc: &CiConfig, repo: &git2::Repository) -> anyhow::Result<bool>
     Ok(true)
 }
 
-fn update_jobs(rc: &CiConfig, args: &Args, repo: &git2::Repository) -> anyhow::Result<()> {
-    if fetch_remotes(rc, repo).ok() == Some(false) && !args.force_update_jobs {
+fn update_jobs(rc: &CiConfig, args: &Args) -> anyhow::Result<()> {
+    if fetch_remotes(rc).ok() == Some(false) && !args.force_update_jobs {
         eprintln!("remotes unchanged, skipping updating joblist");
         return Ok(());
     }
@@ -435,7 +459,7 @@ fn update_jobs(rc: &CiConfig, args: &Args, repo: &git2::Repository) -> anyhow::R
     let lockfile = rc.ktest.output_dir.join("jobs.lock");
     let filelock = FileLock::lock(lockfile, true, FileOptions::new().create(true).write(true))?;
 
-    let jobs_in = rc_test_jobs(rc, durations, repo, false);
+    let jobs_in = rc_test_jobs(rc, durations, false);
     write_test_jobs(rc, jobs_in, args.verbose)?;
 
     drop(filelock);
@@ -474,15 +498,7 @@ fn main() {
         }
     }
 
-    let repo = git2::Repository::open(&rc.ktest.linux_repo);
-    if let Err(e) = repo {
-        eprintln!("Error opening {:?}: {}", rc.ktest.linux_repo, e);
-        eprintln!("Please specify correct linux_repo");
-        process::exit(1);
-    }
-    let repo = repo.unwrap();
-
-    if let Err(e) = update_jobs(&rc, &args, &repo) {
+    if let Err(e) = update_jobs(&rc, &args) {
         eprintln!("update_jobs() error: {}", e);
     }
 }

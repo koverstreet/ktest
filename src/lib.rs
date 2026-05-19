@@ -50,6 +50,11 @@ pub struct Ktestrc {
     pub linux_repo: PathBuf,
     pub output_dir: PathBuf,
     pub ktest_dir: PathBuf,
+    /// Per-repo paths on the jobserver, keyed by short name
+    /// (e.g. "bcachefs-tools" → "/home/testdashboard/bcachefs-tools").
+    /// "linux" falls back to `linux_repo` if absent here.
+    #[serde(default)]
+    pub repos: BTreeMap<String, PathBuf>,
     #[serde(default)]
     pub ci_url: Option<String>,
     /// Git remote name for resolving branch refs (e.g. "bcachefs")
@@ -68,6 +73,21 @@ pub struct Ktestrc {
     pub verbose: bool,
     #[serde(default)]
     pub user_nice: BTreeMap<String, i64>,
+}
+
+impl Ktestrc {
+    /// Resolve a branchconfig `repo` short name to the on-disk path.
+    /// Returns None if the name isn't configured (and isn't the
+    /// special-case "linux" fallback).
+    pub fn repo_path(&self, name: &str) -> Option<&Path> {
+        if let Some(p) = self.repos.get(name) {
+            Some(p.as_path())
+        } else if name == "linux" {
+            Some(self.linux_repo.as_path())
+        } else {
+            None
+        }
+    }
 }
 
 pub fn ktestrc_read() -> anyhow::Result<Ktestrc> {
