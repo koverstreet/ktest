@@ -3,7 +3,7 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../lib/common.sh
 
-: "${ktest_deps_dir:=$HOME/.ktest/deps}"
+: "${ktest_deps_dir:=${HOME:-/root}/.ktest/deps}"
 
 if [[ ! -v ktest_interactive ]]; then
     ktest_failfast=false

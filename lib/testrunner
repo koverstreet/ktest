@@ -185,6 +185,7 @@ export ktest_interactive
 export ktest_verbose
 export ktest_priority
 export ktest_out
+export ktest_deps_dir
 
 set +e
 /host/$ktest_test init
