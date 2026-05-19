@@ -26,6 +26,7 @@ CONFIG_PATH="$KTEST_DATA/upstream-builds.json5"
 ARCH="x86_64"
 DRY_RUN=false
 VERBOSE=false
+FORCE=false
 
 usage() {
     cat <<EOF
@@ -35,16 +36,18 @@ Usage: upstream-kernel-build [options]
 
   -c <file>     config (default: $CONFIG_PATH)
   -a <arch>     architecture (default: $ARCH)
+  -f            force rebuild (ignore manifest, wipe matching store entries)
   -n            dry run (no fetch, no build)
   -v            verbose
   -h            this help
 EOF
 }
 
-while getopts "c:a:nvh" arg; do
+while getopts "c:a:fnvh" arg; do
     case $arg in
 	c) CONFIG_PATH=$OPTARG ;;
 	a) ARCH=$OPTARG ;;
+	f) FORCE=true ;;
 	n) DRY_RUN=true ;;
 	v) VERBOSE=true ;;
 	h) usage; exit 0 ;;
@@ -168,6 +171,13 @@ build_one() {
     fi
     local version=${tag#v}
 
+    local destdir="$KERNELS_DIR/$release-$variant/$ARCH/$version"
+
+    if $FORCE && [[ -d $destdir ]]; then
+	log "force: removing $destdir"
+	rm -rf "$destdir"
+    fi
+
     if already_have "$release" "$variant" "$version"; then
 	log "have upstream/$release-$variant/$ARCH/$version"
 	return 0
@@ -178,7 +188,6 @@ build_one() {
     git -C "$build_repo" reset --quiet --hard "$tag"
     git -C "$build_repo" clean -qfdx
 
-    local destdir="$KERNELS_DIR/$release-$variant/$ARCH/$version"
     local workdir="$WORK_DIR/upstream-$release-$variant-$ARCH"
     mkdir -p "$workdir" "$(dirname "$destdir")"
 
