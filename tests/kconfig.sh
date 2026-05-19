@@ -99,24 +99,18 @@ require-kernel-config KEYS
 
 # bcachefs DKMS deps. When bcachefs is in-tree these are auto-selected
 # from fs/bcachefs/Kconfig; for DKMS the host kernel has to provide them
-# so the module's symbol references resolve at insmod time. Mirror that
-# list here.
+# so the module's symbol references resolve at insmod time.
+#
+# Most are library options with no Kconfig prompt — they're enabled only
+# via `select` from elsewhere, so require-kernel-config can't set them
+# directly (olddefconfig strips them). Require user-facing options that
+# fire the right selects instead:
+require-kernel-config BCACHE		# → CRC64
+require-kernel-config BTRFS_FS		# → CRC32, CRYPTO_LIB_SHA256, ZLIB_*, ZSTD_*, RAID6_PQ, XOR_BLOCKS, XXHASH
+require-kernel-config CRYPTO_LZ4	# → LZ4_COMPRESS, LZ4_DECOMPRESS
+require-kernel-config CRYPTO_LZ4HC	# → LZ4HC_COMPRESS
+require-kernel-config WIREGUARD		# → CRYPTO_LIB_CHACHA + CRYPTO_LIB_POLY1305 (via CHACHA20POLY1305)
 require-kernel-config EXPORTFS
-require-kernel-config CRC32
-require-kernel-config CRC64
-require-kernel-config LZ4_COMPRESS
-require-kernel-config LZ4_DECOMPRESS
-require-kernel-config LZ4HC_COMPRESS
-require-kernel-config ZLIB_DEFLATE
-require-kernel-config ZLIB_INFLATE
-require-kernel-config ZSTD_COMPRESS
-require-kernel-config ZSTD_DECOMPRESS
-require-kernel-config CRYPTO_LIB_SHA256
-require-kernel-config CRYPTO_LIB_CHACHA
-require-kernel-config CRYPTO_LIB_POLY1305
-require-kernel-config RAID6_PQ
-require-kernel-config XOR_BLOCKS
-require-kernel-config XXHASH
 require-kernel-config SYMBOLIC_ERRNAME
 
 require-kernel-config PROC_KCORE	# XXX Needed?
