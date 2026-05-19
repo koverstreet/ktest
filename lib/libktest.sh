@@ -164,22 +164,14 @@ resolve_kernel_name()
     fi
 
     if [[ -z $arch ]]; then
-	# Default to this host's arch (ktest_arch is set in common.sh
-	# from uname -m unless the caller passed -a). Debian-family
-	# distros use their own arch names; everyone else gets the
-	# normalized Linux name.
-	local host_arch="${ktest_arch:-$(uname -m)}"
+	# Default to this host's arch. ktest_arch / DEBIAN_ARCH are
+	# both set by common.sh (via parse_arch). Debian-family distros
+	# use Debian-style arch names in their package metadata, and
+	# distro-kernel-fetch preserves those in the on-disk layout;
+	# everyone else uses Linux-userspace names (ktest_arch).
 	case "$distro" in
-	    debian|ubuntu)
-		case "$host_arch" in
-		    aarch64) arch="arm64" ;;
-		    x86_64)  arch="amd64" ;;
-		    *)       arch="$host_arch" ;;
-		esac
-		;;
-	    *)
-		arch="$host_arch"
-		;;
+	    debian|ubuntu)  arch="$DEBIAN_ARCH" ;;
+	    *)              arch="$ktest_arch" ;;
 	esac
     fi
 

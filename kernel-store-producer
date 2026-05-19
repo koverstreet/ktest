@@ -23,11 +23,6 @@ set -o errtrace
 ktest_dir=$(dirname "$(readlink -f "$0")")
 
 ARCH=$(uname -m)
-case "$ARCH" in
-    aarch64) ARCH=arm64 ;;
-    x86_64)  ;;
-    *)       echo "kernel-store-producer: unsupported arch $ARCH" >&2; exit 1 ;;
-esac
 
 usage() {
     cat <<EOF
