@@ -301,11 +301,29 @@ ktest_kgdb()
 	exit 1
     fi
 
+    local gdb_args=(-ex "set remote interrupt-on-connect")
+
+    # Auto-load kernel gdb helpers (lx-symbols et al) if the kernel was
+    # built with CONFIG_GDB_SCRIPTS=y.
+    if [[ -f $ktest_kernel_binary/vmlinux-gdb.py ]]; then
+	gdb_args+=(-ex "source $ktest_kernel_binary/vmlinux-gdb.py")
+    fi
+
+    gdb_args+=(-ex "target remote | socat UNIX-CONNECT:$ktest_out/vm/kgdb -")
+
+    # Load module symbols. lx-symbols walks /sys/module in the running
+    # kernel and add-symbol-file's each loaded module from the given
+    # search paths. In-tree modules live under the kernel-store entry;
+    # DKMS modules (built inside the VM at test time) land in
+    # $ktest_out via the test's --installtree redirection.
+    local search_paths=()
+    [[ -d $ktest_kernel_binary/lib/modules ]] && search_paths+=("$ktest_kernel_binary/lib/modules")
+    search_paths+=("$ktest_out")
+    gdb_args+=(-ex "lx-symbols ${search_paths[*]}")
+
     ktest_sysrq g
 
-    exec gdb -ex "set remote interrupt-on-connect"			\
-	     -ex "target remote | socat UNIX-CONNECT:$ktest_out/vm/kgdb -"\
-	     "$ktest_kernel_binary/vmlinux"
+    exec gdb "${gdb_args[@]}" "$ktest_kernel_binary/vmlinux"
 }
 
 ktest_mon()
@@ -719,6 +737,14 @@ build_kernel()
 
 	install -m0644 "$ktest_kernel_build/vmlinux" "$ktest_kernel_binary/vmlinux"
 	install -m0644 "$ktest_kernel_build/.config" "$ktest_kernel_binary/config"
+
+	# gdb helpers (lx-symbols, lx-version, etc.) — generated when
+	# CONFIG_GDB_SCRIPTS=y. Saving alongside vmlinux lets ktest_kgdb
+	# auto-source it and load module symbols.
+	if [[ -f $ktest_kernel_build/vmlinux-gdb.py ]]; then
+	    install -m0644 "$ktest_kernel_build/vmlinux-gdb.py" \
+		    "$ktest_kernel_binary/vmlinux-gdb.py"
+	fi
 
 	# if there weren't actually any modules selected, make modules_install gets
 	# confused:
