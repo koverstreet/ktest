@@ -43,8 +43,20 @@ else
     echo "Create an ssh key for ssh access"
 fi
 
+# Overlay the host's kernel-store modules tree into /lib/modules so the
+# read-only modules are visible AND in-VM writes (DKMS install, depmod)
+# land in the overlay's tmpfs without trying to mutate the host. The
+# host glob normally matches one kver dir, but loop just in case.
 mkdir -p /lib/modules
-ln -sf /host/$ktest_kernel_binary/lib/modules/* /lib/modules
+for src in /host/$ktest_kernel_binary/lib/modules/*/; do
+    kver=$(basename "$src")
+    upper=/run/lib-modules-overlay/$kver/upper
+    work=/run/lib-modules-overlay/$kver/work
+    mkdir -p /lib/modules/$kver "$upper" "$work"
+    mount -t overlay overlay \
+	-o lowerdir="$src",upperdir="$upper",workdir="$work" \
+	"/lib/modules/$kver"
+done
 
 dmesg --console-on
 dmesg --console-level 8
