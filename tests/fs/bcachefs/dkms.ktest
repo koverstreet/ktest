@@ -1,0 +1,102 @@
+#!/bin/bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../../test-libs.sh
+
+if $ktest_interactive; then
+    require-git https://evilpiepirate.org/git/bcachefs-tools.git
+    init_build_bcachefs_tools() {
+	cd $ktest_dir/tests/fs/bcachefs/bcachefs-tools
+	make -j8 PREFIX=/usr install
+    }
+fi
+
+if false; then
+    require-kernel-config BCACHEFS_FS=m
+    require-kernel-config UNICODE # casefolding
+else
+    require-kernel-config MD
+    require-kernel-config BLK_DEV_MD
+    require-kernel-config MD_RAID456
+    require-kernel-config BCACHE
+    require-kernel-config MISC_FILESYSTEMS
+    require-kernel-config EROFS_FS
+    require-kernel-config BLK_DEV_DM
+    require-kernel-config DM_VDO
+    require-kernel-config F2FS_FS
+    require-kernel-config F2FS_FS_COMPRESSION
+    require-kernel-config F2FS_FS_LZ4HC
+    require-kernel-config BTRFS_FS
+    require-kernel-config CRYPTO
+    require-kernel-config CRYPTO_CHACHA20
+    require-kernel-config CRYPTO_CHACHA20POLY1305
+
+    require-kernel-config EXPORTFS
+    require-kernel-config CRC32
+    require-kernel-config CRC64
+    require-kernel-config FS_POSIX_ACL
+
+    require-kernel-config KEYS
+    require-kernel-config RAID6_PQ
+    require-kernel-config XOR_BLOCKS
+    require-kernel-config XXHASH
+    require-kernel-config SYMBOLIC_ERRNAME
+
+    require-kernel-config LZ4_COMPRESS
+    require-kernel-config LZ4_DECOMPRESS
+    require-kernel-config LZ4HC_COMPRESS
+    require-kernel-config ZLIB_DEFLATE
+    require-kernel-config ZLIB_INFLATE
+    require-kernel-config ZSTD_COMPRESS
+    require-kernel-config ZSTD_DECOMPRESS
+    require-kernel-config CRYPTO_LIB_SHA256
+    require-kernel-config CRYPTO_LIB_CHACHA
+    require-kernel-config CRYPTO_LIB_POLY1305
+
+    #require-kernel-config CRYPTO
+    #require-kernel-config CRYPTO_LZ4
+    #require-kernel-config CRYPTO_LZ4HC
+    #require-kernel-config CRYPTO_DEFLATE
+    #require-kernel-config CRYPTO_ZSTD
+    #require-kernel-config CRYPTO_CHACHA20POLY1305
+fi
+
+config-scratch-devs 8G
+
+test_dkms()
+{
+    dkms add	    --verbose -m bcachefs -v `bcachefs version`
+    dkms build	    --verbose -m bcachefs -v `bcachefs version`
+
+    # Install into /ktest-out instead of /lib/modules so:
+    #  - /lib/modules/<kver>/ stays the read-only symlink to the host
+    #    kernel-store entry (no overlay needed)
+    #  - the unstripped .ko is on a host-visible path, so ktest_kgdb's
+    #    lx-symbols (which searches $ktest_out) finds it for symbol
+    #    resolution and breakpoints.
+    dkms install    --verbose --installtree=/ktest-out \
+		    -m bcachefs -v `bcachefs version`
+
+    insmod /ktest-out/`uname -r`/updates/dkms/bcachefs.ko
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount ${ktest_scratch_dev[0]} /mnt
+
+    fio --eta=always				\
+	--exitall_on_error=1			\
+	--ioengine=libaio			\
+	--iodepth=64				\
+	--iodepth_batch=16			\
+	--direct=1				\
+	--numjobs=1				\
+	--verify=sha1				\
+	--verify_fatal=1			\
+	--buffer_compress_percentage=30		\
+	--filename=/mnt/fiotest		    	\
+	--filesize=3500M			\
+	--loops=10
+	"$@"
+
+    #umount /mnt
+}
+
+main "$@"
