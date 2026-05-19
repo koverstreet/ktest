@@ -180,15 +180,57 @@ build_one() {
 
     local destdir="$KERNELS_DIR/$release-$variant/$ARCH/$version"
     local workdir="$WORK_DIR/upstream-$release-$variant-$ARCH"
-    mkdir -p "$workdir"
+    mkdir -p "$workdir" "$(dirname "$destdir")"
 
     log "building upstream/$release-$variant @ $tag → $destdir"
-    "$ktest_dir/build-test-kernel" build \
-	-V "$variant" \
-	-a "$ARCH" \
-	-k "$build_repo" \
-	-o "$workdir" \
-	-D "$destdir"
+
+    # Build inside a Debian rootfs via systemd-nspawn. The kernel's
+    # scripts/* (fixdep, modpost, dtc, ...) become real ELF binaries
+    # linked against whatever libc + ld.so the build host has. On a
+    # NixOS build host they'd be /nix/store-anchored, which makes
+    # subsequent dkms builds on Debian workers fail with a confusing
+    # "file not found" (the missing file is the ELF interpreter, not
+    # the binary itself). Wrapping in the same Debian rootfs the
+    # workers run keeps the toolchain uniform end-to-end.
+    #
+    # The rootfs is mounted read-only with an overlay so concurrent
+    # builds (and the workers using the same image) don't step on
+    # each other; the overlay is discarded when nspawn exits.
+    case "$ARCH" in
+	x86_64|amd64)   debian_arch=amd64 ;;
+	aarch64|arm64)  debian_arch=arm64 ;;
+	*)              debian_arch=$ARCH ;;
+    esac
+    local rootfs=""
+    for candidate in "$HOME/.ktest/root.$debian_arch" "/var/lib/ktest/root.$debian_arch"; do
+	[[ -f $candidate ]] && { rootfs=$candidate; break; }
+    done
+    if [[ -z $rootfs ]]; then
+	log "no Debian root image (root.$debian_arch) found; falling back to host build"
+	"$ktest_dir/build-test-kernel" build \
+	    -V "$variant" -a "$ARCH" -k "$build_repo" -o "$workdir" -D "$destdir"
+	return
+    fi
+
+    local machine="ktest-build-$$-$release-$variant"
+    sudo systemd-nspawn \
+	--image="$rootfs" \
+	--read-only \
+	--volatile=overlay \
+	--quiet \
+	--machine="$machine" \
+	--bind-ro="$ktest_dir" \
+	--bind="$build_repo" \
+	--bind="$workdir" \
+	--bind="$(dirname "$destdir")" \
+	--setenv=HOME=/root \
+	/usr/bin/env bash -c "
+	    set -e
+	    git config --global --add safe.directory '$build_repo'
+	    '$ktest_dir/build-test-kernel' build \
+		-V '$variant' -a '$ARCH' \
+		-k '$build_repo' -o '$workdir' -D '$destdir'
+	"
 }
 
 main() {
