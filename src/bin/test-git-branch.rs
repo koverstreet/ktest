@@ -623,10 +623,16 @@ fn run_test_job(
         ]);
         match &job.kernel {
             Some(k) => {
-                cmd.args(["ktest", "-k"]).arg(k).arg("run").arg(&test_path);
+                cmd.arg(ktest_dir.join("ktest"))
+                    .arg("-k")
+                    .arg(k)
+                    .arg("run")
+                    .arg(&test_path);
             }
             None => {
-                cmd.args(["build-test-kernel", "run", "-k"])
+                cmd.arg(ktest_dir.join("build-test-kernel"))
+                    .arg("run")
+                    .arg("-k")
                     .arg(&checkout)
                     .arg("-P")
                     .arg(&test_path);
@@ -638,6 +644,7 @@ fn run_test_job(
         // here instead of polluting the ktest source tree.
         cmd.env("ktest_deps_dir", &state_dir);
 
+        log!("supervisor cmd: {:?}", cmd);
         // The supervisor's exit code reflects test failures, which already
         // show up in the status files. Only the spawn failure is fatal.
         run_inherit(&mut cmd)?;
