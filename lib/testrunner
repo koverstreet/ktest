@@ -45,7 +45,22 @@ else
 fi
 
 mkdir -p /lib/modules
-ln -sf /host/$ktest_kernel_binary/lib/modules/* /lib/modules
+# Mirror the kernel store entry into /lib/modules per-kver instead of as
+# a single dir-symlink, so we can override /lib/modules/<kver>/updates
+# with a writable symlink to /ktest-out. DKMS install lays bcachefs.ko
+# under /lib/modules/<kver>/updates/dkms/ — the store entry is on the
+# 9p-mounted host fs and root-owned from the nspawn build, so a direct
+# write there fails inside the VM. Redirecting just `updates` keeps the
+# rest of the layout at the standard path (depmod, modprobe lookups,
+# tooling that walks /lib/modules all keep working).
+for kver_src in /host/$ktest_kernel_binary/lib/modules/*; do
+    kver=$(basename "$kver_src")
+    mkdir -p "/lib/modules/$kver"
+    for entry in "$kver_src"/*; do
+        ln -sf "$entry" "/lib/modules/$kver/$(basename "$entry")"
+    done
+    ln -sfn /ktest-out "/lib/modules/$kver/updates"
+done
 
 dmesg --console-on
 dmesg --console-level 8
