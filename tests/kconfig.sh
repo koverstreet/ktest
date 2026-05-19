@@ -105,6 +105,7 @@ require-kernel-config KEYS
 # via `select` from elsewhere, so require-kernel-config can't set them
 # directly (olddefconfig strips them). Require user-facing options that
 # fire the right selects instead:
+require-kernel-config CRYPTO		# parent menuconfig — required for CRYPTO_LZ4/LZ4HC
 require-kernel-config MD		# parent menuconfig — required for BCACHE
 require-kernel-config BCACHE		# → CRC64
 require-kernel-config BTRFS_FS		# → CRC32, CRYPTO_LIB_SHA256, ZLIB_*, ZSTD_*, RAID6_PQ, XOR_BLOCKS, XXHASH
