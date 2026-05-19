@@ -91,35 +91,56 @@ read_config() {
     json5_to_json "$CONFIG_PATH"
 }
 
-# Emit one tab-separated `release\tvariant\turl` line per build.
+# Emit one tab-separated `source\turl` line per source.
+list_sources() {
+    read_config | jq -r '
+	.sources | to_entries[]
+	| [.key, .value] | @tsv
+    '
+}
+
+# Emit one tab-separated `release\tvariant\tsource\tbranch\turl` line per
+# build. Branch is "-" (not empty) when the release tracks the source's
+# whole tag history — bash's `read -r` with IFS=$'\t' treats TAB as
+# whitespace and collapses consecutive delimiters, which would otherwise
+# shift `url` into `branch` on the no-branch case.
 list_builds() {
     read_config | jq -r '
 	.sources as $s
 	| .builds | to_entries[]
 	| .key as $rel
-	| .value[]
-	| [$rel, ., $s[$rel] // "MISSING"] | @tsv
+	| .value as $b
+	| $b.variants[]
+	| [$rel, ., $b.source, ($b.branch // "-"), ($s[$b.source] // "MISSING")] | @tsv
     '
 }
 
-# Resolve a release name to its latest tag. Stable releases pick the
-# highest vX.Y.Z (no -rc); rc picks the highest vX.Y-rcN.
+# Resolve a release to its latest tag. With a branch, only tags reachable
+# from that branch are considered (so stable-6.17 tied to linux-6.17.y
+# picks the latest v6.17.* rather than the highest tag in the repo).
+# rc releases pick vX.Y-rcN; everything else picks vX.Y.Z.
 resolve_tag() {
-    local release=$1
-    local bare="$SRCS_DIR/$release.git"
+    local release=$1 source=$2 branch=$3
+    local bare="$SRCS_DIR/$source.git"
     local pattern
     case "$release" in
 	*rc*)    pattern='^v[0-9]+\.[0-9]+-rc[0-9]+$' ;;
 	*)       pattern='^v[0-9]+\.[0-9]+(\.[0-9]+)?$' ;;
     esac
-    git -C "$bare" tag --sort=-v:refname \
-	| grep -E "$pattern" \
-	| head -1
+    if [[ $branch != "-" ]]; then
+	git -C "$bare" tag --merged "$branch" --sort=-v:refname \
+	    | grep -E "$pattern" \
+	    | head -1
+    else
+	git -C "$bare" tag --sort=-v:refname \
+	    | grep -E "$pattern" \
+	    | head -1
+    fi
 }
 
 ensure_bare_clone() {
-    local release=$1 url=$2
-    local dir="$SRCS_DIR/$release.git"
+    local source=$1 url=$2
+    local dir="$SRCS_DIR/$source.git"
     mkdir -p "$SRCS_DIR"
     if [[ ! -d $dir ]]; then
 	log "cloning $url → $dir (first run, may take a while)"
@@ -135,8 +156,8 @@ ensure_bare_clone() {
 # kernel's history on disk per variant; each clone has its own .git
 # state, so concurrent builds across variants don't race on refs/HEAD.
 ensure_build_repo() {
-    local release=$1 variant=$2
-    local bare="$SRCS_DIR/$release.git"
+    local source=$1 release=$2 variant=$3
+    local bare="$SRCS_DIR/$source.git"
     local dir="$BUILDS_DIR/$release-$variant"
     mkdir -p "$BUILDS_DIR"
     if [[ ! -d $dir/.git ]]; then
@@ -151,8 +172,8 @@ already_have() {
 }
 
 build_one() {
-    local release=$1 variant=$2 url=$3
-    local bare="$SRCS_DIR/$release.git"
+    local release=$1 variant=$2 source=$3 branch=$4 url=$5
+    local bare="$SRCS_DIR/$source.git"
     local build_repo="$BUILDS_DIR/$release-$variant"
 
     # On a dry-run the bare clone hasn't been fetched, so we can't
@@ -164,7 +185,7 @@ build_one() {
     fi
 
     local tag
-    tag=$(resolve_tag "$release") || true
+    tag=$(resolve_tag "$release" "$source" "$branch") || true
     if [[ -z $tag ]]; then
 	log "no matching tag for release=$release (skipping $variant)"
 	return 0
@@ -178,7 +199,7 @@ build_one() {
 	return 0
     fi
 
-    ensure_build_repo "$release" "$variant"
+    ensure_build_repo "$source" "$release" "$variant"
     git -C "$build_repo" fetch --quiet "$bare" "+refs/tags/$tag:refs/tags/$tag"
     git -C "$build_repo" reset --quiet --hard "$tag"
     git -C "$build_repo" clean -qfdx
@@ -272,23 +293,22 @@ build_one() {
 main() {
     mkdir -p "$KERNELS_DIR" "$WORK_DIR"
 
-    # Phase 1: fetch every distinct source-tree referenced in the config.
-    declare -A seen_releases
-    while IFS=$'\t' read -r release _ url; do
-	if [[ -z ${seen_releases[$release]:-} ]]; then
-	    seen_releases[$release]=1
-	    if [[ $url = MISSING ]]; then
-		log "release '$release' has no sources entry"
-		exit 1
-	    fi
-	    ensure_bare_clone "$release" "$url"
-	fi
-    done < <(list_builds)
+    # Phase 1: fetch every distinct source tree. Sources are now
+    # shared across releases (eg. stable, stable-6.17, stable-6.18 all
+    # alias one linux-stable bare clone).
+    while IFS=$'\t' read -r source url; do
+	ensure_bare_clone "$source" "$url"
+    done < <(list_sources)
 
     # Phase 2: build each (release, variant) that isn't already in the store.
     local failed=0
-    while IFS=$'\t' read -r release variant url; do
-	if ! build_one "$release" "$variant" "$url"; then
+    while IFS=$'\t' read -r release variant source branch url; do
+	if [[ $url = MISSING ]]; then
+	    log "release '$release' references unknown source '$source'"
+	    failed=$((failed + 1))
+	    continue
+	fi
+	if ! build_one "$release" "$variant" "$source" "$branch" "$url"; then
 	    log "ERROR: $release/$variant"
 	    failed=$((failed + 1))
 	fi

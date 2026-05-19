@@ -1,17 +1,27 @@
 // upstream-kernel-build sources + variants.
 // Place this at $HOME/.ktest/upstream-builds.json5 (override with -c).
 //
-// `sources` maps a release name to a git URL. The release name is freeform
-// — `stable`, `rc`, `mainline`, whatever — and decides how tags get
-// resolved (see resolve_tag in upstream-kernel-build):
-//   - name == "stable" or ends in "-stable" → latest non-rc tag
-//   - name == "rc" or ends in "-rc"         → latest -rc tag
+// `sources` maps a *source name* to a git URL. Each source gets a single
+// bare clone at $HOME/.ktest/upstream-srcs/<source>.git and may be reused
+// by multiple builds below.
 //
-// `builds[<release>]` lists variant names to build for that release.
-// "default" = no overlay (tests/test-libs.sh + kconfig.sh defaults only);
-// every other name maps to tests/<variant>-base.sh (e.g. lockdep,
-// kasan, kcsan, kmsan, ubsan — the same files the test machinery
-// already uses for require-kernel-config).
+// `builds[<release>]` describes one release built from one source:
+//
+//   source:   key into `sources` above (which repo to fetch from)
+//   branch:   optional, restricts tag resolution to tags reachable from
+//             the named branch (a local branch ref in the bare clone,
+//             e.g. `linux-6.17.y`). Omit to consider every tag in the
+//             repo.
+//   variants: list of variant names to build for that release. "default"
+//             = no overlay (tests/test-libs.sh + kconfig.sh defaults
+//             only); every other name maps to tests/<variant>-base.sh
+//             (e.g. lockdep, kasan, kcsan, kmsan, ubsan — the same
+//             files the test machinery already uses for
+//             require-kernel-config).
+//
+// Tag resolution rules (see resolve_tag in upstream-kernel-build):
+//   - release name contains "rc"  → highest vX.Y-rcN
+//   - otherwise                    → highest vX.Y.Z (no -rc)
 {
     sources: {
         stable: "git://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git",
@@ -19,18 +29,20 @@
     },
 
     builds: {
-        // stable: build all the test-matrix variants (matches what
-        //         CI runs against today)
-        stable: [
-            "default",
-            "lockdep",
-            "kasan",
-            "kcsan",
-            "kmsan",
-            "ubsan",
-        ],
+        // stable: latest stable tag across the whole repo, full debug matrix
+        stable: {
+            source: "stable",
+            variants: ["default", "lockdep", "kasan", "kcsan", "kmsan", "ubsan"],
+        },
+
+        // Pinned stable lines — picks the highest vX.Y.* tag reachable from
+        // the matching linux-X.Y.y branch, regardless of what newer trees
+        // have shipped.
+        "stable-6.17": { source: "stable", branch: "linux-6.17.y", variants: ["default"] },
+        "stable-6.18": { source: "stable", branch: "linux-6.18.y", variants: ["default"] },
+        "stable-6.19": { source: "stable", branch: "linux-6.19.y", variants: ["default"] },
 
         // rc: just track the tip — boot-only / smoke; no full debug matrix
-        rc: ["default"],
+        rc: { source: "rc", variants: ["default"] },
     },
 }
