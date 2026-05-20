@@ -173,7 +173,7 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
     } else {
         format!("~/ktest/ktest run -k {}", p.kernel)
     };
-    let run = format!(
+    let inner = format!(
         "cd {ws}; {env}~/ktest/lib/supervisor -T 1200 -f {rd}/full_log \
          -S -F -b {base} -o ktest-out/out -- {runner} ~/ktest/tests/{test} {subtest}",
         ws = ws,
@@ -184,6 +184,16 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
         test = p.test,
         subtest = p.subtest,
     );
+    // build-test-kernel compiles the kernel on the worker — it needs
+    // ci/shell.nix's toolchain (wrapped rustc + rust-src, bindgen,
+    // libclang). `ktest run` builds inside the VM, needing none of it.
+    // `inner` has no embedded double-quotes, so the --run wrap nests
+    // cleanly.
+    let run = if p.kernel.is_empty() {
+        format!("nix-shell ~/ktest/ci/shell.nix --run \"{}\"", inner)
+    } else {
+        inner
+    };
     ctx.run_command(ssh_cmd(&host, &run))
         .await
         .map_err(|e| TaskError::Retry(format!("running supervisor: {e}")))?;
