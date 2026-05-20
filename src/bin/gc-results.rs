@@ -35,14 +35,6 @@ fn branch_get_commits(repo: &git2::Repository, branch: &str, max_commits: u64) -
 }
 
 fn get_live_commits(rc: &CiConfig) -> HashSet<String> {
-    let repo = git2::Repository::open(&rc.ktest.linux_repo);
-    if let Err(e) = repo {
-        eprintln!("Error opening {:?}: {}", rc.ktest.linux_repo, e);
-        eprintln!("Please specify correct linux_repo");
-        process::exit(1);
-    }
-    let repo = repo.unwrap();
-
     let mut ret: HashSet<String> = HashSet::new();
 
     for (user, userconfig) in rc
@@ -52,6 +44,26 @@ fn get_live_commits(rc: &CiConfig) -> HashSet<String> {
         .map(|(user, userconfig)| (user, userconfig.as_ref().unwrap()))
     {
         for (branch, branch_config) in userconfig.branches.iter() {
+            // Walk the branch's own repo: branches can name a repo
+            // other than linux (e.g. bcachefs-tools), and result dirs
+            // are keyed by that repo's commit hashes. Opening linux_repo
+            // unconditionally finds stale same-named refs and yields the
+            // wrong commit set — every result then reads as not-live.
+            let path = match rc.ktest.repo_path(&branch_config.repo) {
+                Some(p) => p,
+                None => {
+                    eprintln!("no path configured for repo {}", branch_config.repo);
+                    continue;
+                }
+            };
+            let repo = match git2::Repository::open(path) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("error opening {:?}: {}", path, e);
+                    continue;
+                }
+            };
+
             for test_group in branch_config.test_groups.iter() {
                 let max_commits = userconfig
                     .test_groups
