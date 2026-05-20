@@ -99,11 +99,14 @@ impl Ktestrc {
 }
 
 pub fn ktestrc_read() -> anyhow::Result<Ktestrc> {
-    let home = std::env::var("HOME").context("HOME not set")?;
-    let path = format!("{}/.ktest/ktest-ci.json5", home);
-    let config = read_to_string(&path).with_context(|| format!("reading {}", path))?;
-    let ktestrc: Ktestrc =
-        json_five::from_str(&config).with_context(|| format!("parsing {}", path))?;
+    // home::home_dir() falls back to the passwd entry when $HOME is
+    // unset — the cgi runs under Apache CGI, which doesn't set it.
+    let home = home::home_dir().context("could not determine home directory")?;
+    let path = home.join(".ktest/ktest-ci.json5");
+    let config = read_to_string(&path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    let ktestrc: Ktestrc = json_five::from_str(&config)
+        .with_context(|| format!("parsing {}", path.display()))?;
     Ok(ktestrc)
 }
 

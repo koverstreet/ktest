@@ -40,6 +40,7 @@ nix-nar = "0.4"
 lzma-rs = "0.3"
 rand = "0.8"
 hostname = "0.4"
+home = "0.5"
 jobkit = { git = "https://evilpiepirate.org/git/jobkit.git" }
 
 [build-dependencies]
