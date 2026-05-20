@@ -3,8 +3,9 @@ use anyhow;
 use chrono::Utc;
 use ci_cgi::TestResultsMap;
 use ci_cgi::{
-    ciconfig_read, commit_update_results_from_fs, commitdir_get_results, git_get_commit,
-    lockfile_exists, subtest_result_key, test_stats, users::RcBranch, CiConfig, RcTestGroup, Userrc,
+    ciconfig_read, commit_update_results_from_fs, commitdir_get_results, encode_env,
+    git_get_commit, lockfile_exists, subtest_result_key, test_stats, users::RcBranch, CiConfig,
+    RcTestGroup, Userrc,
 };
 use clap::Parser;
 use file_lock::{FileLock, FileOptions};
@@ -42,6 +43,10 @@ pub struct TestJob {
     /// "build the kernel from `repo` at `commit`" — the legacy
     /// build-test-kernel behavior.
     kernel: String,
+    /// Encoded env to inject into the test invocation, "K1=V1,K2=V2"
+    /// (empty string = no env). Keys/values must not contain space,
+    /// `,`, or `=`.
+    env: String,
     test: String,
     subtest: String,
 }
@@ -59,6 +64,7 @@ impl Ord for TestJob {
             .then(self.commit.cmp(&other.commit))
             .then(self.test.cmp(&other.test))
             .then(self.kernel.cmp(&other.kernel))
+            .then(self.env.cmp(&other.env))
             .then(self.duration.cmp(&other.duration))
     }
 }
@@ -105,6 +111,13 @@ fn branch_test_jobs(
     let test_name = &test_path.to_string_lossy();
     let full_test_path = rc.ktest.ktest_dir.join("tests").join(test_path);
     let mut ret = Vec::new();
+
+    let encoded_env = encode_env(&test_group.env);
+    if let Err(ref e) = encoded_env {
+        eprintln!("test_group env unencodable: {}", e);
+        return ret;
+    }
+    let encoded_env = encoded_env.unwrap();
 
     let path = match rc.ktest.repo_path(branch_repo) {
         Some(p) => p,
@@ -210,6 +223,7 @@ fn branch_test_jobs(
                     nice,
                     duration,
                     kernel: kernel.clone(),
+                    env: encoded_env.clone(),
                     test: test_name.to_string(),
                     subtest: subtest.clone(),
                 });
@@ -313,11 +327,13 @@ fn write_test_jobs(rc: &CiConfig, jobs_in: Vec<TestJob>, verbose: bool) -> anyho
         let mut jobs_out = std::io::BufWriter::new(File::create(&jobs_fname_new)?);
 
         for job in jobs.iter() {
-            // Format: <repo> <branch> <commit> <age> <kernel-or-`-`> <test> <subtest>
-            // `-` is the sentinel for "no kernel" (build from repo);
-            // kernel-store identifiers always have a `/` in them so a
-            // bare `-` is unambiguous.
+            // Format: <repo> <branch> <commit> <age> <kernel-or-`-`> <env-or-`-`> <test> <subtest>
+            // `-` is the sentinel for empty (no kernel = build from repo;
+            // no env = no overrides). Kernel-store identifiers always
+            // contain `/` and env is encoded `K=V,K=V`, so neither can
+            // collide with the `-` sentinel.
             let kernel = if job.kernel.is_empty() { "-" } else { job.kernel.as_str() };
+            let env = if job.env.is_empty() { "-" } else { job.env.as_str() };
             jobs_out.write(job.repo.as_bytes())?;
             jobs_out.write(b" ")?;
             jobs_out.write(job.branch.as_bytes())?;
@@ -327,6 +343,8 @@ fn write_test_jobs(rc: &CiConfig, jobs_in: Vec<TestJob>, verbose: bool) -> anyho
             jobs_out.write(job.age.to_string().as_bytes())?;
             jobs_out.write(b" ")?;
             jobs_out.write(kernel.as_bytes())?;
+            jobs_out.write(b" ")?;
+            jobs_out.write(env.as_bytes())?;
             jobs_out.write(b" ")?;
             jobs_out.write(job.test.as_bytes())?;
             jobs_out.write(b" ")?;
@@ -472,7 +490,77 @@ fn update_jobs(rc: &CiConfig, args: &Args) -> anyhow::Result<()> {
 struct Args {
     #[arg(short, long)]
     verbose: bool,
+    #[arg(long)]
     force_update_jobs: bool,
+    /// Parse the given user config file and print the test-job matrix
+    /// it would generate, without consulting git or existing results.
+    /// Useful for validating a config + previewing what'll be queued.
+    #[arg(long)]
+    check: Option<PathBuf>,
+}
+
+fn check_config(rc: &CiConfig, path: &Path) -> anyhow::Result<()> {
+    let userrc = ci_cgi::users::userrc_read(path)?;
+
+    println!("test_groups ({}):", userrc.test_groups.len());
+    for (name, g) in &userrc.test_groups {
+        let env_s = encode_env(&g.env)?;
+        println!(
+            "  {}: max_commits={} nice={} kernels={:?} env={} tests={}",
+            name,
+            g.max_commits,
+            g.nice,
+            g.kernels,
+            if env_s.is_empty() { "-".to_string() } else { env_s },
+            g.tests.len(),
+        );
+    }
+
+    println!();
+    println!("expansion (branch test_group kernel env test subtest):");
+
+    let mut total = 0u64;
+    for (branch_name, branch) in &userrc.branches {
+        for tg_name in &branch.test_groups {
+            let tg = userrc
+                .test_groups
+                .get(tg_name)
+                .expect("validated at parse time");
+            let env = encode_env(&tg.env)?;
+            let env_field = if env.is_empty() { "-".to_string() } else { env };
+            let kernels: Vec<String> = if tg.kernels.is_empty() {
+                vec!["-".to_string()]
+            } else {
+                tg.kernels.clone()
+            };
+            for test_path in &tg.tests {
+                let full = rc.ktest.ktest_dir.join("tests").join(test_path);
+                let subtests = get_subtests(full);
+                if subtests.is_empty() {
+                    eprintln!(
+                        "warning: no subtests for {} (check the file exists + lists tests)",
+                        test_path.display()
+                    );
+                }
+                for kernel in &kernels {
+                    for subtest in &subtests {
+                        println!(
+                            "{} {} {} {} {} {}",
+                            branch_name,
+                            tg_name,
+                            kernel,
+                            env_field,
+                            test_path.display(),
+                            subtest
+                        );
+                        total += 1;
+                    }
+                }
+            }
+        }
+    }
+    eprintln!("{} jobs per commit", total);
+    Ok(())
 }
 
 fn main() {
@@ -484,6 +572,14 @@ fn main() {
         process::exit(1);
     }
     let rc = rc.unwrap();
+
+    if let Some(ref path) = args.check {
+        if let Err(e) = check_config(&rc, path) {
+            eprintln!("check error: {:#}", e);
+            process::exit(1);
+        }
+        return;
+    }
 
     // Report users with broken configs
     let broken_users: Vec<_> = rc

@@ -23,6 +23,9 @@ struct TestJob {
     /// Kernel-store identifier (e.g. "debian/forky"), or empty to mean
     /// "build the kernel from `repo` at `commit`" (legacy behavior).
     kernel: String,
+    /// Encoded env overrides to apply at test invocation,
+    /// "K1=V1,K2=V2"; empty string = no overrides.
+    env: String,
     test: String,
     subtests: Vec<String>,
     expected_duration: u64,
@@ -44,9 +47,15 @@ struct Args {
 use memmap::MmapOptions;
 use std::str;
 
-fn commit_test_matches(job: &Option<TestJob>, commit: &str, test: &str, kernel: &str) -> bool {
+fn commit_test_matches(
+    job: &Option<TestJob>,
+    commit: &str,
+    test: &str,
+    kernel: &str,
+    env: &str,
+) -> bool {
     if let Some(job) = job {
-        job.commit == commit && job.test == test && job.kernel == kernel
+        job.commit == commit && job.test == test && job.kernel == kernel && job.env == env
     } else {
         false
     }
@@ -119,7 +128,7 @@ fn get_test_job_for_user(
             eprintln!("get-test-job: considering {} for user {}", job, user);
         }
 
-        // Format: <repo> <branch> <commit> <age> <kernel-or-`-`> <test> <subtest>
+        // Format: <repo> <branch> <commit> <age> <kernel-or-`-`> <env-or-`-`> <test> <subtest>
         let mut fields = job.split(' ');
         let repo = fields.next()?;
         let branch = fields.next()?;
@@ -128,10 +137,12 @@ fn get_test_job_for_user(
         let age = str::parse::<u64>(age_str).ok()?;
         let kernel_field = fields.next()?;
         let kernel = if kernel_field == "-" { "" } else { kernel_field };
+        let env_field = fields.next()?;
+        let env = if env_field == "-" { "" } else { env_field };
         let test = fields.next()?;
         let subtest = fields.next()?;
 
-        if ret.is_some() && !commit_test_matches(&ret, commit, test, kernel) {
+        if ret.is_some() && !commit_test_matches(&ret, commit, test, kernel, env) {
             if args.verbose {
                 eprintln!("get-test-job: subtest from different test as previous, breaking");
             }
@@ -182,6 +193,7 @@ fn get_test_job_for_user(
                 branch: branch.to_string(),
                 commit: commit.to_string(),
                 kernel: kernel.to_string(),
+                env: env.to_string(),
                 test: test.to_string(),
                 age,
                 subtests: vec![subtest.to_string()],
@@ -287,9 +299,10 @@ fn main() {
     if let Some(job) = job {
         let tests = job.test.clone() + " " + &job.subtests.join(" ");
         let kernel = if job.kernel.is_empty() { "-".to_string() } else { job.kernel.clone() };
+        let env = if job.env.is_empty() { "-".to_string() } else { job.env.clone() };
 
-        // Format: TEST_JOB <repo> <branch> <commit> <kernel-or-`-`> <test> <subtests...>
-        println!("TEST_JOB {} {} {} {} {}", job.repo, job.branch, job.commit, kernel, tests);
+        // Format: TEST_JOB <repo> <branch> <commit> <kernel-or-`-`> <env-or-`-`> <test> <subtests...>
+        println!("TEST_JOB {} {} {} {} {} {}", job.repo, job.branch, job.commit, kernel, env, tests);
 
         // Update user stats with expected duration for fair scheduling
         if !args.dry_run {

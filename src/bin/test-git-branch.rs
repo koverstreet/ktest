@@ -68,6 +68,8 @@ struct TestJob {
     /// None when the legacy build-from-repo path applies; Some(id) for
     /// a kernel-store entry like "debian/forky".
     kernel: Option<String>,
+    /// Encoded env overrides ("K1=V1,K2=V2"); empty = none.
+    env: String,
     test_path: String,
     subtests: Vec<String>,
 }
@@ -249,7 +251,7 @@ fn poll_for_job(
 }
 
 fn parse_test_job(line: &str) -> Result<TestJob> {
-    // Format: TEST_JOB <repo> <branch> <commit> <kernel-or-`-`> <test> <subtests...>
+    // Format: TEST_JOB <repo> <branch> <commit> <kernel-or-`-`> <env-or-`-`> <test> <subtests...>
     let missing = |field: &'static str| anyhow!("missing {} in job line: {:?}", field, line);
     let mut fields = line.split_whitespace();
     let tag = fields.next().ok_or_else(|| missing("TEST_JOB tag"))?;
@@ -260,6 +262,7 @@ fn parse_test_job(line: &str) -> Result<TestJob> {
     let branch = fields.next().ok_or_else(|| missing("branch"))?.to_string();
     let commit = fields.next().ok_or_else(|| missing("commit"))?.to_string();
     let kernel_field = fields.next().ok_or_else(|| missing("kernel"))?;
+    let env_field = fields.next().ok_or_else(|| missing("env"))?;
     let test_path = fields.next().ok_or_else(|| missing("test"))?.to_string();
     let subtests: Vec<String> = fields.map(String::from).collect();
     if subtests.is_empty() {
@@ -270,6 +273,7 @@ fn parse_test_job(line: &str) -> Result<TestJob> {
         branch,
         commit,
         kernel: (kernel_field != "-").then(|| kernel_field.to_string()),
+        env: if env_field == "-" { String::new() } else { env_field.to_string() },
         test_path,
         subtests,
     })
@@ -646,6 +650,16 @@ fn run_test_job(
         // Wire require-git in the tests to the state dir, so deps land
         // here instead of polluting the ktest source tree.
         cmd.env("ktest_deps_dir", &state_dir);
+
+        // Apply per-job env overrides (encoded "K1=V1,K2=V2"; empty = none).
+        if !job.env.is_empty() {
+            for pair in job.env.split(',') {
+                let (k, v) = pair.split_once('=').ok_or_else(|| {
+                    anyhow!("malformed env pair {:?} in job env {:?}", pair, job.env)
+                })?;
+                cmd.env(k, v);
+            }
+        }
 
         log!("supervisor cmd: {:?}", cmd);
         // The supervisor's exit code reflects test failures, which already

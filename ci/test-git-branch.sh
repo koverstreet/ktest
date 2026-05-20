@@ -103,8 +103,9 @@ run_test_job() {
     BRANCH="$2"
     COMMIT="$3"
     KERNEL="$4"		# "-" = build from REPO (legacy); otherwise kernel-store id
-    TEST_PATH="$5"
-    shift 5
+    ENV_PAIRS="$5"	# "-" = no env overrides; otherwise "K1=V1,K2=V2"
+    TEST_PATH="$6"
+    shift 6
     SUBTESTS=("$@")
 
     FULL_TEST_PATH=${KTEST_DIR}/tests/$TEST_PATH
@@ -201,7 +202,15 @@ run_test_job() {
 	    TEST_CMD=(build-test-kernel run -P "$FULL_TEST_PATH" "${SUBTESTS[@]}")
 	fi
 
-	$KTEST_DIR/lib/supervisor -T 1200 -f "$FULL_LOG" -S -F	\
+	# Per-job env overrides: encoded "K1=V1,K2=V2" or "-" for none.
+	# Use `env` to scope the overrides to the supervisor invocation
+	# without leaking into the rest of run_test_job.
+	ENV_ARGS=()
+	if [[ -n $ENV_PAIRS && $ENV_PAIRS != "-" ]]; then
+	    IFS=',' read -ra ENV_ARGS <<< "$ENV_PAIRS"
+	fi
+
+	env "${ENV_ARGS[@]}" $KTEST_DIR/lib/supervisor -T 1200 -f "$FULL_LOG" -S -F \
 	    -b $TEST_NAME -o ktest-out/out				\
 	    -- "${TEST_CMD[@]}" &
 	wait
