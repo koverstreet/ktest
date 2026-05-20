@@ -116,6 +116,23 @@ async fn run_step(ctx: &JobContext, host: &str, remote: &str, desc: &str) -> Res
     Ok(())
 }
 
+/// Brotli-compress `path` to `<path>.br` and remove the original — the
+/// cgi serves test logs as `.br`.
+fn brotli_compress(path: &std::path::Path) -> std::io::Result<()> {
+    use std::io::Write;
+    let data = std::fs::read(path)?;
+    let mut w = brotli::CompressorWriter::new(
+        std::fs::File::create(path.with_extension("br"))?,
+        4096,
+        9,
+        22,
+    );
+    w.write_all(&data)?;
+    w.flush()?;
+    drop(w);
+    std::fs::remove_file(path)
+}
+
 /// Run one subtest job on `ctx`'s executor: ssh the worker host through
 /// checkout → prepare → build supervisor → run → pull results.
 ///
@@ -220,6 +237,19 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
             "pulling results: exited {:?}",
             status.code()
         )));
+    }
+
+    // Compress the test logs the cgi serves as .br (the worker writes
+    // them plain). Best-effort — a missing log is not a job failure.
+    ctx.log_line("=== compress logs ===".to_string());
+    let pulled = commit_dir.join(format!("{}.{}", basename, p.subtest.replace('/', ".")));
+    for log in ["log", "full_log"] {
+        let path = pulled.join(log);
+        if path.exists() {
+            if let Err(e) = brotli_compress(&path) {
+                ctx.log_line(format!("compress {}: {}", path.display(), e));
+            }
+        }
     }
 
     // 6. Regenerate the commit's results capnp so the next reconcile
