@@ -6,6 +6,15 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../../test-libs.sh
 
+# nodebug test variant: the harness passes ktest_bcachefs_no_debug (it
+# rides testrunner's ktest_* passthrough). Translate it once to the
+# internal NO_BCACHEFS_DEBUG that the checks below — and bcachefs_antagonist
+# — key on, so those don't all need renaming. Must precede the
+# NO_BCACHEFS_DEBUG block.
+if [[ -v ktest_bcachefs_no_debug ]]; then
+    export NO_BCACHEFS_DEBUG=1
+fi
+
 if [[ ! -v NO_BCACHEFS_DEBUG ]]; then
     require-kernel-config BCACHEFS_DEBUG
     require-kernel-config BCACHEFS_LOCK_TIME_STATS
