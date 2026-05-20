@@ -2430,7 +2430,7 @@ fn main() -> Result<()> {
 
     let config_text = std::fs::read_to_string(&config_path)
         .with_context(|| format!("reading {}", config_path.display()))?;
-    let config: Config = json5::from_str(&config_text)
+    let config: Config = json_five::from_str(&config_text)
         .with_context(|| format!("parsing {}", config_path.display()))?;
 
     let mut failed = 0;
