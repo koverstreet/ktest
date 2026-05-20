@@ -1,6 +1,6 @@
 use ci_cgi::{
     branch_get_results, ciconfig_read, commitdir_get_results_full,
-    count_status, format_duration, get_queue_stats, ktestrc_read, Ktestrc, Userrc,
+    count_status, format_duration, get_queue_stats, ktestrc_read, Ktestrc,
     user_stats_get, user_stats_recent, workers_get, BranchEntry, TestStatus,
 };
 use clap::{Parser, Subcommand};
@@ -370,13 +370,13 @@ fn cmd_summary(ktest: &Ktestrc, json: bool) -> anyhow::Result<()> {
 }
 
 fn user_config_path(ktest: &Ktestrc) -> std::path::PathBuf {
-    ktest.output_dir.join("ci-user.toml")
+    ktest.output_dir.join("ci-user.json5")
 }
 
 fn ci_scp_path(ktest: &Ktestrc) -> anyhow::Result<String> {
     let host = ktest.ci_host.as_deref()
         .ok_or_else(|| anyhow::anyhow!("ci_host not set in config"))?;
-    Ok(format!("{}:ci.toml", host))
+    Ok(format!("{}:ci.json5", host))
 }
 
 fn cmd_pull_config(ktest: &Ktestrc) -> anyhow::Result<()> {
@@ -390,7 +390,7 @@ fn cmd_pull_config(ktest: &Ktestrc) -> anyhow::Result<()> {
         .status()?;
 
     if !status.success() {
-        anyhow::bail!("scp {} failed — you may need to set up ~/ci.toml on the server", remote);
+        anyhow::bail!("scp {} failed — you may need to set up ~/ci.json5 on the server", remote);
     }
 
     println!("Config saved to {}", dest.display());
@@ -422,22 +422,22 @@ fn cmd_branches(ktest: &Ktestrc, json: bool) -> anyhow::Result<()> {
     let config_path = user_config_path(ktest);
     let config = std::fs::read_to_string(&config_path)
         .map_err(|_| anyhow::anyhow!("no user config — run `ci-status pull-config` first"))?;
-    let userrc: Userrc = toml::from_str(&config)?;
+    let userrc = ci_cgi::users::userrc_read_str(&config)?;
 
     if json {
-        let branches: Vec<serde_json::Value> = userrc.branch.iter().map(|(name, b)| {
+        let branches: Vec<serde_json::Value> = userrc.branches.iter().map(|(name, b)| {
             serde_json::json!({
                 "name": name,
                 "fetch": &b.fetch,
-                "tests": &b.tests,
+                "test_groups": &b.test_groups,
             })
         }).collect();
         println!("{}", serde_json::to_string_pretty(&branches)?);
         return Ok(());
     }
 
-    for (name, b) in &userrc.branch {
-        let tests = b.tests.join(", ");
+    for (name, b) in &userrc.branches {
+        let tests = b.test_groups.join(", ");
         println!("{:<40} {}", name, color_dim(&tests));
     }
 

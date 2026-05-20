@@ -232,20 +232,20 @@ fn user_test_jobs(
     verbose: bool,
 ) -> Vec<TestJob> {
     let mut ret: Vec<_> = userconfig
-        .branch
+        .branches
         .iter()
         .flat_map(move |(branch, branchconfig)| {
             branchconfig
-                .tests
+                .test_groups
                 .iter()
-                .filter_map(|i| userconfig.test_group.get(i))
+                .filter_map(|i| userconfig.test_groups.get(i))
                 .map(move |testgroup| (branch, branchconfig, testgroup))
         })
         .flat_map(move |(branch, branchconfig, testgroup)| {
             testgroup.tests.iter().flat_map(move |test| {
                 branch_test_jobs(
                     rc, durations, user, &branch,
-                    &branchconfig.repo, &branchconfig.kernel,
+                    &branchconfig.repo, &testgroup.kernels,
                     &testgroup, &test, verbose,
                 )
             })
@@ -430,7 +430,7 @@ fn fetch_remotes(rc: &CiConfig) -> anyhow::Result<bool> {
         .filter(|u| u.1.is_ok())
         .map(|(user, userconfig)| (user, userconfig.as_ref().unwrap()))
     {
-        for (branch, branchconfig) in &userconfig.branch {
+        for (branch, branchconfig) in &userconfig.branches {
             fetch_branch(rc, user, branch, branchconfig).ok();
         }
     }

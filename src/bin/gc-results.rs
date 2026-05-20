@@ -51,10 +51,10 @@ fn get_live_commits(rc: &CiConfig) -> HashSet<String> {
         .filter(|u| u.1.is_ok())
         .map(|(user, userconfig)| (user, userconfig.as_ref().unwrap()))
     {
-        for (branch, branch_config) in userconfig.branch.iter() {
-            for test_group in branch_config.tests.iter() {
+        for (branch, branch_config) in userconfig.branches.iter() {
+            for test_group in branch_config.test_groups.iter() {
                 let max_commits = userconfig
-                    .test_group
+                    .test_groups
                     .get(test_group)
                     .map(|x| x.max_commits)
                     .unwrap_or(0);

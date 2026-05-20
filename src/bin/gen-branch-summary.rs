@@ -30,7 +30,7 @@ fn main() -> anyhow::Result<()> {
                 if let Some(branch) = &args.branch {
                     vec![branch.clone()]
                 } else {
-                    u.branch.keys().cloned().collect()
+                    u.branches.keys().cloned().collect()
                 }
             }
             Err(e) => {
@@ -42,7 +42,7 @@ fn main() -> anyhow::Result<()> {
     } else {
         rc.users.iter().filter_map(|(user, userrc)| {
             match userrc {
-                Ok(u) => Some((user.clone(), u.branch.keys().cloned().collect())),
+                Ok(u) => Some((user.clone(), u.branches.keys().cloned().collect())),
                 Err(e) => {
                     eprintln!("error reading config for user {}: {}", user, e);
                     None

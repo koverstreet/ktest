@@ -1,0 +1,69 @@
+// Per-user CI test configuration. ktest-ci's gen-job-list iterates
+// `users_dir` (configured in /etc/ktest-ci.toml) and parses every
+// *.json5 file it finds; the file stem (e.g. "alice" for alice.json5)
+// becomes the user name.
+//
+// Schema:
+//   test_groups:  named groups of (tests, kernels, env, scheduling).
+//                 Groups can `extends` another group to inherit and
+//                 override individual fields. `tests` is inherited;
+//                 `kernels` and `env` follow override-or-merge semantics.
+//   branches:     git refs to test, each referencing one or more
+//                 test_groups by name.
+//
+// kernels expansion: each kernel in a group's `kernels` list produces
+// a separate test run. Empty list = "build the kernel from `repo` at
+// the branch's HEAD" (the legacy build-test-kernel path).
+//
+// env: passed to the test harness; merged top-down through `extends`.
+{
+    test_groups: {
+        // Deep history on the default kernel: this is the workhorse,
+        // run on every commit on a deep history.
+        base: {
+            max_commits: 100,
+            nice: 0,
+            tests: [
+                "fs/bcachefs/single_device.ktest",
+                "fs/bcachefs/fstests.ktest",
+                // ... rest of bcachefs test list
+            ],
+            kernels: ["upstream/stable-default"],
+        },
+
+        // Kernel-variant matrix: inherits base's tests, runs them on
+        // each kernel in the `kernels` list — one job per (commit,
+        // test, subtest, kernel).
+        "extended-kernels": {
+            extends: "base",
+            max_commits: 5,
+            nice: 5,
+            kernels: [
+                "upstream/stable-lockdep",
+                "upstream/stable-kasan",
+                "upstream/stable-ubsan",
+                "upstream/stable-preempt",
+            ],
+        },
+
+        // Default kernel, env-flag injection: runs base's tests with
+        // the inject-transaction-restarts hook turned on. The kernel
+        // list is inherited from `base` (single default kernel).
+        "extended-restarts": {
+            extends: "base",
+            max_commits: 5,
+            nice: 5,
+            env: { BCACHEFS_INJECT_RESTARTS: "1" },
+        },
+    },
+
+    branches: {
+        "mybranch": {
+            fetch: "git://example.org/mytree.git mybranch",
+            // `repo` is the local repo name on the test server
+            // (under `linux_repos_dir`). Defaults to "linux".
+            repo: "bcachefs-tools",
+            test_groups: ["base", "extended-kernels", "extended-restarts"],
+        },
+    },
+}

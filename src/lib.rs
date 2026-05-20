@@ -112,6 +112,7 @@ pub fn ciconfig_read() -> anyhow::Result<CiConfig> {
         for i in std::fs::read_dir(users_dir)?
             .filter_map(|x| x.ok())
             .map(|i| i.path())
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("json5"))
         {
             rc.users.insert(
                 i.file_stem().unwrap().to_string_lossy().to_string(),
@@ -788,6 +789,58 @@ pub fn test_name_with_kernel(test: &str, kernel: &str) -> String {
 /// kernel is empty (preserves all existing on-disk results).
 pub fn subtest_result_key(test: &str, subtest: &str, kernel: &str) -> String {
     format!("{}.{}", test_name_with_kernel(test, kernel), subtest)
+}
+
+/// Wire format for the env column in `jobs.<user>` and the TEST_JOB
+/// line: `K1=V1,K2=V2` (empty BTreeMap → empty string; the writer
+/// renders empty as the `-` sentinel). Keys/values must not contain
+/// space, `=`, or `,`.
+pub fn encode_env(env: &std::collections::BTreeMap<String, String>) -> anyhow::Result<String> {
+    use anyhow::anyhow;
+    let bad = |s: &str| s.contains(' ') || s.contains('=') || s.contains(',');
+    let mut parts = Vec::with_capacity(env.len());
+    for (k, v) in env {
+        if k.is_empty() || bad(k) {
+            return Err(anyhow!("env key {:?} contains space, =, or ,", k));
+        }
+        if bad(v) {
+            return Err(anyhow!("env value for {:?} contains space, =, or ,", k));
+        }
+        parts.push(format!("{}={}", k, v));
+    }
+    Ok(parts.join(","))
+}
+
+#[cfg(test)]
+mod encode_env_tests {
+    use super::encode_env;
+    use std::collections::BTreeMap;
+
+    fn m(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn empty_is_empty_string() {
+        assert_eq!(encode_env(&BTreeMap::new()).unwrap(), "");
+    }
+
+    #[test]
+    fn sorted_join() {
+        // BTreeMap iterates sorted, so output is deterministic.
+        let e = m(&[("FOO", "1"), ("BAR", "x")]);
+        assert_eq!(encode_env(&e).unwrap(), "BAR=x,FOO=1");
+    }
+
+    #[test]
+    fn rejects_special_chars() {
+        assert!(encode_env(&m(&[("A B", "1")])).is_err());
+        assert!(encode_env(&m(&[("A=B", "1")])).is_err());
+        assert!(encode_env(&m(&[("A,B", "1")])).is_err());
+        assert!(encode_env(&m(&[("A", "x y")])).is_err());
+        assert!(encode_env(&m(&[("A", "x=y")])).is_err());
+        assert!(encode_env(&m(&[("A", "x,y")])).is_err());
+    }
 }
 
 #[cfg(test)]

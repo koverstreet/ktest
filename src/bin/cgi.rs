@@ -441,7 +441,7 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
 fn ci_list_branches(ci: &Ci, user: &Userrc, out: &mut String) {
     writeln!(out, "<div> <table class=\"table\">").unwrap();
 
-    for (b, _) in &user.branch {
+    for (b, _) in &user.branches {
         writeln!(
             out,
             "<tr> <th> <a href={}?user={}&branch={}>{}</a> </th> </tr>",
@@ -525,7 +525,7 @@ fn ci_list_users(ci: &Ci, out: &mut String) {
 
         let branches: String = userrc
             .as_ref()
-            .map(|u| u.branch.keys().cloned().collect::<Vec<_>>().join(", "))
+            .map(|u| u.branches.keys().cloned().collect::<Vec<_>>().join(", "))
             .unwrap_or_else(|_| "error".to_string());
 
         writeln!(out, "<tr>").unwrap();
@@ -771,7 +771,7 @@ cgi::cgi_main! {|request: cgi::Request| -> cgi::Response {
         let user = query.get("user")?;
         let branch = query.get("branch")?;
         let userrc = rc.users.get(*user)?.as_ref().ok()?;
-        let branchconfig = userrc.branch.get(*branch)?;
+        let branchconfig = userrc.branches.get(*branch)?;
         rc.ktest.repo_path(&branchconfig.repo)
     })().unwrap_or(rc.ktest.linux_repo.as_path());
 
