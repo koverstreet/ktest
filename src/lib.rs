@@ -99,13 +99,19 @@ impl Ktestrc {
 }
 
 pub fn ktestrc_read() -> anyhow::Result<Ktestrc> {
-    // A fixed path, so the cgi can find it: the cgi runs as www-data
-    // under Apache, with no usable $HOME. /etc/ktest-ci.json5 is a
-    // symlink to the real (editable) file in ~/public_html.
-    let path = "/etc/ktest-ci.json5";
-    let config = read_to_string(path).with_context(|| format!("reading {}", path))?;
-    let ktestrc: Ktestrc =
-        json_five::from_str(&config).with_context(|| format!("parsing {}", path))?;
+    // The cgi runs as www-data under Apache, with no usable $HOME, so
+    // locate the config by walking up from our own binary until we find
+    // the public_html/ktest-ci.json5 in the CI user's home directory.
+    let exe = std::env::current_exe().context("locating own binary")?;
+    let path = exe
+        .ancestors()
+        .map(|dir| dir.join("public_html/ktest-ci.json5"))
+        .find(|p| p.exists())
+        .context("public_html/ktest-ci.json5 not found above the binary")?;
+    let config = read_to_string(&path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    let ktestrc: Ktestrc = json_five::from_str(&config)
+        .with_context(|| format!("parsing {}", path.display()))?;
     Ok(ktestrc)
 }
 
