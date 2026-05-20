@@ -46,6 +46,9 @@ const SSH_OPTS: &[&str] = &[
     "-o", "ControlPersist=10m",
     "-o", "ServerAliveInterval=10",
     "-o", "BatchMode=yes",
+    // Trust a worker's host key on first contact (the farm is ours);
+    // BatchMode can't prompt, so an unknown host would otherwise fail.
+    "-o", "StrictHostKeyChecking=accept-new",
 ];
 
 #[derive(Parser)]
