@@ -114,6 +114,8 @@ require-kernel-config CRYPTO_LZ4HC	# → LZ4HC_COMPRESS
 require-kernel-config WIREGUARD		# → CRYPTO_LIB_CHACHA + CRYPTO_LIB_POLY1305 (via CHACHA20POLY1305)
 require-kernel-config EXPORTFS
 require-kernel-config SYMBOLIC_ERRNAME
+require-kernel-config FS_POSIX_ACL	# BCACHEFS_FS selects it
+require-kernel-config QUOTA		# → QUOTACTL (BCACHEFS_QUOTA selects it)
 
 require-kernel-config PROC_KCORE	# XXX Needed?
 
