@@ -540,22 +540,15 @@ fn run_test_job(
         .canonicalize()
         .with_context(|| format!("test path {:?} doesn't exist", test_path))?;
 
-    // test_name is the test path with '/' -> '.' and (when running under a
-    // specific kernel-store entry) a '@<kernel>' suffix, so two kernels
-    // against the same commit don't clobber each other's result dirs.
-    // No kernel suffix preserves the legacy on-disk layout for the
-    // build-from-repo path.
-    let test_name = {
-        let base = job
-            .test_path
-            .strip_suffix(".ktest")
-            .unwrap_or(&job.test_path)
-            .replace('/', ".");
-        match &job.kernel {
-            Some(k) => format!("{}@{}", base, k.replace('/', "_")),
-            None => base,
-        }
-    };
+    // The result basename: test path with '/' -> '.', plus kernel and
+    // env qualifiers, so runs differing only in kernel or env don't
+    // clobber each other's result dirs. Must match subtest_result_key's
+    // prefix exactly — both go through result_basename().
+    let test_name = ci_cgi::result_basename(
+        &job.test_path,
+        job.kernel.as_deref().unwrap_or(""),
+        &job.env,
+    );
 
     let kernel_clause = job
         .kernel

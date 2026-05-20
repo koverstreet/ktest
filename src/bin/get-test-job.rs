@@ -173,7 +173,7 @@ fn get_test_job_for_user(
         if !lockfile_exists(
             rc,
             &commit,
-            &subtest_result_key(&test, &subtest, kernel),
+            &subtest_result_key(&test, &subtest, kernel, env),
             !args.dry_run,
             &mut commits_updated,
         ) {

@@ -206,7 +206,7 @@ fn branch_test_jobs(
             let duration = stats.map_or(rc.ktest.subtest_duration_def.unwrap_or(30), |s| s.duration);
 
             for kernel in &kernels {
-                let key = subtest_result_key(&test_name, subtest, kernel);
+                let key = subtest_result_key(&test_name, subtest, kernel, &encoded_env);
                 if have_result(&results, &key) {
                     continue;
                 }

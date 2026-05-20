@@ -709,6 +709,13 @@ fn ci_home(ci: &Ci) -> cgi::Response {
 
     writeln!(&mut out, "<body>").unwrap();
 
+    writeln!(
+        &mut out,
+        "<p><a href=\"{}?status\">→ live CI status</a></p>",
+        ci.script_name
+    )
+    .unwrap();
+
     ci_list_users(ci, &mut out);
 
     ci_worker_status(ci, &mut out);
@@ -739,6 +746,152 @@ fn error_response(msg: String) -> cgi::Response {
     let env: Vec<_> = std::env::vars().collect();
     writeln!(&mut out, "env: {:?}", env).unwrap();
     cgi::text_response(200, out)
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// Bootstrap table-row class for a jobkit job status.
+fn job_status_class(s: jobkit::JobStatus) -> &'static str {
+    use jobkit::JobStatus::*;
+    match s {
+        Running => "table-secondary",
+        Pending => "table-light",
+        Completed => "table-success",
+        Failed => "table-danger",
+        Cancelled => "table-warning",
+    }
+}
+
+/// Sort key for the job table: running first, then pending, then the
+/// finished states.
+fn job_status_order(s: jobkit::JobStatus) -> u8 {
+    use jobkit::JobStatus::*;
+    match s {
+        Running => 0,
+        Pending => 1,
+        Failed => 2,
+        Cancelled => 3,
+        Completed => 4,
+    }
+}
+
+/// A jobkit per-job log path → a web URL under the served output dir.
+fn job_log_url(output_dir: &std::path::Path, log_path: Option<&str>) -> Option<String> {
+    let rel = std::path::Path::new(log_path?).strip_prefix(output_dir).ok()?;
+    Some(format!("c/{}", rel.display()))
+}
+
+/// Live push-mode daemon status: executor grid + job table, from the
+/// snapshot ci-daemon writes each reconcile tick. Auto-refreshes.
+fn ci_status_page(ci: &Ci) -> cgi::Response {
+    let mut out = String::new();
+    writeln!(&mut out, "<!DOCTYPE HTML>").unwrap();
+    writeln!(&mut out, "<html><head><title>CI status</title>").unwrap();
+    writeln!(&mut out, "<meta http-equiv=\"refresh\" content=\"15\">").unwrap();
+    writeln!(
+        &mut out,
+        "<link href=\"{}\" rel=\"stylesheet\"></head>",
+        ci.stylesheet
+    )
+    .unwrap();
+    writeln!(&mut out, "<body><div class=\"container\">").unwrap();
+    writeln!(&mut out, "<h3>CI status</h3>").unwrap();
+
+    let path = ci.rc.ktest.output_dir.join("ci-daemon-status.json");
+    let status: Option<jobkit::Status> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok());
+    let status = match status {
+        Some(s) => s,
+        None => {
+            writeln!(
+                &mut out,
+                "<p><em>daemon not running — no status snapshot</em></p>"
+            )
+            .unwrap();
+            writeln!(&mut out, "</div></body></html>").unwrap();
+            return cgi::html_response(200, out);
+        }
+    };
+
+    use jobkit::JobStatus::*;
+    let count = |st| status.jobs.iter().filter(|j| j.status == st).count();
+    writeln!(
+        &mut out,
+        "<p>{} running · {} pending · {} completed · {} failed · {} cancelled</p>",
+        count(Running),
+        count(Pending),
+        count(Completed),
+        count(Failed),
+        count(Cancelled),
+    )
+    .unwrap();
+
+    writeln!(&mut out, "<h4>Executors</h4>").unwrap();
+    writeln!(
+        &mut out,
+        "<table class=\"table\"><tr><th>Host</th><th>Running</th></tr>"
+    )
+    .unwrap();
+    for e in &status.executors {
+        writeln!(
+            &mut out,
+            "<tr><td>{}</td><td>{}</td></tr>",
+            html_escape(&e.host),
+            e.current_jobs.len()
+        )
+        .unwrap();
+    }
+    writeln!(&mut out, "</table>").unwrap();
+
+    let mut jobs: Vec<&jobkit::JobInfo> = status.jobs.iter().collect();
+    jobs.sort_by_key(|j| (job_status_order(j.status), j.name.clone()));
+
+    writeln!(&mut out, "<h4>Jobs</h4>").unwrap();
+    writeln!(&mut out, "<table class=\"table\">").unwrap();
+    writeln!(
+        &mut out,
+        "<tr><th>Status</th><th>Executor</th><th>Job</th><th>Elapsed</th><th>Log</th></tr>"
+    )
+    .unwrap();
+    for j in jobs {
+        writeln!(&mut out, "<tr class=\"{}\">", job_status_class(j.status)).unwrap();
+        writeln!(&mut out, "<td>{}</td>", j.status).unwrap();
+        writeln!(
+            &mut out,
+            "<td>{}</td>",
+            html_escape(j.executor.as_deref().unwrap_or("-"))
+        )
+        .unwrap();
+        writeln!(&mut out, "<td>{}</td>", html_escape(&j.name)).unwrap();
+        writeln!(
+            &mut out,
+            "<td>{}</td>",
+            format_duration(j.elapsed_secs as u64)
+        )
+        .unwrap();
+        match job_log_url(&ci.rc.ktest.output_dir, j.log_path.as_deref()) {
+            Some(url) => {
+                writeln!(&mut out, "<td><a href=\"{}\">log</a></td>", url).unwrap()
+            }
+            None => writeln!(&mut out, "<td>-</td>").unwrap(),
+        }
+        writeln!(&mut out, "</tr>").unwrap();
+        if let Some(err) = &j.error {
+            writeln!(
+                &mut out,
+                "<tr class=\"{}\"><td colspan=5><small>{}</small></td></tr>",
+                job_status_class(j.status),
+                html_escape(err)
+            )
+            .unwrap();
+        }
+    }
+    writeln!(&mut out, "</table>").unwrap();
+    writeln!(&mut out, "</div></body></html>").unwrap();
+    cgi::html_response(200, out)
 }
 
 cgi::cgi_main! {|request: cgi::Request| -> cgi::Response {
@@ -793,7 +946,9 @@ cgi::cgi_main! {|request: cgi::Request| -> cgi::Response {
         tests_matching:     Regex::new(tests_matching).unwrap_or(Regex::new("").unwrap()),
     };
 
-    if ci.user.is_some() {
+    if query.contains_key("status") {
+        ci_status_page(&ci)
+    } else if ci.user.is_some() {
         if ci.commit.is_some() {
             ci_commit(&ci)
         } else if ci.branch.is_some() {

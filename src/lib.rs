@@ -1,4 +1,5 @@
 use anyhow;
+use anyhow::Context;
 use die::die;
 use serde_derive::Deserialize;
 use std::collections::{BTreeMap, HashSet};
@@ -7,10 +8,10 @@ use std::io::prelude::*;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-use toml;
 
 pub mod branchlog_capnp;
 pub mod durations_capnp;
+pub mod jobs;
 pub mod testresult_capnp;
 pub mod users;
 pub mod worker_capnp;
@@ -45,6 +46,14 @@ pub fn git_get_commit(
     r
 }
 
+/// One worker host in the `executors` config: the daemon expands this
+/// into `slots` named executors (`<host>:0` … `<host>:slots-1`), each a
+/// slot it ssh's into to run jobs.
+#[derive(Deserialize, Clone, Debug)]
+pub struct ExecutorHost {
+    pub slots: u32,
+}
+
 #[derive(Deserialize)]
 pub struct Ktestrc {
     pub linux_repo: PathBuf,
@@ -73,6 +82,9 @@ pub struct Ktestrc {
     pub verbose: bool,
     #[serde(default)]
     pub user_nice: BTreeMap<String, i64>,
+    /// Worker hosts for the push-mode daemon, keyed by hostname.
+    #[serde(default)]
+    pub executors: BTreeMap<String, ExecutorHost>,
 }
 
 impl Ktestrc {
@@ -91,9 +103,11 @@ impl Ktestrc {
 }
 
 pub fn ktestrc_read() -> anyhow::Result<Ktestrc> {
-    let config = read_to_string("/etc/ktest-ci.toml")?;
-    let ktestrc: Ktestrc = toml::from_str(&config)?;
-
+    let home = std::env::var("HOME").context("HOME not set")?;
+    let path = format!("{}/.ktest/ktest-ci.json5", home);
+    let config = read_to_string(&path).with_context(|| format!("reading {}", path))?;
+    let ktestrc: Ktestrc =
+        json_five::from_str(&config).with_context(|| format!("parsing {}", path))?;
     Ok(ktestrc)
 }
 
@@ -768,11 +782,10 @@ pub fn sanitize_kernel(kernel: &str) -> String {
     kernel.replace('/', "_")
 }
 
-/// The test-name passed to supervisor (-b) and used as the result-key
-/// prefix. Equals the dotted test path when no kernel is set; gets an
-/// `@<sanitized-kernel>` suffix otherwise. The kernel goes BEFORE the
-/// subtest so supervisor's `<basename>.<subtest>` layout still names
-/// the per-subtest dir consistently.
+/// The dotted test path with an optional `@<sanitized-kernel>`
+/// qualifier. A building block for `result_basename`; the kernel goes
+/// before the subtest so supervisor's `<basename>.<subtest>` layout
+/// names the per-subtest dir consistently.
 pub fn test_name_with_kernel(test: &str, kernel: &str) -> String {
     let test = test.to_owned();
     let test = test.replace(".ktest", "");
@@ -784,27 +797,46 @@ pub fn test_name_with_kernel(test: &str, kernel: &str) -> String {
     }
 }
 
-/// The result-key used for per-subtest result dirs + lockfiles:
-/// `<test>[@<kernel>].<subtest>`. Equal to subtest_full_name() when
-/// kernel is empty (preserves all existing on-disk results).
-pub fn subtest_result_key(test: &str, subtest: &str, kernel: &str) -> String {
-    format!("{}.{}", test_name_with_kernel(test, kernel), subtest)
+/// The result basename: the test name qualified by kernel *and* env, so
+/// runs differing only in kernel or env get distinct result dirs.
+/// Passed to supervisor (`-b`) and used as the `subtest_result_key`
+/// prefix. `env` is the encoded form (`K1=V1,K2=V2`), appended
+/// `@`-qualified. Empty kernel and empty env each reproduce the legacy
+/// layout bit-identically, so existing on-disk results are unaffected.
+pub fn result_basename(test: &str, kernel: &str, env: &str) -> String {
+    let base = test_name_with_kernel(test, kernel);
+    if env.is_empty() {
+        base
+    } else {
+        format!("{}@{}", base, env)
+    }
+}
+
+/// The result-key for per-subtest result dirs + lockfiles:
+/// `<test>[@<kernel>][@<env>].<subtest>`. Equal to subtest_full_name()
+/// when kernel and env are both empty (preserves existing on-disk
+/// results).
+pub fn subtest_result_key(test: &str, subtest: &str, kernel: &str, env: &str) -> String {
+    format!("{}.{}", result_basename(test, kernel, env), subtest)
 }
 
 /// Wire format for the env column in `jobs.<user>` and the TEST_JOB
 /// line: `K1=V1,K2=V2` (empty BTreeMap → empty string; the writer
 /// renders empty as the `-` sentinel). Keys/values must not contain
-/// space, `=`, or `,`.
+/// space, `=`, `,`, or `/` — the encoded string is embedded in
+/// result-dir names (`result_basename`), so it must stay a safe single
+/// path component.
 pub fn encode_env(env: &std::collections::BTreeMap<String, String>) -> anyhow::Result<String> {
     use anyhow::anyhow;
-    let bad = |s: &str| s.contains(' ') || s.contains('=') || s.contains(',');
+    let bad =
+        |s: &str| s.contains(' ') || s.contains('=') || s.contains(',') || s.contains('/');
     let mut parts = Vec::with_capacity(env.len());
     for (k, v) in env {
         if k.is_empty() || bad(k) {
-            return Err(anyhow!("env key {:?} contains space, =, or ,", k));
+            return Err(anyhow!("env key {:?} contains space, =, ,, or /", k));
         }
         if bad(v) {
-            return Err(anyhow!("env value for {:?} contains space, =, or ,", k));
+            return Err(anyhow!("env value for {:?} contains space, =, ,, or /", k));
         }
         parts.push(format!("{}={}", k, v));
     }
@@ -840,6 +872,8 @@ mod encode_env_tests {
         assert!(encode_env(&m(&[("A", "x y")])).is_err());
         assert!(encode_env(&m(&[("A", "x=y")])).is_err());
         assert!(encode_env(&m(&[("A", "x,y")])).is_err());
+        assert!(encode_env(&m(&[("A/B", "1")])).is_err());
+        assert!(encode_env(&m(&[("A", "x/y")])).is_err());
     }
 }
 
@@ -852,11 +886,11 @@ mod kernel_key_tests {
         // Bit-identical with subtest_full_name() — old on-disk results
         // keep working unchanged.
         assert_eq!(
-            subtest_result_key("fs/bcachefs/single_device.ktest", "first_thing", ""),
+            subtest_result_key("fs/bcachefs/single_device.ktest", "first_thing", "", ""),
             "fs.bcachefs.single_device.first_thing"
         );
         assert_eq!(
-            subtest_result_key("boot.ktest", "boot", ""),
+            subtest_result_key("boot.ktest", "boot", "", ""),
             "boot.boot"
         );
     }
@@ -867,12 +901,33 @@ mod kernel_key_tests {
         // `@` separates from the test prefix; supervisor's
         // `<basename>.<subtest>` layout still slots in cleanly.
         assert_eq!(
-            subtest_result_key("fs/bcachefs/single_device.ktest", "first_thing", "debian/forky"),
+            subtest_result_key("fs/bcachefs/single_device.ktest", "first_thing", "debian/forky", ""),
             "fs.bcachefs.single_device@debian_forky.first_thing"
         );
         assert_eq!(
-            subtest_result_key("boot.ktest", "boot", "upstream/stable-kasan"),
+            subtest_result_key("boot.ktest", "boot", "upstream/stable-kasan", ""),
             "boot@upstream_stable-kasan.boot"
+        );
+    }
+
+    #[test]
+    fn env_appends_after_kernel() {
+        // env-variant runs get a distinct key so they don't collide
+        // with the base run in the results dir.
+        assert_eq!(
+            subtest_result_key("fs/bcachefs/ec.ktest", "ec", "", "ktest_x=1"),
+            "fs.bcachefs.ec@ktest_x=1.ec"
+        );
+        assert_eq!(
+            subtest_result_key(
+                "fs/bcachefs/ec.ktest", "ec", "upstream/stable-default", "ktest_x=1"
+            ),
+            "fs.bcachefs.ec@upstream_stable-default@ktest_x=1.ec"
+        );
+        // empty env stays bit-identical to the pre-env key.
+        assert_eq!(
+            subtest_result_key("boot.ktest", "boot", "", ""),
+            "boot.boot"
         );
     }
 }

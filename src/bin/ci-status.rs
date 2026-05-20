@@ -12,7 +12,7 @@ struct Args {
     #[command(subcommand)]
     command: Command,
 
-    /// Read from local output_dir (default if /etc/ktest-ci.toml exists)
+    /// Read from local output_dir (default if ~/.ktest/ktest-ci.json5 exists)
     #[arg(long, global = true)]
     local: bool,
 
@@ -572,8 +572,7 @@ fn cmd_logs(
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let mut ktest = ktestrc_read()
-        .map_err(|e| anyhow::anyhow!("failed to read /etc/ktest-ci.toml: {}", e))?;
+    let mut ktest = ktestrc_read()?;
 
     // --remote overrides ci_url from config
     if let Some(url) = args.remote {
