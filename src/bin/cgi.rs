@@ -667,12 +667,17 @@ function render(s) {
     ? 'fair-share: ' + groups.map(g => g[0] + ' ' + fmtDur(g[1])).join('   ')
     : '';
 
+  // Executors are per-slot; group them back by host for display.
   const ex = document.getElementById('executors');
   ex.textContent = '';
-  for (const e of s.executors) {
+  const hosts = {};
+  for (const e of s.executors)
+    (hosts[e.host] = hosts[e.host] || []).push(...e.current_jobs);
+  for (const host of Object.keys(hosts).sort()) {
+    const ids = hosts[host];
     const box = el('div', 'exec');
-    box.appendChild(el('h5', null, e.host + ' (' + e.current_jobs.length + ')'));
-    for (const id of e.current_jobs) {
+    box.appendChild(el('h5', null, host + ' (' + ids.length + ')'));
+    for (const id of ids) {
       const j = byId[id];
       if (!j) continue;
       const row = el('div', 'job running', j.name);

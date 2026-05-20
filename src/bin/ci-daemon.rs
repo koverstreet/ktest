@@ -389,17 +389,19 @@ fn main() -> Result<()> {
 
     let choir = Choir::new(rc.ktest.output_dir.join("ci-daemon-logs"));
 
-    // One executor per worker host, running up to `slots` jobs at once.
+    // One executor per slot: each host gets `slots` executors.
     for (host, ex) in &rc.ktest.executors {
-        choir.add_executor(ExecutorConfig {
-            name: host.clone(),
-            host: host.clone(),
-            capacity: ex.slots as usize,
-        });
+        for slot in 0..ex.slots {
+            choir.add_executor(ExecutorConfig {
+                name: format!("{}:{}", host, slot),
+                host: host.clone(),
+                slot: slot as usize,
+            });
+        }
     }
     let total_slots: u32 = rc.ktest.executors.values().map(|e| e.slots).sum();
     eprintln!(
-        "ci-daemon: {} executors, {} total slots",
+        "ci-daemon: {} hosts, {} executors",
         rc.ktest.executors.len(),
         total_slots,
     );
