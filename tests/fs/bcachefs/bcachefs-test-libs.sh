@@ -22,6 +22,16 @@ else
     require-kernel-config BCACHEFS_NO_LATENCY_ACCT=y
 fi
 
+if [[ -v ktest_bcachefs_inject_transaction_restarts ]]; then
+    require-kernel-config BCACHEFS_INJECT_TRANSACTION_RESTARTS
+    # ktest_bcachefs_inject_transaction_restarts is the harness transport
+    # (it rides testrunner's ktest_* passthrough). bcachefs's fs/Makefile
+    # reads the unprefixed BCACHEFS_INJECT_TRANSACTION_RESTARTS, so
+    # re-export that for the DKMS build. Must precede require-git, which
+    # triggers the build hook.
+    export BCACHEFS_INJECT_TRANSACTION_RESTARTS=1
+fi
+
 require-git https://evilpiepirate.org/git/bcachefs-tools.git
 init_build_bcachefs_tools() {
     local jobs=$(( $(nproc) / 2 ))
