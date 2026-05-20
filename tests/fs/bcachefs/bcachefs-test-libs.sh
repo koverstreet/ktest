@@ -6,18 +6,6 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../../test-libs.sh
 
-require-git https://evilpiepirate.org/git/bcachefs-tools.git
-init_build_bcachefs_tools() {
-    local jobs=$(( $(nproc) / 2 ))
-    (( jobs < 1 )) && jobs=1
-    make -j$jobs -C "$ktest_deps_dir/bcachefs-tools" PREFIX=/usr install
-    make -j$jobs -C "$ktest_deps_dir/bcachefs-tools" PREFIX=/usr dkms-reload
-}
-
-require-kernel-config BCACHEFS_FS
-require-kernel-config-soft BCACHEFS_ASYNC_OBJECT_LISTS
-require-kernel-config UNICODE # casefolding
-
 if [[ ! -v NO_BCACHEFS_DEBUG ]]; then
     require-kernel-config BCACHEFS_DEBUG
     require-kernel-config BCACHEFS_LOCK_TIME_STATS
@@ -33,6 +21,18 @@ if [[ ! -v NO_BCACHEFS_DEBUG ]]; then
 else
     require-kernel-config BCACHEFS_NO_LATENCY_ACCT=y
 fi
+
+require-git https://evilpiepirate.org/git/bcachefs-tools.git
+init_build_bcachefs_tools() {
+    local jobs=$(( $(nproc) / 2 ))
+    (( jobs < 1 )) && jobs=1
+    make -j$jobs -C "$ktest_deps_dir/bcachefs-tools" PREFIX=/usr install
+    make -j$jobs -C "$ktest_deps_dir/bcachefs-tools" PREFIX=/usr dkms-reload
+}
+
+require-kernel-config BCACHEFS_FS
+require-kernel-config-soft BCACHEFS_ASYNC_OBJECT_LISTS
+require-kernel-config UNICODE # casefolding
 
 require-kernel-config TRANSPARENT_HUGEPAGE
 
