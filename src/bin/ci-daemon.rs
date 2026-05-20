@@ -28,6 +28,10 @@ use std::time::Duration;
 /// How often to recompute the desired set and reconcile.
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 
+/// How often the status snapshot is rewritten, so the cgi's live page
+/// stays fresh between reconciles.
+const STATUS_INTERVAL: Duration = Duration::from_secs(2);
+
 /// Reconcile ticks between periodic-maintenance runs — gc-results and
 /// gen-avg-duration, the upkeep the old ci-loop used to drive.
 const GC_EVERY: u64 = 10;
@@ -419,6 +423,12 @@ fn main() -> Result<()> {
         }
         tick += 1;
 
-        std::thread::sleep(RECONCILE_INTERVAL);
+        // Rewrite the status snapshot every STATUS_INTERVAL so the cgi's
+        // live page stays current; reconcile only every RECONCILE_INTERVAL.
+        let next_reconcile = std::time::Instant::now() + RECONCILE_INTERVAL;
+        while std::time::Instant::now() < next_reconcile {
+            std::thread::sleep(STATUS_INTERVAL);
+            write_status(&choir, &rc);
+        }
     }
 }

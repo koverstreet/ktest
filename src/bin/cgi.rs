@@ -748,150 +748,176 @@ fn error_response(msg: String) -> cgi::Response {
     cgi::text_response(200, out)
 }
 
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+
+/// CSS for the live status page.
+const STATUS_CSS: &str = "
+body { margin: 1em; }
+.exec { display: inline-block; vertical-align: top; margin: 0 1em 1em 0;
+        min-width: 15em; border: 1px solid #ccc; padding: .4em .6em; }
+.exec h5 { margin: 0 0 .3em; }
+.job { cursor: pointer; padding: 0 3px; }
+.job:hover { background: #eef; }
+td.running, .running { color: #060; }
+td.pending { color: #888; }
+td.failed, .failed { color: #c00; }
+td.cancelled { color: #c60; }
+#logview { background: #111; color: #ddd; padding: .5em; height: 26em;
+           overflow-y: auto; white-space: pre-wrap; font: 12px/1.3 monospace; }
+";
+
+/// Body of the live status page; the script fills the divs.
+const STATUS_BODY: &str = "
+<div class=container-fluid>
+<h3>CI status</h3>
+<div id=summary></div>
+<h4>Executors</h4>
+<div id=executors></div>
+<h4>Jobs</h4>
+<div id=jobs></div>
+<h4>Log <span id=logname></span></h4>
+<pre id=logview>click a job to tail its log</pre>
+</div>
+";
+
+/// The live status app: polls the daemon's status JSON every 2s,
+/// renders the executor grid + job table, and tails a job's log on
+/// click (via Range requests against the web-served log file).
+const STATUS_JS: &str = r#"
+const STATUS_URL = 'c/ci-daemon-status.json';
+let curLog = null, logTimer = null;
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
 }
 
-/// Bootstrap table-row class for a jobkit job status.
-fn job_status_class(s: jobkit::JobStatus) -> &'static str {
-    use jobkit::JobStatus::*;
-    match s {
-        Running => "table-secondary",
-        Pending => "table-light",
-        Completed => "table-success",
-        Failed => "table-danger",
-        Cancelled => "table-warning",
+// JobInfo.log_path is an absolute server path; the logs are web-served
+// under the output dir at .../ci-daemon-logs/...
+function logUrl(p) {
+  if (!p) return null;
+  const i = p.indexOf('ci-daemon-logs/');
+  return i < 0 ? null : 'c/' + p.slice(i);
+}
+
+function fmtDur(s) {
+  s = Math.floor(s);
+  const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60;
+  return h ? h + 'h' + m + 'm' : (m ? m + 'm' + (s % 60) + 's' : s + 's');
+}
+
+function tailLog() {
+  if (!curLog) return;
+  fetch(curLog.url, { headers: { Range: 'bytes=' + curLog.offset + '-' } })
+    .then(r => r.status === 416 ? '' : r.text())
+    .then(t => {
+      if (!t) return;
+      const v = document.getElementById('logview');
+      const atBottom = v.scrollTop + v.clientHeight >= v.scrollHeight - 4;
+      v.textContent += t;
+      curLog.offset += new Blob([t]).size;
+      if (atBottom) v.scrollTop = v.scrollHeight;
+    })
+    .catch(() => {});
+}
+
+function openLog(name, url) {
+  curLog = { url: url, offset: 0 };
+  document.getElementById('logname').textContent = '- ' + name;
+  document.getElementById('logview').textContent = '';
+  if (logTimer) clearInterval(logTimer);
+  logTimer = setInterval(tailLog, 2000);
+  tailLog();
+}
+
+function render(s) {
+  const byId = {};
+  for (const j of s.jobs) byId[j.id] = j;
+
+  const counts = {};
+  for (const j of s.jobs) counts[j.status] = (counts[j.status] || 0) + 1;
+  document.getElementById('summary').textContent =
+    ['running', 'pending', 'completed', 'failed', 'cancelled']
+      .map(k => (counts[k] || 0) + ' ' + k).join(' · ');
+
+  const ex = document.getElementById('executors');
+  ex.textContent = '';
+  for (const e of s.executors) {
+    const box = el('div', 'exec');
+    box.appendChild(el('h5', null, e.host + ' (' + e.current_jobs.length + ')'));
+    for (const id of e.current_jobs) {
+      const j = byId[id];
+      if (!j) continue;
+      const row = el('div', 'job running', j.name);
+      const u = logUrl(j.log_path);
+      if (u) row.onclick = () => openLog(j.name, u);
+      box.appendChild(row);
     }
-}
+    ex.appendChild(box);
+  }
 
-/// Sort key for the job table: running first, then pending, then the
-/// finished states.
-fn job_status_order(s: jobkit::JobStatus) -> u8 {
-    use jobkit::JobStatus::*;
-    match s {
-        Running => 0,
-        Pending => 1,
-        Failed => 2,
-        Cancelled => 3,
-        Completed => 4,
+  const order = { running: 0, pending: 1, failed: 2, cancelled: 3, completed: 4 };
+  const jobs = s.jobs.slice().sort((a, b) =>
+    (order[a.status] - order[b.status]) || a.name.localeCompare(b.name));
+  const tbl = el('table', 'table');
+  const head = el('tr');
+  for (const h of ['Status', 'User', 'Job', 'Elapsed', 'Log'])
+    head.appendChild(el('th', null, h));
+  tbl.appendChild(head);
+  for (const j of jobs) {
+    const tr = el('tr');
+    tr.appendChild(el('td', j.status, j.status));
+    tr.appendChild(el('td', null, j.group || '-'));
+    tr.appendChild(el('td', null, j.name));
+    tr.appendChild(el('td', null, fmtDur(j.elapsed_secs)));
+    const td = el('td');
+    const u = logUrl(j.log_path);
+    if (u) {
+      const a = el('span', 'job', 'log');
+      a.onclick = () => openLog(j.name, u);
+      td.appendChild(a);
+    } else {
+      td.textContent = '-';
     }
+    tr.appendChild(td);
+    tbl.appendChild(tr);
+    if (j.error) {
+      const er = el('tr'), etd = el('td', 'failed', j.error);
+      etd.colSpan = 5;
+      er.appendChild(etd);
+      tbl.appendChild(er);
+    }
+  }
+  const jdiv = document.getElementById('jobs');
+  jdiv.textContent = '';
+  jdiv.appendChild(tbl);
 }
 
-/// A jobkit per-job log path → a web URL under the served output dir.
-fn job_log_url(output_dir: &std::path::Path, log_path: Option<&str>) -> Option<String> {
-    let rel = std::path::Path::new(log_path?).strip_prefix(output_dir).ok()?;
-    Some(format!("c/{}", rel.display()))
+function poll() {
+  fetch(STATUS_URL)
+    .then(r => r.json())
+    .then(render)
+    .catch(() => {
+      document.getElementById('summary').textContent = 'daemon status unavailable';
+    });
 }
+poll();
+setInterval(poll, 2000);
+"#;
 
-/// Live push-mode daemon status: executor grid + job table, from the
-/// snapshot ci-daemon writes each reconcile tick. Auto-refreshes.
+/// The live push-mode status page — a small client-side app over the
+/// status JSON the daemon writes every couple seconds. See STATUS_JS.
 fn ci_status_page(ci: &Ci) -> cgi::Response {
-    let mut out = String::new();
-    writeln!(&mut out, "<!DOCTYPE HTML>").unwrap();
-    writeln!(&mut out, "<html><head><title>CI status</title>").unwrap();
-    writeln!(&mut out, "<meta http-equiv=\"refresh\" content=\"15\">").unwrap();
-    writeln!(
-        &mut out,
-        "<link href=\"{}\" rel=\"stylesheet\"></head>",
-        ci.stylesheet
-    )
-    .unwrap();
-    writeln!(&mut out, "<body><div class=\"container\">").unwrap();
-    writeln!(&mut out, "<h3>CI status</h3>").unwrap();
-
-    let path = ci.rc.ktest.output_dir.join("ci-daemon-status.json");
-    let status: Option<jobkit::Status> = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok());
-    let status = match status {
-        Some(s) => s,
-        None => {
-            writeln!(
-                &mut out,
-                "<p><em>daemon not running — no status snapshot</em></p>"
-            )
-            .unwrap();
-            writeln!(&mut out, "</div></body></html>").unwrap();
-            return cgi::html_response(200, out);
-        }
-    };
-
-    use jobkit::JobStatus::*;
-    let count = |st| status.jobs.iter().filter(|j| j.status == st).count();
-    writeln!(
-        &mut out,
-        "<p>{} running · {} pending · {} completed · {} failed · {} cancelled</p>",
-        count(Running),
-        count(Pending),
-        count(Completed),
-        count(Failed),
-        count(Cancelled),
-    )
-    .unwrap();
-
-    writeln!(&mut out, "<h4>Executors</h4>").unwrap();
-    writeln!(
-        &mut out,
-        "<table class=\"table\"><tr><th>Host</th><th>Running</th></tr>"
-    )
-    .unwrap();
-    for e in &status.executors {
-        writeln!(
-            &mut out,
-            "<tr><td>{}</td><td>{}</td></tr>",
-            html_escape(&e.host),
-            e.current_jobs.len()
-        )
-        .unwrap();
-    }
-    writeln!(&mut out, "</table>").unwrap();
-
-    let mut jobs: Vec<&jobkit::JobInfo> = status.jobs.iter().collect();
-    jobs.sort_by_key(|j| (job_status_order(j.status), j.name.clone()));
-
-    writeln!(&mut out, "<h4>Jobs</h4>").unwrap();
-    writeln!(&mut out, "<table class=\"table\">").unwrap();
-    writeln!(
-        &mut out,
-        "<tr><th>Status</th><th>Executor</th><th>Job</th><th>Elapsed</th><th>Log</th></tr>"
-    )
-    .unwrap();
-    for j in jobs {
-        writeln!(&mut out, "<tr class=\"{}\">", job_status_class(j.status)).unwrap();
-        writeln!(&mut out, "<td>{}</td>", j.status).unwrap();
-        writeln!(
-            &mut out,
-            "<td>{}</td>",
-            html_escape(j.executor.as_deref().unwrap_or("-"))
-        )
-        .unwrap();
-        writeln!(&mut out, "<td>{}</td>", html_escape(&j.name)).unwrap();
-        writeln!(
-            &mut out,
-            "<td>{}</td>",
-            format_duration(j.elapsed_secs as u64)
-        )
-        .unwrap();
-        match job_log_url(&ci.rc.ktest.output_dir, j.log_path.as_deref()) {
-            Some(url) => {
-                writeln!(&mut out, "<td><a href=\"{}\">log</a></td>", url).unwrap()
-            }
-            None => writeln!(&mut out, "<td>-</td>").unwrap(),
-        }
-        writeln!(&mut out, "</tr>").unwrap();
-        if let Some(err) = &j.error {
-            writeln!(
-                &mut out,
-                "<tr class=\"{}\"><td colspan=5><small>{}</small></td></tr>",
-                job_status_class(j.status),
-                html_escape(err)
-            )
-            .unwrap();
-        }
-    }
-    writeln!(&mut out, "</table>").unwrap();
-    writeln!(&mut out, "</div></body></html>").unwrap();
-    cgi::html_response(200, out)
+    let page = format!(
+        "<!DOCTYPE html>\n\
+         <html><head><title>CI status</title>\n\
+         <link href=\"{}\" rel=\"stylesheet\">\n\
+         <style>{}</style></head>\n\
+         <body>{}<script>{}</script></body></html>\n",
+        ci.stylesheet, STATUS_CSS, STATUS_BODY, STATUS_JS,
+    );
+    cgi::html_response(200, page)
 }
 
 cgi::cgi_main! {|request: cgi::Request| -> cgi::Response {
