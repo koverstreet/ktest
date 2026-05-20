@@ -198,7 +198,7 @@ fn main() -> Result<()> {
             commit_update_results(&output_dir, commit);
         }
         eprintln!(
-            "Deleted {} results. Run gen-job-list to regenerate jobs.",
+            "Deleted {} results; the CI daemon will re-run them.",
             results.len()
         );
     }

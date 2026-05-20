@@ -1,7 +1,7 @@
 //! distro-kernel-fetch — Poll configured distro repositories for new kernel
 //! packages and convert them to ktest's canonical layout.
 //!
-//! Designed to run periodically (nightly or hourly via cron / ci-loop).
+//! Designed to run periodically (nightly or hourly via cron).
 //! Memoized: if a package version is already present in the output dir, it
 //! is skipped without redownloading.
 //!

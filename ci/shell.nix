@@ -5,9 +5,8 @@
 # come from configuration.nix — do NOT add them here, as nix-shell's
 # cc-wrapper adds hardening flags that break kernel builds.
 #
-# Usage:
-#   ci/ci-worker [test-git-branch.sh args...]    # preferred
-#   nix-shell ci/shell.nix --run '...'           # manual
+# Usage: ci-daemon's executor closure wraps the worker-side kernel
+# build in `nix-shell ci/shell.nix --run '...'`.
 
 { pkgs ? import <nixpkgs> {} }:
 
