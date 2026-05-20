@@ -1,14 +1,11 @@
-use chrono::Duration;
 use regex::Regex;
-use std::collections::BTreeMap;
 use std::fmt::Write;
 extern crate cgi;
 extern crate querystring;
 
 use ci_cgi::{
-    branch_get_results, ciconfig_read, format_duration, get_queue_stats, last_good_line,
-    update_lcov, user_stats_get, user_stats_recent, workers_get, CiConfig, CommitResults,
-    TestResultsMap, TestStatus, Userrc,
+    branch_get_results, ciconfig_read, last_good_line, update_lcov, CiConfig,
+    CommitResults, TestResultsMap, TestStatus, Userrc,
 };
 
 const STYLESHEET: &str = "bootstrap.min.css";
@@ -490,39 +487,16 @@ fn ci_user(ci: &Ci) -> cgi::Response {
 }
 
 fn ci_list_users(ci: &Ci, out: &mut String) {
-    let queue_stats = get_queue_stats(&ci.rc);
-    let user_stats = user_stats_get(&ci.rc.ktest).unwrap_or_default();
-
     writeln!(out, "<h4>Users</h4>").unwrap();
     writeln!(out, "<div> <table class=\"table\">").unwrap();
-
-    writeln!(out, "<tr>").unwrap();
-    writeln!(out, "<th> User </th>").unwrap();
-    writeln!(out, "<th> Pending </th>").unwrap();
-    writeln!(out, "<th> Running </th>").unwrap();
-    writeln!(out, "<th> Recent </th>").unwrap();
-    writeln!(out, "<th> Total </th>").unwrap();
-    writeln!(out, "<th> Nice </th>").unwrap();
-    writeln!(out, "<th> Branches </th>").unwrap();
-    writeln!(out, "</tr>").unwrap();
+    writeln!(
+        out,
+        "<tr> <th> User </th> <th> Nice </th> <th> Branches </th> </tr>"
+    )
+    .unwrap();
 
     for (user, userrc) in &ci.rc.users {
-        let pending = queue_stats.pending_by_user.get(user).unwrap_or(&0);
-        let running = queue_stats.running_by_user.get(user).unwrap_or(&0);
-
-        let (recent, total) = user_stats
-            .iter()
-            .find(|s| &s.user == user)
-            .map(|s| {
-                (
-                    format_duration(user_stats_recent(s) as u64),
-                    format_duration(s.total_seconds),
-                )
-            })
-            .unwrap_or_else(|| ("-".to_string(), "-".to_string()));
-
         let nice = ci.rc.ktest.user_nice.get(user).copied().unwrap_or(0);
-
         let branches: String = userrc
             .as_ref()
             .map(|u| u.branches.keys().cloned().collect::<Vec<_>>().join(", "))
@@ -535,164 +509,12 @@ fn ci_list_users(ci: &Ci, out: &mut String) {
             ci.script_name, user, user
         )
         .unwrap();
-        writeln!(out, "<td> {} </td>", pending).unwrap();
-        writeln!(out, "<td> {} </td>", running).unwrap();
-        writeln!(out, "<td> {} </td>", recent).unwrap();
-        writeln!(out, "<td> {} </td>", total).unwrap();
         writeln!(out, "<td> {} </td>", nice).unwrap();
         writeln!(out, "<td> {} </td>", branches).unwrap();
         writeln!(out, "</tr>").unwrap();
     }
 
-    writeln!(out, "</table>").unwrap();
-
-    // Summary line
-    writeln!(
-        out,
-        "<p><strong>Total:</strong> {} pending, {} running</p>",
-        queue_stats.total_pending, queue_stats.total_running
-    )
-    .unwrap();
-    writeln!(out, "</div>").unwrap();
-}
-
-fn ci_worker_status(ci: &Ci, out: &mut String) -> Option<()> {
-    use chrono::prelude::Utc;
-
-    let workers = workers_get(&ci.rc.ktest).ok()?;
-
-    // Group workers by hostname
-    let mut by_host: BTreeMap<String, Vec<_>> = BTreeMap::new();
-    for w in workers {
-        by_host.entry(w.hostname.clone()).or_default().push(w);
-    }
-
-    let now = Utc::now();
-    let tests_dir = ci
-        .rc
-        .ktest
-        .ktest_dir
-        .clone()
-        .into_os_string()
-        .into_string()
-        .unwrap()
-        + "/tests/";
-
-    writeln!(out, "<h4>Workers</h4>").unwrap();
-
-    for (hostname, host_workers) in &by_host {
-        let running = host_workers.iter().filter(|w| !w.tests.is_empty()).count();
-        let total = host_workers.len();
-
-        writeln!(out, "<details>").unwrap();
-        writeln!(
-            out,
-            "<summary><strong>{}</strong> ({} workers, {} running)</summary>",
-            hostname, total, running
-        )
-        .unwrap();
-
-        writeln!(out, "<table class=\"table\">").unwrap();
-        writeln!(out, "<tr>").unwrap();
-        writeln!(out, "<th> Workdir </th>").unwrap();
-        writeln!(out, "<th> User </th>").unwrap();
-        writeln!(out, "<th> Commit </th>").unwrap();
-        writeln!(out, "<th> Tests </th>").unwrap();
-        writeln!(out, "<th> Elapsed </th>").unwrap();
-        writeln!(out, "</tr>").unwrap();
-
-        for w in host_workers {
-            let elapsed = (now - w.starttime).max(Duration::zero());
-            let tests = w.tests.strip_prefix(&tests_dir).unwrap_or(&w.tests);
-
-            writeln!(out, "<tr>").unwrap();
-            writeln!(out, "<td> {} </td>", w.workdir).unwrap();
-            if w.user.is_empty() {
-                writeln!(out, "<td> - </td>").unwrap();
-            } else {
-                writeln!(
-                    out,
-                    "<td> <a href=\"{}?user={}\">{}</a> </td>",
-                    ci.script_name, w.user, w.user
-                )
-                .unwrap();
-            }
-            if w.branch.is_empty() {
-                writeln!(out, "<td> - </td>").unwrap();
-                writeln!(out, "<td> (idle) </td>").unwrap();
-            } else {
-                writeln!(out, "<td> {}~{} </td>", w.branch, w.age).unwrap();
-                writeln!(out, "<td> {} </td>", tests).unwrap();
-            }
-            writeln!(
-                out,
-                "<td> {}:{:02}:{:02} </td>",
-                elapsed.num_hours(),
-                elapsed.num_minutes() % 60,
-                elapsed.num_seconds() % 60
-            )
-            .unwrap();
-            writeln!(out, "</tr>").unwrap();
-        }
-
-        writeln!(out, "</table>").unwrap();
-        writeln!(out, "</details>").unwrap();
-    }
-
-    Some(())
-}
-
-fn ci_scheduling_info(ci: &Ci, out: &mut String) -> Option<()> {
-    let stats = user_stats_get(&ci.rc.ktest).ok()?;
-    let queue_stats = get_queue_stats(&ci.rc);
-
-    // Get users with pending jobs, sorted by effective recent runtime (lowest first = next to run)
-    // Effective = recent * (1 + nice), so higher nice = higher effective = lower priority
-    let mut users_with_jobs: Vec<_> = queue_stats
-        .pending_by_user
-        .keys()
-        .map(|user| {
-            let recent = stats
-                .iter()
-                .find(|s| &s.user == user)
-                .map(|s| user_stats_recent(s))
-                .unwrap_or(0.0);
-            let nice = ci.rc.ktest.user_nice.get(user).copied().unwrap_or(0);
-            let multiplier = (1.0 + nice as f64).max(0.1);
-            let effective = recent * multiplier;
-            (user, recent, effective)
-        })
-        .collect();
-    users_with_jobs.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
-
-    if users_with_jobs.is_empty() {
-        writeln!(out, "<p><em>No pending jobs</em></p>").unwrap();
-        return Some(());
-    }
-
-    writeln!(out, "<h4>Scheduling Priority</h4>").unwrap();
-    writeln!(
-        out,
-        "<p>Next job will go to: <strong>{}</strong> (recent: {})</p>",
-        users_with_jobs[0].0,
-        format_duration(users_with_jobs[0].1 as u64)
-    )
-    .unwrap();
-
-    if users_with_jobs.len() > 1 {
-        writeln!(
-            out,
-            "<p><small>Queue order: {}</small></p>",
-            users_with_jobs
-                .iter()
-                .map(|(u, r, _)| format!("{} ({})", u, format_duration(*r as u64)))
-                .collect::<Vec<_>>()
-                .join(" → ")
-        )
-        .unwrap();
-    }
-
-    Some(())
+    writeln!(out, "</table> </div>").unwrap();
 }
 
 fn ci_home(ci: &Ci) -> cgi::Response {
@@ -717,10 +539,6 @@ fn ci_home(ci: &Ci) -> cgi::Response {
     .unwrap();
 
     ci_list_users(ci, &mut out);
-
-    ci_worker_status(ci, &mut out);
-
-    ci_scheduling_info(ci, &mut out);
 
     writeln!(&mut out, "</body>").unwrap();
     writeln!(&mut out, "</html>").unwrap();
@@ -770,6 +588,7 @@ const STATUS_BODY: &str = "
 <div class=container-fluid>
 <h3>CI status</h3>
 <div id=summary></div>
+<div id=fairshare></div>
 <h4>Executors</h4>
 <div id=executors></div>
 <h4>Jobs</h4>
@@ -840,6 +659,13 @@ function render(s) {
   document.getElementById('summary').textContent =
     ['running', 'pending', 'completed', 'failed', 'cancelled']
       .map(k => (counts[k] || 0) + ' ' + k).join(' · ');
+
+  // Fair-share standing: groups (users) by decayed recent farm time,
+  // lowest first — that is who the scheduler serves next.
+  const groups = Object.entries(s.fairshare || {}).sort((a, b) => a[1] - b[1]);
+  document.getElementById('fairshare').textContent = groups.length
+    ? 'fair-share: ' + groups.map(g => g[0] + ' ' + fmtDur(g[1])).join('   ')
+    : '';
 
   const ex = document.getElementById('executors');
   ex.textContent = '';
