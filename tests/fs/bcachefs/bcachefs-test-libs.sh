@@ -8,7 +8,6 @@
 
 require-git https://evilpiepirate.org/git/bcachefs-tools.git
 init_build_bcachefs_tools() {
-    cd
     local jobs=$(( $(nproc) / 2 ))
     (( jobs < 1 )) && jobs=1
     make -j$jobs -C "$ktest_deps_dir/bcachefs-tools" PREFIX=/usr install
@@ -24,6 +23,13 @@ if [[ ! -v NO_BCACHEFS_DEBUG ]]; then
     require-kernel-config BCACHEFS_LOCK_TIME_STATS
     require-kernel-config BCACHEFS_NO_LATENCY_ACCT=n
     require-kernel-config BCACHEFS_TRANS_KMALLOC_TRACE
+    # Plumb BCACHEFS_DEBUG into the DKMS module build: bcachefs's fs/Makefile
+    # picks this up as a make var (inherited from env) and emits
+    # -DCONFIG_BCACHEFS_DEBUG=1 for the module compile. The kernel config
+    # requirements above only apply to in-tree builds; DKMS modules built
+    # against upstream kernels (no bcachefs in-tree) need this separate
+    # signal.
+    export BCACHEFS_DEBUG=1
 else
     require-kernel-config BCACHEFS_NO_LATENCY_ACCT=y
 fi
