@@ -19,8 +19,6 @@ fn main() -> anyhow::Result<()> {
             .expect("set_verify_owner_validation should never fail");
     }
 
-    let repo = git2::Repository::open(&rc.ktest.linux_repo)?;
-
     let users: Vec<(String, Vec<String>)> = if let Some(user) = &args.user {
         let userrc = rc.users.get(user)
             .ok_or_else(|| anyhow::anyhow!("user {} not found", user))?;
@@ -53,6 +51,21 @@ fn main() -> anyhow::Result<()> {
 
     for (user, branches) in &users {
         for branch in branches {
+            // Walk the branch's own repo — branches can name a repo
+            // other than linux (e.g. bcachefs-tools). Fall back to
+            // linux_repo for branches not in the config (--branch arg).
+            let repo_path = rc.users.get(user)
+                .and_then(|u| u.as_ref().ok())
+                .and_then(|u| u.branches.get(branch))
+                .and_then(|b| rc.ktest.repo_path(&b.repo))
+                .unwrap_or_else(|| rc.ktest.linux_repo.as_path());
+            let repo = match git2::Repository::open(repo_path) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("error opening {:?} for {}/{}: {}", repo_path, user, branch, e);
+                    continue;
+                }
+            };
             match generate_branch_log(&repo, &rc.ktest, user, branch) {
                 Ok(entries) => {
                     if let Err(e) = write_branch_log(&rc.ktest.output_dir, user, branch, &entries) {

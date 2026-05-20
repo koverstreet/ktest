@@ -97,6 +97,44 @@ fn resolve_branch(repo: &git2::Repository, ktest: &Ktestrc, name: &str) -> anyho
     anyhow::bail!("can't resolve '{}' — try a full ref like 'remote/branch'", name)
 }
 
+/// Open the git repo a branch's commits live in. Branches name their
+/// repo in the user config (e.g. bcachefs-tools); fall back to
+/// linux_repo for branches not found there.
+fn open_branch_repo(ktest: &Ktestrc, branch: &str) -> anyhow::Result<git2::Repository> {
+    let repo_path = (|| -> Option<std::path::PathBuf> {
+        let config = std::fs::read_to_string(user_config_path(ktest)).ok()?;
+        let userrc = ci_cgi::users::userrc_read_str(&config).ok()?;
+        let b = userrc.branches.get(branch)?;
+        ktest.repo_path(&b.repo).map(|p| p.to_path_buf())
+    })().unwrap_or_else(|| ktest.linux_repo.clone());
+
+    Ok(git2::Repository::open(repo_path)?)
+}
+
+/// Expand a short commit prefix to a full hash by matching against the
+/// result dirs in output_dir — the authoritative set of tested commits,
+/// and the same place commitdir_get_results_full reads from. Avoids
+/// guessing which git repo a bare commit hash belongs to.
+fn resolve_commit_prefix(ktest: &Ktestrc, prefix: &str) -> anyhow::Result<String> {
+    if prefix.len() >= 40 {
+        return Ok(prefix.to_string());
+    }
+
+    let mut matches: Vec<String> = std::fs::read_dir(&ktest.output_dir)?
+        .filter_map(|d| d.ok())
+        .filter_map(|d| d.file_name().into_string().ok())
+        .filter(|name| name.len() == 40 && name.starts_with(prefix))
+        .collect();
+    matches.sort();
+    matches.dedup();
+
+    match matches.len() {
+        0 => anyhow::bail!("no test results for commit {}", prefix),
+        1 => Ok(matches.pop().unwrap()),
+        n => anyhow::bail!("ambiguous commit prefix {} ({} matches)", prefix, n),
+    }
+}
+
 fn cmd_log(
     branch: &str,
     ktest: &Ktestrc,
@@ -107,7 +145,7 @@ fn cmd_log(
             .expect("set_verify_owner_validation should never fail");
     }
 
-    let repo = git2::Repository::open(&ktest.linux_repo)?;
+    let repo = open_branch_repo(ktest, branch)?;
     let gitref = resolve_branch(&repo, ktest, branch)?;
     let all = regex::Regex::new("").unwrap();
     let results = branch_get_results(&repo, ktest, None, None, Some(&gitref), &all)
@@ -187,18 +225,7 @@ fn cmd_show(
     ktest: &Ktestrc,
     json: bool,
 ) -> anyhow::Result<()> {
-    // Resolve short prefix to full hash via git
-    let commit = if commit.len() < 40 {
-        unsafe {
-            git2::opts::set_verify_owner_validation(false)
-                .expect("set_verify_owner_validation should never fail");
-        }
-        let repo = git2::Repository::open(&ktest.linux_repo)?;
-        let obj = repo.revparse_single(commit)?;
-        obj.id().to_string()
-    } else {
-        commit.to_string()
-    };
+    let commit = resolve_commit_prefix(ktest, commit)?;
 
     let full = commitdir_get_results_full(ktest, &commit)?;
 
@@ -482,18 +509,7 @@ fn cmd_logs(
     full: bool,
     ktest: &Ktestrc,
 ) -> anyhow::Result<()> {
-    // Resolve short prefix to full hash
-    let commit = if commit.len() < 40 {
-        unsafe {
-            git2::opts::set_verify_owner_validation(false)
-                .expect("set_verify_owner_validation should never fail");
-        }
-        let repo = git2::Repository::open(&ktest.linux_repo)?;
-        let obj = repo.revparse_single(commit)?;
-        obj.id().to_string()
-    } else {
-        commit.to_string()
-    };
+    let commit = resolve_commit_prefix(ktest, commit)?;
 
     let results = commitdir_get_results_full(ktest, &commit)?;
 
