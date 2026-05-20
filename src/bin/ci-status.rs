@@ -1,7 +1,7 @@
 use ci_cgi::{
-    branch_get_results, ciconfig_read, commitdir_get_results_full,
-    count_status, format_duration, get_queue_stats, ktestrc_read, Ktestrc,
-    user_stats_get, user_stats_recent, workers_get, BranchEntry, TestStatus,
+    branch_get_results, commitdir_get_results_full,
+    count_status, format_duration, ktestrc_read, Ktestrc, BranchEntry,
+    TestStatus,
 };
 use clap::{Parser, Subcommand};
 use std::io::Read;
@@ -38,10 +38,6 @@ enum Command {
         /// Commit hash (prefix ok)
         commit: String,
     },
-    /// Worker status grouped by host
-    Workers,
-    /// One-line summary of test counts
-    Summary,
     /// List branches from CI user config
     Branches,
     /// Fetch and display test log
@@ -297,105 +293,6 @@ fn cmd_show(
     Ok(())
 }
 
-fn cmd_workers(ktest: &Ktestrc, json: bool) -> anyhow::Result<()> {
-    let workers = workers_get(ktest)?;
-
-    if json {
-        let json_workers: Vec<serde_json::Value> = workers.iter().map(|w| {
-            serde_json::json!({
-                "hostname": &w.hostname,
-                "workdir": &w.workdir,
-                "user": &w.user,
-                "branch": &w.branch,
-                "commit": &w.commit,
-                "tests": &w.tests,
-                "starttime": w.starttime.to_rfc3339(),
-            })
-        }).collect();
-        println!("{}", serde_json::to_string_pretty(&json_workers)?);
-        return Ok(());
-    }
-
-    // Group by hostname
-    let mut by_host: std::collections::BTreeMap<String, Vec<_>> = std::collections::BTreeMap::new();
-    for w in workers {
-        by_host.entry(w.hostname.clone()).or_default().push(w);
-    }
-
-    let now = chrono::Utc::now();
-    let tests_dir = ktest.ktest_dir.to_string_lossy().to_string() + "/tests/";
-
-    for (hostname, host_workers) in &by_host {
-        let running = host_workers.iter().filter(|w| !w.tests.is_empty()).count();
-        println!("{} ({} workers, {} running)", hostname, host_workers.len(), running);
-
-        for w in host_workers {
-            let elapsed = now - w.starttime;
-            let elapsed_s = format!("{}:{:02}:{:02}",
-                elapsed.num_hours(),
-                elapsed.num_minutes() % 60,
-                elapsed.num_seconds() % 60);
-
-            let tests = w.tests.strip_prefix(&tests_dir).unwrap_or(&w.tests);
-
-            if w.branch.is_empty() {
-                println!("  {:<12} {:>10}  {}",
-                    w.workdir,
-                    elapsed_s,
-                    color_dim("(idle)"),
-                );
-            } else {
-                println!("  {:<12} {:>10}  {:<12} {}",
-                    w.workdir,
-                    elapsed_s,
-                    format!("{}~{}", w.branch, w.age),
-                    tests,
-                );
-            }
-        }
-        println!();
-    }
-
-    Ok(())
-}
-
-fn cmd_summary(ktest: &Ktestrc, json: bool) -> anyhow::Result<()> {
-    let rc = ciconfig_read()?;
-    let queue_stats = get_queue_stats(&rc);
-
-    if json {
-        let out = serde_json::json!({
-            "pending": queue_stats.total_pending,
-            "running": queue_stats.total_running,
-        });
-        println!("{}", serde_json::to_string_pretty(&out)?);
-        return Ok(());
-    }
-
-    println!("{} pending, {} running",
-        queue_stats.total_pending,
-        queue_stats.total_running,
-    );
-
-    // Show per-user breakdown if there's data
-    let user_stats = user_stats_get(ktest).unwrap_or_default();
-    if !user_stats.is_empty() {
-        println!();
-        println!("{:<20} {:>8} {:>8} {:>8}", "USER", "PENDING", "RUNNING", "RECENT");
-        println!("{}", "-".repeat(48));
-
-        for s in &user_stats {
-            let pending = queue_stats.pending_by_user.get(&s.user).unwrap_or(&0);
-            let running = queue_stats.running_by_user.get(&s.user).unwrap_or(&0);
-            let recent = format_duration(user_stats_recent(s) as u64);
-
-            println!("{:<20} {:>8} {:>8} {:>8}", s.user, pending, running, recent);
-        }
-    }
-
-    Ok(())
-}
-
 fn user_config_path(ktest: &Ktestrc) -> std::path::PathBuf {
     ktest.output_dir.join("ci-user.json5")
 }
@@ -585,12 +482,6 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Show { commit } => {
             cmd_show(&commit, &ktest, args.json)
-        }
-        Command::Workers => {
-            cmd_workers(&ktest, args.json)
-        }
-        Command::Summary => {
-            cmd_summary(&ktest, args.json)
         }
         Command::Logs { commit, test, full } => {
             cmd_logs(&commit, test.as_deref(), full, &ktest)
