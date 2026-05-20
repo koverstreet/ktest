@@ -67,6 +67,11 @@ pkgs.mkShellNoCC {
     # Rust for kernel (wrapped to include rust-src in sysroot)
     rustcWrapped cargo rust-bindgen rust-analyzer
 
+    # capnp is needed by ci_cgi's build.rs (capnpc compiles the
+    # *.capnp schemas). Hosts without capnp in /run/current-system
+    # fall back to the nixpkgs version through here.
+    capnproto
+
     # Do NOT include llvmPackages.libclang in nativeBuildInputs — its
     # setup hooks set LLVM environment variables that cause the system
     # clang to warn about unused flags, which becomes fatal with -Werror.
