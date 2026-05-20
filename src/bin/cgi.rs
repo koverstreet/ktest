@@ -763,9 +763,9 @@ cgi::cgi_main! {|request: cgi::Request| -> cgi::Response {
             .expect("set_verify_owner_validation should never fail");
     }
 
-    let query = cgi_header_get(&request, "x-cgi-query-string");
+    let query_string = cgi_header_get(&request, "x-cgi-query-string");
     let query: std::collections::HashMap<_, _> =
-        querystring::querify(&query).into_iter().collect();
+        querystring::querify(&query_string).into_iter().collect();
 
     let tests_matching = query.get("test").unwrap_or(&"");
 
@@ -798,7 +798,8 @@ cgi::cgi_main! {|request: cgi::Request| -> cgi::Response {
         tests_matching:     Regex::new(tests_matching).unwrap_or(Regex::new("").unwrap()),
     };
 
-    if query.contains_key("status") {
+    // querify() drops a bare key with no '=', so check the raw string.
+    if query_string.split('&').any(|p| p == "status" || p.starts_with("status=")) {
         ci_status_page(&ci)
     } else if ci.user.is_some() {
         if ci.commit.is_some() {
