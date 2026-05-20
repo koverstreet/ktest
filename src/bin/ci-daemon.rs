@@ -28,6 +28,11 @@ use std::time::Duration;
 /// How often to recompute the desired set and reconcile.
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 
+/// Reconcile ticks between periodic-maintenance runs — gc-results and
+/// gen-avg-duration, the upkeep the old ci-loop used to drive.
+const GC_EVERY: u64 = 10;
+const DURATIONS_EVERY: u64 = 60;
+
 /// ssh options: connection multiplexing so the daemon's many per-step
 /// ssh calls to one worker share a single connection. BatchMode so a
 /// missing key fails fast instead of hanging on a prompt.
@@ -309,6 +314,16 @@ fn write_status(choir: &Choir, rc: &CiConfig) {
     }
 }
 
+/// Run a periodic-maintenance binary (gc-results, gen-avg-duration),
+/// best-effort — a failure is logged, not fatal.
+fn run_maintenance(name: &str) {
+    match std::process::Command::new(name).status() {
+        Ok(s) if s.success() => eprintln!("maintenance: {} ok", name),
+        Ok(s) => eprintln!("maintenance: {} exited {:?}", name, s.code()),
+        Err(e) => eprintln!("maintenance: {} failed to run: {}", name, e),
+    }
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     let rc = ciconfig_read()?;
@@ -337,6 +352,7 @@ fn main() -> Result<()> {
     );
 
     let mut job_map: HashMap<JobKey, JobId> = HashMap::new();
+    let mut tick = 0u64;
 
     loop {
         reconcile(&choir, &mut job_map, &ci_host, &rc, args.limit, &desired_jobs(&rc));
@@ -347,6 +363,16 @@ fn main() -> Result<()> {
             write_status(&choir, &rc);
             return Ok(());
         }
+
+        // Periodic maintenance the old ci-loop used to drive.
+        if tick % GC_EVERY == 0 {
+            run_maintenance("gc-results");
+        }
+        if tick % DURATIONS_EVERY == 0 {
+            run_maintenance("gen-avg-duration");
+        }
+        tick += 1;
+
         std::thread::sleep(RECONCILE_INTERVAL);
     }
 }
