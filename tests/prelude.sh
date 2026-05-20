@@ -12,30 +12,20 @@ if [[ ! -v ktest_interactive ]]; then
     ktest_priority=0
 fi
 
+# Scalar defaults: only set if not already provided (by the harness env
+# or an eval'd `deps` output) — an inherited value should win.
 if [[ ! -v ktest_cpus ]]; then
     ktest_cpus=$(nproc)
     ktest_mem=""
     ktest_timeout=""
     ktest_timeout_multiplier=1
     ktest_mem_multiplier=1
-    ktest_kernel_append=()
-    ktest_kernel_make_append=()
 
     # virtio-scsi-pci semes to be buggy: reading the superblock on the root
     # filesystem randomly returns zeroes
     #ktest_storage_bus=virtio-scsi-pci
     ktest_storage_bus=virtio-blk
-    ktest_images=()
-    ktest_rw_images=()
 
-    ktest_scratch_dev=()
-    ktest_scratch_dev_sizes=()
-    ktest_scratch_dev_count=0
-
-    ktest_make_install=()
-    ktest_kernel_config_require=()
-    ktest_kernel_config_require_soft=()
-    ktest_qemu_append=()
     ktest_compiler="${CC:-gcc}"
     ktest_allow_taint=false
 
@@ -47,6 +37,24 @@ if [[ ! -v ktest_cpus ]]; then
 
     BUILD_ON_HOST=""
 fi
+
+# Accumulator arrays/counter: always start fresh. The test body appends
+# to these (config-scratch-devs, require-kernel-config, …); bash arrays
+# can't be inherited through the environment anyway, so there's nothing
+# a guard could correctly preserve. Must stay outside the ktest_cpus
+# guard — an inherited ktest_cpus there would skip them and leave
+# config-* appending to unset vars.
+ktest_kernel_append=()
+ktest_kernel_make_append=()
+ktest_images=()
+ktest_rw_images=()
+ktest_scratch_dev=()
+ktest_scratch_dev_sizes=()
+ktest_scratch_dev_count=0
+ktest_make_install=()
+ktest_kernel_config_require=()
+ktest_kernel_config_require_soft=()
+ktest_qemu_append=()
 
 case $ktest_storage_bus in
     virtio-blk)

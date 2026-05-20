@@ -199,12 +199,19 @@ fi
 trap 'pkill -P $$ >/dev/null' EXIT
 cd /root
 
-export ktest_failfast
-export ktest_interactive
-export ktest_verbose
-export ktest_priority
-export ktest_out
-export ktest_deps_dir
+# ktest_tmp here is testrunner's /host/-rewritten *host* tmpdir; the
+# test subprocess must make its own VM-local one (common.sh get_tmpdir,
+# which only creates one if ktest_tmp is empty). Drop it so the blanket
+# export below doesn't leak it into the test.
+unset ktest_tmp
+
+# Export every ktest_* var sourced from the env file so the test
+# subprocess inherits them — test variants ride this through by naming
+# their control vars ktest_*. The ktest_ prefix is the allowlist:
+# host-shell internals (BASH_*, PWD, …) never carry it. Safe now that
+# prelude.sh's accumulator-array init no longer hides behind an
+# inherited-ktest_cpus guard.
+export ${!ktest_@}
 
 set +e
 /host/$ktest_test init
