@@ -181,20 +181,16 @@ resolve_kernel_name()
 	[[ -d $v ]] && versions+=("${v%/}")
     done
 
-    case ${#versions[@]} in
-	0)
-	    echo "no kernel versions under $source_dir" >&2
-	    return 1
-	    ;;
-	1)
-	    echo "${versions[0]}"
-	    ;;
-	*)
-	    echo "multiple kernel versions in $source_dir (expected one):" >&2
-	    printf '  %s\n' "${versions[@]}" >&2
-	    return 1
-	    ;;
-    esac
+    if (( ${#versions[@]} == 0 )); then
+	echo "no kernel versions under $source_dir" >&2
+	return 1
+    fi
+
+    # Multiple versions on disk is fine — pick the highest by version
+    # sort. Stale entries from a previous build target are left in
+    # place (so older kernels remain available for explicit selection)
+    # but the implicit resolve always returns the newest.
+    printf '%s\n' "${versions[@]}" | sort -V | tail -1
 }
 
 ktest_usage_run_opts()
