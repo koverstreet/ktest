@@ -378,20 +378,37 @@ fn run_maintenance(name: &str) {
 /// at once and storm the workers' sshd MaxStartups.
 fn prewarm_ssh_masters(rc: &CiConfig) {
     use std::process::Stdio;
-    for host in rc.ktest.executors.keys() {
-        // `timeout` caps the attempt so a wedged ssh can't hang daemon
-        // startup; stdio is detached so the persisted master doesn't
-        // hold the daemon's streams open.
-        let mut cmd = std::process::Command::new("timeout");
-        cmd.arg("30")
-            .arg("ssh")
-            .args(SSH_OPTS)
-            .arg(host)
-            .arg("true")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        match cmd.status() {
+    // Spawn every master connection at once, then collect them — a
+    // serial pre-warm would cost one full `timeout` (30s) per down host.
+    // `timeout` caps a wedged ssh so it can't hang startup; stdio is
+    // detached so the persisted master doesn't hold the daemon's
+    // streams open.
+    let spawned: Vec<_> = rc
+        .ktest
+        .executors
+        .keys()
+        .filter_map(|host| {
+            let child = std::process::Command::new("timeout")
+                .arg("30")
+                .arg("ssh")
+                .args(SSH_OPTS)
+                .arg(host)
+                .arg("true")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn();
+            match child {
+                Ok(c) => Some((host, c)),
+                Err(e) => {
+                    eprintln!("ci-daemon: ssh master to {}: {}", host, e);
+                    None
+                }
+            }
+        })
+        .collect();
+    for (host, mut child) in spawned {
+        match child.wait() {
             Ok(s) if s.success() => eprintln!("ci-daemon: ssh master to {} ready", host),
             Ok(s) => eprintln!("ci-daemon: ssh master to {} failed (exit {:?})", host, s.code()),
             Err(e) => eprintln!("ci-daemon: ssh master to {}: {}", host, e),
