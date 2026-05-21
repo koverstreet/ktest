@@ -591,8 +591,10 @@ const STATUS_BODY: &str = "
 <div id=fairshare></div>
 <h4>Executors</h4>
 <div id=executors></div>
-<h4>Jobs</h4>
+<details>
+<summary>Jobs</summary>
 <div id=jobs></div>
+</details>
 <h4>Log <span id=logname></span></h4>
 <pre id=logview>click a job to tail its log</pre>
 </div>
