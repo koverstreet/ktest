@@ -221,9 +221,22 @@ require-kernel-config EXT4_FS_POSIX_ACL
 # fstests generic/270 requires capabilities on root fs
 require-kernel-config EXT4_FS_SECURITY
 
+# xfs: image.ktest builds/migrates bcachefs images from xfs; perf tests
+# use xfs as a comparison filesystem.
+require-kernel-config XFS_FS
+
 require-kernel-config NET_9P
 require-kernel-config NETWORK_FILESYSTEMS
 require-kernel-config 9P_FS
+
+# NFS client + server: nfs.ktest exports a bcachefs fs over NFS and
+# mounts it back; single_device.ktest also exercises NFSD. From-store
+# kernels are built once from this config, so a test's own
+# require-kernel-config can't retrofit them — both ends live here.
+require-kernel-config NFS_FS
+require-kernel-config NFS_V4
+require-kernel-config NFSD
+require-kernel-config NFSD_V4
 
 # Crash dumps
 #if $ktest_crashdump; then
