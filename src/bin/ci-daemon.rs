@@ -377,6 +377,22 @@ fn run_maintenance(name: &str) {
     }
 }
 
+/// Open one ssh master connection per worker host. The executors' many
+/// per-step ssh calls then multiplex over it (ControlMaster=auto in
+/// SSH_OPTS); without this, 50 executors each open a fresh connection
+/// at once and storm the workers' sshd MaxStartups.
+fn prewarm_ssh_masters(rc: &CiConfig) {
+    for host in rc.ktest.executors.keys() {
+        let mut cmd = std::process::Command::new("ssh");
+        cmd.args(SSH_OPTS).arg(host).arg("true");
+        match cmd.status() {
+            Ok(s) if s.success() => eprintln!("ci-daemon: ssh master to {} ready", host),
+            Ok(s) => eprintln!("ci-daemon: ssh master to {} exited {:?}", host, s.code()),
+            Err(e) => eprintln!("ci-daemon: ssh master to {}: {}", host, e),
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     let rc = ciconfig_read()?;
@@ -388,6 +404,10 @@ fn main() -> Result<()> {
         .ok_or_else(|| anyhow!("ci_host not set in ~/.ktest/ktest-ci.json5"))?;
 
     let choir = Choir::new(rc.ktest.output_dir.join("ci-daemon-logs"));
+
+    // Pre-open an ssh master per host so the executors' per-step ssh
+    // calls multiplex over it instead of storming sshd MaxStartups.
+    prewarm_ssh_masters(&rc);
 
     // One executor per slot: each host gets `slots` executors.
     for (host, ex) in &rc.ktest.executors {
