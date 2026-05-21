@@ -297,6 +297,11 @@ build_one() {
 		-V '$variant' -a '$ARCH' \
 		-k '$build_repo' -o '$workdir' -D '$destdir'
 	"
+
+    # nspawn ran the build as root, so the freshly-written store entry is
+    # root-owned. Hand it back to the invoking user: kernel-store-push runs
+    # unprivileged, and a later force-rebuild's `rm -rf` would fail on it.
+    sudo chown -R "$(id -u):$(id -g)" "$destdir"
 }
 
 main() {
