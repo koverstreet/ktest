@@ -30,8 +30,13 @@ ln -sf $ktest_out /ktest-out
 mkdir -p $(dirname $home)
 ln -sf /host/$home $home
 
+# Per-slot cargo home: $ktest_deps_dir is this slot's own workspace, so
+# the N VMs sharing a host don't fight over one ~/.cargo — cargo's
+# package-cache lock doesn't coordinate across 9p clients and concurrent
+# builds wedge. mkdir -p keeps it from being a dangling symlink.
 rm -rf /root/.cargo
-ln -s $HOME/.cargo /root/.cargo
+mkdir -p $ktest_deps_dir/.cargo
+ln -s $ktest_deps_dir/.cargo /root/.cargo
 
 ktest_no_cleanup_tmpdir=1
 
