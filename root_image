@@ -86,7 +86,7 @@ PACKAGES=(kexec-tools less psmisc openssh-server curl		\
     stress-ng lsof xxd zstd ripgrep bpfcc-tools)
 
 # build tools:
-PACKAGES+=(build-essential make gcc g++ clang)
+PACKAGES+=(build-essential make gcc g++ clang lld)
 PACKAGES+=(autoconf automake autopoint bison flex pahole)
 PACKAGES+=(cargo mold)
 PACKAGES+=(rustc rust-src rust-analyzer librust-bindgen-dev bindgen)
