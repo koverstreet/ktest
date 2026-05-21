@@ -50,11 +50,95 @@ ktest_bcachefs_tests=1
 export BCACHEFS_TESTS=1
 
 require-git https://evilpiepirate.org/git/bcachefs-tools.git
+# Cache key for the bcachefs DKMS module. The built .ko is fully
+# determined by the kernel it compiles against (version + config), the
+# bcachefs-tools revision, and the build flags — key on exactly that.
+# An empty key (no git rev, a dirty tree, an unreadable kernel config)
+# disables caching rather than risking a stale or wrong .ko.
+dkms_cache_key() {
+    local tools=$1
+    local kver config rev
+
+    kver=$(uname -r)
+    config="/lib/modules/$kver/build/.config"
+    if [[ ! -r $config ]]; then
+        echo "dkms cache: disabled — kernel config unreadable ($config)" >&2
+        return 0
+    fi
+    # The bcachefs-tools tree is bind-mounted from the host and owned by
+    # a different uid than root in this VM — git rejects it as "dubious
+    # ownership" and the checks below fatal out. Ephemeral build VM, so
+    # opt out (safe.directory is honored only from global config, not -c).
+    git config --system --add safe.directory '*' >&2
+
+    if ! git -C "$tools" diff --quiet HEAD 2>/dev/null; then
+        echo "dkms cache: disabled — $tools has uncommitted changes:" >&2
+        git -C "$tools" status --short >&2
+        return 0
+    fi
+    rev=$(git -C "$tools" rev-parse HEAD 2>/dev/null)
+    if [[ -z $rev ]]; then
+        echo "dkms cache: disabled — no git HEAD for $tools" >&2
+        return 0
+    fi
+
+    # One hash over the scalar inputs (NUL-separated) followed by the
+    # kernel config verbatim.
+    {
+        printf '%s\0' "$kver" "$rev" \
+            "${BCACHEFS_DEBUG-}" "${BCACHEFS_TESTS-}" \
+            "${BCACHEFS_INJECT_TRANSACTION_RESTARTS-}"
+        cat "$config"
+    } | sha256sum | cut -d' ' -f1
+}
+
+# Build + install bcachefs-tools and the bcachefs DKMS module. The module
+# compile is by far the slowest part of test bringup, so it is cached
+# host-side (keyed by dkms_cache_key) and shared across slots — the cache
+# dir sits beside the per-slot workspaces. Write-once-per-key: concurrent
+# misses for the same key both build and the first to rename in wins.
 init_build_bcachefs_tools() {
     local jobs=$(( $(nproc) / 2 ))
     (( jobs < 1 )) && jobs=1
-    make -j$jobs -C "$ktest_deps_dir/bcachefs-tools" PREFIX=/usr install
-    make -j$jobs -C "$ktest_deps_dir/bcachefs-tools" PREFIX=/usr dkms-reload
+    local tools="$ktest_deps_dir/bcachefs-tools"
+
+    make -j$jobs -C "$tools" PREFIX=/usr install
+
+    local kver=$(uname -r)
+    local ko="/lib/modules/$kver/updates/dkms/bcachefs.ko"
+    local key=$(dkms_cache_key "$tools")
+    local cachedir=$(dirname "$ktest_deps_dir")/dkms-cache
+
+    mkdir -p "$cachedir"
+    local cache="$cachedir/$key"
+
+    if [[ -n $key && -f "$cache/bcachefs.ko" ]]; then
+        echo "init_build_bcachefs_tools: dkms cache hit ($key)"
+        mkdir -p "$(dirname "$ko")"
+        cp "$cache/bcachefs.ko" "$ko"
+        depmod -a "$kver"
+        modprobe bcachefs
+        return
+    fi
+
+    make -j$jobs -C "$tools" PREFIX=/usr dkms-reload
+
+    # Populate the cache. Build into a temp dir and rename in: a concurrent
+    # miss that lost the race just discards its copy (the .ko is already
+    # installed locally either way).
+    if [[ -n $key && -f $ko ]]; then
+        local tmp
+        mkdir -p "$cachedir"
+        if tmp=$(mktemp -d "$cachedir/.tmp.XXXXXX" 2>/dev/null); then
+            if cp "$ko" "$tmp/bcachefs.ko" && mv -T "$tmp" "$cache" 2>/dev/null; then
+                echo "init_build_bcachefs_tools: dkms cache store ($key)"
+            else
+                rm -rf "$tmp"
+            fi
+        fi
+    elif [[ -n $key ]]; then
+        echo "dkms cache: not stored — no module at $ko" >&2
+    fi
 }
 
 require-kernel-config BCACHEFS_FS
