@@ -232,9 +232,11 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
     // more -- a build interrupted mid-write leaves a corrupt cached
     // object that the incremental rebuild then trusts. Also self-heals
     // workspaces already poisoned.
+    // Each {run} does its own `cd`, so run it in a subshell — otherwise
+    // the first run's cd leaks and the git -C / retry resolve wrong.
     let run = format!(
-        "{run} || {{ echo '=== run failed -- git clean + retry ==='; \
-         git -C {ws}/{repo} clean -fdqx; {run}; }}",
+        "( {run} ) || {{ echo '=== run failed -- git clean + retry ==='; \
+         git -C ~/{ws}/{repo} clean -fdqx; ( {run} ); }}",
         run = run, ws = ws, repo = p.repo,
     );
     // -tt: force a pty so a dropped ssh hangs up and SIGHUP reaps the
