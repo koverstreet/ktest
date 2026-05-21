@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+#
+# ktest-deploy — force-sync the ktest checkout on every CI worker node.
+#
+# Push-mode CI runs jobs out of each worker's ~/ktest, but nothing keeps
+# those checkouts current. This resets every configured worker's ~/ktest
+# to origin/master. The worker list is the ktest-ci.json5 executor map —
+# the same hosts ci-daemon dispatches jobs to.
+#
+# Quick and dirty for now; longer term ktest should be a proper nix
+# package and this goes away.
+
+set -o nounset
+set -o errexit
+set -o errtrace
+
+CONFIG_PATH="${KTEST_CI_CONFIG:-$HOME/.ktest/ktest-ci.json5}"
+
+# -n is load-bearing: ssh runs inside a `while read` loop over the worker
+# list, and without it the first ssh reads (and swallows) the rest of that
+# list off stdin. accept-new: head node -> worker may be first contact.
+SSH="ssh -n -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new"
+
+# JSON5 -> JSON via perl: strip // comments (preceded by whitespace, so
+# git://, http:// inside strings survive), drop trailing commas, quote
+# unquoted object keys. Same reader as kernel-store-push.
+json5_to_json() {
+    perl -0777 -pe '
+	s{(^|\s)//[^\n]*}{$1}gm;
+	s/,(\s*[}\]])/$1/g;
+	s/([\{,\[]\s*|^\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*):/$1"$2"$3:/gm;
+    ' "$1"
+}
+
+if [[ ! -f $CONFIG_PATH ]]; then
+    echo "ktest-deploy: no config at $CONFIG_PATH" >&2
+    exit 1
+fi
+
+workers=$(json5_to_json "$CONFIG_PATH" | jq -r '.ktest.executors | keys[]')
+
+failed=0
+while IFS= read -r host; do
+    [[ -n $host ]] || continue
+    echo "ktest-deploy: $host"
+    if $SSH "$host" \
+	"cd ktest && git fetch -q origin && git reset --hard -q origin/master && git log -1 --format='    %h %s'"; then
+	:
+    else
+	echo "    FAILED" >&2
+	failed=$((failed + 1))
+    fi
+done <<<"$workers"
+
+if [[ $failed -gt 0 ]]; then
+    echo "ktest-deploy: $failed worker(s) failed" >&2
+    exit 1
+fi
