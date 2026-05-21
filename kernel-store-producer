@@ -57,6 +57,13 @@ main() {
     # single toplevel dir rather than exploding into the cwd.
     tar --zstd -cf "$tarball" -C "$KTEST_DATA" kernels-new
 
+    # Capture the worker list up front. A `done < <(read_workers)` process
+    # substitution would hide a read_workers failure from errexit/pipefail
+    # (a JSON5 typo -> jq fails -> silent deploy to zero workers, exit 0);
+    # a failed command substitution in an assignment does abort.
+    local workers
+    workers=$(read_workers)
+
     while IFS= read -r worker; do
         [[ -n $worker ]] || continue
         log "deploying to $worker"
@@ -73,7 +80,7 @@ main() {
             mv -T --exchange kernels-new kernels
             rm -rf kernels-new
         '
-    done < <(read_workers)
+    done <<< "$workers"
 
     log "done"
 }
