@@ -95,6 +95,10 @@ fn ssh_cmd(host: &str, remote: &str, tty: bool) -> Command {
     if tty {
         c.arg("-tt");
     }
+    // Detach stdin from the daemon's terminal: with -tt, ssh would put
+    // that terminal into raw mode, and the operator's Ctrl-C would
+    // become a stray byte instead of a SIGINT.
+    c.stdin(std::process::Stdio::null());
     c.args(SSH_OPTS).arg(host).arg(remote);
     c
 }
