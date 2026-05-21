@@ -431,25 +431,57 @@ fn prewarm_ssh_masters(rc: &CiConfig) {
     }
 }
 
-/// Background thread: keep the CI's git repos current. `refill` builds
-/// the job matrix as a pure read of local refs (jobs.rs does not fetch),
-/// so without this nothing pushed upstream ever gets picked up. Fetches
-/// every configured repo's remotes once a minute.
+/// `git fetch <fetch>` in `path`, then point the local ref
+/// `<user>/<branch>` at the freshly-fetched FETCH_HEAD.
+fn fetch_branch(
+    path: &std::path::Path,
+    user: &str,
+    branch: &str,
+    fetch: &str,
+) -> Result<()> {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .arg("fetch")
+        .args(fetch.split_whitespace())
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("git fetch {} in {}: {}", fetch, path.display(), status);
+    }
+
+    let repo = git2::Repository::open(path)?;
+    let fetch_head = repo.revparse_single("FETCH_HEAD")?.peel_to_commit()?;
+    repo.branch(&format!("{}/{}", user, branch), &fetch_head, true)?;
+    Ok(())
+}
+
+/// Background thread: keep the CI's git refs current. `refill` / jobs.rs
+/// build the job matrix as a pure read of the per-(user,branch) local
+/// refs `<user>/<branch>`, so without this nothing new is picked up.
+///
+/// Ported from the old gen-job-list `fetch_remotes`: per branch, run the
+/// configured `git fetch <remote> <ref>` — targeted, never `--all`, so CI
+/// bookkeeping tags (`origin/master_<date>` etc.) can't trip refname
+/// conflicts — then point `<user>/<branch>` at FETCH_HEAD.
 fn spawn_repo_fetcher(rc: &CiConfig) {
-    let mut repos: Vec<std::path::PathBuf> = rc.ktest.repos.values().cloned().collect();
-    repos.push(rc.ktest.linux_repo.clone());
+    // Snapshot (user, branch, repo path, fetch args); the thread outlives `rc`.
+    let mut branches: Vec<(String, String, std::path::PathBuf, String)> = Vec::new();
+    for (user, userconfig) in &rc.users {
+        let Ok(userconfig) = userconfig else { continue };
+        for (branch, bc) in &userconfig.branches {
+            match rc.ktest.repo_path(&bc.repo) {
+                Some(path) =>
+                    branches.push((user.clone(), branch.clone(), path.to_path_buf(), bc.fetch.clone())),
+                None =>
+                    eprintln!("ci-daemon: repo-fetcher: no path for repo {}", bc.repo),
+            }
+        }
+    }
 
     std::thread::spawn(move || loop {
-        for repo in &repos {
-            match std::process::Command::new("git")
-                .arg("-C")
-                .arg(repo)
-                .args(["fetch", "--all", "--prune", "--quiet"])
-                .status()
-            {
-                Ok(s) if s.success() => {}
-                Ok(s) => eprintln!("ci-daemon: git fetch {}: exited {}", repo.display(), s),
-                Err(e) => eprintln!("ci-daemon: git fetch {}: {}", repo.display(), e),
+        for (user, branch, path, fetch) in &branches {
+            if let Err(e) = fetch_branch(path, user, branch, fetch) {
+                eprintln!("ci-daemon: fetch {}/{}: {}", user, branch, e);
             }
         }
         std::thread::sleep(std::time::Duration::from_secs(60));
