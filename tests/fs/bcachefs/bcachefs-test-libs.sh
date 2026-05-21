@@ -41,6 +41,14 @@ if [[ -v ktest_bcachefs_inject_transaction_restarts ]]; then
     export BCACHEFS_INJECT_TRANSACTION_RESTARTS=1
 fi
 
+# In-kernel unit tests (CONFIG_BCACHEFS_TESTS) — enabled for all bcachefs
+# tests. require-kernel-config covers in-tree kernels; bcachefs's fs/Makefile
+# reads the unprefixed BCACHEFS_TESTS for the DKMS build, so export that too.
+# Must precede require-git, which triggers the build hook.
+require-kernel-config BCACHEFS_TESTS
+ktest_bcachefs_tests=1
+export BCACHEFS_TESTS=1
+
 require-git https://evilpiepirate.org/git/bcachefs-tools.git
 init_build_bcachefs_tools() {
     local jobs=$(( $(nproc) / 2 ))
