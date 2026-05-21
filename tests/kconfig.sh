@@ -245,6 +245,8 @@ require-kernel-config NFS_V4
 require-kernel-config NFSD
 require-kernel-config NFSD_V4
 
+require-kernel-config OVERLAY_FS
+
 # Crash dumps
 #if $ktest_crashdump; then
 #    require-kernel-config KEXEC
