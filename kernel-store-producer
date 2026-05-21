@@ -3,7 +3,7 @@
 # kernel-store-producer — build the kernel store and deploy it to the workers.
 #
 # Builds the whole store (distro + upstream kernels) into a temp dir, tars
-# it, and ships the tarball to every worker in farm-workers.json5. On each
+# it, and ships the tarball to every CI executor host in ktest-ci.json5. On each
 # worker the tarball is unpacked into ~/.ktest/kernels-new and swapped into
 # place against ~/.ktest/kernels with `mv --exchange`; the displaced old
 # store is then removed.
@@ -15,7 +15,7 @@ set -o pipefail
 
 ktest_dir=$(dirname "$(readlink -f "$0")")
 KTEST_DATA="${KTEST_DATA:-$HOME/.ktest}"
-CONFIG_PATH="$KTEST_DATA/farm-workers.json5"
+CONFIG_PATH="${KTEST_CI_CONFIG:-$KTEST_DATA/ktest-ci.json5}"
 
 SSH="ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new"
 
@@ -39,10 +39,12 @@ json5_to_json() {
     ' "$1"
 }
 
-# One worker target per line.
+# The deploy targets, one host per line. The kernel store goes to exactly
+# the machines that run tests, so this is the same ktest-ci.json5 executor
+# list ci-daemon / ktest-deploy read — one source of truth.
 read_workers() {
     [[ -f $CONFIG_PATH ]] || { log "no config at $CONFIG_PATH"; exit 1; }
-    json5_to_json "$CONFIG_PATH" | jq -r '.workers[].target'
+    json5_to_json "$CONFIG_PATH" | jq -r '.executors | keys[]'
 }
 
 main() {
