@@ -19,6 +19,13 @@ CONFIG_PATH="$KTEST_DATA/farm-workers.json5"
 
 SSH="ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new"
 
+# Build the store into a temp dir on real disk (it's many GB — keep it off
+# /tmp, which may be tmpfs). Script-scoped, not main()-local, so the EXIT
+# trap can still see them after main() returns.
+new="$KTEST_DATA/kernels-new"
+tarball="$new.tar.zst"
+trap 'rm -rf "$new" "$tarball"' EXIT
+
 log() { echo "kernel-store-producer: $*"; }
 
 # JSON5 → JSON: strip // comments (only after whitespace/SOL so URLs
@@ -39,12 +46,6 @@ read_workers() {
 }
 
 main() {
-    # Build the store into a temp dir on real disk (it's many GB — keep it
-    # off /tmp, which may be tmpfs). Removed on exit along with the tarball.
-    local new="$KTEST_DATA/kernels-new"
-    local tarball="$new.tar.zst"
-    trap 'rm -rf "$new" "$tarball"' EXIT
-
     log "fetching distro kernels"
     "$ktest_dir/target/release/distro-kernel-fetch" --output "$new"
 
