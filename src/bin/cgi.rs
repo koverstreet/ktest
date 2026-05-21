@@ -654,11 +654,18 @@ function render(s) {
   const byId = {};
   for (const j of s.jobs) byId[j.id] = j;
 
+  // running/finished are counted from s.jobs (non-pending, all
+  // carried); the pending backlog is summarized per group.
   const counts = {};
   for (const j of s.jobs) counts[j.status] = (counts[j.status] || 0) + 1;
+  const pend = Object.entries(s.pending_by_group || {}).sort((a, b) => b[1] - a[1]);
+  const pendTotal = pend.reduce((acc, e) => acc + e[1], 0);
+  const pendStr = pend.map(e => e[0] + ' ' + e[1]).join(', ');
   document.getElementById('summary').textContent =
-    ['running', 'pending', 'completed', 'failed', 'cancelled']
-      .map(k => (counts[k] || 0) + ' ' + k).join(' · ');
+    pendTotal + ' pending' + (pendStr ? ' (' + pendStr + ')' : '') +
+    ' · ' + (counts.running || 0) + ' running' +
+    ' · ' + (counts.completed || 0) + ' completed' +
+    ' · ' + (counts.failed || 0) + ' failed';
 
   // Fair-share standing: groups (users) by decayed recent farm time,
   // lowest first — that is who the scheduler serves next.
