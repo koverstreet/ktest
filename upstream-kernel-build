@@ -71,6 +71,9 @@ BUILDS_DIR="$KTEST_DATA/upstream-builds"
 # the live store — kernel-store-push then deploys it atomically. -o
 # overrides the output location entirely (e.g. a tmpdir to push from).
 if [[ -n $OUTPUT ]]; then
+    # -o may be given relative, but it ends up in an nspawn --bind=, which
+    # requires an absolute path. Canonicalize (also collapses // etc.).
+    OUTPUT=$(realpath -m "$OUTPUT")
     KERNELS_DIR="$OUTPUT/upstream"
 else
     KERNELS_DIR="$KTEST_DATA/$($PUSH && echo kernel-build || echo kernels)/upstream"
