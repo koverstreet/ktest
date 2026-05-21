@@ -204,11 +204,11 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
         format!("~/ktest/ktest run -k {}", p.kernel)
     };
     let inner = format!(
-        "cd {ws}; {env}~/ktest/lib/supervisor -T 1200 -f {rd}/full_log \
+        "cd {ws}; {env}~/ktest/lib/supervisor -T 1200 -f {sub}/full_log \
          -S -F -b {base} -o ktest-out/out -- {runner} ~/ktest/tests/{test} {subtest}",
         ws = ws,
         env = job_env_prefix(&p.env, &ws),
-        rd = result_dir,
+        sub = subtest_dir,
         base = basename,
         runner = runner,
         test = p.test,
