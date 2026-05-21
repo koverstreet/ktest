@@ -21,18 +21,28 @@ SSH="ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-n
 
 log() { echo "kernel-store-producer: $*"; }
 
-# One worker hostname per line.
+# JSON5 → JSON: strip // comments (only after whitespace/SOL so URLs
+# survive), drop trailing commas, quote unquoted object keys. Same
+# reader as upstream-kernel-build / ktest-deploy.
+json5_to_json() {
+    perl -0777 -pe '
+	s{(^|\s)//[^\n]*}{$1}gm;
+	s/,(\s*[}\]])/$1/g;
+	s/([\{,\[]\s*|^\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*):/$1"$2"$3:/gm;
+    ' "$1"
+}
+
+# One worker target per line.
 read_workers() {
     [[ -f $CONFIG_PATH ]] || { log "no config at $CONFIG_PATH"; exit 1; }
-    jq -r '.workers[].target' "$CONFIG_PATH"
+    json5_to_json "$CONFIG_PATH" | jq -r '.workers[].target'
 }
 
 main() {
     # Build the store into a temp dir on real disk (it's many GB — keep it
     # off /tmp, which may be tmpfs). Removed on exit along with the tarball.
-    local tmp tarball
-    new="$KTEST_DATA/kernels-new"
-    tarball="$new.tar.zst"
+    local new="$KTEST_DATA/kernels-new"
+    local tarball="$new.tar.zst"
     trap 'rm -rf "$new" "$tarball"' EXIT
 
     log "fetching distro kernels"
