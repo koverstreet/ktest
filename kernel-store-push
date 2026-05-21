@@ -82,7 +82,7 @@ read_workers() {
     # Emit one tab-separated `target\tremote_data` line per worker.
     json5_to_json "$CONFIG_PATH" | jq -r '
 	.workers[]
-	| [.target, (.remote_data // "~/.ktest")] | @tsv
+	| [.target, (.remote_data // ".ktest")] | @tsv
     '
 }
 
