@@ -1,63 +1,66 @@
 #!/usr/bin/env bash
 #
-# kernel-store-producer — full producer cycle for a kernel-store host.
+# kernel-store-producer — build the kernel store and deploy it to the workers.
 #
-# Runs the three phases in order:
-#
-#   1. distro-kernel-fetch     fetch latest kernels from configured distros
-#   2. upstream-kernel-build   build configured upstream variants
-#   3. kernel-store-push       atomically rsync to configured farm workers
-#
-# Each phase is idempotent and memoized — only missing/new entries do work.
-# Phases are run unconditionally even if an earlier one fails, so a transient
-# fetch failure doesn't block the build of unrelated entries from a previous
-# fetch. Overall exit is nonzero iff any phase failed.
-#
-# Intended for scheduled invocation (systemd timer, cron, etc.); produces no
-# output on a fully up-to-date run.
+# Builds the whole store (distro + upstream kernels) into a temp dir, tars
+# it, and ships the tarball to every worker in farm-workers.json5. On each
+# worker the tarball is unpacked into ~/.ktest/kernels-new and swapped into
+# place against ~/.ktest/kernels with `mv --exchange`; the displaced old
+# store is then removed.
 
 set -o nounset
-set -o pipefail
+set -o errexit
 set -o errtrace
+set -o pipefail
 
 ktest_dir=$(dirname "$(readlink -f "$0")")
+KTEST_DATA="${KTEST_DATA:-$HOME/.ktest}"
+CONFIG_PATH="$KTEST_DATA/farm-workers.json5"
 
-ARCH=$(uname -m)
+SSH="ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new"
 
-usage() {
-    cat <<EOF
-kernel-store-producer — run fetch + build + push for the kernel store.
+log() { echo "kernel-store-producer: $*"; }
 
-Usage: kernel-store-producer [options]
-
-  -a <arch>     architecture (default: $ARCH, derived from uname -m)
-  -h            this help
-EOF
+# One worker hostname per line.
+read_workers() {
+    [[ -f $CONFIG_PATH ]] || { log "no config at $CONFIG_PATH"; exit 1; }
+    jq -r '.workers[].target' "$CONFIG_PATH"
 }
 
-while getopts "a:h" arg; do
-    case $arg in
-        a) ARCH=$OPTARG ;;
-        h) usage; exit 0 ;;
-        *) usage; exit 1 ;;
-    esac
-done
+main() {
+    # Build the store into a temp dir on real disk (it's many GB — keep it
+    # off /tmp, which may be tmpfs). Removed on exit along with the tarball.
+    local tmp tarball
+    new="$KTEST_DATA/kernels-new"
+    tarball="$new.tar.zst"
+    trap 'rm -rf "$new" "$tarball"' EXIT
 
-failed=0
-run_phase() {
-    local name=$1; shift
-    echo "==> $name"
-    if ! "$@"; then
-        echo "kernel-store-producer: $name failed (exit $?)" >&2
-        failed=$((failed + 1))
-    fi
+    log "fetching distro kernels"
+    "$ktest_dir/target/release/distro-kernel-fetch" --output "$new"
+
+    log "building upstream kernels"
+    "$ktest_dir/upstream-kernel-build" -o "$new"
+
+    log "packing tarball"
+    tar --zstd -cf "$tarball" -C "$new" .
+
+    while IFS= read -r worker; do
+        [[ -n $worker ]] || continue
+        log "deploying to $worker"
+        scp -q "$tarball" "$worker:.ktest/kernel-store.tar.zst"
+        $SSH "$worker" '
+            set -e
+            cd .ktest
+            rm -rf kernels-new
+            mkdir kernels-new
+            tar --zstd -xf kernel-store.tar.zst -C kernels-new
+            rm kernel-store.tar.zst
+            mv --exchange kernels-new kernels
+            rm -rf kernels-new
+        '
+    done < <(read_workers)
+
+    log "done"
 }
 
-run_phase "distro-kernel-fetch"   "$ktest_dir/target/release/distro-kernel-fetch"
-run_phase "upstream-kernel-build" "$ktest_dir/upstream-kernel-build" -a "$ARCH"
-run_phase "kernel-store-push"     "$ktest_dir/kernel-store-push"
-
-if [[ $failed -gt 0 ]]; then
-    echo "kernel-store-producer: $failed phase(s) failed" >&2
-    exit 1
-fi
+main "$@"

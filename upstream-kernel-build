@@ -28,6 +28,7 @@ DRY_RUN=false
 VERBOSE=false
 FORCE=false
 BUILD_FILTER=""
+OUTPUT=""
 PUSH=false
 
 usage() {
@@ -39,6 +40,7 @@ Usage: upstream-kernel-build [options]
   -c <file>     config (default: $CONFIG_PATH)
   -a <arch>     architecture (default: $ARCH)
   -b <name>     build only this <release>-<variant> (e.g. stable-default)
+  -o <dir>      kernel store root to build into (default: $KTEST_DATA/kernels)
   -f            force rebuild (ignore manifest, wipe matching store entries)
   -n            dry run (no fetch, no build)
   -p            build into a staging dir, then kernel-store-push to all workers
@@ -47,11 +49,12 @@ Usage: upstream-kernel-build [options]
 EOF
 }
 
-while getopts "c:a:b:fnpvh" arg; do
+while getopts "c:a:b:o:fnpvh" arg; do
     case $arg in
 	c) CONFIG_PATH=$OPTARG ;;
 	a) ARCH=$OPTARG ;;
 	b) BUILD_FILTER=$OPTARG ;;
+	o) OUTPUT=$OPTARG ;;
 	f) FORCE=true ;;
 	n) DRY_RUN=true ;;
 	p) PUSH=true ;;
@@ -65,8 +68,13 @@ SRCS_DIR="$KTEST_DATA/upstream-srcs"
 BUILDS_DIR="$KTEST_DATA/upstream-builds"
 # A plain run publishes into the live store, so an interactive build can
 # be booted straight away. -p builds into a staging dir and never touches
-# the live store — kernel-store-push then deploys it atomically.
-KERNELS_DIR="$KTEST_DATA/$($PUSH && echo kernel-build || echo kernels)/upstream"
+# the live store — kernel-store-push then deploys it atomically. -o
+# overrides the output location entirely (e.g. a tmpdir to push from).
+if [[ -n $OUTPUT ]]; then
+    KERNELS_DIR="$OUTPUT/upstream"
+else
+    KERNELS_DIR="$KTEST_DATA/$($PUSH && echo kernel-build || echo kernels)/upstream"
+fi
 WORK_DIR="$KTEST_DATA/_work"
 
 log()   { echo "upstream-kernel-build: $*"; }
@@ -276,6 +284,13 @@ build_one() {
     # nix-store PATH into the container, where none of the Debian binaries
     # are reachable. Override with a Debian-sensible PATH.
     local machine="ktest-build-$$-$release-$variant"
+    # The build runs as root inside nspawn, so $destdir lands root-owned.
+    # Chown it back to the invoking user as the final in-container step —
+    # we're root there already, so no sudo rule is needed. Numeric IDs:
+    # the Debian rootfs has no matching user.
+    local build_uid build_gid
+    build_uid=$(id -u)
+    build_gid=$(id -g)
     sudo systemd-nspawn \
 	--image="$rootfs" \
 	--read-only \
@@ -296,12 +311,8 @@ build_one() {
 	    '$ktest_dir/build-test-kernel' build \
 		-V '$variant' -a '$ARCH' \
 		-k '$build_repo' -o '$workdir' -D '$destdir'
+	    chown -R $build_uid:$build_gid '$destdir'
 	"
-
-    # nspawn ran the build as root, so the freshly-written store entry is
-    # root-owned. Hand it back to the invoking user: kernel-store-push runs
-    # unprivileged, and a later force-rebuild's `rm -rf` would fail on it.
-    sudo chown -R "$(id -u):$(id -g)" "$destdir"
 }
 
 main() {
