@@ -23,6 +23,14 @@ SRC_KERNELS="$KTEST_DATA/kernels"
 DRY_RUN=false
 VERBOSE=false
 
+# ssh for bare remote commands. -n is load-bearing: these run inside a
+# `while read` loop over the worker list, and without it the first ssh
+# reads (and swallows) the rest of that list off stdin, so the loop only
+# ever processes one worker. accept-new: producer host -> worker is
+# usually first contact.
+SSH="ssh -n -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new"
+RSYNC_SSH="ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new"
+
 usage() {
     cat <<EOF
 kernel-store-push — atomically rsync the kernel store to farm workers.
@@ -89,7 +97,7 @@ local_entries() {
 # What's already on the worker? One ssh roundtrip per worker.
 remote_entries() {
     local target=$1 remote_data=$2
-    ssh -o BatchMode=yes -o ConnectTimeout=10 "$target" \
+    $SSH "$target" \
 	"find $remote_data/kernels -name manifest.json -type f 2>/dev/null \
 	 | sed 's|.*/kernels/||; s|/manifest.json\$||'" 2>/dev/null \
 	| sort || true
@@ -116,13 +124,13 @@ push_entry() {
     vlog "$target: $entry"
     # Make sure remote parent exists; clean any prior staging from a
     # previous interrupted push.
-    ssh -o BatchMode=yes "$target" \
+    $SSH "$target" \
 	"mkdir -p '$remote_parent' && rm -rf '$remote_staging'"
 
     # Rsync into the staging dir. Trailing '/' on src means "copy contents
     # of $src into $remote_staging/" (so $remote_staging is the new entry
     # root, mirroring $src).
-    rsync -a --quiet -e "ssh -o BatchMode=yes" \
+    rsync -a --quiet -e "$RSYNC_SSH" \
 	"$src/" "$target:$remote_staging/"
 
     # Atomic rename. mv -T on a single filesystem is rename(2); a reader
@@ -132,10 +140,10 @@ push_entry() {
     # If $remote_final somehow already exists (race: another concurrent
     # push, or the entry was just published from elsewhere), our
     # `--no-target-directory` would refuse — bail and clean up staging.
-    if ! ssh -o BatchMode=yes "$target" \
+    if ! $SSH "$target" \
 	    "mv -T --no-target-directory '$remote_staging' '$remote_final'"; then
 	log "WARN: $target: $entry: rename failed (raced?)"
-	ssh -o BatchMode=yes "$target" "rm -rf '$remote_staging'" || true
+	$SSH "$target" "rm -rf '$remote_staging'" || true
 	return 1
     fi
 }
