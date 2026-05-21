@@ -116,6 +116,7 @@ require-kernel-config EXPORTFS
 require-kernel-config SYMBOLIC_ERRNAME
 require-kernel-config FS_POSIX_ACL	# BCACHEFS_FS selects it
 require-kernel-config QUOTA		# → QUOTACTL (BCACHEFS_QUOTA selects it)
+require-kernel-config UNICODE
 
 # migrate tests in image.ktest:
 require-kernel-config BLK_DEV_WRITE_MOUNTED
