@@ -117,6 +117,9 @@ require-kernel-config SYMBOLIC_ERRNAME
 require-kernel-config FS_POSIX_ACL	# BCACHEFS_FS selects it
 require-kernel-config QUOTA		# → QUOTACTL (BCACHEFS_QUOTA selects it)
 
+# migrate tests in image.ktest:
+require-kernel-config BLK_DEV_WRITE_MOUNTED
+
 require-kernel-config PROC_KCORE	# XXX Needed?
 
 require-kernel-config TTY
@@ -337,3 +340,4 @@ require-kernel-config SECCOMP_FILTER
 
 # Rust:
 require-kernel-config RUST
+config-compiler clang
