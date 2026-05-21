@@ -120,6 +120,10 @@ require-kernel-config QUOTA		# → QUOTACTL (BCACHEFS_QUOTA selects it)
 # migrate tests in image.ktest:
 require-kernel-config BLK_DEV_WRITE_MOUNTED
 
+# replication.ktest:
+require-kernel-config BLK_DEV_DM
+require-kernel-config DM_FLAKEY
+
 require-kernel-config PROC_KCORE	# XXX Needed?
 
 require-kernel-config TTY
