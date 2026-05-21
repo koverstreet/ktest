@@ -52,7 +52,9 @@ main() {
     "$ktest_dir/upstream-kernel-build" -o "$new"
 
     log "packing tarball"
-    tar --zstd -cf "$tarball" -C "$new" .
+    # Archive the kernels-new/ directory itself, so the tarball has a
+    # single toplevel dir rather than exploding into the cwd.
+    tar --zstd -cf "$tarball" -C "$KTEST_DATA" kernels-new
 
     while IFS= read -r worker; do
         [[ -n $worker ]] || continue
@@ -62,10 +64,12 @@ main() {
             set -e
             cd .ktest
             rm -rf kernels-new
-            mkdir kernels-new
-            tar --zstd -xf kernel-store.tar.zst -C kernels-new
+            tar --zstd -xf kernel-store.tar.zst
             rm kernel-store.tar.zst
-            mv --exchange kernels-new kernels
+            # -T: kernels is the literal target, not a dir to move into.
+            # mkdir -p: --exchange needs both dirs (first deploy has none).
+            mkdir -p kernels
+            mv -T --exchange kernels-new kernels
             rm -rf kernels-new
         '
     done < <(read_workers)
