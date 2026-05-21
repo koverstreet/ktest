@@ -104,40 +104,55 @@ init_build_bcachefs_tools() {
 
     make -j$jobs -C "$tools" PREFIX=/usr install
 
-    local kver=$(uname -r)
-    local ko="/lib/modules/$kver/updates/dkms/bcachefs.ko"
-    local key=$(dkms_cache_key "$tools")
-    local cachedir=$(dirname "$ktest_deps_dir")/dkms-cache
+    if ! [[ -e /sys/fs/bcachefs ]]; then
+	local kver=$(uname -r)
+	local ko="/lib/modules/$kver/updates/dkms/bcachefs.ko"
+	local key=$(dkms_cache_key "$tools")
+	local cachedir=$(dirname "$ktest_deps_dir")/dkms-cache
 
-    mkdir -p "$cachedir"
-    local cache="$cachedir/$key"
+	mkdir -p "$cachedir"
+	local cache="$cachedir/$key"
 
-    if [[ -n $key && -f "$cache/bcachefs.ko" ]]; then
-        echo "init_build_bcachefs_tools: dkms cache hit ($key)"
-        mkdir -p "$(dirname "$ko")"
-        cp "$cache/bcachefs.ko" "$ko"
-        depmod -a "$kver"
-        modprobe bcachefs
-        return
-    fi
+	if [[ -n $key && -f "$cache/bcachefs.ko" ]]; then
+	    echo "init_build_bcachefs_tools: dkms cache hit ($key)"
+	    mkdir -p "$(dirname "$ko")"
+	    cp "$cache/bcachefs.ko" "$ko"
+	    depmod -a "$kver"
+	    modprobe bcachefs
+	    return
+	fi
 
-    make -j$jobs -C "$tools" PREFIX=/usr dkms-reload
+	# On DKMS build failure, surface the compiler output — otherwise the
+	# test log just shows "Bad return status" with no reason.
+	if ! make -j$jobs -C "$tools" PREFIX=/usr dkms-reload; then
+	    echo "init_build_bcachefs_tools: DKMS build failed; dumping make.log" >&2
+	    local log found=0
+	    while IFS= read -r log; do
+	        found=1
+	        echo "===== $log =====" >&2
+	        cat -- "$log" >&2
+	    done < <(find -L /var/lib/dkms/bcachefs -name make.log -printf '%i\t%p\n' \
+	                 2>/dev/null | sort -u -k1,1 | cut -f2-)
+	    (( found )) || echo "init_build_bcachefs_tools: no make.log found" >&2
+	    return 1
+	fi
 
-    # Populate the cache. Build into a temp dir and rename in: a concurrent
-    # miss that lost the race just discards its copy (the .ko is already
-    # installed locally either way).
-    if [[ -n $key && -f $ko ]]; then
-        local tmp
-        mkdir -p "$cachedir"
-        if tmp=$(mktemp -d "$cachedir/.tmp.XXXXXX" 2>/dev/null); then
-            if cp "$ko" "$tmp/bcachefs.ko" && mv -T "$tmp" "$cache" 2>/dev/null; then
-                echo "init_build_bcachefs_tools: dkms cache store ($key)"
-            else
-                rm -rf "$tmp"
-            fi
-        fi
-    elif [[ -n $key ]]; then
-        echo "dkms cache: not stored — no module at $ko" >&2
+	# Populate the cache. Build into a temp dir and rename in: a concurrent
+	# miss that lost the race just discards its copy (the .ko is already
+	# installed locally either way).
+	if [[ -n $key && -f $ko ]]; then
+	    local tmp
+	    mkdir -p "$cachedir"
+	    if tmp=$(mktemp -d "$cachedir/.tmp.XXXXXX" 2>/dev/null); then
+		if cp "$ko" "$tmp/bcachefs.ko" && mv -T "$tmp" "$cache" 2>/dev/null; then
+		    echo "init_build_bcachefs_tools: dkms cache store ($key)"
+		else
+		    rm -rf "$tmp"
+		fi
+	    fi
+	elif [[ -n $key ]]; then
+	    echo "dkms cache: not stored — no module at $ko" >&2
+	fi
     fi
 }
 
@@ -231,16 +246,21 @@ antagonist_shrink()
     done
 }
 
+expensive_debug_checks_set()
+{
+    files="expensive_debug_checks debug_check_btree_locking debug_check_iterators debug_check_bset_lookups debug_check_btree_accounting debug_check_bkey_unpack"
+    echo $1 |tee $files >& /dev/null || true
+}
+
 antagonist_expensive_debug_checks()
 {
     # This only exists if CONFIG_BCACHE_DEBUG is on
     cd /sys/module/bcachefs/parameters
-    files="expensive_debug_checks debug_check_btree_locking debug_check_iterators debug_check_bset_lookups debug_check_btree_accounting debug_check_bkey_unpack"
 
     while true; do
-	echo 1 |tee $files >& /dev/null || true
+	expensive_debug_checks_set 1
 	sleep 5
-	echo 0 |tee $files >& /dev/null || true
+	expensive_debug_checks_set 0
 	sleep 10
     done
 }
