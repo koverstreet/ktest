@@ -741,7 +741,6 @@ function poll() {
     });
 }
 poll();
-setInterval(poll, 2000);
 "#;
 
 /// The live push-mode status page — a small client-side app over the
