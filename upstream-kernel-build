@@ -23,7 +23,7 @@ set -o errtrace
 ktest_dir=$(dirname "$(readlink -f "$0")")
 KTEST_DATA="${KTEST_DATA:-$HOME/.ktest}"
 CONFIG_PATH="$KTEST_DATA/upstream-builds.json5"
-ARCH="x86_64"
+ARCH="$(uname -m)"
 DRY_RUN=false
 VERBOSE=false
 FORCE=false
