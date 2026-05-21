@@ -37,7 +37,7 @@ if [[ ! -f $CONFIG_PATH ]]; then
     exit 1
 fi
 
-workers=$(json5_to_json "$CONFIG_PATH" | jq -r '.ktest.executors | keys[]')
+workers=$(json5_to_json "$CONFIG_PATH" | jq -r '.executors | keys[]')
 
 failed=0
 while IFS= read -r host; do
