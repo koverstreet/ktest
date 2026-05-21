@@ -87,8 +87,14 @@ struct JobParams {
 }
 
 /// An ssh command to `host` running `remote` (one shell command line).
-fn ssh_cmd(host: &str, remote: &str) -> Command {
+/// `tty` forces a pseudo-terminal (`-tt`): when the daemon's ssh dies,
+/// the pty hangs up and SIGHUP reaps the whole remote process group --
+/// without it an interrupted job leaks its VM and kernel build.
+fn ssh_cmd(host: &str, remote: &str, tty: bool) -> Command {
     let mut c = Command::new("ssh");
+    if tty {
+        c.arg("-tt");
+    }
     c.args(SSH_OPTS).arg(host).arg(remote);
     c
 }
@@ -110,7 +116,7 @@ fn job_env_prefix(env: &str, ws: &str) -> String {
 async fn run_step(ctx: &JobContext, host: &str, remote: &str, desc: &str) -> Result<(), TaskError> {
     ctx.log_line(format!("=== {} ===", desc));
     let status = ctx
-        .run_command(ssh_cmd(host, remote))
+        .run_command(ssh_cmd(host, remote, false))
         .await
         .map_err(|e| TaskError::Retry(format!("{desc}: {e}")))?;
     if !status.success() {
@@ -218,7 +224,9 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
     } else {
         inner
     };
-    ctx.run_command(ssh_cmd(&host, &run))
+    // -tt: force a pty so a dropped ssh hangs up and SIGHUP reaps the
+    // supervisor, the kernel build, and the VM together.
+    ctx.run_command(ssh_cmd(&host, &run, true))
         .await
         .map_err(|e| TaskError::Retry(format!("running supervisor: {e}")))?;
 
