@@ -251,8 +251,16 @@ fn results_to_capnp(
         result.set_status(result_in.status);
     }
 
+    // Unique temp name per call: many jobs for one commit can finish at
+    // once (the daemon's window concentrates on a single commit), and a
+    // shared "<commit>.capnp.new" races — the loser's rename() ENOENTs.
+    static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let fname = output_dir.join(format!("{commit_id}.capnp"));
-    let fname_new = output_dir.join(format!("{commit_id}.capnp.new"));
+    let fname_new = output_dir.join(format!(
+        "{commit_id}.capnp.{}.{}.new",
+        std::process::id(),
+        TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    ));
 
     let mut out = File::create(&fname_new).map(std::io::BufWriter::new)?;
     serialize::write_message(&mut out, &message)?;

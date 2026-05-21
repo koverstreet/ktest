@@ -261,11 +261,11 @@ pub fn desired_jobs(rc: &CiConfig, limit: usize) -> Vec<Job> {
                         nice,
                         duration,
                     });
+                    if out.len() >= limit {
+                        return out;
+                    }
                 }
             }
-        }
-        if out.len() >= limit {
-            break;
         }
     }
     out
