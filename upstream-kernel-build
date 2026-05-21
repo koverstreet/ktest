@@ -27,6 +27,7 @@ ARCH="$(uname -m)"
 DRY_RUN=false
 VERBOSE=false
 FORCE=false
+BUILD_FILTER=""
 
 usage() {
     cat <<EOF
@@ -36,6 +37,7 @@ Usage: upstream-kernel-build [options]
 
   -c <file>     config (default: $CONFIG_PATH)
   -a <arch>     architecture (default: $ARCH)
+  -b <name>     build only this <release>-<variant> (e.g. stable-default)
   -f            force rebuild (ignore manifest, wipe matching store entries)
   -n            dry run (no fetch, no build)
   -v            verbose
@@ -43,10 +45,11 @@ Usage: upstream-kernel-build [options]
 EOF
 }
 
-while getopts "c:a:fnvh" arg; do
+while getopts "c:a:b:fnvh" arg; do
     case $arg in
 	c) CONFIG_PATH=$OPTARG ;;
 	a) ARCH=$OPTARG ;;
+	b) BUILD_FILTER=$OPTARG ;;
 	f) FORCE=true ;;
 	n) DRY_RUN=true ;;
 	v) VERBOSE=true ;;
@@ -303,6 +306,9 @@ main() {
     # Phase 2: build each (release, variant) that isn't already in the store.
     local failed=0
     while IFS=$'\t' read -r release variant source branch url; do
+	if [[ -n $BUILD_FILTER && "$release-$variant" != "$BUILD_FILTER" ]]; then
+	    continue
+	fi
 	if [[ $url = MISSING ]]; then
 	    log "release '$release' references unknown source '$source'"
 	    failed=$((failed + 1))
