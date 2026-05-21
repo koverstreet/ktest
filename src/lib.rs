@@ -262,10 +262,15 @@ fn results_to_capnp(
         TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
     ));
 
-    let mut out = File::create(&fname_new).map(std::io::BufWriter::new)?;
-    serialize::write_message(&mut out, &message)?;
-    out.into_inner()?;
-    std::fs::rename(fname_new, fname)?;
+    let mut out = File::create(&fname_new)
+        .map(std::io::BufWriter::new)
+        .with_context(|| format!("creating {}", fname_new.display()))?;
+    serialize::write_message(&mut out, &message)
+        .with_context(|| format!("writing {}", fname_new.display()))?;
+    out.into_inner()
+        .with_context(|| format!("flushing {}", fname_new.display()))?;
+    std::fs::rename(&fname_new, &fname)
+        .with_context(|| format!("renaming {} -> {}", fname_new.display(), fname.display()))?;
 
     Ok(())
 }
@@ -277,7 +282,7 @@ pub fn commit_update_results_from_fs(ktestrc: &Ktestrc, commit_id: &str) {
 pub fn commit_update_results(output_dir: &Path, commit_id: &str) {
     let results = commitdir_get_results_fs(output_dir, commit_id);
     results_to_capnp(output_dir, commit_id, None, &results)
-        .map_err(|e| eprintln!("error generating capnp: {}", e))
+        .map_err(|e| eprintln!("error generating capnp for {}: {:#}", commit_id, e))
         .ok();
 }
 
@@ -288,7 +293,7 @@ pub fn commit_update_results_with_message(
 ) {
     let results = commitdir_get_results_fs(output_dir, commit_id);
     results_to_capnp(output_dir, commit_id, Some(message), &results)
-        .map_err(|e| eprintln!("error generating capnp: {}", e))
+        .map_err(|e| eprintln!("error generating capnp for {}: {:#}", commit_id, e))
         .ok();
 }
 
