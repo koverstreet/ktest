@@ -431,6 +431,31 @@ fn prewarm_ssh_masters(rc: &CiConfig) {
     }
 }
 
+/// Background thread: keep the CI's git repos current. `refill` builds
+/// the job matrix as a pure read of local refs (jobs.rs does not fetch),
+/// so without this nothing pushed upstream ever gets picked up. Fetches
+/// every configured repo's remotes once a minute.
+fn spawn_repo_fetcher(rc: &CiConfig) {
+    let mut repos: Vec<std::path::PathBuf> = rc.ktest.repos.values().cloned().collect();
+    repos.push(rc.ktest.linux_repo.clone());
+
+    std::thread::spawn(move || loop {
+        for repo in &repos {
+            match std::process::Command::new("git")
+                .arg("-C")
+                .arg(repo)
+                .args(["fetch", "--all", "--prune", "--quiet"])
+                .status()
+            {
+                Ok(s) if s.success() => {}
+                Ok(s) => eprintln!("ci-daemon: git fetch {}: exited {}", repo.display(), s),
+                Err(e) => eprintln!("ci-daemon: git fetch {}: {}", repo.display(), e),
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    });
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     let rc = ciconfig_read()?;
@@ -463,6 +488,9 @@ fn main() -> Result<()> {
         rc.ktest.executors.len(),
         total_slots,
     );
+
+    // Keep the CI repos current; the job matrix is a pure read of local refs.
+    spawn_repo_fetcher(&rc);
 
     let mut job_map: HashMap<JobKey, JobId> = HashMap::new();
     let window = args.limit.unwrap_or(WINDOW);
