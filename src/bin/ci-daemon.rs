@@ -1,20 +1,18 @@
 // ci-daemon: push-mode CI job runner.
 //
 // Runs on the jobserver. Builds a jobkit Choir with one executor per
-// configured worker host (each running up to `slots` jobs at once),
-// then loops:
-//   * compute the desired job set (ci_cgi::jobs::desired_jobs)
-//   * reconcile against the in-memory job table — submit new, cancel +
-//     drop stale (force-pushed, done)
+// worker-host slot, then keeps a bounded *window* of jobs submitted:
+//   * desired_jobs() yields the newest commits' jobs first, capped
+//   * submit that window; as it drains, regenerate and top it back up
 //   * write a status snapshot for the cgi
 //
-// Each job is one subtest. The executor closure ssh's the worker host
-// through checkout → prepare → build supervisor → run → pull results;
-// "what is running" is the in-memory table, not lockfiles.
+// The matrix can be millions of jobs; jobkit only ever holds the
+// window (~2000). Each job is one subtest — the executor closure ssh's
+// the worker through checkout → prepare → build supervisor → run →
+// pull results.
 //
-// Deferred: gcov/lcov upload and log compression (peripheral to the
-// core test-running path); the daemon's own git fetch (the old CI's
-// fetch keeps the branch refs fresh during the transition).
+// Deferred: gcov/lcov upload; the daemon's own git fetch and reconcile
+// on branch change (it currently refills only as the window drains).
 
 use anyhow::{anyhow, Result};
 use ci_cgi::jobs::{desired_jobs, Job, JobKey};
@@ -25,17 +23,17 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// How often to recompute the desired set and reconcile.
-const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
+/// Bounded job window: jobkit never holds much more than this — the
+/// desired matrix itself can be millions of jobs.
+const WINDOW: usize = 2000;
 
 /// How often the status snapshot is rewritten, so the cgi's live page
 /// stays fresh between reconciles.
 const STATUS_INTERVAL: Duration = Duration::from_secs(2);
 
-/// Reconcile ticks between periodic-maintenance runs — gc-results and
-/// gen-avg-duration, the upkeep the old ci-loop used to drive.
-const GC_EVERY: u64 = 10;
-const DURATIONS_EVERY: u64 = 60;
+/// How often to run periodic upkeep — gc-results and gen-avg-duration,
+/// the maintenance the old ci-loop used to drive.
+const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
 /// ssh options: connection multiplexing so the daemon's many per-step
 /// ssh calls to one worker share a single connection. BatchMode so a
@@ -45,6 +43,7 @@ const SSH_OPTS: &[&str] = &[
     "-o", "ControlPath=~/.ssh/ci-master-%r@%h:%p",
     "-o", "ControlPersist=10m",
     "-o", "ServerAliveInterval=10",
+    "-o", "ConnectTimeout=20",
     "-o", "BatchMode=yes",
     // Trust a worker's host key on first contact (the farm is ours);
     // BatchMode can't prompt, so an unknown host would otherwise fail.
@@ -299,53 +298,36 @@ fn make_job_spec(ci_host: &str, rc: &CiConfig, job: &Job) -> JobSpec {
 
 // --- reconcile + status ---
 
-/// Reconcile the desired job set against the in-memory job table.
-fn reconcile(
+/// Top the job window back up. Finished jobs are dropped from the choir
+/// first — a still-desired one (e.g. a failed infra step) is then free
+/// to be re-submitted on this same pass. Then submit the newest desired
+/// jobs not already tracked; desired_jobs() caps itself at `window`, so
+/// the choir never holds much more than that.
+fn refill(
     choir: &Choir,
     job_map: &mut HashMap<JobKey, JobId>,
     ci_host: &str,
     rc: &CiConfig,
-    limit: Option<usize>,
-    desired: &[Job],
+    window: usize,
 ) {
-    let desired_keys: HashSet<&JobKey> = desired.iter().map(|j| &j.key).collect();
+    choir.remove(|_| true);
+    let live: HashSet<JobId> = choir.status().jobs.iter().map(|j| j.id).collect();
+    job_map.retain(|_, id| live.contains(id));
 
-    // Submit jobs wanted but not yet tracked, up to --limit.
+    let desired = desired_jobs(rc, window);
     let mut submitted = 0;
-    for job in desired {
+    for job in &desired {
         if job_map.contains_key(&job.key) {
             continue;
-        }
-        if limit.map_or(false, |n| job_map.len() >= n) {
-            break;
         }
         let id = choir.submit(make_job_spec(ci_host, rc, job));
         job_map.insert(job.key.clone(), id);
         submitted += 1;
     }
-
-    // Cancel jobs no longer wanted (force-pushed away, or now done);
-    // remove drops the ones that have actually finished.
-    let stale: HashSet<JobId> = job_map
-        .iter()
-        .filter(|(key, _)| !desired_keys.contains(*key))
-        .map(|(_, id)| *id)
-        .collect();
-    if !stale.is_empty() {
-        choir.cancel(|j| stale.contains(&j.id));
-        choir.remove(|j| stale.contains(&j.id));
-    }
-
-    // Drop map entries for jobs jobkit has removed from the table, so a
-    // key that becomes wanted again later is re-submitted.
-    let live: HashSet<JobId> = choir.status().jobs.iter().map(|j| j.id).collect();
-    job_map.retain(|_, id| live.contains(id));
-
     eprintln!(
-        "reconcile: {} desired, {} submitted, {} stale, {} tracked",
+        "refill: {} desired, {} submitted, {} tracked",
         desired.len(),
         submitted,
-        stale.len(),
         job_map.len(),
     );
 }
@@ -382,12 +364,23 @@ fn run_maintenance(name: &str) {
 /// SSH_OPTS); without this, 50 executors each open a fresh connection
 /// at once and storm the workers' sshd MaxStartups.
 fn prewarm_ssh_masters(rc: &CiConfig) {
+    use std::process::Stdio;
     for host in rc.ktest.executors.keys() {
-        let mut cmd = std::process::Command::new("ssh");
-        cmd.args(SSH_OPTS).arg(host).arg("true");
+        // `timeout` caps the attempt so a wedged ssh can't hang daemon
+        // startup; stdio is detached so the persisted master doesn't
+        // hold the daemon's streams open.
+        let mut cmd = std::process::Command::new("timeout");
+        cmd.arg("30")
+            .arg("ssh")
+            .args(SSH_OPTS)
+            .arg(host)
+            .arg("true")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
         match cmd.status() {
             Ok(s) if s.success() => eprintln!("ci-daemon: ssh master to {} ready", host),
-            Ok(s) => eprintln!("ci-daemon: ssh master to {} exited {:?}", host, s.code()),
+            Ok(s) => eprintln!("ci-daemon: ssh master to {} failed (exit {:?})", host, s.code()),
             Err(e) => eprintln!("ci-daemon: ssh master to {}: {}", host, e),
         }
     }
@@ -427,10 +420,11 @@ fn main() -> Result<()> {
     );
 
     let mut job_map: HashMap<JobKey, JobId> = HashMap::new();
-    let mut tick = 0u64;
+    let window = args.limit.unwrap_or(WINDOW);
+    let mut last_maintenance: Option<std::time::Instant> = None;
 
     loop {
-        reconcile(&choir, &mut job_map, &ci_host, &rc, args.limit, &desired_jobs(&rc));
+        refill(&choir, &mut job_map, &ci_host, &rc, window);
         write_status(&choir, &rc);
 
         if args.once {
@@ -439,21 +433,22 @@ fn main() -> Result<()> {
             return Ok(());
         }
 
-        // Periodic maintenance the old ci-loop used to drive.
-        if tick % GC_EVERY == 0 {
+        // Periodic upkeep the old ci-loop used to drive.
+        if last_maintenance.map_or(true, |t| t.elapsed() > MAINTENANCE_INTERVAL) {
             run_maintenance("gc-results");
-        }
-        if tick % DURATIONS_EVERY == 0 {
             run_maintenance("gen-avg-duration");
+            last_maintenance = Some(std::time::Instant::now());
         }
-        tick += 1;
 
-        // Rewrite the status snapshot every STATUS_INTERVAL so the cgi's
-        // live page stays current; reconcile only every RECONCILE_INTERVAL.
-        let next_reconcile = std::time::Instant::now() + RECONCILE_INTERVAL;
-        while std::time::Instant::now() < next_reconcile {
+        // Rewrite the status snapshot every STATUS_INTERVAL; refill once
+        // the window has drained low enough to want topping up.
+        loop {
             std::thread::sleep(STATUS_INTERVAL);
             write_status(&choir, &rc);
+            let pending: usize = choir.status().pending_by_group.values().sum();
+            if pending <= window / 4 {
+                break;
+            }
         }
     }
 }

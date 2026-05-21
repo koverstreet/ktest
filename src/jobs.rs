@@ -1,26 +1,27 @@
-// Job-list matrix: the set of test jobs *desired* by the CI config —
-// the full matrix (commits × test_groups × tests × subtests × kernels)
-// minus jobs that already have a result on disk.
+// Job-list matrix: the test jobs the CI config wants run — the matrix
+// (commits × test_groups × tests × subtests × kernels) minus jobs that
+// already have a result on disk.
 //
-// This is the port of gen-job-list's matrix computation for the
-// push-mode daemon. It deliberately omits the lockfile in-flight check:
-// in push mode "what's running" is the daemon's in-memory job table,
-// and reconcile diffs desired_jobs() against that table directly.
+// Ported from gen-job-list for the push-mode daemon. desired_jobs()
+// emits commit-age-major (every config's age-0 / branch-tip jobs, then
+// age-1, …) and stops at a caller-given limit — so the daemon can pull
+// a bounded window of the *newest* commits' work without materializing
+// the whole (potentially millions-of-jobs) matrix.
 //
-// desired_jobs() does not fetch git or refresh result caches — the
-// daemon owns those. It is a pure read of (config, git refs, results).
+// Pure read of (config, git refs, results) — it does not fetch git or
+// refresh result caches; the daemon owns those.
 
 use crate::{
     commitdir_get_results, encode_env, git_get_commit, subtest_result_key, test_stats, CiConfig,
-    Ktestrc, RcTestGroup, TestStats, TestStatus,
+    RcTestGroup, TestStats, TestStatus,
 };
 use memmap::MmapOptions;
 use memoize::memoize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Identity of a test job — the tuple that uniquely names a unit of
-/// test work. Reconcile diffs the desired set against the running set
-/// on this key.
+/// test work. The daemon's job map diffs the desired set on this key.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct JobKey {
     pub user: String,
@@ -95,130 +96,45 @@ fn job_nice(tg: &RcTestGroup, stats: Option<&TestStats>) -> u64 {
     nice
 }
 
-/// Emit the desired jobs for one (branch, test_group, test): walk the
-/// branch's commits, fan out over subtests × kernels, skip any already
-/// done.
-fn branch_group_test_jobs(
-    rc: &Ktestrc,
-    durations: Option<&[u8]>,
-    user: &str,
-    branch: &str,
-    repo: &str,
-    tg: &RcTestGroup,
-    test: &str,
-    out: &mut Vec<Job>,
-) {
-    let env = match encode_env(&tg.env) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("test_group env for branch {} unencodable: {}", branch, e);
-            return;
-        }
-    };
-
-    let repo_path = match rc.repo_path(repo) {
-        Some(p) => p,
-        None => {
-            eprintln!("no path configured for repo {}", repo);
-            return;
-        }
-    };
-    let git = match git2::Repository::open(repo_path) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("error opening {:?}: {}", repo_path, e);
-            return;
-        }
-    };
-
-    let subtests = get_subtests(rc.ktest_dir.join("tests").join(test));
-    if subtests.is_empty() {
-        return;
-    }
-
-    let userbranch = format!("{}/{}", user, branch);
-    let reference = match git_get_commit(&git, userbranch.clone()) {
-        Ok(r) => r,
-        Err(_) => {
-            eprintln!("branch {} not found", userbranch);
-            return;
-        }
-    };
-    let mut walk = match git.revwalk() {
-        Ok(w) => w,
-        Err(e) => {
-            eprintln!("revwalk error for {}: {}", userbranch, e);
-            return;
-        }
-    };
-    if let Err(e) = walk.push(reference.id()) {
-        eprintln!("error walking {}: {}", userbranch, e);
-        return;
-    }
-
-    // Empty kernel list = build the kernel from the commit's own repo.
-    let kernels: Vec<String> = if tg.kernels.is_empty() {
-        vec![String::new()]
-    } else {
-        tg.kernels.clone()
-    };
-
-    for (age, commit) in walk
-        .filter_map(|i| i.ok())
-        .filter_map(|i| git.find_commit(i).ok())
-        .take(tg.max_commits as usize)
-        .enumerate()
-    {
-        let commit = commit.id().to_string();
-        let results = commitdir_get_results(rc, &commit).unwrap_or_default();
-
-        for subtest in &subtests {
-            let stats = test_stats(durations, test, subtest);
-            let nice = job_nice(tg, stats.as_ref());
-            let duration = stats
-                .map(|s| s.duration)
-                .unwrap_or(rc.subtest_duration_def.unwrap_or(30));
-
-            for kernel in &kernels {
-                let key = subtest_result_key(test, subtest, kernel, &env);
-                if results.get(&key).map(|r| result_is_done(r.status)) == Some(true) {
-                    continue;
-                }
-                out.push(Job {
-                    key: JobKey {
-                        user: user.to_string(),
-                        repo: repo.to_string(),
-                        branch: branch.to_string(),
-                        commit: commit.clone(),
-                        kernel: kernel.clone(),
-                        env: env.clone(),
-                        test: test.to_string(),
-                        subtest: subtest.clone(),
-                    },
-                    age: age as u64,
-                    nice,
-                    duration,
-                });
-            }
-        }
-    }
+/// One (user, branch, test_group, test) and its branch's commit list —
+/// enough to emit that test's jobs commit-by-commit.
+struct TestSpec<'a> {
+    user: String,
+    repo: String,
+    branch: String,
+    test: String,
+    env: String,
+    tg: &'a RcTestGroup,
+    subtests: Vec<String>,
+    kernels: Vec<String>,
+    /// Commit ids newest-first, capped at tg.max_commits.
+    commits: Vec<String>,
 }
 
-/// The full set of test jobs the CI config currently wants run: the
-/// matrix minus jobs already done. Pure read — does not fetch git or
-/// touch result caches.
-///
-/// May contain duplicate `JobKey`s if the config routes the same
-/// (test, kernel, env) through two test_groups on one branch; the
-/// daemon's reconcile map collapses those.
-pub fn desired_jobs(rc: &CiConfig) -> Vec<Job> {
-    // Historical per-subtest durations, for the nice/duration hints.
-    let durations_map = std::fs::File::open(rc.ktest.output_dir.join("test_durations.capnp"))
-        .ok()
-        .and_then(|f| unsafe { MmapOptions::new().map(&f).ok() });
-    let durations = durations_map.as_ref().map(|m| m.as_ref());
+/// The branch's commit ids, newest-first, capped at `max`.
+fn branch_commits(git: &git2::Repository, userbranch: &str, max: usize) -> Option<Vec<String>> {
+    let reference = git_get_commit(git, userbranch.to_string())
+        .map_err(|_| eprintln!("branch {} not found", userbranch))
+        .ok()?;
+    let mut walk = git
+        .revwalk()
+        .map_err(|e| eprintln!("revwalk error for {}: {}", userbranch, e))
+        .ok()?;
+    walk.push(reference.id())
+        .map_err(|e| eprintln!("error walking {}: {}", userbranch, e))
+        .ok()?;
+    Some(
+        walk.filter_map(|i| i.ok())
+            .take(max)
+            .map(|id| id.to_string())
+            .collect(),
+    )
+}
 
-    let mut out = Vec::new();
+/// Build one TestSpec per (user, branch, test_group, test) across the
+/// whole CI config, each carrying its branch's commit list.
+fn build_test_specs<'a>(rc: &'a CiConfig) -> Vec<TestSpec<'a>> {
+    let mut specs = Vec::new();
     for (user, userconfig) in &rc.users {
         let userconfig = match userconfig {
             Ok(u) => u,
@@ -228,21 +144,128 @@ pub fn desired_jobs(rc: &CiConfig) -> Vec<Job> {
             for tg_name in &branchconfig.test_groups {
                 let tg = match userconfig.test_groups.get(tg_name) {
                     Some(tg) => tg,
-                    None => continue, // undefined test_group — validated at parse time
+                    None => continue, // undefined group — validated at parse time
+                };
+                let env = match encode_env(&tg.env) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        eprintln!("test_group env for branch {} unencodable: {}", branch, e);
+                        continue;
+                    }
+                };
+                let repo_path = match rc.ktest.repo_path(&branchconfig.repo) {
+                    Some(p) => p,
+                    None => {
+                        eprintln!("no path configured for repo {}", branchconfig.repo);
+                        continue;
+                    }
+                };
+                let git = match git2::Repository::open(repo_path) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("error opening {:?}: {}", repo_path, e);
+                        continue;
+                    }
+                };
+                let userbranch = format!("{}/{}", user, branch);
+                let commits = match branch_commits(&git, &userbranch, tg.max_commits as usize) {
+                    Some(c) => c,
+                    None => continue,
+                };
+                let kernels = if tg.kernels.is_empty() {
+                    vec![String::new()]
+                } else {
+                    tg.kernels.clone()
                 };
                 for test in &tg.tests {
-                    branch_group_test_jobs(
-                        &rc.ktest,
-                        durations,
-                        user,
-                        branch,
-                        &branchconfig.repo,
+                    let test = test.to_string_lossy().to_string();
+                    let subtests = get_subtests(rc.ktest.ktest_dir.join("tests").join(&test));
+                    if subtests.is_empty() {
+                        continue;
+                    }
+                    specs.push(TestSpec {
+                        user: user.clone(),
+                        repo: branchconfig.repo.clone(),
+                        branch: branch.clone(),
+                        test,
+                        env: env.clone(),
                         tg,
-                        &test.to_string_lossy(),
-                        &mut out,
-                    );
+                        subtests,
+                        kernels: kernels.clone(),
+                        commits: commits.clone(),
+                    });
                 }
             }
+        }
+    }
+    specs
+}
+
+/// The desired test jobs, newest-commit-first, capped at `limit`.
+///
+/// Emits commit-age-major: every config's age-0 (branch-tip) jobs, then
+/// age-1, and so on — so a bounded prefix is exactly the newest
+/// commits' work, and the daemon can window without materializing the
+/// whole matrix. Pure read; does not fetch git.
+///
+/// May contain duplicate `JobKey`s if the config routes the same
+/// (test, kernel, env) through two test_groups on one branch; the
+/// daemon's job map collapses those.
+pub fn desired_jobs(rc: &CiConfig, limit: usize) -> Vec<Job> {
+    // Historical per-subtest durations, for the nice/duration hints.
+    let durations_map = std::fs::File::open(rc.ktest.output_dir.join("test_durations.capnp"))
+        .ok()
+        .and_then(|f| unsafe { MmapOptions::new().map(&f).ok() });
+    let durations = durations_map.as_ref().map(|m| m.as_ref());
+
+    let specs = build_test_specs(rc);
+    let max_age = specs.iter().map(|s| s.commits.len()).max().unwrap_or(0);
+
+    // A commit's results are fetched once and shared across the specs
+    // that touch that commit at the same age.
+    let mut results_cache: HashMap<String, _> = HashMap::new();
+    let mut out = Vec::new();
+
+    for age in 0..max_age {
+        for spec in &specs {
+            let commit = match spec.commits.get(age) {
+                Some(c) => c,
+                None => continue,
+            };
+            let results = results_cache
+                .entry(commit.clone())
+                .or_insert_with(|| commitdir_get_results(&rc.ktest, commit).unwrap_or_default());
+            for subtest in &spec.subtests {
+                let stats = test_stats(durations, &spec.test, subtest);
+                let nice = job_nice(spec.tg, stats.as_ref());
+                let duration = stats
+                    .map(|s| s.duration)
+                    .unwrap_or(rc.ktest.subtest_duration_def.unwrap_or(30));
+                for kernel in &spec.kernels {
+                    let key = subtest_result_key(&spec.test, subtest, kernel, &spec.env);
+                    if results.get(&key).map(|r| result_is_done(r.status)) == Some(true) {
+                        continue;
+                    }
+                    out.push(Job {
+                        key: JobKey {
+                            user: spec.user.clone(),
+                            repo: spec.repo.clone(),
+                            branch: spec.branch.clone(),
+                            commit: commit.clone(),
+                            kernel: kernel.clone(),
+                            env: spec.env.clone(),
+                            test: spec.test.clone(),
+                            subtest: subtest.clone(),
+                        },
+                        age: age as u64,
+                        nice,
+                        duration,
+                    });
+                }
+            }
+        }
+        if out.len() >= limit {
+            break;
         }
     }
     out
