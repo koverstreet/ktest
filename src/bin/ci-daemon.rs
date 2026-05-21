@@ -228,6 +228,15 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
     } else {
         inner
     };
+    // Stopgap: if the run fails, git-clean the workspace and try once
+    // more -- a build interrupted mid-write leaves a corrupt cached
+    // object that the incremental rebuild then trusts. Also self-heals
+    // workspaces already poisoned.
+    let run = format!(
+        "{run} || {{ echo '=== run failed -- git clean + retry ==='; \
+         git -C {ws}/{repo} clean -fdqx; {run}; }}",
+        run = run, ws = ws, repo = p.repo,
+    );
     // -tt: force a pty so a dropped ssh hangs up and SIGHUP reaps the
     // supervisor, the kernel build, and the VM together.
     ctx.run_command(ssh_cmd(&host, &run, true))
