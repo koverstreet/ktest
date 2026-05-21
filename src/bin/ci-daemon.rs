@@ -152,7 +152,8 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
     let host = ctx.executor().host.clone();
     let ws = format!("ktest-ci/{}", ctx.slot());
     let basename = result_basename(&p.test, &p.kernel, &p.env);
-    let result_dir = format!("ktest-out/out/{}.{}", basename, p.subtest.replace('/', "."));
+    let subtest_dir = format!("{}.{}", basename, p.subtest.replace('/', "."));
+    let result_dir = format!("ktest-out/out/{}", subtest_dir);
 
     // 1. Check out the repo at the commit. A repo switch (the workspace
     //    has a different repo, or none) wipes the workspace — the stale
@@ -221,16 +222,20 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
         .await
         .map_err(|e| TaskError::Retry(format!("running supervisor: {e}")))?;
 
-    // 5. Pull the subtest's result dir back to the daemon's output_dir.
+    // 5. Pull *only* this job's subtest dir back to the daemon's
+    //    output_dir. Pulling all of ktest-out/out would drag back the
+    //    supervisor's whole-test-file in-progress markers and clobber
+    //    every other subtest's real result.
     ctx.log_line("=== pull results ===".to_string());
     let commit_dir = p.output_dir.join(&p.commit);
     let pull = format!(
-        "mkdir -p {dst} && ssh {opts} {host} 'cd {ws}/ktest-out/out && tar -c .' \
+        "mkdir -p {dst} && ssh {opts} {host} 'cd {ws}/ktest-out/out && tar -c {sub}' \
          | tar -x -C {dst}",
         dst = commit_dir.display(),
         opts = SSH_OPTS.join(" "),
         host = host,
         ws = ws,
+        sub = subtest_dir,
     );
     let mut pull_cmd = Command::new("bash");
     pull_cmd.arg("-c").arg(&pull);
@@ -248,7 +253,7 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
     // Compress the test logs the cgi serves as .br (the worker writes
     // them plain). Best-effort — a missing log is not a job failure.
     ctx.log_line("=== compress logs ===".to_string());
-    let pulled = commit_dir.join(format!("{}.{}", basename, p.subtest.replace('/', ".")));
+    let pulled = commit_dir.join(&subtest_dir);
     for log in ["log", "full_log"] {
         let path = pulled.join(log);
         if path.exists() {
