@@ -59,7 +59,8 @@ for kver_src in /host/$ktest_kernel_binary/lib/modules/*; do
     for entry in "$kver_src"/*; do
         ln -sf "$entry" "/lib/modules/$kver/$(basename "$entry")"
     done
-    ln -sfn /ktest-out "/lib/modules/$kver/updates"
+    mkdir -p /ktest-out/dkms
+    ln -sfn /ktest-out/dkms "/lib/modules/$kver/updates"
 done
 
 dmesg --console-on
