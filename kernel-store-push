@@ -22,6 +22,7 @@ CONFIG_PATH="$KTEST_DATA/farm-workers.json5"
 SRC_KERNELS="$KTEST_DATA/kernels"
 DRY_RUN=false
 VERBOSE=false
+FORCE=false
 
 # ssh for bare remote commands. -n is load-bearing: these run inside a
 # `while read` loop over the worker list, and without it the first ssh
@@ -38,15 +39,19 @@ kernel-store-push — atomically rsync the kernel store to farm workers.
 Usage: kernel-store-push [options]
 
   -c <file>     config (default: $CONFIG_PATH)
+  -s <dir>      kernel store to push from (default: $SRC_KERNELS)
+  -f            force: re-push every entry, replacing any already present
   -n            dry run (list what would be pushed; no rsync)
   -v            verbose
   -h            this help
 EOF
 }
 
-while getopts "c:nvh" arg; do
+while getopts "c:s:fnvh" arg; do
     case $arg in
 	c) CONFIG_PATH=$OPTARG ;;
+	s) SRC_KERNELS=$OPTARG ;;
+	f) FORCE=true ;;
 	n) DRY_RUN=true ;;
 	v) VERBOSE=true ;;
 	h) usage; exit 0 ;;
@@ -133,6 +138,26 @@ push_entry() {
     rsync -a --quiet -e "$RSYNC_SSH" \
 	"$src/" "$target:$remote_staging/"
 
+    # -f: replace the entry in place. Swap the old one aside, move the new
+    # one in, drop the old — two back-to-back renames, so the window where
+    # $remote_final is briefly absent is negligible. A test already running
+    # off this kernel keeps its files through its open fds.
+    if $FORCE; then
+	local remote_old="$remote_parent/.$rel_leaf.old.$$"
+	if ! $SSH "$target" "set -e
+		rm -rf '$remote_old'
+		if [ -e '$remote_final' ]; then
+		    mv -T '$remote_final' '$remote_old'
+		fi
+		mv -T --no-target-directory '$remote_staging' '$remote_final'
+		rm -rf '$remote_old'"; then
+		log "WARN: $target: $entry: replace failed"
+		$SSH "$target" "rm -rf '$remote_staging' '$remote_old'" || true
+		return 1
+	fi
+	return 0
+    fi
+
     # Atomic rename. mv -T on a single filesystem is rename(2); a reader
     # sees either no entry at $remote_final (not yet) or a complete entry
     # (manifest.json present), never partial.
@@ -158,9 +183,15 @@ push_to_worker() {
 	return 1
     }
 
-    # comm -23 = lines in first that aren't in second.
+    # -f re-pushes every entry — a rebuild can change an entry's contents
+    # without changing its version. Otherwise push only what the worker is
+    # missing (comm -23 = lines in the first list absent from the second).
     local to_push
-    to_push=$(comm -23 <(local_entries) <(echo "$on_remote"))
+    if $FORCE; then
+	to_push=$(local_entries)
+    else
+	to_push=$(comm -23 <(local_entries) <(echo "$on_remote"))
+    fi
 
     if [[ -z $to_push ]]; then
 	log "  $target: up to date"
