@@ -13,30 +13,30 @@ if [[ ! -v ktest_interactive ]]; then
 fi
 
 # Scalar defaults: only set if not already provided (by the harness env
-# or an eval'd `deps` output) — an inherited value should win.
-if [[ ! -v ktest_cpus ]]; then
-    ktest_cpus=$(nproc)
-    ktest_mem=""
-    ktest_timeout=""
-    ktest_timeout_multiplier=1
-    ktest_mem_multiplier=1
+# or an eval'd `deps` output) — an inherited value should win. Guarded
+# per-variable: the harness exports an arbitrary subset of ktest_* vars,
+# so a single-variable proxy guard would skip the defaults for the rest.
+: "${ktest_cpus:=$(nproc)}"
+: "${ktest_mem:=}"
+: "${ktest_timeout:=}"
+: "${ktest_timeout_multiplier:=1}"
+: "${ktest_mem_multiplier:=1}"
 
-    # virtio-scsi-pci semes to be buggy: reading the superblock on the root
-    # filesystem randomly returns zeroes
-    #ktest_storage_bus=virtio-scsi-pci
-    ktest_storage_bus=virtio-blk
+# virtio-scsi-pci semes to be buggy: reading the superblock on the root
+# filesystem randomly returns zeroes
+#ktest_storage_bus=virtio-scsi-pci
+: "${ktest_storage_bus:=virtio-blk}"
 
-    ktest_compiler="${CC:-gcc}"
-    ktest_allow_taint=false
+: "${ktest_compiler:=${CC:-gcc}}"
+: "${ktest_allow_taint:=false}"
 
-    ktest_tests_unknown=false
-    ktest_kconfig_base=
-    ktest_no_kbuild=false
-    ktest_no_vm=false
-    ktest_kbuild_target=""
+: "${ktest_tests_unknown:=false}"
+: "${ktest_kconfig_base:=}"
+: "${ktest_no_kbuild:=false}"
+: "${ktest_no_vm:=false}"
+: "${ktest_kbuild_target:=}"
 
-    BUILD_ON_HOST=""
-fi
+: "${BUILD_ON_HOST:=}"
 
 # Accumulator arrays/counter: always start fresh. The test body appends
 # to these (config-scratch-devs, require-kernel-config, …); bash arrays
