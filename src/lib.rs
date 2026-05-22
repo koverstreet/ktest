@@ -297,6 +297,59 @@ pub fn commit_update_results_with_message(
         .ok();
 }
 
+/// Delete result entries left "in progress". Intended for daemon
+/// startup, where every such marker is stale by definition: the daemon
+/// is running nothing, so an Inprogress status on disk is a job a
+/// previous daemon was running when it died. Deleting the entry makes
+/// the subtest look never-run, so desired_jobs() emits it again — which
+/// it will *not* do for a live Inprogress (see job_wanted()).
+pub fn cleanup_inprogress_results(output_dir: &Path) {
+    let entries = match output_dir.read_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("cleanup_inprogress_results: reading {}: {}",
+                      output_dir.display(), e);
+            return;
+        }
+    };
+
+    for commit in entries.filter_map(|i| i.ok()) {
+        // Commit result dirs are named by a full 40-char git sha — this
+        // skips <commit>.capnp files and the daemon's other state.
+        let commit_id = commit.file_name().into_string().unwrap_or_default();
+        if commit_id.len() != 40
+            || !commit_id.bytes().all(|b| b.is_ascii_hexdigit())
+            || !commit.path().is_dir()
+        {
+            continue;
+        }
+
+        // Each subdir is one subtest result; <subdir>/status holds it.
+        let subtests = match commit.path().read_dir() {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let mut deleted = 0;
+        for s in subtests.filter_map(|i| i.ok()) {
+            let status = read_to_string(s.path().join("status"))
+                .map(|t| TestStatus::from_str(&t));
+            if matches!(status, Ok(TestStatus::Inprogress)) {
+                match std::fs::remove_dir_all(s.path()) {
+                    Ok(()) => deleted += 1,
+                    Err(e) => eprintln!("cleanup_inprogress_results: removing {}: {}",
+                                        s.path().display(), e),
+                }
+            }
+        }
+
+        if deleted != 0 {
+            eprintln!("cleanup_inprogress_results: {commit_id}: deleted \
+                       {deleted} stale in-progress result(s)");
+            commit_update_results(output_dir, &commit_id);
+        }
+    }
+}
+
 /// Rewrite an existing capnp file to add/update the commit message,
 /// preserving the test results from the capnp (not re-reading from filesystem).
 /// Used by migrate-capnp where commit dirs may have been GC'd.

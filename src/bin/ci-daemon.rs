@@ -16,7 +16,7 @@
 
 use anyhow::{anyhow, Result};
 use ci_cgi::jobs::{desired_jobs, Job, JobKey};
-use ci_cgi::{ciconfig_read, commit_update_results, result_basename, subtest_result_key, CiConfig, TestStatus};
+use ci_cgi::{ciconfig_read, cleanup_inprogress_results, commit_update_results, result_basename, subtest_result_key, CiConfig, TestStatus};
 use clap::Parser;
 use jobkit::{
     ClaimedJob, Choir, Command, ExecutorConfig, ExecutorHandle, JobId, JobOutcome, JobSpec,
@@ -617,6 +617,11 @@ fn main() -> Result<()> {
         .ci_host
         .clone()
         .ok_or_else(|| anyhow!("ci_host not set in ~/.ktest/ktest-ci.json5"))?;
+
+    // A result still marked "in progress" at startup is stale — the
+    // daemon that was running it died. Delete those so the subtests are
+    // re-emitted as runnable; desired_jobs() skips a *live* Inprogress.
+    cleanup_inprogress_results(&rc.ktest.output_dir);
 
     let choir: Choir<JobParams> = Choir::new(rc.ktest.output_dir.join("ci-daemon-logs"));
 

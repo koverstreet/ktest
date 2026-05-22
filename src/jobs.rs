@@ -98,10 +98,12 @@ fn get_subtests(test_path: PathBuf) -> Vec<String> {
 ///   - Notstarted — the test run never started — the VM didn't come
 ///                  up, or the supervisor couldn't launch it. A
 ///                  CI-side failure; terminal, surfaced not re-run.
-/// Not verdicts — must re-run:
-///   - Inprogress — still running, or a stale marker from a daemon
-///                  restart (the in-memory table tracks the real set).
-///   - Unknown    — a garbled or partially-written status file.
+/// Not verdicts:
+///   - Unknown    — a garbled or partially-written status file; re-run.
+///   - Inprogress — a job in flight: not a verdict, but desired_jobs()
+///                  must not re-emit it either — that would double-run
+///                  the VM (see job_wanted()). Stale Inprogress markers
+///                  from a crashed daemon are deleted at startup.
 ///
 /// Whitelist, not blacklist: a future TestStatus variant defaults to
 /// "not done" — at worst a wasted re-run, never a silent loss.
@@ -109,6 +111,18 @@ fn result_is_done(status: TestStatus) -> bool {
     matches!(status,
              TestStatus::Passed | TestStatus::Failed |
              TestStatus::Notrun | TestStatus::Notstarted)
+}
+
+/// Whether desired_jobs() should emit a job for a subtest, given its
+/// recorded result status (None = no result yet). Emit when there is no
+/// result, or a non-verdict, non-running one (Unknown); skip a verdict,
+/// and skip Inprogress — that job is in flight, and re-emitting it would
+/// double-run the VM.
+fn job_wanted(status: Option<TestStatus>) -> bool {
+    match status {
+        None => true,
+        Some(s) => !result_is_done(s) && s != TestStatus::Inprogress,
+    }
 }
 
 /// Niceness for one subtest: the test_group's base nice plus the
@@ -277,7 +291,7 @@ pub fn desired_jobs(rc: &CiConfig, limit: usize) -> Vec<Job> {
                     .unwrap_or(rc.ktest.subtest_duration_def.unwrap_or(30));
                 for kernel in &spec.kernels {
                     let key = subtest_result_key(&spec.test, subtest, kernel, &spec.env);
-                    if results.get(&key).map(|r| result_is_done(r.status)) == Some(true) {
+                    if !job_wanted(results.get(&key).map(|r| r.status)) {
                         continue;
                     }
                     out.push(Job {
@@ -319,5 +333,13 @@ mod tests {
         // not verdicts — must re-run, not silently "done"
         assert!(!result_is_done(TestStatus::Inprogress)); // still running
         assert!(!result_is_done(TestStatus::Unknown));    // garbled status
+    }
+
+    #[test]
+    fn inprogress_is_not_re_emitted() {
+        assert!(job_wanted(None));                          // never run
+        assert!(job_wanted(Some(TestStatus::Unknown)));     // garbled — re-run
+        assert!(!job_wanted(Some(TestStatus::Passed)));     // verdict
+        assert!(!job_wanted(Some(TestStatus::Inprogress))); // in flight — don't double-run
     }
 }
