@@ -68,13 +68,21 @@ fn get_subtests(test_path: PathBuf) -> Vec<String> {
     }
 }
 
-/// True once a result exists and is not Inprogress: the job is done and
-/// re-running won't change the verdict — Notstarted/Unknown count, a
-/// result entry exists. Inprogress is *not* done; in push mode the
-/// daemon's in-memory table tracks what is actually running, so a stale
-/// Inprogress (e.g. left by a daemon restart) correctly re-runs.
+/// True once a *verdict* was recorded — the job is done, re-running
+/// won't change it. Only Passed, Failed, and Notrun (a test reporting
+/// it deliberately did not run) are verdicts. The rest are not, and
+/// must re-run:
+///   - Inprogress  — still running (or a stale marker from a daemon
+///                   restart; the in-memory table tracks the real set)
+///   - Unknown     — a garbled or partially-written status file
+///   - Notstarted  — a CI failure to *start* the test: an error, not
+///                   a result
+///
+/// Whitelist, not blacklist: a future TestStatus variant defaults to
+/// "not done" — at worst a wasted re-run, never a silent loss.
 fn result_is_done(status: TestStatus) -> bool {
-    status != TestStatus::Inprogress
+    matches!(status,
+             TestStatus::Passed | TestStatus::Failed | TestStatus::Notrun)
 }
 
 /// Niceness for one subtest: the test_group's base nice plus the
@@ -276,12 +284,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn done_excludes_only_inprogress() {
+    fn done_needs_a_verdict() {
+        // verdicts — re-running won't change them
         assert!(result_is_done(TestStatus::Passed));
         assert!(result_is_done(TestStatus::Failed));
         assert!(result_is_done(TestStatus::Notrun));
-        assert!(result_is_done(TestStatus::Notstarted));
-        assert!(result_is_done(TestStatus::Unknown));
-        assert!(!result_is_done(TestStatus::Inprogress));
+        // not verdicts — must re-run, not silently "done"
+        assert!(!result_is_done(TestStatus::Inprogress)); // still running
+        assert!(!result_is_done(TestStatus::Unknown));    // garbled status
+        assert!(!result_is_done(TestStatus::Notstarted)); // CI failed to start it
     }
 }
