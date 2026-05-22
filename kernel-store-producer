@@ -7,6 +7,13 @@
 # worker the tarball is unpacked into ~/.ktest/kernels-new and swapped into
 # place against ~/.ktest/kernels with `mv --exchange`; the displaced old
 # store is then removed.
+#
+# Modes (default is build + pack + deploy in one shot):
+#   --pack-only      Build + pack, then stop. Tarball is kept on success so
+#                    a subsequent --deploy-only can pick it up.
+#   --deploy-only    Skip build/pack; deploy the existing tarball.
+#   --dry-run, -n    Print scp/ssh deploy commands instead of running them.
+#                    The tarball is preserved so a real deploy can follow.
 
 set -o nounset
 set -o errexit
@@ -19,14 +26,66 @@ CONFIG_PATH="${KTEST_CI_CONFIG:-$KTEST_DATA/ktest-ci.json5}"
 
 SSH="ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new"
 
-# Build the store into a temp dir on real disk (it's many GB — keep it off
+# Build the store into a real-disk staging dir (it's many GB — keep it off
 # /tmp, which may be tmpfs). Script-scoped, not main()-local, so the EXIT
 # trap can still see them after main() returns.
 new="$KTEST_DATA/kernels-new"
 tarball="$new.tar.zst"
-trap 'rm -rf "$new" "$tarball"' EXIT
 
 log() { echo "kernel-store-producer: $*"; }
+
+usage() {
+    cat <<EOF
+Usage: kernel-store-producer [OPTIONS]
+
+  --pack-only        Build and pack only; leave the tarball at
+                     $tarball for a later deploy.
+  --deploy-only      Skip build/pack; deploy the existing tarball at
+                     $tarball.
+  --dry-run, -n      Print scp/ssh deploy commands instead of running them.
+                     The tarball is preserved on a dry deploy so a real
+                     run afterwards can use it.
+  -h, --help         Show this help.
+
+Default: build + pack + deploy.
+EOF
+}
+
+do_pack=true
+do_deploy=true
+dry_run=false
+
+while (($#)); do
+    case $1 in
+        --pack-only)   do_deploy=false ;;
+        --deploy-only) do_pack=false ;;
+        --dry-run|-n)  dry_run=true ;;
+        -h|--help)     usage; exit 0 ;;
+        *)             log "unknown argument: $1"; usage >&2; exit 1 ;;
+    esac
+    shift
+done
+
+# Cleanup policy (driven by mode):
+#   --deploy-only:           don't touch anything. The tarball is the
+#                            caller's; we didn't create the staging dir.
+#   pack ran, failure (rc!=0): always remove staging + tarball — a partial
+#                            tarball must not survive to the next run.
+#   pack ran, success, real deploy ran (default): remove both — end of life.
+#   pack ran, success, --pack-only or --dry-run: keep the tarball for the
+#                            next call; remove only the staging dir.
+on_exit() {
+    local rc=$?
+    if $do_pack; then
+        rm -rf "$new"
+        if (( rc != 0 )); then
+            rm -f "$tarball"
+        elif $do_deploy && ! $dry_run; then
+            rm -f "$tarball"
+        fi
+    fi
+}
+trap on_exit EXIT
 
 # JSON5 → JSON: strip // comments (only after whitespace/SOL so URLs
 # survive), drop trailing commas, quote unquoted object keys. Same
@@ -47,44 +106,61 @@ read_workers() {
     json5_to_json "$CONFIG_PATH" | jq -r '.executors | keys[]'
 }
 
+# Print-or-run wrapper for --dry-run. Used for the outward-facing deploy
+# commands (scp/ssh) only; local pack/build commands are not gated, since
+# you can already skip them with --deploy-only.
+run() {
+    if $dry_run; then
+        echo "kernel-store-producer: DRY-RUN: $*"
+    else
+        "$@"
+    fi
+}
+
 main() {
-    log "fetching distro kernels"
-    "$ktest_dir/target/release/distro-kernel-fetch" --output "$new"
+    if $do_pack; then
+        log "fetching distro kernels"
+        "$ktest_dir/target/release/distro-kernel-fetch" --output "$new"
 
-    log "building upstream kernels"
-    "$ktest_dir/upstream-kernel-build" -o "$new"
+        log "building upstream kernels"
+        "$ktest_dir/upstream-kernel-build" -o "$new"
 
-    log "packing tarball"
-    # Archive the kernels-new/ directory itself, so the tarball has a
-    # single toplevel dir rather than exploding into the cwd.
-    tar --zstd -cf "$tarball" -C "$KTEST_DATA" kernels-new
+        log "packing tarball"
+        # Archive the kernels-new/ directory itself, so the tarball has a
+        # single toplevel dir rather than exploding into the cwd.
+        tar --zstd -cf "$tarball" -C "$KTEST_DATA" kernels-new
+    fi
 
-    # Capture the worker list up front. A `done < <(read_workers)` process
-    # substitution would hide a read_workers failure from errexit/pipefail
-    # (a JSON5 typo -> jq fails -> silent deploy to zero workers, exit 0);
-    # a failed command substitution in an assignment does abort.
-    local workers
-    workers=$(read_workers)
+    if $do_deploy; then
+        [[ -f $tarball ]] || { log "no tarball at $tarball (run --pack-only first?)"; exit 1; }
 
-    while IFS= read -r worker; do
-        [[ -n $worker ]] || continue
-        log "deploying to $worker"
-        scp -q "$tarball" "$worker:.ktest/kernel-store.tar.zst"
-        $SSH "$worker" '
-            set -e
-            cd .ktest
-            rm -rf kernels-new
-            tar --zstd -xf kernel-store.tar.zst
-            rm kernel-store.tar.zst
-            # -T: kernels is the literal target, not a dir to move into.
-            # mkdir -p: --exchange needs both dirs (first deploy has none).
-            mkdir -p kernels
-            mv -T --exchange kernels-new kernels
-            rm -rf kernels-new
-        '
-    done <<< "$workers"
+        # Capture the worker list up front. A `done < <(read_workers)` process
+        # substitution would hide a read_workers failure from errexit/pipefail
+        # (a JSON5 typo -> jq fails -> silent deploy to zero workers, exit 0);
+        # a failed command substitution in an assignment does abort.
+        local workers
+        workers=$(read_workers)
+
+        while IFS= read -r worker; do
+            [[ -n $worker ]] || continue
+            log "deploying to $worker"
+            run scp -q "$tarball" "$worker:.ktest/kernel-store.tar.zst"
+            run $SSH "$worker" '
+                set -e
+                cd .ktest
+                rm -rf kernels-new
+                tar --zstd -xf kernel-store.tar.zst
+                rm kernel-store.tar.zst
+                # -T: kernels is the literal target, not a dir to move into.
+                # mkdir -p: --exchange needs both dirs (first deploy has none).
+                mkdir -p kernels
+                mv -T --exchange kernels-new kernels
+                rm -rf kernels-new
+            '
+        done <<< "$workers"
+    fi
 
     log "done"
 }
 
-main "$@"
+main
