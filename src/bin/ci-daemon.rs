@@ -7,9 +7,9 @@
 //   * write a status snapshot for the cgi
 //
 // The matrix can be millions of jobs; jobkit only ever holds the
-// window (~2000). Each job is one subtest — the executor closure ssh's
-// the worker through checkout → prepare → build supervisor → run →
-// pull results.
+// window (~2000). Each job is one subtest; an executor claims a
+// duration-bounded *batch* of one test file's subtests and runs them in
+// a single VM — checkout → build supervisor → run → pull results.
 //
 // Deferred: gcov/lcov upload; the daemon's own git fetch and reconcile
 // on branch change (it currently refills only as the window drains).
@@ -18,7 +18,10 @@ use anyhow::{anyhow, Result};
 use ci_cgi::jobs::{desired_jobs, Job, JobKey};
 use ci_cgi::{ciconfig_read, commit_update_results, result_basename, subtest_result_key, CiConfig, TestStatus};
 use clap::Parser;
-use jobkit::{Choir, Command, ExecutorConfig, JobContext, JobId, JobSpec, TaskError};
+use jobkit::{
+    ClaimedJob, Choir, Command, ExecutorConfig, ExecutorHandle, JobId, JobOutcome, JobSpec,
+    TaskError,
+};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -117,9 +120,14 @@ fn job_env_prefix(env: &str, ws: &str) -> String {
 
 /// Run one ssh step that must succeed; non-zero exit or a spawn failure
 /// is infrastructure failure → retry the job.
-async fn run_step(ctx: &JobContext, host: &str, remote: &str, desc: &str) -> Result<(), TaskError> {
-    ctx.log_line(format!("=== {} ===", desc));
-    let status = ctx
+async fn run_step(
+    handle: &ExecutorHandle<JobParams>,
+    host: &str,
+    remote: &str,
+    desc: &str,
+) -> Result<(), TaskError> {
+    handle.log_line(format!("=== {} ===", desc));
+    let status = handle
         .run_command(ssh_cmd(host, remote, false))
         .await
         .map_err(|e| TaskError::Retry(format!("{desc}: {e}")))?;
@@ -149,8 +157,8 @@ fn brotli_compress(path: &std::path::Path) -> std::io::Result<()> {
     std::fs::remove_file(path)
 }
 
-/// Run a job's subtests on `ctx`'s executor: check out the repo, build
-/// the supervisor, then a resume loop — run the not-yet-completed
+/// Run one claimed batch on `handle`'s executor: check out the repo,
+/// build the supervisor, then a resume loop — run the not-yet-completed
 /// subtests in one VM, and retry any the VM died before reaching.
 /// Ported from test-git-branch.sh's run_test_job.
 ///
@@ -161,22 +169,27 @@ fn brotli_compress(path: &std::path::Path) -> std::io::Result<()> {
 /// retried in a fresh VM. A run that completes none of them is an
 /// infrastructure failure.
 ///
-/// `remaining` is a list so a later grab-N change can hand one VM run
-/// several subtests; today it holds the job's single subtest, so the
-/// loop runs once and the retry path is dormant.
+/// `batch` is the subtests an executor claimed together — all of one
+/// test file at one (user, repo, branch, commit, kernel, env), bounded
+/// by subtest_duration_max. They run in a single VM boot.
 ///
 /// Returns Err only on infrastructure failure (a step couldn't run).
-async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
+async fn run_ktest_job(
+    handle: &ExecutorHandle<JobParams>,
+    batch: &[ClaimedJob<JobParams>],
+) -> Result<(), TaskError> {
+    let p = &batch[0].payload;
     if p.repo_url.is_empty() {
         return Err(TaskError::Fatal(format!("repo {} not configured", p.repo)));
     }
-    let host = ctx.executor().host.clone();
-    let ws = format!("ktest-ci/{}", ctx.slot());
+    let host = handle.executor().host.clone();
+    let ws = format!("ktest-ci/{}", handle.slot());
     let basename = result_basename(&p.test, &p.kernel, &p.env);
     let commit_dir = p.output_dir.join(&p.commit);
 
-    // Subtests still owed a verdict. Today: the job's single subtest.
-    let mut remaining: Vec<String> = vec![p.subtest.clone()];
+    // Subtests still owed a verdict — the whole claimed batch to start.
+    let mut remaining: Vec<String> =
+        batch.iter().map(|j| j.payload.subtest.clone()).collect();
 
     // 1. Check out the repo at the commit. A repo switch (different
     //    repo, or none) wipes the workspace — the stale checkout and
@@ -193,10 +206,10 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
          test \"$(git rev-parse HEAD)\" = \"{commit}\"",
         ws = ws, repo = p.repo, url = p.repo_url, commit = p.commit,
     );
-    run_step(&ctx, &host, &checkout, "checkout").await?;
+    run_step(handle, &host, &checkout, "checkout").await?;
 
     // 2. Build the supervisor (idempotent C helper).
-    run_step(&ctx, &host, "make -C ~/ktest/lib supervisor", "build supervisor").await?;
+    run_step(handle, &host, "make -C ~/ktest/lib supervisor", "build supervisor").await?;
 
     // 3. Clean ktest-out (keep the kernel build cache) and mark every
     //    subtest in-progress — on the worker so a dead VM still leaves
@@ -208,7 +221,7 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
         if let Err(e) = std::fs::create_dir_all(&d)
             .and_then(|()| std::fs::write(d.join("status"), "IN PROGRESS\n"))
         {
-            ctx.log_line(format!("marking {st} in-progress: {e}"));
+            handle.log_line(format!("marking {st} in-progress: {e}"));
         }
     }
     commit_update_results(&p.output_dir, &p.commit);
@@ -228,7 +241,7 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
          {mark}",
         ws = ws, mark = mark,
     );
-    run_step(&ctx, &host, &prepare, "prepare").await?;
+    run_step(handle, &host, &prepare, "prepare").await?;
 
     // Resume loop: run the not-yet-completed subtests in one VM; retry
     // any the VM died before reaching.
@@ -236,7 +249,7 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
         // 4. Run the supervisor over `remaining`, one VM. Its exit
         //    status is ignored — verdicts are in the result files; only
         //    a failure to *run* it is an error.
-        ctx.log_line(format!("=== run: {} ===", remaining.join(" ")));
+        handle.log_line(format!("=== run: {} ===", remaining.join(" ")));
         let runner = if p.kernel.is_empty() {
             format!("~/ktest/build-test-kernel run -k {}/{} -P", ws, p.repo)
         } else {
@@ -277,13 +290,13 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
         );
         // -tt: force a pty so a dropped ssh hangs up and SIGHUP reaps
         // the supervisor, the kernel build, and the VM together.
-        ctx.run_command(ssh_cmd(&host, &run, true))
+        handle.run_command(ssh_cmd(&host, &run, true))
             .await
             .map_err(|e| TaskError::Retry(format!("running supervisor: {e}")))?;
 
         // 5. Pull the remaining subtests' result dirs back to the
         //    daemon's output_dir.
-        ctx.log_line("=== pull results ===".to_string());
+        handle.log_line("=== pull results ===".to_string());
         let dirs = remaining.iter()
             .map(|st| subtest_result_key(&p.test, st, &p.kernel, &p.env))
             .collect::<Vec<_>>()
@@ -297,7 +310,7 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
         );
         let mut pull_cmd = Command::new("bash");
         pull_cmd.arg("-c").arg(&pull);
-        let status = ctx
+        let status = handle
             .run_command(pull_cmd)
             .await
             .map_err(|e| TaskError::Retry(format!("pulling results: {e}")))?;
@@ -324,7 +337,7 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
                 let path = d.join(log);
                 if path.exists() {
                     if let Err(e) = brotli_compress(&path) {
-                        ctx.log_line(format!("compress {}: {}", path.display(), e));
+                        handle.log_line(format!("compress {}: {}", path.display(), e));
                     }
                 }
             }
@@ -343,7 +356,7 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
             if let Err(e) =
                 std::os::unix::fs::symlink(format!("../{log_dir}/full_log.br"), &link)
             {
-                ctx.log_line(format!("full_log link for {st}: {e}"));
+                handle.log_line(format!("full_log link for {st}: {e}"));
             }
         }
 
@@ -377,8 +390,26 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
     Ok(())
 }
 
-/// Build the jobkit JobSpec for a desired job.
-fn make_job_spec(ci_host: &str, rc: &CiConfig, job: &Job) -> JobSpec {
+/// One executor's body: claim a duration-bounded batch of subtests, run
+/// them in one VM, report each job's outcome. Loops until the Choir is
+/// dropped. `budget` is subtest_duration_max — the most VM-time of work
+/// to pack into a boot.
+async fn run_executor(mut handle: ExecutorHandle<JobParams>, budget: f64) {
+    while let Some(batch) = handle.claim(budget).await {
+        let outcome = match run_ktest_job(&handle, &batch).await {
+            Ok(()) => JobOutcome::Completed,
+            Err(e) => JobOutcome::Failed(e.to_string()),
+        };
+        for j in &batch {
+            handle.report(j.id, outcome.clone());
+        }
+    }
+}
+
+/// Build the jobkit JobSpec for a desired job. Subtests of one test
+/// file at the same (user, repo, branch, commit, kernel, env) share a
+/// batch key, so an executor claims and runs them together in one VM.
+fn make_job_spec(ci_host: &str, rc: &CiConfig, job: &Job) -> JobSpec<JobParams> {
     let k = &job.key;
     let name = format!("{} {} {}", short_commit(&k.commit), k.test, k.subtest);
     let repo_url = rc
@@ -400,12 +431,17 @@ fn make_job_spec(ci_host: &str, rc: &CiConfig, job: &Job) -> JobSpec {
     // Mirror the old user_stats_select_fair multiplier: higher nice =
     // more weight = the user is scheduled less often.
     let weight = (1.0 + nice as f64).max(0.1);
-    JobSpec::new(name, move |ctx| {
-        let params = params.clone();
-        async move { run_ktest_job(ctx, params).await }
-    })
-    .group(k.user.clone())
-    .weight(weight)
+    // Batch key: everything but the subtest. `\0` can't occur in any
+    // field, so distinct keys can't collide.
+    let batch_key = format!(
+        "{}\0{}\0{}\0{}\0{}\0{}\0{}",
+        k.user, k.repo, k.branch, k.commit, k.kernel, k.env, k.test,
+    );
+    JobSpec::new(name, params)
+        .batch_key(batch_key)
+        .cost(job.duration as f64)
+        .group(k.user.clone())
+        .weight(weight)
 }
 
 // --- reconcile + status ---
@@ -416,7 +452,7 @@ fn make_job_spec(ci_host: &str, rc: &CiConfig, job: &Job) -> JobSpec {
 /// jobs not already tracked; desired_jobs() caps itself at `window`, so
 /// the choir never holds much more than that.
 fn refill(
-    choir: &Choir,
+    choir: &Choir<JobParams>,
     job_map: &mut HashMap<JobKey, JobId>,
     ci_host: &str,
     rc: &CiConfig,
@@ -446,7 +482,7 @@ fn refill(
 
 /// Write the Choir's status snapshot to the file the cgi reads.
 /// Written via a temp file + rename so the cgi never sees a partial.
-fn write_status(choir: &Choir, rc: &CiConfig) {
+fn write_status(choir: &Choir<JobParams>, rc: &CiConfig) {
     let json = match serde_json::to_string_pretty(&choir.status()) {
         Ok(j) => j,
         Err(e) => {
@@ -582,20 +618,23 @@ fn main() -> Result<()> {
         .clone()
         .ok_or_else(|| anyhow!("ci_host not set in ~/.ktest/ktest-ci.json5"))?;
 
-    let choir = Choir::new(rc.ktest.output_dir.join("ci-daemon-logs"));
+    let choir: Choir<JobParams> = Choir::new(rc.ktest.output_dir.join("ci-daemon-logs"));
 
     // Pre-open an ssh master per host so the executors' per-step ssh
     // calls multiplex over it instead of storming sshd MaxStartups.
     prewarm_ssh_masters(&rc);
 
-    // One executor per slot: each host gets `slots` executors.
+    // One executor per slot. The body claims a duration-bounded batch
+    // of one test file's subtests and runs them in a single VM.
+    let budget = rc.ktest.subtest_duration_max.unwrap_or(600) as f64;
     for (host, ex) in &rc.ktest.executors {
         for slot in 0..ex.slots {
-            choir.add_executor(ExecutorConfig {
+            let cfg = ExecutorConfig {
                 name: format!("{}:{}", host, slot),
                 host: host.clone(),
                 slot: slot as usize,
-            });
+            };
+            choir.add_executor(cfg, move |_cfg, handle| run_executor(handle, budget));
         }
     }
     let total_slots: u32 = rc.ktest.executors.values().map(|e| e.slots).sum();

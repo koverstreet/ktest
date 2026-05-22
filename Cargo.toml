@@ -44,3 +44,8 @@ jobkit = { git = "https://evilpiepirate.org/git/jobkit.git" }
 
 [build-dependencies]
 capnpc = "0.21.*"
+
+# Develop jobkit in-tree: build against the local checkout rather than
+# the published git rev.
+[patch."https://evilpiepirate.org/git/jobkit.git"]
+jobkit = { path = "/home/kent/jobkit" }
