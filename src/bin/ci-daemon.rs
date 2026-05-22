@@ -16,7 +16,7 @@
 
 use anyhow::{anyhow, Result};
 use ci_cgi::jobs::{desired_jobs, Job, JobKey};
-use ci_cgi::{ciconfig_read, commit_update_results, result_basename, subtest_result_key, CiConfig};
+use ci_cgi::{ciconfig_read, commit_update_results, result_basename, subtest_result_key, CiConfig, TestStatus};
 use clap::Parser;
 use jobkit::{Choir, Command, ExecutorConfig, JobContext, JobId, JobSpec, TaskError};
 use std::collections::{HashMap, HashSet};
@@ -164,6 +164,21 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
     let basename = result_basename(&p.test, &p.kernel, &p.env);
     let subtest_dir = subtest_result_key(&p.test, &p.subtest, &p.kernel, &p.env);
     let result_dir = format!("ktest-out/out/{}", subtest_dir);
+    let commit_dir = p.output_dir.join(&p.commit);
+
+    // Mark the subtest in-progress in our own output_dir, so branch
+    // status reflects it while the job runs. ci-daemon writes the same
+    // marker on the worker (step 2), but that copy isn't visible here
+    // until step 5 pulls it — by which point it's the final verdict.
+    // The pull overwrites this with the real result (or, on a crash,
+    // re-confirms IN PROGRESS — see after step 5).
+    let local_result_dir = commit_dir.join(&subtest_dir);
+    if let Err(e) = std::fs::create_dir_all(&local_result_dir)
+        .and_then(|()| std::fs::write(local_result_dir.join("status"), "IN PROGRESS\n"))
+    {
+        ctx.log_line(format!("marking in-progress: {e}"));
+    }
+    commit_update_results(&p.output_dir, &p.commit);
 
     // 1. Check out the repo at the commit. A repo switch (the workspace
     //    has a different repo, or none) wipes the workspace — the stale
@@ -250,7 +265,6 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
     //    supervisor's whole-test-file in-progress markers and clobber
     //    every other subtest's real result.
     ctx.log_line("=== pull results ===".to_string());
-    let commit_dir = p.output_dir.join(&p.commit);
     let pull = format!(
         "mkdir -p {dst} && ssh {opts} {host} 'cd {ws}/ktest-out/out && tar -c {sub}' \
          | tar -x -C {dst}",
@@ -283,6 +297,22 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
             if let Err(e) = brotli_compress(&path) {
                 ctx.log_line(format!("compress {}: {}", path.display(), e));
             }
+        }
+    }
+
+    // A guest panic or hang never lets the supervisor record a verdict,
+    // so the pull brings back step 2's "IN PROGRESS" marker verbatim (or
+    // no status at all). Record that as a failure — otherwise it sits as
+    // a perpetual "in progress" and desired_jobs() re-runs it forever.
+    let status_path = pulled.join("status");
+    let no_verdict = std::fs::read_to_string(&status_path)
+        .map(|s| TestStatus::from_str(&s) == TestStatus::Inprogress)
+        .unwrap_or(true);
+    if no_verdict {
+        ctx.log_line("=== no verdict recorded (kernel crashed or hung) — marking FAILED ===".to_string());
+        if let Err(e) = std::fs::write(&status_path,
+                                       "FAILED: no status recorded (kernel crashed or hung)\n") {
+            ctx.log_line(format!("marking FAILED: {e}"));
         }
     }
 

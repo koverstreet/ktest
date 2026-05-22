@@ -145,7 +145,7 @@ pub fn ciconfig_read() -> anyhow::Result<CiConfig> {
 pub use testresult_capnp::test_result::Status as TestStatus;
 
 impl TestStatus {
-    fn from_str(status: &str) -> TestStatus {
+    pub fn from_str(status: &str) -> TestStatus {
         if status.is_empty() {
             TestStatus::Inprogress
         } else if status.contains("IN PROGRESS") {
