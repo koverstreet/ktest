@@ -92,6 +92,30 @@ dkms_cache_key() {
     } | sha256sum | cut -d' ' -f1
 }
 
+# Cache key for the bcachefs-tools build (the bcachefs binary — a slow
+# Rust + C compile). Determined by the bcachefs-tools revision and the
+# target arch; kernel-independent, unlike dkms_cache_key(). An empty key
+# (dirty tree, no git HEAD) disables caching rather than risk a stale
+# binary.
+tools_cache_key() {
+    local tools=$1
+    local rev
+
+    git config --system --add safe.directory '*' >&2
+
+    if ! git -C "$tools" diff --quiet HEAD 2>/dev/null; then
+        echo "tools cache: disabled — $tools has uncommitted changes" >&2
+        return 0
+    fi
+    rev=$(git -C "$tools" rev-parse HEAD 2>/dev/null)
+    if [[ -z $rev ]]; then
+        echo "tools cache: disabled — no git HEAD for $tools" >&2
+        return 0
+    fi
+
+    printf '%s\0' "$rev" "$(uname -m)" | sha256sum | cut -d' ' -f1
+}
+
 # Build + install bcachefs-tools and the bcachefs DKMS module. The module
 # compile is by far the slowest part of test bringup, so it is cached
 # host-side (keyed by dkms_cache_key) and shared across slots — the cache
@@ -102,7 +126,51 @@ init_build_bcachefs_tools() {
     (( jobs < 1 )) && jobs=1
     local tools="$ktest_deps_dir/bcachefs-tools"
 
-    make -j$jobs -C "$tools" PREFIX=/usr install
+    # bcachefs-tools build cache: building the bcachefs binary is a slow
+    # Rust + C compile. The build is done once into a DESTDIR and tarred
+    # up; the tarball is cached host-side keyed by tools_cache_key, and
+    # untarring it into / is the *only* install path — a cache hit and a
+    # cache miss install identically. Mirrors the DKMS .ko cache below.
+    local tkey=$(tools_cache_key "$tools")
+    local tcachedir=$(dirname "$ktest_deps_dir")/tools-cache
+    local cached="$tcachedir/$tkey.tar"
+    local ttar
+
+    if [[ -n $tkey && -f "$cached" ]]; then
+        echo "init_build_bcachefs_tools: tools cache hit ($tkey)"
+        ttar="$cached"
+    else
+        # Build into a DESTDIR and pack the install into a tarball.
+        local dest
+        dest=$(mktemp -d)
+        make -j$jobs -C "$tools" PREFIX=/usr DESTDIR="$dest" install
+        ttar="$dest.tar"
+        tar -cf "$ttar" -C "$dest" .
+        rm -rf "$dest"
+        # Publish to the cache (atomic rename-in) if caching is enabled;
+        # a concurrent miss that loses the race just discards its copy.
+        if [[ -n $tkey ]]; then
+            local ttmp
+            mkdir -p "$tcachedir"
+            if ttmp=$(mktemp "$tcachedir/.tmp.XXXXXX" 2>/dev/null) &&
+               cp "$ttar" "$ttmp" &&
+               mv "$ttmp" "$cached" 2>/dev/null; then
+                echo "init_build_bcachefs_tools: tools cache store ($tkey)"
+            else
+                rm -f "$ttmp"
+            fi
+        fi
+    fi
+
+    # Untarring the tarball into / is the one and only install path.
+    # --keep-directory-symlink: the VM root is usrmerged (/sbin is a
+    # symlink to usr/sbin), and without it tar replaces that symlink with
+    # a real directory — bcachefs then lands in a /sbin that is no longer
+    # on $PATH. -p preserves the install modes.
+    tar -xpf "$ttar" -C / --keep-directory-symlink
+    if [[ $ttar != "$cached" ]]; then
+        rm -f "$ttar"
+    fi
 
     if ! [[ -e /sys/fs/bcachefs ]]; then
 	local kver=$(uname -r)
