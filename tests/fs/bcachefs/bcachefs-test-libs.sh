@@ -167,7 +167,7 @@ init_build_bcachefs_tools() {
     # symlink to usr/sbin), and without it tar replaces that symlink with
     # a real directory — bcachefs then lands in a /sbin that is no longer
     # on $PATH. -p preserves the install modes.
-    tar -xpf "$ttar" -C / --keep-directory-symlink
+    tar -xpf "$ttar" -C / --no-overwrite-dir --keep-directory-symlink
     if [[ $ttar != "$cached" ]]; then
         rm -f "$ttar"
     fi
