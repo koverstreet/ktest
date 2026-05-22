@@ -149,12 +149,23 @@ fn brotli_compress(path: &std::path::Path) -> std::io::Result<()> {
     std::fs::remove_file(path)
 }
 
-/// Run one subtest job on `ctx`'s executor: ssh the worker host through
-/// checkout → prepare → build supervisor → run → pull results.
+/// Run a job's subtests on `ctx`'s executor: check out the repo, build
+/// the supervisor, then a resume loop — run the not-yet-completed
+/// subtests in one VM, and retry any the VM died before reaching.
+/// Ported from test-git-branch.sh's run_test_job.
 ///
-/// Returns Err only on infrastructure failure (a step couldn't run). A
-/// test that runs and fails is a normal Ok — its verdict is in the
-/// result files, pulled back in the last step.
+/// The supervisor writes each subtest's status itself — it parses the
+/// VM output for test-start: Passed/Failed for a test that ran (a
+/// kernel panic mid-test is a Failed), NOT STARTED for one it could not
+/// launch. A subtest it never reached stays IN PROGRESS — those are
+/// retried in a fresh VM. A run that completes none of them is an
+/// infrastructure failure.
+///
+/// `remaining` is a list so a later grab-N change can hand one VM run
+/// several subtests; today it holds the job's single subtest, so the
+/// loop runs once and the retry path is dormant.
+///
+/// Returns Err only on infrastructure failure (a step couldn't run).
 async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
     if p.repo_url.is_empty() {
         return Err(TaskError::Fatal(format!("repo {} not configured", p.repo)));
@@ -162,27 +173,14 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
     let host = ctx.executor().host.clone();
     let ws = format!("ktest-ci/{}", ctx.slot());
     let basename = result_basename(&p.test, &p.kernel, &p.env);
-    let subtest_dir = subtest_result_key(&p.test, &p.subtest, &p.kernel, &p.env);
-    let result_dir = format!("ktest-out/out/{}", subtest_dir);
     let commit_dir = p.output_dir.join(&p.commit);
 
-    // Mark the subtest in-progress in our own output_dir, so branch
-    // status reflects it while the job runs. ci-daemon writes the same
-    // marker on the worker (step 2), but that copy isn't visible here
-    // until step 5 pulls it — by which point it's the final verdict.
-    // The pull overwrites this with the real result (or, on a crash,
-    // re-confirms IN PROGRESS — see after step 5).
-    let local_result_dir = commit_dir.join(&subtest_dir);
-    if let Err(e) = std::fs::create_dir_all(&local_result_dir)
-        .and_then(|()| std::fs::write(local_result_dir.join("status"), "IN PROGRESS\n"))
-    {
-        ctx.log_line(format!("marking in-progress: {e}"));
-    }
-    commit_update_results(&p.output_dir, &p.commit);
+    // Subtests still owed a verdict. Today: the job's single subtest.
+    let mut remaining: Vec<String> = vec![p.subtest.clone()];
 
-    // 1. Check out the repo at the commit. A repo switch (the workspace
-    //    has a different repo, or none) wipes the workspace — the stale
-    //    checkout and its kernel build cache are both invalid.
+    // 1. Check out the repo at the commit. A repo switch (different
+    //    repo, or none) wipes the workspace — the stale checkout and
+    //    its kernel build cache are both invalid.
     let checkout = format!(
         "set -e; \
          if [ ! -d {ws}/{repo}/.git ]; then \
@@ -197,128 +195,184 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
     );
     run_step(&ctx, &host, &checkout, "checkout").await?;
 
-    // 2. Clean ktest-out (keep the kernel build cache), and mark the
-    //    subtest in-progress so a dead VM still leaves a status.
+    // 2. Build the supervisor (idempotent C helper).
+    run_step(&ctx, &host, "make -C ~/ktest/lib supervisor", "build supervisor").await?;
+
+    // 3. Clean ktest-out (keep the kernel build cache) and mark every
+    //    subtest in-progress — on the worker so a dead VM still leaves
+    //    a status, and in our output_dir so branch status shows the job
+    //    running. Once: the resume loop re-runs only not-completed
+    //    subtests and must not wipe the rest's results.
+    for st in &remaining {
+        let d = commit_dir.join(subtest_result_key(&p.test, st, &p.kernel, &p.env));
+        if let Err(e) = std::fs::create_dir_all(&d)
+            .and_then(|()| std::fs::write(d.join("status"), "IN PROGRESS\n"))
+        {
+            ctx.log_line(format!("marking {st} in-progress: {e}"));
+        }
+    }
+    commit_update_results(&p.output_dir, &p.commit);
+
+    let mark = remaining.iter()
+        .map(|st| {
+            let d = subtest_result_key(&p.test, st, &p.kernel, &p.env);
+            format!("mkdir -p ktest-out/out/{d}; echo 'IN PROGRESS' > ktest-out/out/{d}/status")
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
     let prepare = format!(
         "set -e; cd {ws}; \
          if [ -d ktest-out ]; then \
              find ktest-out -mindepth 1 -maxdepth 1 ! -name 'kernel*' -exec rm -rf {{}} +; \
          fi; \
-         mkdir -p {rd}; \
-         echo 'IN PROGRESS' > {rd}/status",
-        ws = ws, rd = result_dir,
+         {mark}",
+        ws = ws, mark = mark,
     );
     run_step(&ctx, &host, &prepare, "prepare").await?;
 
-    // 3. Build the supervisor (idempotent C helper).
-    run_step(&ctx, &host, "make -C ~/ktest/lib supervisor", "build supervisor").await?;
+    // Resume loop: run the not-yet-completed subtests in one VM; retry
+    // any the VM died before reaching.
+    while !remaining.is_empty() {
+        // 4. Run the supervisor over `remaining`, one VM. Its exit
+        //    status is ignored — verdicts are in the result files; only
+        //    a failure to *run* it is an error.
+        ctx.log_line(format!("=== run: {} ===", remaining.join(" ")));
+        let runner = if p.kernel.is_empty() {
+            format!("~/ktest/build-test-kernel run -k {}/{} -P", ws, p.repo)
+        } else {
+            format!("~/ktest/ktest run -k {}", p.kernel)
+        };
+        // The supervisor's -f full-log is one file per VM run; it lives
+        // in remaining[0]'s dir, and every other subtest's full_log.br
+        // is linked to it after the pull.
+        let full_log = format!(
+            "{}/full_log",
+            subtest_result_key(&p.test, &remaining[0], &p.kernel, &p.env),
+        );
+        let inner = format!(
+            "cd {ws}; {env}~/ktest/lib/supervisor -T 1200 -f {full_log} \
+             -S -F -b {base} -o ktest-out/out -- {runner} ~/ktest/tests/{test} {subtests}",
+            ws = ws,
+            env = job_env_prefix(&p.env, &ws),
+            full_log = full_log,
+            base = basename,
+            runner = runner,
+            test = p.test,
+            subtests = remaining.join(" "),
+        );
+        // build-test-kernel compiles the kernel on the worker — it needs
+        // ci/shell.nix's toolchain. `ktest run` builds inside the VM.
+        let run = if p.kernel.is_empty() {
+            format!("nix-shell ~/ktest/ci/shell.nix --run \"{}\"", inner)
+        } else {
+            inner
+        };
+        // Stopgap: a build interrupted mid-write leaves a corrupt cached
+        // object the incremental rebuild then trusts — git-clean and try
+        // once more. Each {run} does its own cd, so subshell it.
+        let run = format!(
+            "( {run} ) || {{ echo '=== run failed -- git clean + retry ==='; \
+             git -C ~/{ws}/{repo} clean -fdqx; ( {run} ); }}",
+            run = run, ws = ws, repo = p.repo,
+        );
+        // -tt: force a pty so a dropped ssh hangs up and SIGHUP reaps
+        // the supervisor, the kernel build, and the VM together.
+        ctx.run_command(ssh_cmd(&host, &run, true))
+            .await
+            .map_err(|e| TaskError::Retry(format!("running supervisor: {e}")))?;
 
-    // 4. Run the test. The supervisor's exit status reflects test
-    //    pass/fail — recorded in the result files — so only a failure
-    //    to *run* it is an error; the status itself is ignored.
-    ctx.log_line("=== run ===".to_string());
-    let runner = if p.kernel.is_empty() {
-        format!("~/ktest/build-test-kernel run -k {}/{} -P", ws, p.repo)
-    } else {
-        format!("~/ktest/ktest run -k {}", p.kernel)
-    };
-    let inner = format!(
-        "cd {ws}; {env}~/ktest/lib/supervisor -T 1200 -f {sub}/full_log \
-         -S -F -b {base} -o ktest-out/out -- {runner} ~/ktest/tests/{test} {subtest}",
-        ws = ws,
-        env = job_env_prefix(&p.env, &ws),
-        sub = subtest_dir,
-        base = basename,
-        runner = runner,
-        test = p.test,
-        subtest = p.subtest,
-    );
-    // build-test-kernel compiles the kernel on the worker — it needs
-    // ci/shell.nix's toolchain (wrapped rustc + rust-src, bindgen,
-    // libclang). `ktest run` builds inside the VM, needing none of it.
-    // `inner` has no embedded double-quotes, so the --run wrap nests
-    // cleanly.
-    let run = if p.kernel.is_empty() {
-        format!("nix-shell ~/ktest/ci/shell.nix --run \"{}\"", inner)
-    } else {
-        inner
-    };
-    // Stopgap: if the run fails, git-clean the workspace and try once
-    // more -- a build interrupted mid-write leaves a corrupt cached
-    // object that the incremental rebuild then trusts. Also self-heals
-    // workspaces already poisoned.
-    // Each {run} does its own `cd`, so run it in a subshell — otherwise
-    // the first run's cd leaks and the git -C / retry resolve wrong.
-    let run = format!(
-        "( {run} ) || {{ echo '=== run failed -- git clean + retry ==='; \
-         git -C ~/{ws}/{repo} clean -fdqx; ( {run} ); }}",
-        run = run, ws = ws, repo = p.repo,
-    );
-    // -tt: force a pty so a dropped ssh hangs up and SIGHUP reaps the
-    // supervisor, the kernel build, and the VM together.
-    ctx.run_command(ssh_cmd(&host, &run, true))
-        .await
-        .map_err(|e| TaskError::Retry(format!("running supervisor: {e}")))?;
+        // 5. Pull the remaining subtests' result dirs back to the
+        //    daemon's output_dir.
+        ctx.log_line("=== pull results ===".to_string());
+        let dirs = remaining.iter()
+            .map(|st| subtest_result_key(&p.test, st, &p.kernel, &p.env))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let pull = format!(
+            "mkdir -p {dst} && ssh {opts} {host} 'cd {ws}/ktest-out/out && tar -c {dirs}' \
+             | tar -x -C {dst}",
+            dst = commit_dir.display(),
+            opts = SSH_OPTS.join(" "),
+            host = host, ws = ws, dirs = dirs,
+        );
+        let mut pull_cmd = Command::new("bash");
+        pull_cmd.arg("-c").arg(&pull);
+        let status = ctx
+            .run_command(pull_cmd)
+            .await
+            .map_err(|e| TaskError::Retry(format!("pulling results: {e}")))?;
+        if !status.success() {
+            return Err(TaskError::Retry(format!(
+                "pulling results: exited {:?}",
+                status.code()
+            )));
+        }
 
-    // 5. Pull *only* this job's subtest dir back to the daemon's
-    //    output_dir. Pulling all of ktest-out/out would drag back the
-    //    supervisor's whole-test-file in-progress markers and clobber
-    //    every other subtest's real result.
-    ctx.log_line("=== pull results ===".to_string());
-    let pull = format!(
-        "mkdir -p {dst} && ssh {opts} {host} 'cd {ws}/ktest-out/out && tar -c {sub}' \
-         | tar -x -C {dst}",
-        dst = commit_dir.display(),
-        opts = SSH_OPTS.join(" "),
-        host = host,
-        ws = ws,
-        sub = subtest_dir,
-    );
-    let mut pull_cmd = Command::new("bash");
-    pull_cmd.arg("-c").arg(&pull);
-    let status = ctx
-        .run_command(pull_cmd)
-        .await
-        .map_err(|e| TaskError::Retry(format!("pulling results: {e}")))?;
-    if !status.success() {
-        return Err(TaskError::Retry(format!(
-            "pulling results: exited {:?}",
-            status.code()
-        )));
-    }
-
-    // Compress the test logs the cgi serves as .br (the worker writes
-    // them plain). Best-effort — a missing log is not a job failure.
-    ctx.log_line("=== compress logs ===".to_string());
-    let pulled = commit_dir.join(&subtest_dir);
-    for log in ["log", "full_log"] {
-        let path = pulled.join(log);
-        if path.exists() {
-            if let Err(e) = brotli_compress(&path) {
-                ctx.log_line(format!("compress {}: {}", path.display(), e));
+        // The cgi serves logs as .br. Drop any full_log.br a prior
+        // iteration linked in — so a retried subtest relinks to the run
+        // that actually produced its verdict — then compress this run's
+        // logs. Best-effort — a missing log isn't fatal.
+        for st in &remaining {
+            let _ = std::fs::remove_file(
+                commit_dir
+                    .join(subtest_result_key(&p.test, st, &p.kernel, &p.env))
+                    .join("full_log.br"));
+        }
+        for st in &remaining {
+            let d = commit_dir.join(subtest_result_key(&p.test, st, &p.kernel, &p.env));
+            for log in ["log", "full_log"] {
+                let path = d.join(log);
+                if path.exists() {
+                    if let Err(e) = brotli_compress(&path) {
+                        ctx.log_line(format!("compress {}: {}", path.display(), e));
+                    }
+                }
             }
         }
-    }
 
-    // A guest panic or hang never lets the supervisor record a verdict,
-    // so the pull brings back step 2's "IN PROGRESS" marker verbatim (or
-    // no status at all). Record that as a failure — otherwise it sits as
-    // a perpetual "in progress" and desired_jobs() re-runs it forever.
-    let status_path = pulled.join("status");
-    let no_verdict = std::fs::read_to_string(&status_path)
-        .map(|s| TestStatus::from_str(&s) == TestStatus::Inprogress)
-        .unwrap_or(true);
-    if no_verdict {
-        ctx.log_line("=== no verdict recorded (kernel crashed or hung) — marking FAILED ===".to_string());
-        if let Err(e) = std::fs::write(&status_path,
-                                       "FAILED: no status recorded (kernel crashed or hung)\n") {
-            ctx.log_line(format!("marking FAILED: {e}"));
+        // Every subtest needs a working full_log — it is how a test
+        // that failed to start gets debugged. The supervisor wrote one
+        // full log for the VM run, into remaining[0]'s dir; link every
+        // other subtest's full_log.br to it (relative — both dirs sit
+        // under commit_dir, so it resolves).
+        let log_dir = subtest_result_key(&p.test, &remaining[0], &p.kernel, &p.env);
+        for st in remaining.iter().skip(1) {
+            let link = commit_dir
+                .join(subtest_result_key(&p.test, st, &p.kernel, &p.env))
+                .join("full_log.br");
+            if let Err(e) =
+                std::os::unix::fs::symlink(format!("../{log_dir}/full_log.br"), &link)
+            {
+                ctx.log_line(format!("full_log link for {st}: {e}"));
+            }
         }
-    }
 
-    // 6. Regenerate the commit's results capnp so the next reconcile
-    //    tick sees the new result and stops desiring this job.
-    commit_update_results(&p.output_dir, &p.commit);
+        // 6. The supervisor wrote a status for every subtest it reached
+        //    (Passed/Failed, or NOT STARTED if it couldn't launch one).
+        //    A subtest still IN PROGRESS was never reached — the VM died
+        //    first — and is retried in a fresh VM.
+        let mut next = Vec::new();
+        for st in &remaining {
+            let status_path = commit_dir
+                .join(subtest_result_key(&p.test, st, &p.kernel, &p.env))
+                .join("status");
+            let in_progress = std::fs::read_to_string(&status_path)
+                .map(|s| TestStatus::from_str(&s) == TestStatus::Inprogress)
+                .unwrap_or(true);
+            if in_progress {
+                next.push(st.clone());
+            }
+        }
+        commit_update_results(&p.output_dir, &p.commit);
+
+        // A run that completed none of the subtests is an infrastructure
+        // failure — re-running the same VM the same way won't help.
+        if next.len() == remaining.len() {
+            return Err(TaskError::Retry(format!(
+                "run completed no subtests: {}", remaining.join(" "))));
+        }
+        remaining = next;
+    }
 
     Ok(())
 }

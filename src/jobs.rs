@@ -91,20 +91,24 @@ fn get_subtests(test_path: PathBuf) -> Vec<String> {
 }
 
 /// True once a *verdict* was recorded — the job is done, re-running
-/// won't change it. Only Passed, Failed, and Notrun (a test reporting
-/// it deliberately did not run) are verdicts. The rest are not, and
-/// must re-run:
-///   - Inprogress  — still running (or a stale marker from a daemon
-///                   restart; the in-memory table tracks the real set)
-///   - Unknown     — a garbled or partially-written status file
-///   - Notstarted  — a CI failure to *start* the test: an error, not
-///                   a result
+/// won't change it. Verdicts:
+///   - Passed / Failed — the test ran and reported (a kernel panic
+///                  while it runs counts as Failed).
+///   - Notrun     — a test reporting it deliberately did not run.
+///   - Notstarted — the test run never started — the VM didn't come
+///                  up, or the supervisor couldn't launch it. A
+///                  CI-side failure; terminal, surfaced not re-run.
+/// Not verdicts — must re-run:
+///   - Inprogress — still running, or a stale marker from a daemon
+///                  restart (the in-memory table tracks the real set).
+///   - Unknown    — a garbled or partially-written status file.
 ///
 /// Whitelist, not blacklist: a future TestStatus variant defaults to
 /// "not done" — at worst a wasted re-run, never a silent loss.
 fn result_is_done(status: TestStatus) -> bool {
     matches!(status,
-             TestStatus::Passed | TestStatus::Failed | TestStatus::Notrun)
+             TestStatus::Passed | TestStatus::Failed |
+             TestStatus::Notrun | TestStatus::Notstarted)
 }
 
 /// Niceness for one subtest: the test_group's base nice plus the
@@ -311,9 +315,9 @@ mod tests {
         assert!(result_is_done(TestStatus::Passed));
         assert!(result_is_done(TestStatus::Failed));
         assert!(result_is_done(TestStatus::Notrun));
+        assert!(result_is_done(TestStatus::Notstarted)); // run never started — terminal
         // not verdicts — must re-run, not silently "done"
         assert!(!result_is_done(TestStatus::Inprogress)); // still running
         assert!(!result_is_done(TestStatus::Unknown));    // garbled status
-        assert!(!result_is_done(TestStatus::Notstarted)); // CI failed to start it
     }
 }
