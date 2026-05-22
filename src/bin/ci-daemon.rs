@@ -16,7 +16,7 @@
 
 use anyhow::{anyhow, Result};
 use ci_cgi::jobs::{desired_jobs, Job, JobKey};
-use ci_cgi::{ciconfig_read, commit_update_results, result_basename, CiConfig};
+use ci_cgi::{ciconfig_read, commit_update_results, result_basename, subtest_result_key, CiConfig};
 use clap::Parser;
 use jobkit::{Choir, Command, ExecutorConfig, JobContext, JobId, JobSpec, TaskError};
 use std::collections::{HashMap, HashSet};
@@ -162,7 +162,7 @@ async fn run_ktest_job(ctx: JobContext, p: JobParams) -> Result<(), TaskError> {
     let host = ctx.executor().host.clone();
     let ws = format!("ktest-ci/{}", ctx.slot());
     let basename = result_basename(&p.test, &p.kernel, &p.env);
-    let subtest_dir = format!("{}.{}", basename, p.subtest.replace('/', "."));
+    let subtest_dir = subtest_result_key(&p.test, &p.subtest, &p.kernel, &p.env);
     let result_dir = format!("ktest-out/out/{}", subtest_dir);
 
     // 1. Check out the repo at the commit. A repo switch (the workspace

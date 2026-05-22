@@ -582,7 +582,11 @@ pub fn result_basename(test: &str, kernel: &str, env: &str) -> String {
 /// when kernel and env are both empty (preserves existing on-disk
 /// results).
 pub fn subtest_result_key(test: &str, subtest: &str, kernel: &str, env: &str) -> String {
-    format!("{}.{}", result_basename(test, kernel, env), subtest)
+    // `/` in the subtest is flattened to `.`, matching the on-disk
+    // result-dir name. commit_update_results() keys the capnp by dir
+    // name, so this key and that name must agree exactly — otherwise
+    // desired_jobs() never finds the result and re-runs the job forever.
+    format!("{}.{}", result_basename(test, kernel, env), subtest.replace('/', "."))
 }
 
 /// Wire format for the env column in `jobs.<user>` and the TEST_JOB
@@ -657,6 +661,11 @@ mod kernel_key_tests {
         assert_eq!(
             subtest_result_key("boot.ktest", "boot", "", ""),
             "boot.boot"
+        );
+        // `/` in the subtest flattens to `.`, same as subtest_full_name().
+        assert_eq!(
+            subtest_result_key("fs/bcachefs/fstests.ktest", "generic/001", "", ""),
+            "fs.bcachefs.fstests.generic.001"
         );
     }
 
