@@ -16,9 +16,9 @@ use crate::{
     RcTestGroup, TestStats, TestStatus,
 };
 use memmap::MmapOptions;
-use memoize::memoize;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{LazyLock, Mutex};
 
 /// Identity of a test job — the tuple that uniquely names a unit of
 /// test work. The daemon's job map diffs the desired set on this key.
@@ -49,23 +49,45 @@ pub struct Job {
     pub duration: u64,
 }
 
-/// List the subtests of a .ktest file. Memoized — the same test shows
-/// up across many branches/groups, and listing spawns the file.
-#[memoize]
+/// List the subtests of a .ktest file. Cached — the same test shows up
+/// across many branches/groups, and listing spawns the file. Only a
+/// *successful* listing is cached: a transient list-tests failure (a
+/// spawn error or a non-zero exit) must not stick a whole test out of
+/// the job matrix for the daemon's entire lifetime — the next call
+/// retries instead.
 fn get_subtests(test_path: PathBuf) -> Vec<String> {
-    match std::process::Command::new(&test_path)
+    static CACHE: LazyLock<Mutex<HashMap<PathBuf, Vec<String>>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    if let Some(hit) = CACHE.lock().unwrap().get(&test_path) {
+        return hit.clone();
+    }
+
+    let subtests = match std::process::Command::new(&test_path)
         .arg("list-tests")
         .output()
     {
-        Ok(o) => String::from_utf8_lossy(&o.stdout)
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
             .split_whitespace()
             .map(|s| s.to_string())
             .collect(),
-        Err(e) => {
-            eprintln!("failed to list subtests of {:?}: {}", test_path, e);
+        Ok(o) => {
+            eprintln!("listing subtests of {:?}: list-tests exited {:?}",
+                      test_path, o.status.code());
             Vec::new()
         }
+        Err(e) => {
+            eprintln!("listing subtests of {:?}: {}", test_path, e);
+            Vec::new()
+        }
+    };
+
+    // Cache successes only; an empty result — a failure, or a genuinely
+    // subtest-less test — re-lists on the next call rather than sticking.
+    if !subtests.is_empty() {
+        CACHE.lock().unwrap().insert(test_path, subtests.clone());
     }
+    subtests
 }
 
 /// True once a *verdict* was recorded — the job is done, re-running
