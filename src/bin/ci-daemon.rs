@@ -188,25 +188,34 @@ async fn run_ktest_job(
 ) -> Result<(), TaskError> {
     let result = run_ktest_job_inner(handle, host, slot, results, batch).await;
 
-    // On any failure that left subtests marked IN PROGRESS, clear those
-    // entries from the store and remove the per-subtest disk dirs so
-    // desired_jobs() re-emits them. job_wanted() treats a live IN
-    // PROGRESS as "in flight, don't double-run" — if we leave the entry,
-    // the subtest is stuck until daemon restart.
+    // On any failure that left subtests marked IN PROGRESS, write a
+    // Notstarted verdict for them. The daemon failed to launch / pull
+    // for this subtest in this batch — that IS a verdict (the infra
+    // step is the test being measured for this purpose). Leaving them
+    // IN PROGRESS would stick them forever (job_wanted skips a live
+    // Inprogress); deleting them would re-emit on every refill until a
+    // VM finally landed, which buries a systematically-broken subtest.
     if result.is_err() {
         let p = &batch[0].payload;
         let commit_dir = p.output_dir.join(&p.commit);
-        let mut stale_keys = Vec::new();
+        let now = Utc::now();
+        let mut updates = TestResultsMap::new();
         for j in batch {
             let key = subtest_result_key(
                 &j.payload.test, &j.payload.subtest, &j.payload.kernel, &j.payload.env,
             );
             if results.lookup(&p.commit, &key) == Some(TestStatus::Inprogress) {
-                let _ = std::fs::remove_dir_all(commit_dir.join(&key));
-                stale_keys.push(key);
+                let d = commit_dir.join(&key);
+                let _ = std::fs::create_dir_all(&d)
+                    .and_then(|()| std::fs::write(d.join("status"), "NOT STARTED\n"));
+                updates.insert(key, TestResult {
+                    status: TestStatus::Notstarted,
+                    starttime: now,
+                    duration: 0,
+                });
             }
         }
-        results.delete(&p.commit, &stale_keys);
+        results.update(&p.commit, updates);
     }
 
     result
