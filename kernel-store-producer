@@ -8,12 +8,13 @@
 # place against ~/.ktest/kernels with `mv --exchange`; the displaced old
 # store is then removed.
 #
+# The tarball is kept across runs — overwritten by the next pack — so a
+# failed deploy can be retried with --deploy-only without rebuilding.
+#
 # Modes (default is build + pack + deploy in one shot):
-#   --pack-only      Build + pack, then stop. Tarball is kept on success so
-#                    a subsequent --deploy-only can pick it up.
+#   --pack-only      Build + pack, then stop.
 #   --deploy-only    Skip build/pack; deploy the existing tarball.
 #   --dry-run, -n    Print scp/ssh deploy commands instead of running them.
-#                    The tarball is preserved so a real deploy can follow.
 
 set -o nounset
 set -o errexit
@@ -43,8 +44,6 @@ Usage: kernel-store-producer [OPTIONS]
   --deploy-only      Skip build/pack; deploy the existing tarball at
                      $tarball.
   --dry-run, -n      Print scp/ssh deploy commands instead of running them.
-                     The tarball is preserved on a dry deploy so a real
-                     run afterwards can use it.
   -h, --help         Show this help.
 
 Default: build + pack + deploy.
@@ -66,26 +65,13 @@ while (($#)); do
     shift
 done
 
-# Cleanup policy (driven by mode):
-#   --deploy-only:           don't touch anything. The tarball is the
-#                            caller's; we didn't create the staging dir.
-#   pack ran, failure (rc!=0): always remove staging + tarball — a partial
-#                            tarball must not survive to the next run.
-#   pack ran, success, real deploy ran (default): remove both — end of life.
-#   pack ran, success, --pack-only or --dry-run: keep the tarball for the
-#                            next call; remove only the staging dir.
-on_exit() {
-    local rc=$?
-    if $do_pack; then
-        rm -rf "$new"
-        if (( rc != 0 )); then
-            rm -f "$tarball"
-        elif $do_deploy && ! $dry_run; then
-            rm -f "$tarball"
-        fi
-    fi
-}
-trap on_exit EXIT
+# Clean up the build staging dir on exit. The tarball is intentionally
+# kept across runs: it gets overwritten by the next pack anyway, and
+# keeping it means --deploy-only can retry after a deploy failure
+# without rebuilding the whole kernel store.
+if $do_pack; then
+    trap 'rm -rf "$new"' EXIT
+fi
 
 # JSON5 → JSON: strip // comments (only after whitespace/SOL so URLs
 # survive), drop trailing commas, quote unquoted object keys. Same
