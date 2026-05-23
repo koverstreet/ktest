@@ -180,6 +180,41 @@ async fn run_ktest_job(
     slot: usize,
     batch: &[ClaimedJob<JobParams>],
 ) -> Result<(), TaskError> {
+    let result = run_ktest_job_inner(handle, host, slot, batch).await;
+
+    // On any failure that left subtests marked IN PROGRESS, clear those
+    // markers so desired_jobs() re-emits them. job_wanted() treats a live
+    // IN PROGRESS as "in flight, don't double-run" — if we leave the file
+    // behind on an error exit, the subtest is stuck until daemon restart.
+    if result.is_err() {
+        let p = &batch[0].payload;
+        let commit_dir = p.output_dir.join(&p.commit);
+        let mut cleaned = false;
+        for j in batch {
+            let d = commit_dir.join(subtest_result_key(
+                &j.payload.test, &j.payload.subtest, &j.payload.kernel, &j.payload.env,
+            ));
+            let stale = std::fs::read_to_string(d.join("status"))
+                .map(|s| TestStatus::from_str(&s) == TestStatus::Inprogress)
+                .unwrap_or(false);
+            if stale && std::fs::remove_dir_all(&d).is_ok() {
+                cleaned = true;
+            }
+        }
+        if cleaned {
+            commit_update_results(&p.output_dir, &p.commit);
+        }
+    }
+
+    result
+}
+
+async fn run_ktest_job_inner(
+    handle: &ExecutorHandle<JobParams>,
+    host: &str,
+    slot: usize,
+    batch: &[ClaimedJob<JobParams>],
+) -> Result<(), TaskError> {
     let p = &batch[0].payload;
     if p.repo_url.is_empty() {
         return Err(TaskError::Fatal(format!("repo {} not configured", p.repo)));
