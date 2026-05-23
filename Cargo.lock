@@ -827,7 +827,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 [[package]]
 name = "jobkit"
 version = "0.4.0"
-source = "git+https://evilpiepirate.org/git/jobkit.git#df3c2f9a95ba296475e4e5485ae88e871a4e9d98"
+source = "git+https://evilpiepirate.org/git/jobkit.git#659af98591b5112e33d0f1b81112ac438f2e2761"
 dependencies = [
  "log",
  "serde",

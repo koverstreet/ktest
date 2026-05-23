@@ -150,6 +150,42 @@ async fn run_step(
     Ok(())
 }
 
+/// Compose a daemon-side full_log: batch metadata header + the
+/// executor-log slice from `exec_offset_start` to current + the
+/// supervisor-written body if any. The slice captures everything
+/// ci-daemon saw — pre-supervisor ssh (checkout, build, prepare),
+/// the supervisor invocation itself, the pull, anything else
+/// in-window. The supervisor body is the VM output the supervisor
+/// captured on the worker, pulled back.
+fn format_full_log(
+    host: &str,
+    slot: usize,
+    p: &JobParams,
+    subtests: &[&str],
+    exec_log_path: &std::path::Path,
+    exec_offset_start: u64,
+    supervisor_body: &[u8],
+) -> Vec<u8> {
+    let header = format!(
+        "# host={} slot={} commit={} kernel={} test={} env={} subtests={}\n",
+        host, slot, p.commit, p.kernel, p.test, p.env, subtests.join(","),
+    );
+    let exec_slice = std::fs::read(exec_log_path)
+        .ok()
+        .map(|b| {
+            let start = (exec_offset_start as usize).min(b.len());
+            b[start..].to_vec()
+        })
+        .unwrap_or_default();
+    [
+        header.as_bytes(),
+        b"# --- ci-daemon executor log for this batch ---\n",
+        &exec_slice,
+        b"\n# --- supervisor full_log ---\n",
+        supervisor_body,
+    ].concat()
+}
+
 /// Brotli-compress `path` to `<path>.br` and remove the original — the
 /// cgi serves test logs as `.br`.
 fn brotli_compress(path: &std::path::Path) -> std::io::Result<()> {
@@ -191,7 +227,19 @@ async fn run_ktest_job(
     results: &TestResultsStore,
     batch: &[ClaimedJob<JobParams>],
 ) -> Result<(), TaskError> {
-    let result = run_ktest_job_inner(handle, host, slot, results, batch).await;
+    // Inner does the full_log write inside its resume loop, where
+    // it has the per-iter context (which subtests were primary,
+    // what slice of the executor log to splice in). The outer
+    // wrapper only steps in if a subtest came out the other side
+    // without any full_log.br at all — i.e. the inner errored out
+    // before it could write one. Those still need *something* to
+    // look at on the dashboard.
+    let exec_log_offset_start = handle.log_offset();
+    let exec_log_path = handle.log_path().to_path_buf();
+
+    let result = run_ktest_job_inner(
+        handle, host, slot, &exec_log_path, results, batch,
+    ).await;
 
     // Drop the worker-side per-batch ktest-tmp dir (scratch devices,
     // sockets, env files). ktest's own EXIT trap usually cleans it
@@ -203,6 +251,46 @@ async fn run_ktest_job(
         ssh_cmd(host, &format!("rm -rf {}/ktest-tmp", ws), false),
     ).await;
 
+    let p = &batch[0].payload;
+    let commit_dir = p.output_dir.join(&p.commit);
+
+    // Fallback: any subtest that didn't get a full_log.br from inner
+    // (inner exited Err before its prepend ran) gets a header-only
+    // full_log written here so the dashboard has something. The
+    // executor-log slice from batch start to now captures whatever
+    // ssh output we saw.
+    let missing: Vec<&ClaimedJob<JobParams>> = batch.iter().filter(|j| {
+        let key = subtest_result_key(
+            &j.payload.test, &j.payload.subtest, &j.payload.kernel, &j.payload.env,
+        );
+        !commit_dir.join(&key).join("full_log.br").exists()
+    }).collect();
+
+    if !missing.is_empty() {
+        let content = format_full_log(
+            host, slot, p, &batch.iter().map(|j| j.payload.subtest.as_str())
+                .collect::<Vec<_>>(),
+            &exec_log_path, exec_log_offset_start,
+            &[],  // no supervisor body — inner didn't reach the pull
+        );
+        for j in missing {
+            let key = subtest_result_key(
+                &j.payload.test, &j.payload.subtest, &j.payload.kernel, &j.payload.env,
+            );
+            let d = commit_dir.join(&key);
+            let full_log_path = d.join("full_log");
+            if let Err(e) = std::fs::create_dir_all(&d)
+                .and_then(|()| std::fs::write(&full_log_path, &content))
+            {
+                handle.log_line(format!("fallback full_log {}: {}", full_log_path.display(), e));
+                continue;
+            }
+            if let Err(e) = brotli_compress(&full_log_path) {
+                handle.log_line(format!("brotli {}: {}", full_log_path.display(), e));
+            }
+        }
+    }
+
     // On any failure that left subtests marked IN PROGRESS, write a
     // FailedToRun verdict for them. The daemon failed to launch / pull
     // for this subtest in this batch — that IS a verdict (the infra
@@ -211,8 +299,6 @@ async fn run_ktest_job(
     // Inprogress); deleting them would re-emit on every refill until a
     // VM finally landed, which buries a systematically-broken subtest.
     if result.is_err() {
-        let p = &batch[0].payload;
-        let commit_dir = p.output_dir.join(&p.commit);
         let now = Utc::now();
         let mut updates = TestResultsMap::new();
         for j in batch {
@@ -240,6 +326,7 @@ async fn run_ktest_job_inner(
     handle: &ExecutorHandle<JobParams>,
     host: &str,
     slot: usize,
+    exec_log_path: &std::path::Path,
     results: &TestResultsStore,
     batch: &[ClaimedJob<JobParams>],
 ) -> Result<(), TaskError> {
@@ -251,12 +338,6 @@ async fn run_ktest_job_inner(
     let basename = result_basename(&p.test, &p.kernel, &p.env);
     let commit_dir = p.output_dir.join(&p.commit);
 
-    // Capture the executor-log byte offset at batch start so the
-    // header-prepend below can splice in just the slice covering this
-    // batch — gives us a log to debug from even when the supervisor
-    // never produced full_log on the worker.
-    let exec_log_offset_start = handle.log_offset();
-    let exec_log_path = handle.log_path().to_path_buf();
     handle.log_line(format!("=== batch on {}:{} ===", host, slot));
 
     // Subtests still owed a verdict — the whole claimed batch to start.
@@ -333,6 +414,10 @@ async fn run_ktest_job_inner(
     // Resume loop: run the not-yet-completed subtests in one VM; retry
     // any the VM died before reaching.
     while !remaining.is_empty() {
+        // Mark this iter's window in the executor log so the post-pull
+        // full_log write splices in exactly what we did this iter.
+        let iter_offset = handle.log_offset();
+
         // 4. Run the supervisor over `remaining`, one VM. Its exit
         //    status is ignored — verdicts are in the result files; only
         //    a failure to *run* it is an error.
@@ -414,9 +499,9 @@ async fn run_ktest_job_inner(
         }
 
         // The cgi serves logs as .br. Drop any full_log.br a prior
-        // iteration linked in — so a retried subtest relinks to the run
-        // that actually produced its verdict — then compress this run's
-        // logs. Best-effort — a missing log isn't fatal.
+        // iteration linked into these subtests' dirs — a retried
+        // subtest relinks to the iter that actually produced its
+        // verdict.
         for st in &remaining {
             let _ = std::fs::remove_file(
                 commit_dir
@@ -424,75 +509,46 @@ async fn run_ktest_job_inner(
                     .join("full_log.br"));
         }
 
-        // Always (re)write full_log on the daemon side, even if the
-        // supervisor never wrote one — so a debug attempt always has
-        // *something* to look at. Content is:
-        //   1. The batch header (host, slot, commit, kernel, test, env,
-        //      subtests) — context supervisor doesn't have.
-        //   2. The slice of this executor's log written since batch start
-        //      — captures pre-supervisor ssh output (checkout, build,
-        //      prepare) and any stderr from the runner if supervisor
-        //      itself died before logging.
-        //   3. The supervisor-written full_log body, if any.
-        {
-            let primary = commit_dir
-                .join(subtest_result_key(&p.test, &remaining[0], &p.kernel, &p.env))
-                .join("full_log");
-            let header = format!(
-                "# host={} slot={} commit={} kernel={} test={} env={} subtests={}\n",
-                host, slot, p.commit, p.kernel, p.test, p.env,
-                remaining.join(","),
-            );
-            let exec_slice = std::fs::read(&exec_log_path)
-                .ok()
-                .map(|b| {
-                    let start = (exec_log_offset_start as usize).min(b.len());
-                    b[start..].to_vec()
-                })
-                .unwrap_or_default();
-            let body = std::fs::read(&primary).unwrap_or_default();
-            let prelude =
-                b"# --- ci-daemon executor log for this batch ---\n".to_vec();
-            let body_marker =
-                b"\n# --- supervisor full_log ---\n".to_vec();
-            let combined: Vec<u8> = [
-                header.as_bytes(),
-                &prelude,
-                &exec_slice,
-                &body_marker,
-                &body,
-            ].concat();
-            if let Err(e) = std::fs::create_dir_all(primary.parent().unwrap())
-                .and_then(|()| std::fs::write(&primary, &combined))
-            {
-                handle.log_line(format!("write full_log to {}: {}", primary.display(), e));
-            }
+        // Compose this iter's full_log: batch header + iter slice of
+        // executor log + supervisor body (the pulled file). Write to
+        // remaining[0]'s dir as the canonical, brotli, then symlink
+        // every other subtest's full_log.br to it.
+        let primary_key = subtest_result_key(&p.test, &remaining[0], &p.kernel, &p.env);
+        let primary_dir = commit_dir.join(&primary_key);
+        let primary_path = primary_dir.join("full_log");
+        let supervisor_body = std::fs::read(&primary_path).unwrap_or_default();
+        let content = format_full_log(
+            host, slot, p,
+            &remaining.iter().map(String::as_str).collect::<Vec<_>>(),
+            exec_log_path, iter_offset,
+            &supervisor_body,
+        );
+        if let Err(e) = std::fs::write(&primary_path, &content) {
+            handle.log_line(format!("write full_log {}: {}", primary_path.display(), e));
+        } else if let Err(e) = brotli_compress(&primary_path) {
+            handle.log_line(format!("brotli {}: {}", primary_path.display(), e));
         }
 
+        // Brotli per-subtest "log" files (one per test the supervisor
+        // reached).
         for st in &remaining {
             let d = commit_dir.join(subtest_result_key(&p.test, st, &p.kernel, &p.env));
-            for log in ["log", "full_log"] {
-                let path = d.join(log);
-                if path.exists() {
-                    if let Err(e) = brotli_compress(&path) {
-                        handle.log_line(format!("compress {}: {}", path.display(), e));
-                    }
+            let path = d.join("log");
+            if path.exists() {
+                if let Err(e) = brotli_compress(&path) {
+                    handle.log_line(format!("compress {}: {}", path.display(), e));
                 }
             }
         }
 
-        // Every subtest needs a working full_log — it is how a test
-        // that failed to start gets debugged. The supervisor wrote one
-        // full log for the VM run, into remaining[0]'s dir; link every
-        // other subtest's full_log.br to it (relative — both dirs sit
-        // under commit_dir, so it resolves).
-        let log_dir = subtest_result_key(&p.test, &remaining[0], &p.kernel, &p.env);
+        // Every other subtest in this iter shares the same VM run —
+        // symlink each one's full_log.br to the primary's.
         for st in remaining.iter().skip(1) {
             let link = commit_dir
                 .join(subtest_result_key(&p.test, st, &p.kernel, &p.env))
                 .join("full_log.br");
             if let Err(e) =
-                std::os::unix::fs::symlink(format!("../{log_dir}/full_log.br"), &link)
+                std::os::unix::fs::symlink(format!("../{primary_key}/full_log.br"), &link)
             {
                 handle.log_line(format!("full_log link for {st}: {e}"));
             }
