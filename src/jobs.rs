@@ -44,7 +44,7 @@ pub struct Job {
     /// Commits behind the branch tip (0 = tip). Lower = run sooner.
     pub age: u64,
     /// Niceness — higher = lower scheduling priority.
-    pub nice: u64,
+    pub nice: i64,
     /// Expected runtime in seconds, from historical durations.
     pub duration: u64,
 }
@@ -128,17 +128,17 @@ fn job_wanted(status: Option<TestStatus>) -> bool {
 /// Niceness for one subtest: the test_group's base nice plus the
 /// historical-stats adjustments — nice down tests that consistently
 /// pass-or-fail, and long-running tests.
-fn job_nice(tg: &RcTestGroup, stats: Option<&TestStats>) -> u64 {
-    let mut nice = tg.nice;
+fn job_nice(tg: &RcTestGroup, stats: Option<&TestStats>) -> i64 {
+    let mut nice = tg.nice as i64;
     if let Some(stats) = stats {
         if tg.test_always_passes_nice != 0
             && stats.passed != stats.failed
             && stats.passed + stats.failed > tg.test_always_passes_nice
         {
-            nice += tg.test_always_passes_nice;
+            nice += tg.test_always_passes_nice as i64;
         }
         if tg.test_duration_nice != 0 {
-            nice += stats.duration / tg.test_duration_nice;
+            nice += (stats.duration / tg.test_duration_nice) as i64;
         }
     }
     nice

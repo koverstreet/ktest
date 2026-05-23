@@ -638,7 +638,7 @@ fn make_job_spec(ci_host: &str, rc: &CiConfig, job: &Job) -> JobSpec<JobParams> 
         repo_url,
         output_dir: rc.ktest.output_dir.clone(),
     };
-    let nice = rc.ktest.user_nice.get(&k.user).copied().unwrap_or(0);
+    let nice = job.nice + rc.ktest.user_nice.get(&k.user).copied().unwrap_or(0);
     // Mirror the old user_stats_select_fair multiplier: higher nice =
     // more weight = the user is scheduled less often.
     let weight = (1.0 + nice as f64).max(0.1);
