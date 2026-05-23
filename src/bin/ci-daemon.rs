@@ -242,6 +242,31 @@ async fn run_ktest_job_inner(
     let mut remaining: Vec<String> =
         batch.iter().map(|j| j.payload.subtest.clone()).collect();
 
+    // Mark every subtest in-progress immediately: in the store (which
+    // is what the cgi reads via the capnp) and in our output_dir
+    // (debugging artifact). The worker-side mark is written by the
+    // prepare step below so a dead VM still leaves a status. Doing
+    // this up front — before checkout — means the cgi shows the
+    // claim the moment an executor picks the batch, not after the
+    // multi-second checkout + supervisor build.
+    let now = Utc::now();
+    let mut inprogress_map = TestResultsMap::new();
+    for st in &remaining {
+        let key = subtest_result_key(&p.test, st, &p.kernel, &p.env);
+        let d = commit_dir.join(&key);
+        if let Err(e) = std::fs::create_dir_all(&d)
+            .and_then(|()| std::fs::write(d.join("status"), "IN PROGRESS\n"))
+        {
+            handle.log_line(format!("marking {st} in-progress: {e}"));
+        }
+        inprogress_map.insert(key, TestResult {
+            status: TestStatus::Inprogress,
+            starttime: now,
+            duration: 0,
+        });
+    }
+    results.update(&p.commit, inprogress_map);
+
     // 1. Check out the repo at the commit. A repo switch (different
     //    repo, or none) wipes the workspace — the stale checkout and
     //    its kernel build cache are both invalid.
@@ -262,30 +287,11 @@ async fn run_ktest_job_inner(
     // 2. Build the supervisor (idempotent C helper).
     run_step(handle, host, "make -C ~/ktest/lib supervisor", "build supervisor").await?;
 
-    // 3. Clean ktest-out (keep the kernel build cache) and mark every
-    //    subtest in-progress — on the worker so a dead VM still leaves
-    //    a status, in our output_dir for debugging, and in the store
-    //    (which is what desired_jobs() and the cgi read). Once: the
-    //    resume loop re-runs only not-completed subtests and must not
-    //    wipe the rest's results.
-    let now = Utc::now();
-    let mut inprogress_map = TestResultsMap::new();
-    for st in &remaining {
-        let key = subtest_result_key(&p.test, st, &p.kernel, &p.env);
-        let d = commit_dir.join(&key);
-        if let Err(e) = std::fs::create_dir_all(&d)
-            .and_then(|()| std::fs::write(d.join("status"), "IN PROGRESS\n"))
-        {
-            handle.log_line(format!("marking {st} in-progress: {e}"));
-        }
-        inprogress_map.insert(key, TestResult {
-            status: TestStatus::Inprogress,
-            starttime: now,
-            duration: 0,
-        });
-    }
-    results.update(&p.commit, inprogress_map);
-
+    // 3. Clean ktest-out (keep the kernel build cache); mark every
+    //    subtest in-progress worker-side too so a dead VM still leaves
+    //    a status for the supervisor to scan. Once: the resume loop
+    //    re-runs only not-completed subtests and must not wipe the
+    //    rest's results.
     let mark = remaining.iter()
         .map(|st| {
             let d = subtest_result_key(&p.test, st, &p.kernel, &p.env);
