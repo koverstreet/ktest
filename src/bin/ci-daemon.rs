@@ -188,6 +188,16 @@ async fn run_ktest_job(
 ) -> Result<(), TaskError> {
     let result = run_ktest_job_inner(handle, host, slot, results, batch).await;
 
+    // Drop the worker-side per-batch ktest-tmp dir (scratch devices,
+    // sockets, env files). ktest's own EXIT trap usually cleans it
+    // up, but doesn't fire on SIGKILL / parent-reaped — that's the
+    // mechanism the /tmp/ktest-* leaks were going through. Always
+    // ssh+rm here so the daemon is the source of truth for that dir.
+    let ws = format!("ktest-ci/{}", slot);
+    let _ = handle.run_command(
+        ssh_cmd(host, &format!("rm -rf {}/ktest-tmp", ws), false),
+    ).await;
+
     // On any failure that left subtests marked IN PROGRESS, write a
     // FailedToRun verdict for them. The daemon failed to launch / pull
     // for this subtest in this batch — that IS a verdict (the infra
@@ -316,10 +326,14 @@ async fn run_ktest_job_inner(
         //    status is ignored — verdicts are in the result files; only
         //    a failure to *run* it is an error.
         handle.log_line(format!("=== run: {} ===", remaining.join(" ")));
+        // -T <tmp>: caller-managed VM working dir (scratch devices,
+        // sockets, env files). Under $ws so the per-batch teardown
+        // below catches it even if bash's EXIT trap doesn't fire
+        // (SIGKILL, OOM); avoids /tmp/ktest-* leaks.
         let runner = if p.kernel.is_empty() {
-            format!("~/ktest/build-test-kernel run -k {}/{} -P", ws, p.repo)
+            format!("~/ktest/build-test-kernel run -k {}/{} -T {}/ktest-tmp -P", ws, p.repo, ws)
         } else {
-            format!("~/ktest/ktest run -k {}", p.kernel)
+            format!("~/ktest/ktest run -k {} -T {}/ktest-tmp", p.kernel, ws)
         };
         // The supervisor's -f full-log is one file per VM run; it lives
         // in remaining[0]'s dir, and every other subtest's full_log.br

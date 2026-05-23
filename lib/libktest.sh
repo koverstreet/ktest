@@ -39,7 +39,7 @@ ktest_no_vm=false
 
 # args:
 
-ktest_args="a:k:o:p:ISFLvxn:N:"
+ktest_args="a:k:o:p:T:ISFLvxn:N:"
 parse_ktest_arg()
 {
     local arg=$1
@@ -56,6 +56,12 @@ parse_ktest_arg()
 	    ;;
 	p)
 	    ktest_priority=$OPTARG
+	    ;;
+	T)
+	    # Caller-managed VM working dir (scratch devices, sockets,
+	    # env files). Lets the daemon clean up reliably when bash's
+	    # EXIT trap doesn't fire (e.g. SIGKILL).
+	    ktest_tmp=$OPTARG
 	    ;;
 	I)
 	    ktest_interactive=true
@@ -114,6 +120,8 @@ ktest_usage_opts()
     echo "                       \$HOME/.ktest/kernels or /var/lib/ktest/kernels"
     echo "                       path: a directory containing vmlinuz (+ optional initramfs)"
     echo "      -o <dir>        output directory; defaults to ./ktest-out"
+    echo "      -T <dir>        VM working dir (scratch devices, sockets);"
+    echo "                       caller-managed if set, mktemp'd otherwise"
     echo "      -n (user|vde)   Networking type to use"
     echo "      -x              bash debug statements"
     echo "      -h              display this help and exit"

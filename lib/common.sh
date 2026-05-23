@@ -10,6 +10,11 @@ set -o pipefail
 trap 'echo "Error $? at $BASH_SOURCE $LINENO from: $BASH_COMMAND, exiting"' ERR
 
 ktest_tmp=${ktest_tmp:-""}
+# When the caller (e.g. ci-daemon's -T) supplies the tmp dir, it owns
+# the cleanup: bash's EXIT trap doesn't always fire (SIGKILL, OOM,
+# parent reaped first), so we don't want $ktest_tmp's removal to be
+# the only safety net. The daemon's rm after each batch is reliable.
+ktest_tmp_external=false
 ktest_exit()
 {
     local children=$(jobs -rp)
@@ -18,7 +23,9 @@ ktest_exit()
 	wait $(jobs -rp) >& /dev/null || true
     fi
 
-    [[ -n $ktest_tmp ]] && rm -rf "$ktest_tmp"
+    if [[ -n $ktest_tmp ]] && ! $ktest_tmp_external; then
+	rm -rf "$ktest_tmp"
+    fi
     true
 }
 
@@ -28,6 +35,10 @@ get_tmpdir()
 {
     if [[ -z $ktest_tmp ]]; then
 	ktest_tmp=$(mktemp --tmpdir -d $(basename "$0")-XXXXXXXXXX)
+    else
+	# pre-set (via -T) — caller owns cleanup
+	ktest_tmp_external=true
+	mkdir -p "$ktest_tmp"
     fi
 }
 
