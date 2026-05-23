@@ -75,6 +75,10 @@ pub struct Ktestrc {
     pub subtest_duration_max: Option<u64>,
     #[serde(default)]
     pub subtest_duration_def: Option<u64>,
+    /// How many commits back from each branch tip to preserve results
+    /// for (used by gc-results and the cgi viewer). Defaults to 500.
+    #[serde(default)]
+    pub keep_results_commits: Option<u64>,
     #[serde(default)]
     pub verbose: bool,
     #[serde(default)]
@@ -1025,11 +1029,14 @@ pub fn branch_get_results(
         return Err(format!("Error walking {}: {}", branch_or_commit, e));
     }
 
-    // Phase 1: collect commit IDs from git (cheap, no I/O beyond git)
+    // Phase 1: collect commit IDs from git (cheap, no I/O beyond git).
+    // Match gc-results' liveness depth so the viewer can reach everything
+    // that's still on disk.
+    let depth: usize = ktest.keep_results_commits.unwrap_or(500) as usize;
     let commits: Vec<(String, String)> = walk
         .filter_map(|i| i.ok())
         .filter_map(|i| repo.find_commit(i).ok())
-        .take(150)
+        .take(depth)
         .map(|c| (c.id().to_string(), c.message().unwrap_or("").to_string()))
         .collect();
 
@@ -1062,7 +1069,7 @@ pub fn branch_get_results(
         ret.push(r);
 
         nr_commits += 1;
-        if nr_commits > 50 {
+        if nr_commits > depth {
             break;
         }
     }

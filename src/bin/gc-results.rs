@@ -36,6 +36,7 @@ fn branch_get_commits(repo: &git2::Repository, branch: &str, max_commits: u64) -
 
 fn get_live_commits(rc: &CiConfig) -> HashSet<String> {
     let mut ret: HashSet<String> = HashSet::new();
+    let depth = rc.ktest.keep_results_commits.unwrap_or(500);
 
     for (user, userconfig) in rc
         .users
@@ -64,16 +65,9 @@ fn get_live_commits(rc: &CiConfig) -> HashSet<String> {
                 }
             };
 
-            for test_group in branch_config.test_groups.iter() {
-                let max_commits = userconfig
-                    .test_groups
-                    .get(test_group)
-                    .map(|x| x.max_commits)
-                    .unwrap_or(0);
-                let userbranch = user.to_string() + "/" + branch;
-                for commit in branch_get_commits(&repo, &userbranch, max_commits) {
-                    ret.insert(commit);
-                }
+            let userbranch = format!("{}/{}", user, branch);
+            for commit in branch_get_commits(&repo, &userbranch, depth) {
+                ret.insert(commit);
             }
         }
     }
