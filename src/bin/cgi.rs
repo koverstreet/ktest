@@ -680,9 +680,13 @@ function render(s) {
   // shown — idle ones included — each tailing its own log.
   const ex = document.getElementById('executors');
   ex.textContent = '';
+  // Executor names are 'host:slot' by ci-daemon convention; jobkit
+  // itself just carries the name. Split it back out for the host row.
   const hosts = {};
-  for (const e of s.executors)
-    (hosts[e.host] = hosts[e.host] || []).push(e);
+  for (const e of s.executors) {
+    const host = e.name.split(':')[0];
+    (hosts[host] = hosts[host] || []).push(e);
+  }
   for (const host of Object.keys(hosts).sort()) {
     const execs = hosts[host].sort((a, b) => a.name.localeCompare(b.name));
     const running = execs.filter(e => e.current_jobs.length).length;
