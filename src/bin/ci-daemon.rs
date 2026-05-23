@@ -334,6 +334,28 @@ async fn run_ktest_job(
                     .join(subtest_result_key(&p.test, st, &p.kernel, &p.env))
                     .join("full_log.br"));
         }
+
+        // Prepend a header to the supervisor's full_log (in remaining[0]'s
+        // dir) so the host/slot/commit etc. are findable inside the log
+        // itself, not just via the surrounding directory. supervisor.c
+        // doesn't know any of this — only ci-daemon does.
+        {
+            let primary = commit_dir
+                .join(subtest_result_key(&p.test, &remaining[0], &p.kernel, &p.env))
+                .join("full_log");
+            if primary.exists() {
+                let body = std::fs::read(&primary).unwrap_or_default();
+                let header = format!(
+                    "# host={} slot={} commit={} kernel={} test={} env={} subtests={}\n",
+                    host, slot, p.commit, p.kernel, p.test, p.env,
+                    remaining.join(","),
+                );
+                if let Err(e) = std::fs::write(&primary, [header.as_bytes(), &body].concat()) {
+                    handle.log_line(format!("prepend header to {}: {}", primary.display(), e));
+                }
+            }
+        }
+
         for st in &remaining {
             let d = commit_dir.join(subtest_result_key(&p.test, st, &p.kernel, &p.env));
             for log in ["log", "full_log"] {
