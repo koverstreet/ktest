@@ -372,6 +372,10 @@ async fn run_ktest_job_inner(
     // 1. Check out the repo at the commit. A repo switch (different
     //    repo, or none) wipes the workspace — the stale checkout and
     //    its kernel build cache are both invalid.
+    // Each slot has its own git repo (no concurrent legitimate user),
+    // so a leftover .git/index.lock is from a previous batch whose git
+    // op got SIGKILL'd between O_EXCL-creating the lock and releasing
+    // it. Drop it before fetch.
     let checkout = format!(
         "set -e; \
          if [ ! -d {ws}/{repo}/.git ]; then \
@@ -379,6 +383,7 @@ async fn run_ktest_job_inner(
              git -C {ws} clone {url} {repo}; \
          fi; \
          cd {ws}/{repo}; \
+         rm -f .git/index.lock; \
          git fetch {url} {commit}; \
          git checkout -f FETCH_HEAD; \
          test \"$(git rev-parse HEAD)\" = \"{commit}\"",
