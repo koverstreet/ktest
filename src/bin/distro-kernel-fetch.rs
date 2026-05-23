@@ -850,7 +850,10 @@ fn dnf_fetch_packages(repo: &str) -> Result<Vec<DnfPkg>> {
             Ok(Event::Text(t)) => {
                 if let Some(target) = text_target {
                     if let Some(c) = cur.as_mut() {
-                        let txt = t.unescape().unwrap_or_default().to_string();
+                        let decoded = t.decode().unwrap_or_default();
+                        let txt = quick_xml::escape::unescape(&decoded)
+                            .unwrap_or_default()
+                            .to_string();
                         match target {
                             "name" => c.name = txt,
                             "arch" => c.arch = txt,
@@ -1886,11 +1889,19 @@ fn write_manifest(stage: &Path, pkg: &KernelPkg) -> Result<()> {
 
 fn sha256_file(path: &Path) -> Result<String> {
     use sha2::{Digest, Sha256};
+    use std::io::Read;
     let mut f = fs::File::open(path)
         .with_context(|| format!("opening {} for hashing", path.display()))?;
     let mut hasher = Sha256::new();
-    std::io::copy(&mut f, &mut hasher)
-        .with_context(|| format!("reading {} for hashing", path.display()))?;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = f.read(&mut buf)
+            .with_context(|| format!("reading {} for hashing", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
     Ok(hex::encode(hasher.finalize()))
 }
 
