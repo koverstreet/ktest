@@ -16,11 +16,20 @@ type TestDurationMap = BTreeMap<String, TestDuration>;
 fn read_duration_sums(rc: &Ktestrc) -> TestDurationMap {
     let mut durations: BTreeMap<String, TestDuration> = BTreeMap::new();
 
-    for i in std::fs::read_dir(&rc.output_dir)
-        .unwrap()
-        .into_iter()
+    let entries = match std::fs::read_dir(&rc.output_dir) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("gen-avg-duration: reading {}: {}",
+                      rc.output_dir.display(), e);
+            return durations;
+        }
+    };
+    // metadata() can race with concurrent gc / result-dir cleanup — the
+    // dir entry was listed but is gone by the time we stat it. Skip
+    // anything that's vanished or isn't a dir.
+    for i in entries
         .filter_map(|e| e.ok())
-        .filter(|e| e.metadata().unwrap().is_dir())
+        .filter(|e| e.metadata().map(|m| m.is_dir()).unwrap_or(false))
         .filter_map(|e| e.file_name().into_string().ok())
         .filter_map(|e| commitdir_get_results(rc, &e).ok())
     {
