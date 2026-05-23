@@ -264,7 +264,7 @@ require-kernel-config RANDOMIZE_MEMORY=n
 # Profiling:
 require-kernel-config PROFILING
 require-kernel-config JUMP_LABEL
-#require-kernel-config-soft MEM_ALLOC_PROFILING
+require-kernel-config MEM_ALLOC_PROFILING
 require-kernel-config SHRINKER_DEBUG
 
 # iotop:
