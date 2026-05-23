@@ -218,10 +218,11 @@ pub struct TestResultsStore {
 
 impl TestResultsStore {
     /// Load every commit's results from `output_dir` into memory. Stale
-    /// IN PROGRESS entries are skipped — they were left by a previous
-    /// daemon that died mid-run, and the subtest needs to be re-emitted
-    /// by desired_jobs(). After load(), the capnp files are NOT rewritten
-    /// (loading is a pure read).
+    /// IN PROGRESS entries are dropped: the previous daemon died mid-run,
+    /// the subtests need to be re-emitted by desired_jobs(). Their
+    /// per-subtest disk dirs are removed and the per-commit capnp is
+    /// rewritten so the cgi (which reads the capnp) doesn't keep showing
+    /// the stale Inprogress entries on the dashboard.
     pub fn load(output_dir: PathBuf) -> Self {
         let mut by_commit: HashMap<String, TestResultsMap> = HashMap::new();
         if let Ok(entries) = output_dir.read_dir() {
@@ -234,7 +235,22 @@ impl TestResultsStore {
                     continue;
                 }
                 let mut m = commitdir_get_results_fs(&output_dir, &commit_id);
-                m.retain(|_, r| r.status != TestStatus::Inprogress);
+                let stale: Vec<String> = m.iter()
+                    .filter(|(_, r)| r.status == TestStatus::Inprogress)
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                if !stale.is_empty() {
+                    for k in &stale {
+                        m.remove(k);
+                        let _ = std::fs::remove_dir_all(
+                            output_dir.join(&commit_id).join(k),
+                        );
+                    }
+                    if let Err(e) = results_to_capnp(&output_dir, &commit_id, None, &m) {
+                        eprintln!("TestResultsStore::load: capnp for {}: {:#}",
+                                  commit_id, e);
+                    }
+                }
                 if !m.is_empty() {
                     by_commit.insert(commit_id, m);
                 }
