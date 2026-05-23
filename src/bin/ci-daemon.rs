@@ -332,13 +332,14 @@ async fn run_ktest_job_inner(
         //    a failure to *run* it is an error.
         handle.log_line(format!("=== run: {} ===", remaining.join(" ")));
         // -T <tmp>: caller-managed VM working dir (scratch devices,
-        // sockets, env files). Under $ws so the per-batch teardown
-        // below catches it even if bash's EXIT trap doesn't fire
-        // (SIGKILL, OOM); avoids /tmp/ktest-* leaks.
+        // sockets, env files). Resolves under $ws (CWD of the inner
+        // shell is $ws after the leading 'cd {ws};') so the per-batch
+        // teardown below catches it even if bash's EXIT trap doesn't
+        // fire (SIGKILL, OOM); avoids /tmp/ktest-* leaks.
         let runner = if p.kernel.is_empty() {
-            format!("~/ktest/build-test-kernel run -k {}/{} -T {}/ktest-tmp -P", ws, p.repo, ws)
+            format!("~/ktest/build-test-kernel run -k {}/{} -T ktest-tmp -P", ws, p.repo)
         } else {
-            format!("~/ktest/ktest run -k {} -T {}/ktest-tmp", p.kernel, ws)
+            format!("~/ktest/ktest run -k {} -T ktest-tmp", p.kernel)
         };
         // The supervisor's -f full-log is one file per VM run; it lives
         // in remaining[0]'s dir, and every other subtest's full_log.br

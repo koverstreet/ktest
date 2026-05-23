@@ -60,8 +60,11 @@ parse_ktest_arg()
 	T)
 	    # Caller-managed VM working dir (scratch devices, sockets,
 	    # env files). Lets the daemon clean up reliably when bash's
-	    # EXIT trap doesn't fire (e.g. SIGKILL).
-	    ktest_tmp=$OPTARG
+	    # EXIT trap doesn't fire (e.g. SIGKILL). Absolutize so the
+	    # ln -s "$ktest_tmp" "$ktest_out/vm" symlink resolves the
+	    # same way no matter where the caller's CWD is.
+	    mkdir -p "$OPTARG"
+	    ktest_tmp=$(cd "$OPTARG" && pwd)
 	    ;;
 	I)
 	    ktest_interactive=true
