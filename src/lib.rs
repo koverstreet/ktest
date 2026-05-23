@@ -1,10 +1,11 @@
 use anyhow;
 use anyhow::Context;
 use serde_derive::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::{create_dir_all, read_to_string, File};
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 pub mod branchlog_capnp;
 pub mod durations_capnp;
@@ -194,6 +195,96 @@ pub struct TestResult {
 }
 
 pub type TestResultsMap = BTreeMap<String, TestResult>;
+
+/// Process-wide store of per-commit test results, mirrored to per-commit
+/// .capnp files for the cgi to read.
+///
+/// Loaded once at startup from the existing on-disk per-commit dirs
+/// (stale IN PROGRESS entries are dropped — they're from a previous
+/// daemon run); subsequently the in-memory map is the source of truth
+/// and the capnp files are derived. Every `update` takes a global lock
+/// and holds it across the merge + capnp rewrite, so concurrent updates
+/// for the same commit serialise and the on-disk file always reflects
+/// the latest committed snapshot.
+///
+/// Replaces the old read-disk-then-rewrite-capnp model, which raced when
+/// two batches finished for the same commit at the same time (an older
+/// snapshot's capnp could land after a newer one's, clobbering verdicts
+/// and dropping the pass count).
+pub struct TestResultsStore {
+    output_dir: PathBuf,
+    by_commit: Mutex<HashMap<String, TestResultsMap>>,
+}
+
+impl TestResultsStore {
+    /// Load every commit's results from `output_dir` into memory. Stale
+    /// IN PROGRESS entries are skipped — they were left by a previous
+    /// daemon that died mid-run, and the subtest needs to be re-emitted
+    /// by desired_jobs(). After load(), the capnp files are NOT rewritten
+    /// (loading is a pure read).
+    pub fn load(output_dir: PathBuf) -> Self {
+        let mut by_commit: HashMap<String, TestResultsMap> = HashMap::new();
+        if let Ok(entries) = output_dir.read_dir() {
+            for e in entries.filter_map(|i| i.ok()) {
+                let commit_id = e.file_name().into_string().unwrap_or_default();
+                if commit_id.len() != 40
+                    || !commit_id.bytes().all(|b| b.is_ascii_hexdigit())
+                    || !e.path().is_dir()
+                {
+                    continue;
+                }
+                let mut m = commitdir_get_results_fs(&output_dir, &commit_id);
+                m.retain(|_, r| r.status != TestStatus::Inprogress);
+                if !m.is_empty() {
+                    by_commit.insert(commit_id, m);
+                }
+            }
+        }
+        TestResultsStore {
+            output_dir,
+            by_commit: Mutex::new(by_commit),
+        }
+    }
+
+    /// Look up one subtest's recorded status. `key` is the subtest's
+    /// result_key (see `subtest_result_key`).
+    pub fn lookup(&self, commit: &str, key: &str) -> Option<TestStatus> {
+        let g = self.by_commit.lock().unwrap();
+        g.get(commit).and_then(|m| m.get(key)).map(|r| r.status)
+    }
+
+    /// Cloned snapshot of one commit's full map. Use this when an op
+    /// needs to iterate without holding the store lock.
+    pub fn commit_results(&self, commit: &str) -> Option<TestResultsMap> {
+        let g = self.by_commit.lock().unwrap();
+        g.get(commit).cloned()
+    }
+
+    /// Merge `updates` into the commit's map, then rewrite the capnp.
+    /// Both happen under the global lock — concurrent callers serialise.
+    /// Failure to write the capnp is logged but not propagated; the
+    /// in-memory state is authoritative, the capnp is a render of it.
+    pub fn update(&self, commit: &str, updates: TestResultsMap) {
+        if updates.is_empty() {
+            return;
+        }
+        let mut g = self.by_commit.lock().unwrap();
+        let entry = g.entry(commit.to_string()).or_default();
+        for (k, v) in updates {
+            entry.insert(k, v);
+        }
+        if let Err(e) = results_to_capnp(&self.output_dir, commit, None, entry) {
+            eprintln!("TestResultsStore: capnp for {}: {:#}", commit, e);
+        }
+    }
+
+    /// Convenience: update one subtest. Same semantics as `update`.
+    pub fn update_one(&self, commit: &str, key: String, result: TestResult) {
+        let mut m = BTreeMap::new();
+        m.insert(key, result);
+        self.update(commit, m);
+    }
+}
 
 fn commitdir_get_results_fs(output_dir: &Path, commit_id: &str) -> TestResultsMap {
     fn read_test_result(testdir: &std::fs::DirEntry) -> Option<TestResult> {
