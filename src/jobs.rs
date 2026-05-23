@@ -249,12 +249,22 @@ fn build_test_specs<'a>(rc: &'a CiConfig) -> Vec<TestSpec<'a>> {
     specs
 }
 
-/// The desired test jobs, newest-commit-first, capped at `limit`.
+/// Per-job scheduling weight — lower runs sooner.
 ///
-/// Emits commit-age-major: every config's age-0 (branch-tip) jobs, then
-/// age-1, and so on — so a bounded prefix is exactly the newest
-/// commits' work, and the daemon can window without materializing the
-/// whole matrix. Pure read; does not fetch git.
+/// Faithful port of gen-job-list's testjob_weight: age + nice. A
+/// low-nice branch's older commits outrank a high-nice branch's tip;
+/// within a (branch, nice) class, newer commits naturally come first.
+fn job_weight(j: &Job) -> i64 {
+    j.age as i64 + j.nice
+}
+
+/// The desired test jobs, priority-ordered (lowest weight first),
+/// capped at `limit`.
+///
+/// Emits the full candidate matrix, sorts by `(age + nice)` weight with
+/// commit/test/kernel/env/duration as tiebreakers (matching the old
+/// gen-job-list ordering), then truncates. Pure read; does not fetch
+/// git.
 ///
 /// May contain duplicate `JobKey`s if the config routes the same
 /// (test, kernel, env) through two test_groups on one branch; the
@@ -309,13 +319,21 @@ pub fn desired_jobs(rc: &CiConfig, results: &TestResultsStore, limit: usize) -> 
                         nice,
                         duration,
                     });
-                    if out.len() >= limit {
-                        return out;
-                    }
                 }
             }
         }
     }
+
+    out.sort_by(|a, b| {
+        job_weight(a)
+            .cmp(&job_weight(b))
+            .then(a.key.commit.cmp(&b.key.commit))
+            .then(a.key.test.cmp(&b.key.test))
+            .then(a.key.kernel.cmp(&b.key.kernel))
+            .then(a.key.env.cmp(&b.key.env))
+            .then(a.duration.cmp(&b.duration))
+    });
+    out.truncate(limit);
     out
 }
 
