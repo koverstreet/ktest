@@ -284,29 +284,57 @@ impl TestResultsStore {
         m.insert(key, result);
         self.update(commit, m);
     }
+
+    /// Drop entries for these subtests, then rewrite the capnp. Used by
+    /// the daemon when cleaning up stale IN PROGRESS markers — same lock
+    /// discipline as `update`.
+    pub fn delete(&self, commit: &str, keys: &[String]) {
+        if keys.is_empty() {
+            return;
+        }
+        let mut g = self.by_commit.lock().unwrap();
+        let entry = match g.get_mut(commit) {
+            Some(e) => e,
+            None => return,
+        };
+        let mut changed = false;
+        for k in keys {
+            if entry.remove(k).is_some() {
+                changed = true;
+            }
+        }
+        if !changed {
+            return;
+        }
+        if let Err(e) = results_to_capnp(&self.output_dir, commit, None, entry) {
+            eprintln!("TestResultsStore: capnp for {}: {:#}", commit, e);
+        }
+    }
+}
+
+/// Read one subtest's result dir (the `status` + `duration` files).
+/// Returns None if there's no `status` or it can't be read — caller
+/// treats that as "no result yet."
+pub fn read_test_result(testdir: &Path) -> Option<TestResult> {
+    let mut f = File::open(testdir.join("status")).ok()?;
+    let mut status = String::new();
+    f.read_to_string(&mut status).ok()?;
+    Some(TestResult {
+        status: TestStatus::from_str(&status),
+        starttime: f.metadata().ok()?.modified().ok()?.into(),
+        duration: read_to_string(testdir.join("duration"))
+            .unwrap_or("0".to_string())
+            .parse()
+            .unwrap_or(0),
+    })
 }
 
 fn commitdir_get_results_fs(output_dir: &Path, commit_id: &str) -> TestResultsMap {
-    fn read_test_result(testdir: &std::fs::DirEntry) -> Option<TestResult> {
-        let mut f = File::open(&testdir.path().join("status")).ok()?;
-        let mut status = String::new();
-        f.read_to_string(&mut status).ok()?;
-
-        Some(TestResult {
-            status: TestStatus::from_str(&status),
-            starttime: f.metadata().ok()?.modified().ok()?.into(),
-            duration: read_to_string(&testdir.path().join("duration"))
-                .unwrap_or("0".to_string())
-                .parse()
-                .unwrap_or(0),
-        })
-    }
-
     let mut results = BTreeMap::new();
 
     if let Ok(results_dir) = output_dir.join(commit_id).read_dir() {
         for d in results_dir.filter_map(|i| i.ok()) {
-            if let Some(r) = read_test_result(&d) {
+            if let Some(r) = read_test_result(&d.path()) {
                 results.insert(d.file_name().into_string().unwrap(), r);
             }
         }

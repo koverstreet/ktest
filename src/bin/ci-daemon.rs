@@ -16,7 +16,12 @@
 
 use anyhow::{anyhow, Result};
 use ci_cgi::jobs::{desired_jobs, Job, JobKey};
-use ci_cgi::{ciconfig_read, cleanup_inprogress_results, commit_update_results, result_basename, subtest_result_key, CiConfig, TestStatus};
+use ci_cgi::{
+    ciconfig_read, read_test_result, result_basename, subtest_result_key, CiConfig, TestResult,
+    TestResultsMap, TestResultsStore, TestStatus,
+};
+use std::sync::Arc;
+use chrono::Utc;
 use clap::Parser;
 use jobkit::{
     ClaimedJob, Choir, Command, ExecutorConfig, ExecutorHandle, JobId, JobOutcome, JobSpec,
@@ -178,32 +183,30 @@ async fn run_ktest_job(
     handle: &ExecutorHandle<JobParams>,
     host: &str,
     slot: usize,
+    results: &TestResultsStore,
     batch: &[ClaimedJob<JobParams>],
 ) -> Result<(), TaskError> {
-    let result = run_ktest_job_inner(handle, host, slot, batch).await;
+    let result = run_ktest_job_inner(handle, host, slot, results, batch).await;
 
     // On any failure that left subtests marked IN PROGRESS, clear those
-    // markers so desired_jobs() re-emits them. job_wanted() treats a live
-    // IN PROGRESS as "in flight, don't double-run" — if we leave the file
-    // behind on an error exit, the subtest is stuck until daemon restart.
+    // entries from the store and remove the per-subtest disk dirs so
+    // desired_jobs() re-emits them. job_wanted() treats a live IN
+    // PROGRESS as "in flight, don't double-run" — if we leave the entry,
+    // the subtest is stuck until daemon restart.
     if result.is_err() {
         let p = &batch[0].payload;
         let commit_dir = p.output_dir.join(&p.commit);
-        let mut cleaned = false;
+        let mut stale_keys = Vec::new();
         for j in batch {
-            let d = commit_dir.join(subtest_result_key(
+            let key = subtest_result_key(
                 &j.payload.test, &j.payload.subtest, &j.payload.kernel, &j.payload.env,
-            ));
-            let stale = std::fs::read_to_string(d.join("status"))
-                .map(|s| TestStatus::from_str(&s) == TestStatus::Inprogress)
-                .unwrap_or(false);
-            if stale && std::fs::remove_dir_all(&d).is_ok() {
-                cleaned = true;
+            );
+            if results.lookup(&p.commit, &key) == Some(TestStatus::Inprogress) {
+                let _ = std::fs::remove_dir_all(commit_dir.join(&key));
+                stale_keys.push(key);
             }
         }
-        if cleaned {
-            commit_update_results(&p.output_dir, &p.commit);
-        }
+        results.delete(&p.commit, &stale_keys);
     }
 
     result
@@ -213,6 +216,7 @@ async fn run_ktest_job_inner(
     handle: &ExecutorHandle<JobParams>,
     host: &str,
     slot: usize,
+    results: &TestResultsStore,
     batch: &[ClaimedJob<JobParams>],
 ) -> Result<(), TaskError> {
     let p = &batch[0].payload;
@@ -251,18 +255,27 @@ async fn run_ktest_job_inner(
 
     // 3. Clean ktest-out (keep the kernel build cache) and mark every
     //    subtest in-progress — on the worker so a dead VM still leaves
-    //    a status, and in our output_dir so branch status shows the job
-    //    running. Once: the resume loop re-runs only not-completed
-    //    subtests and must not wipe the rest's results.
+    //    a status, in our output_dir for debugging, and in the store
+    //    (which is what desired_jobs() and the cgi read). Once: the
+    //    resume loop re-runs only not-completed subtests and must not
+    //    wipe the rest's results.
+    let now = Utc::now();
+    let mut inprogress_map = TestResultsMap::new();
     for st in &remaining {
-        let d = commit_dir.join(subtest_result_key(&p.test, st, &p.kernel, &p.env));
+        let key = subtest_result_key(&p.test, st, &p.kernel, &p.env);
+        let d = commit_dir.join(&key);
         if let Err(e) = std::fs::create_dir_all(&d)
             .and_then(|()| std::fs::write(d.join("status"), "IN PROGRESS\n"))
         {
             handle.log_line(format!("marking {st} in-progress: {e}"));
         }
+        inprogress_map.insert(key, TestResult {
+            status: TestStatus::Inprogress,
+            starttime: now,
+            duration: 0,
+        });
     }
-    commit_update_results(&p.output_dir, &p.commit);
+    results.update(&p.commit, inprogress_map);
 
     let mark = remaining.iter()
         .map(|st| {
@@ -423,20 +436,26 @@ async fn run_ktest_job_inner(
         // 6. The supervisor wrote a status for every subtest it reached
         //    (Passed/Failed, or NOT STARTED if it couldn't launch one).
         //    A subtest still IN PROGRESS was never reached — the VM died
-        //    first — and is retried in a fresh VM.
+        //    first — and is retried in a fresh VM. Read each batch
+        //    subtest's pulled status from disk, merge into the store
+        //    (one locked rewrite of the capnp), and pick out the ones
+        //    that need another VM.
         let mut next = Vec::new();
+        let mut verdicts = TestResultsMap::new();
         for st in &remaining {
-            let status_path = commit_dir
-                .join(subtest_result_key(&p.test, st, &p.kernel, &p.env))
-                .join("status");
-            let in_progress = std::fs::read_to_string(&status_path)
-                .map(|s| TestStatus::from_str(&s) == TestStatus::Inprogress)
-                .unwrap_or(true);
-            if in_progress {
+            let key = subtest_result_key(&p.test, st, &p.kernel, &p.env);
+            let dir = commit_dir.join(&key);
+            let r = read_test_result(&dir).unwrap_or(TestResult {
+                status: TestStatus::Inprogress,
+                starttime: now,
+                duration: 0,
+            });
+            if r.status == TestStatus::Inprogress {
                 next.push(st.clone());
             }
+            verdicts.insert(key, r);
         }
-        commit_update_results(&p.output_dir, &p.commit);
+        results.update(&p.commit, verdicts);
 
         // A run that completed none of the subtests is an infrastructure
         // failure — re-running the same VM the same way won't help.
@@ -458,10 +477,11 @@ async fn run_executor(
     mut handle: ExecutorHandle<JobParams>,
     host: String,
     slot: usize,
+    results: Arc<TestResultsStore>,
     budget: f64,
 ) {
     while let Some(batch) = handle.claim(budget).await {
-        let outcome = match run_ktest_job(&handle, &host, slot, &batch).await {
+        let outcome = match run_ktest_job(&handle, &host, slot, &results, &batch).await {
             Ok(()) => JobOutcome::Completed,
             Err(e) => JobOutcome::Failed(e.to_string()),
         };
@@ -521,13 +541,14 @@ fn refill(
     job_map: &mut HashMap<JobKey, JobId>,
     ci_host: &str,
     rc: &CiConfig,
+    results: &TestResultsStore,
     window: usize,
 ) {
     choir.remove(|_| true);
     let live: HashSet<JobId> = choir.status().jobs.iter().map(|j| j.id).collect();
     job_map.retain(|_, id| live.contains(id));
 
-    let desired = desired_jobs(rc, window);
+    let desired = desired_jobs(rc, results, window);
     let mut submitted = 0;
     for job in &desired {
         if job_map.contains_key(&job.key) {
@@ -683,10 +704,13 @@ fn main() -> Result<()> {
         .clone()
         .ok_or_else(|| anyhow!("ci_host not set in ~/.ktest/ktest-ci.json5"))?;
 
-    // A result still marked "in progress" at startup is stale — the
-    // daemon that was running it died. Delete those so the subtests are
-    // re-emitted as runnable; desired_jobs() skips a *live* Inprogress.
-    cleanup_inprogress_results(&rc.ktest.output_dir);
+    // Load the test result store. IN PROGRESS entries from a previous
+    // daemon are stale (no longer running) and dropped — desired_jobs()
+    // then re-emits those subtests. A live IN PROGRESS, written by an
+    // executor in this run, never makes it back to disk-load: it's
+    // either updated to a verdict before the next restart or cleared on
+    // run_ktest_job error.
+    let results = Arc::new(TestResultsStore::load(rc.ktest.output_dir.clone()));
 
     let choir: Choir<JobParams> = Choir::new(rc.ktest.output_dir.join("ci-daemon-logs"));
 
@@ -704,8 +728,9 @@ fn main() -> Result<()> {
             };
             let host = host.clone();
             let slot = slot as usize;
+            let results = Arc::clone(&results);
             choir.add_executor(cfg, move |_cfg, handle| {
-                run_executor(handle, host, slot, budget)
+                run_executor(handle, host, slot, results, budget)
             });
         }
     }
@@ -724,7 +749,7 @@ fn main() -> Result<()> {
     let mut last_maintenance: Option<std::time::Instant> = None;
 
     loop {
-        refill(&choir, &mut job_map, &ci_host, &rc, window);
+        refill(&choir, &mut job_map, &ci_host, &rc, &results, window);
         write_status(&choir, &rc);
 
         if args.once {

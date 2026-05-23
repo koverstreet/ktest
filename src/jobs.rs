@@ -12,8 +12,8 @@
 // refresh result caches; the daemon owns those.
 
 use crate::{
-    commitdir_get_results, encode_env, git_get_commit, subtest_result_key, test_stats, CiConfig,
-    RcTestGroup, TestStats, TestStatus,
+    encode_env, git_get_commit, subtest_result_key, test_stats, CiConfig, RcTestGroup,
+    TestResultsMap, TestResultsStore, TestStats, TestStatus,
 };
 use memmap::MmapOptions;
 use std::collections::HashMap;
@@ -259,7 +259,7 @@ fn build_test_specs<'a>(rc: &'a CiConfig) -> Vec<TestSpec<'a>> {
 /// May contain duplicate `JobKey`s if the config routes the same
 /// (test, kernel, env) through two test_groups on one branch; the
 /// daemon's job map collapses those.
-pub fn desired_jobs(rc: &CiConfig, limit: usize) -> Vec<Job> {
+pub fn desired_jobs(rc: &CiConfig, results: &TestResultsStore, limit: usize) -> Vec<Job> {
     // Historical per-subtest durations, for the nice/duration hints.
     let durations_map = std::fs::File::open(rc.ktest.output_dir.join("test_durations.capnp"))
         .ok()
@@ -269,9 +269,9 @@ pub fn desired_jobs(rc: &CiConfig, limit: usize) -> Vec<Job> {
     let specs = build_test_specs(rc);
     let max_age = specs.iter().map(|s| s.commits.len()).max().unwrap_or(0);
 
-    // A commit's results are fetched once and shared across the specs
-    // that touch that commit at the same age.
-    let mut results_cache: HashMap<String, _> = HashMap::new();
+    // A commit's results are fetched once (from the in-mem store) and
+    // shared across the specs that touch that commit at the same age.
+    let mut results_cache: HashMap<String, TestResultsMap> = HashMap::new();
     let mut out = Vec::new();
 
     for age in 0..max_age {
@@ -282,7 +282,7 @@ pub fn desired_jobs(rc: &CiConfig, limit: usize) -> Vec<Job> {
             };
             let results = results_cache
                 .entry(commit.clone())
-                .or_insert_with(|| commitdir_get_results(&rc.ktest, commit).unwrap_or_default());
+                .or_insert_with(|| results.commit_results(commit).unwrap_or_default());
             for subtest in &spec.subtests {
                 let stats = test_stats(durations, &spec.test, subtest);
                 let nice = job_nice(spec.tg, stats.as_ref());
