@@ -217,13 +217,23 @@ pub struct TestResultsStore {
 }
 
 impl TestResultsStore {
-    /// Load every commit's results from `output_dir` into memory. Stale
-    /// IN PROGRESS entries are dropped: the previous daemon died mid-run,
-    /// the subtests need to be re-emitted by desired_jobs(). Their
-    /// per-subtest disk dirs are removed and the per-commit capnp is
-    /// rewritten so the cgi (which reads the capnp) doesn't keep showing
-    /// the stale Inprogress entries on the dashboard.
-    pub fn load(output_dir: PathBuf) -> Self {
+    /// Load every commit's results from `output_dir` into memory.
+    ///
+    /// IN PROGRESS entries are always dropped: the previous daemon died
+    /// mid-run, the subtests need to be re-emitted by desired_jobs().
+    /// `clear_failed_to_run`, when set, also drops FailedToRun verdicts —
+    /// for recovering after an infra event (worker/daemon version skew,
+    /// /tmp full) terminalized subtests spuriously.
+    ///
+    /// For every dropped entry the per-subtest disk dir is removed and
+    /// the per-commit capnp is rewritten, so the cgi (which reads the
+    /// capnp) doesn't keep showing the cleared status on the dashboard.
+    pub fn load(output_dir: PathBuf, clear_failed_to_run: bool) -> Self {
+        let drop_status = |s: TestStatus| -> bool {
+            s == TestStatus::Inprogress
+                || (clear_failed_to_run && s == TestStatus::FailedToRun)
+        };
+
         let mut by_commit: HashMap<String, TestResultsMap> = HashMap::new();
         if let Ok(entries) = output_dir.read_dir() {
             for e in entries.filter_map(|i| i.ok()) {
@@ -236,7 +246,7 @@ impl TestResultsStore {
                 }
                 let mut m = commitdir_get_results_fs(&output_dir, &commit_id);
                 let stale: Vec<String> = m.iter()
-                    .filter(|(_, r)| r.status == TestStatus::Inprogress)
+                    .filter(|(_, r)| drop_status(r.status))
                     .map(|(k, _)| k.clone())
                     .collect();
                 if !stale.is_empty() {

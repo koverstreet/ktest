@@ -68,6 +68,11 @@ struct Args {
     /// (`--limit 1 --once` runs exactly one job end-to-end).
     #[arg(long)]
     limit: Option<usize>,
+    /// Drop FailedToRun verdicts at startup so the subtests get
+    /// re-emitted. Used to recover after an infra problem (e.g. a
+    /// daemon/worker version mismatch) terminalized them spuriously.
+    #[arg(long)]
+    clear_failed_to_run: bool,
 }
 
 fn short_commit(c: &str) -> &str {
@@ -739,7 +744,10 @@ fn main() -> Result<()> {
     // executor in this run, never makes it back to disk-load: it's
     // either updated to a verdict before the next restart or cleared on
     // run_ktest_job error.
-    let results = Arc::new(TestResultsStore::load(rc.ktest.output_dir.clone()));
+    let results = Arc::new(TestResultsStore::load(
+        rc.ktest.output_dir.clone(),
+        args.clear_failed_to_run,
+    ));
 
     let choir: Choir<JobParams> = Choir::new(rc.ktest.output_dir.join("ci-daemon-logs"));
 
