@@ -251,6 +251,12 @@ async fn run_ktest_job_inner(
     let basename = result_basename(&p.test, &p.kernel, &p.env);
     let commit_dir = p.output_dir.join(&p.commit);
 
+    // Capture the executor-log byte offset at batch start so the
+    // header-prepend below can splice in just the slice covering this
+    // batch — gives us a log to debug from even when the supervisor
+    // never produced full_log on the worker.
+    let exec_log_offset_start = handle.log_offset();
+    let exec_log_path = handle.log_path().to_path_buf();
     handle.log_line(format!("=== batch on {}:{} ===", host, slot));
 
     // Subtests still owed a verdict — the whole claimed batch to start.
@@ -418,24 +424,48 @@ async fn run_ktest_job_inner(
                     .join("full_log.br"));
         }
 
-        // Prepend a header to the supervisor's full_log (in remaining[0]'s
-        // dir) so the host/slot/commit etc. are findable inside the log
-        // itself, not just via the surrounding directory. supervisor.c
-        // doesn't know any of this — only ci-daemon does.
+        // Always (re)write full_log on the daemon side, even if the
+        // supervisor never wrote one — so a debug attempt always has
+        // *something* to look at. Content is:
+        //   1. The batch header (host, slot, commit, kernel, test, env,
+        //      subtests) — context supervisor doesn't have.
+        //   2. The slice of this executor's log written since batch start
+        //      — captures pre-supervisor ssh output (checkout, build,
+        //      prepare) and any stderr from the runner if supervisor
+        //      itself died before logging.
+        //   3. The supervisor-written full_log body, if any.
         {
             let primary = commit_dir
                 .join(subtest_result_key(&p.test, &remaining[0], &p.kernel, &p.env))
                 .join("full_log");
-            if primary.exists() {
-                let body = std::fs::read(&primary).unwrap_or_default();
-                let header = format!(
-                    "# host={} slot={} commit={} kernel={} test={} env={} subtests={}\n",
-                    host, slot, p.commit, p.kernel, p.test, p.env,
-                    remaining.join(","),
-                );
-                if let Err(e) = std::fs::write(&primary, [header.as_bytes(), &body].concat()) {
-                    handle.log_line(format!("prepend header to {}: {}", primary.display(), e));
-                }
+            let header = format!(
+                "# host={} slot={} commit={} kernel={} test={} env={} subtests={}\n",
+                host, slot, p.commit, p.kernel, p.test, p.env,
+                remaining.join(","),
+            );
+            let exec_slice = std::fs::read(&exec_log_path)
+                .ok()
+                .map(|b| {
+                    let start = (exec_log_offset_start as usize).min(b.len());
+                    b[start..].to_vec()
+                })
+                .unwrap_or_default();
+            let body = std::fs::read(&primary).unwrap_or_default();
+            let prelude =
+                b"# --- ci-daemon executor log for this batch ---\n".to_vec();
+            let body_marker =
+                b"\n# --- supervisor full_log ---\n".to_vec();
+            let combined: Vec<u8> = [
+                header.as_bytes(),
+                &prelude,
+                &exec_slice,
+                &body_marker,
+                &body,
+            ].concat();
+            if let Err(e) = std::fs::create_dir_all(primary.parent().unwrap())
+                .and_then(|()| std::fs::write(&primary, &combined))
+            {
+                handle.log_line(format!("write full_log to {}: {}", primary.display(), e));
             }
         }
 
