@@ -176,16 +176,19 @@ fn brotli_compress(path: &std::path::Path) -> std::io::Result<()> {
 /// Returns Err only on infrastructure failure (a step couldn't run).
 async fn run_ktest_job(
     handle: &ExecutorHandle<JobParams>,
+    host: &str,
+    slot: usize,
     batch: &[ClaimedJob<JobParams>],
 ) -> Result<(), TaskError> {
     let p = &batch[0].payload;
     if p.repo_url.is_empty() {
         return Err(TaskError::Fatal(format!("repo {} not configured", p.repo)));
     }
-    let host = handle.executor().host.clone();
-    let ws = format!("ktest-ci/{}", handle.slot());
+    let ws = format!("ktest-ci/{}", slot);
     let basename = result_basename(&p.test, &p.kernel, &p.env);
     let commit_dir = p.output_dir.join(&p.commit);
+
+    handle.log_line(format!("=== batch on {}:{} ===", host, slot));
 
     // Subtests still owed a verdict — the whole claimed batch to start.
     let mut remaining: Vec<String> =
@@ -206,10 +209,10 @@ async fn run_ktest_job(
          test \"$(git rev-parse HEAD)\" = \"{commit}\"",
         ws = ws, repo = p.repo, url = p.repo_url, commit = p.commit,
     );
-    run_step(handle, &host, &checkout, "checkout").await?;
+    run_step(handle, host, &checkout, "checkout").await?;
 
     // 2. Build the supervisor (idempotent C helper).
-    run_step(handle, &host, "make -C ~/ktest/lib supervisor", "build supervisor").await?;
+    run_step(handle, host, "make -C ~/ktest/lib supervisor", "build supervisor").await?;
 
     // 3. Clean ktest-out (keep the kernel build cache) and mark every
     //    subtest in-progress — on the worker so a dead VM still leaves
@@ -241,7 +244,7 @@ async fn run_ktest_job(
          {mark}",
         ws = ws, mark = mark,
     );
-    run_step(handle, &host, &prepare, "prepare").await?;
+    run_step(handle, host, &prepare, "prepare").await?;
 
     // Resume loop: run the not-yet-completed subtests in one VM; retry
     // any the VM died before reaching.
@@ -290,7 +293,7 @@ async fn run_ktest_job(
         );
         // -tt: force a pty so a dropped ssh hangs up and SIGHUP reaps
         // the supervisor, the kernel build, and the VM together.
-        handle.run_command(ssh_cmd(&host, &run, true))
+        handle.run_command(ssh_cmd(host, &run, true))
             .await
             .map_err(|e| TaskError::Retry(format!("running supervisor: {e}")))?;
 
@@ -394,9 +397,14 @@ async fn run_ktest_job(
 /// them in one VM, report each job's outcome. Loops until the Choir is
 /// dropped. `budget` is subtest_duration_max — the most VM-time of work
 /// to pack into a boot.
-async fn run_executor(mut handle: ExecutorHandle<JobParams>, budget: f64) {
+async fn run_executor(
+    mut handle: ExecutorHandle<JobParams>,
+    host: String,
+    slot: usize,
+    budget: f64,
+) {
     while let Some(batch) = handle.claim(budget).await {
-        let outcome = match run_ktest_job(&handle, &batch).await {
+        let outcome = match run_ktest_job(&handle, &host, slot, &batch).await {
             Ok(()) => JobOutcome::Completed,
             Err(e) => JobOutcome::Failed(e.to_string()),
         };
@@ -636,10 +644,12 @@ fn main() -> Result<()> {
         for slot in 0..ex.slots {
             let cfg = ExecutorConfig {
                 name: format!("{}:{}", host, slot),
-                host: host.clone(),
-                slot: slot as usize,
             };
-            choir.add_executor(cfg, move |_cfg, handle| run_executor(handle, budget));
+            let host = host.clone();
+            let slot = slot as usize;
+            choir.add_executor(cfg, move |_cfg, handle| {
+                run_executor(handle, host, slot, budget)
+            });
         }
     }
     let total_slots: u32 = rc.ktest.executors.values().map(|e| e.slots).sum();
