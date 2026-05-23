@@ -157,8 +157,8 @@ impl TestStatus {
             TestStatus::Failed
         } else if status.contains("NOTRUN") {
             TestStatus::Notrun
-        } else if status.contains("NOT STARTED") {
-            TestStatus::Notstarted
+        } else if status.contains("FAILED TO RUN") || status.contains("NOT STARTED") {
+            TestStatus::FailedToRun
         } else {
             TestStatus::Unknown
         }
@@ -170,7 +170,7 @@ impl TestStatus {
             TestStatus::Passed => "Passed",
             TestStatus::Failed => "Failed",
             TestStatus::Notrun => "Not run",
-            TestStatus::Notstarted => "Not started",
+            TestStatus::FailedToRun => "Failed to run",
             TestStatus::Unknown => "Unknown",
         }
     }
@@ -181,7 +181,7 @@ impl TestStatus {
             TestStatus::Passed => "table-success",
             TestStatus::Failed => "table-danger",
             TestStatus::Notrun => "table-secondary",
-            TestStatus::Notstarted => "table-secondary",
+            TestStatus::FailedToRun => "table-secondary",
             TestStatus::Unknown => "table-secondary",
         }
     }
@@ -1088,7 +1088,7 @@ pub struct BranchEntry {
     pub passed: u32,
     pub failed: u32,
     pub notrun: u32,
-    pub notstarted: u32,
+    pub failed_to_run: u32,
     pub inprogress: u32,
     pub unknown: u32,
     pub duration: u64,
@@ -1119,7 +1119,7 @@ pub fn generate_branch_log(
                 passed: count_status(&r.tests, TestStatus::Passed),
                 failed: count_status(&r.tests, TestStatus::Failed),
                 notrun: count_status(&r.tests, TestStatus::Notrun),
-                notstarted: count_status(&r.tests, TestStatus::Notstarted),
+                failed_to_run: count_status(&r.tests, TestStatus::FailedToRun),
                 inprogress: count_status(&r.tests, TestStatus::Inprogress),
                 unknown: count_status(&r.tests, TestStatus::Unknown),
                 duration,
@@ -1145,7 +1145,7 @@ pub fn write_branch_log(
         dst.set_passed(entry.passed);
         dst.set_failed(entry.failed);
         dst.set_notrun(entry.notrun);
-        dst.set_notstarted(entry.notstarted);
+        dst.set_failed_to_run(entry.failed_to_run);
         dst.set_inprogress(entry.inprogress);
         dst.set_unknown(entry.unknown);
         dst.set_duration(entry.duration);
@@ -1177,7 +1177,7 @@ pub fn branchlog_parse(f: &[u8]) -> anyhow::Result<Vec<BranchEntry>> {
             passed: e.get_passed(),
             failed: e.get_failed(),
             notrun: e.get_notrun(),
-            notstarted: e.get_notstarted(),
+            failed_to_run: e.get_failed_to_run(),
             inprogress: e.get_inprogress(),
             unknown: e.get_unknown(),
             duration: e.get_duration(),

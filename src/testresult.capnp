@@ -10,7 +10,7 @@ struct TestResult {
 	passed		@1;
 	failed		@2;
 	notrun		@3;
-	notstarted	@4;
+	failedToRun	@4;
 	unknown		@5;
     }
 }

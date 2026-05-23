@@ -157,7 +157,7 @@ fn cmd_log(
                 passed: count_status(&r.tests, TestStatus::Passed),
                 failed: count_status(&r.tests, TestStatus::Failed),
                 notrun: count_status(&r.tests, TestStatus::Notrun),
-                notstarted: count_status(&r.tests, TestStatus::Notstarted),
+                failed_to_run: count_status(&r.tests, TestStatus::FailedToRun),
                 inprogress: count_status(&r.tests, TestStatus::Inprogress),
                 unknown: count_status(&r.tests, TestStatus::Unknown),
                 duration,
@@ -173,7 +173,7 @@ fn cmd_log(
                 "passed": e.passed,
                 "failed": e.failed,
                 "notrun": e.notrun,
-                "notstarted": e.notstarted,
+                "failed_to_run": e.failed_to_run,
                 "inprogress": e.inprogress,
                 "unknown": e.unknown,
                 "duration": e.duration,
@@ -190,7 +190,7 @@ fn cmd_log(
 
     // Header
     println!("{:<14} {:>6} {:>6} {:>6} {:>6} {:>8}  {}",
-        "COMMIT", "PASS", "FAIL", "NOTST", "INPRO", "DURATION", "MESSAGE");
+        "COMMIT", "PASS", "FAIL", "FTRUN", "INPRO", "DURATION", "MESSAGE");
     println!("{}", "-".repeat(80));
 
     for e in &entries {
@@ -206,7 +206,7 @@ fn cmd_log(
             commit,
             if e.passed > 0 { color_passed(&pass_s) } else { pass_s },
             if e.failed > 0 { color_failed(&fail_s) } else { fail_s },
-            e.notstarted,
+            e.failed_to_run,
             e.inprogress,
             format_duration(e.duration),
             subject,
@@ -260,7 +260,7 @@ fn cmd_show(
         TestStatus::Inprogress => 1,
         TestStatus::Notrun     => 2,
         TestStatus::Unknown    => 3,
-        TestStatus::Notstarted => 4,
+        TestStatus::FailedToRun => 4,
         TestStatus::Passed     => 5,
     });
 

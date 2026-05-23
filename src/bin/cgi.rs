@@ -86,7 +86,7 @@ const COMMIT_FILTER:    &str =
     <label><input type=radio name=testfilter onchange='update_filter()' value='Passed'>         Passed</label>
     <label><input type=radio name=testfilter onchange='update_filter()' value='Failed' checked> Failed</label>
     <label><input type=radio name=testfilter onchange='update_filter()' value='Not run'>        Not run</label>
-    <label><input type=radio name=testfilter onchange='update_filter()' value='Not started'>    Not started</label>
+    <label><input type=radio name=testfilter onchange='update_filter()' value='Failed to run'>    Failed to run</label>
     <label><input type=radio name=testfilter onchange='update_filter()' value='In progress'>    In progress</label>
     <label><input type=radio name=testfilter onchange='update_filter()' value='Unknown'>        Unknown</label>
     <label><input type=radio name=testfilter onchange='update_filter()' value='All'>            All</label>
@@ -153,7 +153,7 @@ fn ci_log(ci: &Ci) -> cgi::Response {
         writeln!(&mut out, "<th> Description </th>").unwrap();
         writeln!(&mut out, "<th> Passed      </th>").unwrap();
         writeln!(&mut out, "<th> Failed      </th>").unwrap();
-        writeln!(&mut out, "<th> Not started </th>").unwrap();
+        writeln!(&mut out, "<th> Failed to run </th>").unwrap();
         writeln!(&mut out, "<th> Not run     </th>").unwrap();
         writeln!(&mut out, "<th> In progress </th>").unwrap();
         writeln!(&mut out, "<th> Unknown     </th>").unwrap();
@@ -209,7 +209,7 @@ fn ci_log(ci: &Ci) -> cgi::Response {
                 writeln!(
                     &mut out,
                     "<td> {} </td>",
-                    count(&r.tests, TestStatus::Notstarted)
+                    count(&r.tests, TestStatus::FailedToRun)
                 )
                 .unwrap();
                 writeln!(

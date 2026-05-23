@@ -6,7 +6,7 @@ struct BranchEntry {
     passed @2:		UInt32;
     failed @3:		UInt32;
     notrun @4:		UInt32;
-    notstarted @5:	UInt32;
+    failedToRun @5:	UInt32;
     inprogress @6:	UInt32;
     unknown @7:		UInt32;
     duration @8:	UInt64;

@@ -5,23 +5,14 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 fn main() {
-    capnpc::CompilerCommand::new()
-        .output_path(".")
-        .file("src/testresult.capnp")
-        .run()
-        .expect("compiling schema");
-
-    capnpc::CompilerCommand::new()
-        .output_path(".")
-        .file("src/durations.capnp")
-        .run()
-        .expect("compiling schema");
-
-    capnpc::CompilerCommand::new()
-        .output_path(".")
-        .file("src/branchlog.capnp")
-        .run()
-        .expect("compiling schema");
+    for schema in ["src/testresult.capnp", "src/durations.capnp", "src/branchlog.capnp"] {
+        println!("cargo:rerun-if-changed={}", schema);
+        capnpc::CompilerCommand::new()
+            .output_path(".")
+            .file(schema)
+            .run()
+            .expect("compiling schema");
+    }
 
     generate_lustre_sanity_tests();
 }

@@ -95,7 +95,7 @@ fn get_subtests(test_path: PathBuf) -> Vec<String> {
 ///   - Passed / Failed — the test ran and reported (a kernel panic
 ///                  while it runs counts as Failed).
 ///   - Notrun     — a test reporting it deliberately did not run.
-///   - Notstarted — the test run never started — the VM didn't come
+///   - FailedToRun — the daemon never managed to launch this subtest in
 ///                  up, or the supervisor couldn't launch it. A
 ///                  CI-side failure; terminal, surfaced not re-run.
 /// Not verdicts:
@@ -110,7 +110,7 @@ fn get_subtests(test_path: PathBuf) -> Vec<String> {
 fn result_is_done(status: TestStatus) -> bool {
     matches!(status,
              TestStatus::Passed | TestStatus::Failed |
-             TestStatus::Notrun | TestStatus::Notstarted)
+             TestStatus::Notrun | TestStatus::FailedToRun)
 }
 
 /// Whether desired_jobs() should emit a job for a subtest, given its
@@ -329,7 +329,7 @@ mod tests {
         assert!(result_is_done(TestStatus::Passed));
         assert!(result_is_done(TestStatus::Failed));
         assert!(result_is_done(TestStatus::Notrun));
-        assert!(result_is_done(TestStatus::Notstarted)); // run never started — terminal
+        assert!(result_is_done(TestStatus::FailedToRun)); // daemon failed to run — terminal
         // not verdicts — must re-run, not silently "done"
         assert!(!result_is_done(TestStatus::Inprogress)); // still running
         assert!(!result_is_done(TestStatus::Unknown));    // garbled status

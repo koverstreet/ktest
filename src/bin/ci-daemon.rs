@@ -169,7 +169,7 @@ fn brotli_compress(path: &std::path::Path) -> std::io::Result<()> {
 ///
 /// The supervisor writes each subtest's status itself — it parses the
 /// VM output for test-start: Passed/Failed for a test that ran (a
-/// kernel panic mid-test is a Failed), NOT STARTED for one it could not
+/// kernel panic mid-test is a Failed), FAILED TO RUN for one it could not
 /// launch. A subtest it never reached stays IN PROGRESS — those are
 /// retried in a fresh VM. A run that completes none of them is an
 /// infrastructure failure.
@@ -189,7 +189,7 @@ async fn run_ktest_job(
     let result = run_ktest_job_inner(handle, host, slot, results, batch).await;
 
     // On any failure that left subtests marked IN PROGRESS, write a
-    // Notstarted verdict for them. The daemon failed to launch / pull
+    // FailedToRun verdict for them. The daemon failed to launch / pull
     // for this subtest in this batch — that IS a verdict (the infra
     // step is the test being measured for this purpose). Leaving them
     // IN PROGRESS would stick them forever (job_wanted skips a live
@@ -207,9 +207,9 @@ async fn run_ktest_job(
             if results.lookup(&p.commit, &key) == Some(TestStatus::Inprogress) {
                 let d = commit_dir.join(&key);
                 let _ = std::fs::create_dir_all(&d)
-                    .and_then(|()| std::fs::write(d.join("status"), "NOT STARTED\n"));
+                    .and_then(|()| std::fs::write(d.join("status"), "FAILED TO RUN\n"));
                 updates.insert(key, TestResult {
-                    status: TestStatus::Notstarted,
+                    status: TestStatus::FailedToRun,
                     starttime: now,
                     duration: 0,
                 });
@@ -443,7 +443,7 @@ async fn run_ktest_job_inner(
         }
 
         // 6. The supervisor wrote a status for every subtest it reached
-        //    (Passed/Failed, or NOT STARTED if it couldn't launch one).
+        //    (Passed/Failed, or FAILED TO RUN if it couldn't launch one).
         //    A subtest still IN PROGRESS was never reached — the VM died
         //    first — and is retried in a fresh VM. Read each batch
         //    subtest's pulled status from disk, merge into the store
