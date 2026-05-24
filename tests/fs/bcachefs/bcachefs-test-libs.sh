@@ -143,7 +143,21 @@ init_build_bcachefs_tools() {
         # Build into a DESTDIR and pack the install into a tarball.
         local dest
         dest=$(mktemp -d)
-        make -j$jobs -C "$tools" PREFIX=/usr DESTDIR="$dest" install
+        if ! make -j$jobs -C "$tools" PREFIX=/usr DESTDIR="$dest" install; then
+            echo "init_build_bcachefs_tools: tools build failed" >&2
+            rm -rf "$dest"
+            return 1
+        fi
+        # Sanity-check the install before tarring: an empty/partial DESTDIR
+        # would otherwise be cached as a "successful" build and silently
+        # poison every future cache hit on this key. With PREFIX=/usr,
+        # bcachefs-tools installs to $dest/sbin/bcachefs (Makefile pins
+        # ROOT_SBINDIR=/sbin when PREFIX=/usr).
+        if [[ ! -f "$dest/sbin/bcachefs" ]]; then
+            echo "init_build_bcachefs_tools: install produced no bcachefs binary at $dest/sbin/bcachefs" >&2
+            rm -rf "$dest"
+            return 1
+        fi
         ttar="$dest.tar"
         tar -cf "$ttar" -C "$dest" .
         rm -rf "$dest"
