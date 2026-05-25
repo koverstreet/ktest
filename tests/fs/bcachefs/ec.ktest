@@ -320,6 +320,51 @@ test_device_failed()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+test_ec_bucket_mismatch()
+{
+    # Reproduces phaeton's IRC report (2026-05-25): mkfs without EC,
+    # device-add more disks at a different bucket_size, then enable EC +
+    # raise replicas. EC requires uniform bucket size across the stripe;
+    # mismatch caused a silent infinite reconcile_hipri loop with no
+    # progress and unbounded journal growth.
+    #
+    # Pass conditions: reconcile makes progress (or completes), OR a
+    # clear error is surfaced. Watchdog catches the infinite-loop bug.
+    set_watchdog 240
+
+    run_quiet "" bcachefs format -f		\
+	--replicas=2				\
+	--bucket_size=1M			\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}
+
+    mount -t bcachefs "${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}" /mnt
+
+    dd if=/dev/zero of=/mnt/before bs=1M count=64 oflag=sync
+
+    # Mismatched bucket size on the added devices — this is the situation
+    # that breaks EC stripe formation.
+    bcachefs device add -f --bucket_size=2M /mnt ${ktest_scratch_dev[2]}
+    bcachefs device add -f --bucket_size=2M /mnt ${ktest_scratch_dev[3]}
+    bcachefs device add -f --bucket_size=2M /mnt ${ktest_scratch_dev[4]}
+
+    bcachefs set-fs-option --data_replicas=3 --erasure_code "${ktest_scratch_dev[@]}"
+
+    # Drive EC stripe formation; reconcile should run.
+    dd if=/dev/zero of=/mnt/after bs=1M count=128 oflag=sync
+    sync
+
+    # Give reconcile time to either make progress or fail clearly.
+    # Watchdog will fire if it spins forever.
+    sleep 30
+
+    bcachefs fs usage -h /mnt
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_ec_crash_recovery()
 {
     [[ -f /sys/module/bcachefs/parameters/journal_replay_slowpath_ratio ]] || exit 0
