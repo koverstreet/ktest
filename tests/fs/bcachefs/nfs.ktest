@@ -19,7 +19,10 @@ test_nfs()
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /export2
 
-    echo "/export1  *(rw,insecure,no_root_squash,no_subtree_check)" >> /etc/exports
+    # Write /etc/exports fresh (>, not >>): if this test runs more than once
+    # in the same VM (e.g. retried), appending would leave duplicate entries
+    # and "exportfs -a" fails with "duplicated export entries".
+    echo "/export1  *(rw,insecure,no_root_squash,no_subtree_check)" >  /etc/exports
     echo "/export2  *(rw,insecure,no_root_squash,no_subtree_check)" >> /etc/exports
     exportfs -a
 
