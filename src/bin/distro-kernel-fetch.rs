@@ -675,6 +675,19 @@ impl DistroFetcher for UbuntuFetcher {
                 }
             }
         }
+        // The headers tree's `rust/` symlink points into a separate
+        // linux[-hwe-X.Y]-lib-rust-<abi>-generic package (Rust bindings,
+        // needed once the module has Rust). Same HWE-prefix variation as the
+        // common headers, so match by the lib-rust suffix + shared Source.
+        let lib_rust_suffix = format!("-lib-rust-{}-generic", abi);
+        for (name, stanza) in by_name.iter() {
+            if name.ends_with(&lib_rust_suffix)
+                && stanza.fields.get("Source").map(String::as_str) == flavor_source {
+                if let Some(p) = apt_stanza_to_pkgfile(stanza) {
+                    headers.push(p);
+                }
+            }
+        }
         if headers.is_empty() {
             bail!("no headers packages found for ABI {}", abi);
         }
