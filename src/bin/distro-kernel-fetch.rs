@@ -1957,6 +1957,22 @@ fn create_build_symlink(stage: &Path, uname_r: &str) -> Result<()> {
 
     std::os::unix::fs::symlink(&rel, stage.join("build"))
         .with_context(|| format!("creating build symlink -> {}", rel.display()))?;
+
+    // The package ships lib/modules/<v>/build pointing at an install path
+    // (/usr/src/... on Ubuntu, ../../../src/... on Debian) that only resolves
+    // on an installed system. /lib/modules/<v>/build is the canonical path
+    // DKMS/kbuild use, so repoint it at the in-tree headers via a relative
+    // path that resolves inside the kernel store: lib/modules/<v>/build is
+    // three levels below the store root, so ../../../ reaches it. (Skip the
+    // non-symlink case — there it's the real build dir, e.g. Arch.)
+    if meta.file_type().is_symlink() {
+        let rel_from_modules = Path::new("../../..").join(&rel);
+        fs::remove_file(&modules_build)
+            .with_context(|| format!("removing stale {}", modules_build.display()))?;
+        std::os::unix::fs::symlink(&rel_from_modules, &modules_build)
+            .with_context(|| format!("repointing {} -> {}",
+                                     modules_build.display(), rel_from_modules.display()))?;
+    }
     Ok(())
 }
 
