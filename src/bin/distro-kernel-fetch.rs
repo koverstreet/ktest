@@ -2321,6 +2321,59 @@ fn generate_initramfs(stage: &Path, uname_r: &str) -> Result<()> {
     Ok(())
 }
 
+/// Repoint dangling relative symlinks in a staged tree to whatever they should
+/// actually point to. A distro package can name a directory differently from
+/// the name another package's symlink references — e.g. Ubuntu's headers point
+/// `rust/` at `linux-hwe-X.Y-lib-rust-<v>/rust`, but the package installs to
+/// `linux-lib-rust-<v>/`. For each dangling symlink, find the first missing path
+/// component and, if a sibling directory makes the remainder of the path
+/// resolve, rewrite the link through that sibling. Symlinks with no viable
+/// target (e.g. a reference into a package we don't fetch) are left as-is.
+fn repair_dangling_symlinks(root: &Path) -> Result<()> {
+    fn walk(dir: &Path) -> Result<()> {
+        for entry in fs::read_dir(dir)? {
+            let path = entry?.path();
+            let md = fs::symlink_metadata(&path)?;
+            if md.file_type().is_symlink() {
+                if path.exists() { continue; }              // already resolves
+                let target = fs::read_link(&path)?;
+                if target.is_absolute() { continue; }       // not our concern
+                let parent = path.parent().unwrap();
+                let comps: Vec<_> = target.components().collect();
+                let mut cur = parent.to_path_buf();
+                for (i, c) in comps.iter().enumerate() {
+                    let next = cur.join(c);
+                    if !next.exists() && i + 1 < comps.len() {
+                        // `next` is the first missing dir; `cur` (its parent)
+                        // exists. Look for a sibling that satisfies the rest.
+                        let remainder: PathBuf = comps[i + 1..].iter().collect();
+                        let missing = next.file_name().map(|n| n.to_owned());
+                        for sib in fs::read_dir(&cur)? {
+                            let sib = sib?.file_name();
+                            if Some(&sib) == missing.as_ref() { continue; }
+                            if cur.join(&sib).join(&remainder).exists() {
+                                let mut newt = PathBuf::new();
+                                for cc in &comps[..i] { newt.push(cc); }
+                                newt.push(&sib);
+                                newt.push(&remainder);
+                                fs::remove_file(&path)?;
+                                std::os::unix::fs::symlink(&newt, &path)?;
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                    cur = next;
+                }
+            } else if md.file_type().is_dir() {
+                walk(&path)?;
+            }
+        }
+        Ok(())
+    }
+    walk(root)
+}
+
 fn fetch_and_convert(output: &Path, pkg: &KernelPkg) -> Result<()> {
     let src_dir = source_dir(output, pkg);
     let dst = src_dir.join(&pkg.version);
@@ -2393,6 +2446,11 @@ fn fetch_and_convert(output: &Path, pkg: &KernelPkg) -> Result<()> {
         if pkg.distro == "opensuse" {
             opensuse_fixup(&stage)?;
         }
+
+        // After all per-distro placement, repoint any dangling symlinks
+        // (e.g. Ubuntu's headers `rust/` -> the differently-named lib-rust dir).
+        repair_dangling_symlinks(&stage)
+            .context("repairing dangling symlinks")?;
     }
     generate_initramfs(&stage, &pkg.version)
         .with_context(|| format!("generating initramfs for {}", pkg.version))?;
