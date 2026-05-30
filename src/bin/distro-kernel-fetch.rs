@@ -2256,8 +2256,11 @@ fn generate_initramfs(stage: &Path, uname_r: &str) -> Result<()> {
     let interp_dst = irfs.join("usr/lib").join(interp.file_name().unwrap());
     fs::copy(&interp, &interp_dst)
         .with_context(|| format!("copying klibc interp {}", interp.display()))?;
-    // Nix store files are 0444; ensure the cpio's copy is plain 0644.
-    fs::set_permissions(&interp_dst, fs::Permissions::from_mode(0o644))?;
+    // The interp must be executable: the kernel's ELF loader opens PT_INTERP
+    // with exec permission checks, so a non-executable interpreter makes every
+    // klibc binary (and thus /init) fail to exec with EACCES ("No working init
+    // found"). Nix store files are 0444; force 0755.
+    fs::set_permissions(&interp_dst, fs::Permissions::from_mode(0o755))?;
 
     // Decompress + stage each module under /modules/ flat (no kernel/ prefix).
     for mod_name in &ordered {
