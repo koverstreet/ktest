@@ -822,7 +822,9 @@ fn spawn_repo_fetcher(rc: &CiConfig) {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    eprintln!("ci-daemon: starting");
     let rc = ciconfig_read()?;
+    eprintln!("ci-daemon: config loaded");
 
     let ci_host = rc
         .ktest
@@ -836,16 +838,30 @@ fn main() -> Result<()> {
     // executor in this run, never makes it back to disk-load: it's
     // either updated to a verdict before the next restart or cleared on
     // run_ktest_job error.
+    eprintln!(
+        "ci-daemon: loading test results from {}",
+        rc.ktest.output_dir.display()
+    );
+    let load_start = std::time::Instant::now();
     let results = Arc::new(TestResultsStore::load(
         rc.ktest.output_dir.clone(),
         args.clear_failed_to_run,
     ));
+    eprintln!(
+        "ci-daemon: test results loaded in {:.1}s",
+        load_start.elapsed().as_secs_f64()
+    );
 
     let choir: Choir<JobParams> = Choir::new(rc.ktest.output_dir.join("ci-daemon-logs"));
 
     // Pre-open an ssh master per host so the executors' per-step ssh
     // calls multiplex over it instead of storming sshd MaxStartups.
+    eprintln!(
+        "ci-daemon: prewarming ssh masters to {} hosts",
+        rc.ktest.executors.len()
+    );
     prewarm_ssh_masters(&rc);
+    eprintln!("ci-daemon: ssh master prewarm complete");
 
     // One executor per slot. The body claims a duration-bounded batch
     // of one test file's subtests and runs them in a single VM.
