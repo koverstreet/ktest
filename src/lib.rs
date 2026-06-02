@@ -248,7 +248,17 @@ impl TestResultsStore {
                 {
                     continue;
                 }
-                let mut m = commitdir_get_results_fs(&output_dir, &commit_id);
+                // Read the per-commit capnp - the only source of truth
+                // for results at load time. A commit dir without a capnp
+                // has nothing for the daemon to act on.
+                let capnp_path = output_dir.join(format!("{}.capnp", commit_id));
+                let mut m = match std::fs::read(&capnp_path)
+                    .ok()
+                    .and_then(|buf| parse_test_results(&buf).ok())
+                {
+                    Some(c) => c.tests,
+                    None => continue,
+                };
                 let stale: Vec<String> = m.iter()
                     .filter(|(_, r)| drop_status(r.status))
                     .map(|(k, _)| k.clone())
