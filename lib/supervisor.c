@@ -365,9 +365,16 @@ again:
 			break;
 		}
 
+		/*
+		 * BUG: / kernel BUG at indicates a real fault; arm a short
+		 * post-mortem alarm so the supervisor doesn't sit on a wedged
+		 * kernel. Match the colon explicitly so this doesn't fire on
+		 * benign substrings like "DEBUG BUILD" / "DEBUG_INFO".
+		 */
 		if (exit_on_failure &&
 		    (strstr(line, "Kernel panic") ||
-		     strstr(line, "BUG")))
+		     strstr(line, "BUG:") ||
+		     strstr(line, "kernel BUG at")))
 			alarm(5);
 
 		free(output);
