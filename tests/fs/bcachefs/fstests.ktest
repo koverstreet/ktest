@@ -13,7 +13,7 @@ require-kernel-config QUOTA
 [[ ! -v MKFS_OPTIONS ]] && export MKFS_OPTIONS="--encrypted --no_passphrase --errors=ro"
 export FSTYP=bcachefs
 
-run_test()
+run_tests()
 {
     if [[ ! -f /xfstests-init-done ]]; then
 	bcachefs_antagonist
