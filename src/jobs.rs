@@ -294,13 +294,16 @@ pub fn desired_jobs(rc: &CiConfig, results: &TestResultsStore, limit: usize) -> 
                 .entry(commit.clone())
                 .or_insert_with(|| results.commit_results(commit).unwrap_or_default());
             for subtest in &spec.subtests {
+                // nice is computed once per subtest from a cross-kernel lookup
+                // (empty kernel/env == subtest_full_name), exactly as
+                // gen-job-list did, and summed into the weight. The per-kernel
+                // duration below is only jobkit's batch-sizing cost — it must
+                // not feed the priority ordering.
+                let nice = job_nice(spec.tg,
+                                    test_stats(durations, &spec.test, subtest, "", "").as_ref());
+
                 for kernel in &spec.kernels {
-                    // stats are keyed per (subtest, kernel, env) — same key
-                    // the durations capnp uses, so the lookup must be in here
-                    // where kernel/env are known, not hoisted out.
-                    let stats = test_stats(durations, &spec.test, subtest, kernel, &spec.env);
-                    let nice = job_nice(spec.tg, stats.as_ref());
-                    let duration = stats
+                    let duration = test_stats(durations, &spec.test, subtest, kernel, &spec.env)
                         .map(|s| s.duration)
                         .unwrap_or(rc.ktest.subtest_duration_def.unwrap_or(30));
                     let key = subtest_result_key(&spec.test, subtest, kernel, &spec.env);
