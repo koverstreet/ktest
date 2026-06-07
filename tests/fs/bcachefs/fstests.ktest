@@ -34,8 +34,9 @@ run_tests()
     # generic/757: dm logwrites test that needs to be tweaked for bcachefs, it doesn't purge the journal of entries from the future
     # generic/371: excessively strict -ENOSPC semantics
     # generic/065,generic/336,generic/510: who drunkenly imagined up this "requirement" for fsync()? fsync the thing you want synced
+    # generic/484: we don't guarantee that syncfs/fsync only returns the error once
 
-    run_fstests -e generic/064,generic/065,generic/102,generic/275,generic/336,generic/371,generic/414,generic/441,generic/510,generic/558,generic/559,generic/219,generic/328,generic/762,generic/757 "$@"
+    run_fstests -e generic/064,generic/065,generic/102,generic/275,generic/336,generic/371,generic/414,generic/441,generic/510,generic/558,generic/559,generic/219,generic/328,generic/484,generic/762,generic/757 "$@"
 
     bcachefs_test_end_checks ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
 }
