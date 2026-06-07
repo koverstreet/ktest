@@ -927,7 +927,8 @@ pub struct TestStats {
 }
 
 use durations_capnp::durations;
-pub fn test_stats(durations: Option<&[u8]>, test: &str, subtest: &str) -> Option<TestStats> {
+pub fn test_stats(durations: Option<&[u8]>, test: &str, subtest: &str,
+                  kernel: &str, env: &str) -> Option<TestStats> {
     if let Some(d) = durations {
         let mut d = d;
 
@@ -952,7 +953,10 @@ pub fn test_stats(durations: Option<&[u8]>, test: &str, subtest: &str) -> Option
         }
         let d = d.unwrap();
 
-        let full_test = subtest_full_name(test, subtest);
+        // Durations are stored under the on-disk result-dir key, which
+        // carries @kernel[@env] — match that, not subtest_full_name(),
+        // or every lookup misses once kernels/env are non-empty.
+        let full_test = subtest_result_key(test, subtest, kernel, env);
         let full_test = full_test.as_str();
 
         let mut l = 0;
