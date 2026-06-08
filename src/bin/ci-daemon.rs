@@ -14,7 +14,7 @@
 // Deferred: gcov/lcov upload; the daemon's own git fetch and reconcile
 // on branch change (it currently refills only as the window drains).
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use ci_cgi::jobs::{desired_jobs, Job, JobKey};
 use ci_cgi::{
     ciconfig_read, read_test_result, result_basename, subtest_result_key, CiConfig, TestResult,
@@ -92,7 +92,7 @@ struct JobParams {
     env: String,
     test: String,
     subtest: String,
-    /// `git fetch` URL the worker pulls the repo from (`ci_host:path`);
+    /// Public `git fetch` URL the worker pulls the repo from (git://…);
     /// empty if the repo isn't configured.
     repo_url: String,
     /// Daemon-local results dir; pulled results land in `<it>/<commit>/`.
@@ -620,14 +620,10 @@ async fn run_executor(
 /// Build the jobkit JobSpec for a desired job. Subtests of one test
 /// file at the same (user, repo, branch, commit, kernel, env) share a
 /// batch key, so an executor claims and runs them together in one VM.
-fn make_job_spec(ci_host: &str, rc: &CiConfig, job: &Job) -> JobSpec<JobParams> {
+fn make_job_spec(rc: &CiConfig, job: &Job) -> JobSpec<JobParams> {
     let k = &job.key;
     let name = format!("{} {} {}", short_commit(&k.commit), k.test, k.subtest);
-    let repo_url = rc
-        .ktest
-        .repo_path(&k.repo)
-        .map(|path| format!("{}:{}", ci_host, path.display()))
-        .unwrap_or_default();
+    let repo_url = rc.ktest.repo_url(&k.repo).map(String::from).unwrap_or_default();
     let params = JobParams {
         repo: k.repo.clone(),
         commit: k.commit.clone(),
@@ -665,7 +661,6 @@ fn make_job_spec(ci_host: &str, rc: &CiConfig, job: &Job) -> JobSpec<JobParams> 
 fn refill(
     choir: &Choir<JobParams>,
     job_map: &mut HashMap<JobKey, JobId>,
-    ci_host: &str,
     rc: &CiConfig,
     results: &TestResultsStore,
     window: usize,
@@ -680,7 +675,7 @@ fn refill(
         if job_map.contains_key(&job.key) {
             continue;
         }
-        let id = choir.submit(make_job_spec(ci_host, rc, job));
+        let id = choir.submit(make_job_spec(rc, job));
         job_map.insert(job.key.clone(), id);
         submitted += 1;
     }
@@ -826,12 +821,6 @@ fn main() -> Result<()> {
     let rc = ciconfig_read()?;
     eprintln!("ci-daemon: config loaded");
 
-    let ci_host = rc
-        .ktest
-        .ci_host
-        .clone()
-        .ok_or_else(|| anyhow!("ci_host not set in ~/.ktest/ktest-ci.json5"))?;
-
     // Load the test result store. IN PROGRESS entries from a previous
     // daemon are stale (no longer running) and dropped — desired_jobs()
     // then re-emits those subtests. A live IN PROGRESS, written by an
@@ -894,7 +883,7 @@ fn main() -> Result<()> {
     let mut last_maintenance: Option<std::time::Instant> = None;
 
     loop {
-        refill(&choir, &mut job_map, &ci_host, &rc, &results, window);
+        refill(&choir, &mut job_map, &rc, &results, window);
         write_status(&choir, &rc);
 
         if args.once {

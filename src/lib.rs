@@ -51,16 +51,25 @@ pub struct ExecutorHost {
     pub slots: u32,
 }
 
+/// One entry in the `repos` config: where the repo lives on the
+/// jobserver (the daemon maintains its refs there) and the public URL
+/// workers fetch it from — git://… and never ssh, so a fleet of
+/// concurrent fetches can't storm the jobserver's sshd.
+#[derive(Deserialize, Clone, Debug)]
+pub struct RepoConfig {
+    pub path: PathBuf,
+    pub url: String,
+}
+
 #[derive(Deserialize)]
 pub struct Ktestrc {
     pub linux_repo: PathBuf,
     pub output_dir: PathBuf,
     pub ktest_dir: PathBuf,
-    /// Per-repo paths on the jobserver, keyed by short name
-    /// (e.g. "bcachefs-tools" → "/home/testdashboard/bcachefs-tools").
-    /// "linux" falls back to `linux_repo` if absent here.
+    /// Per-repo config on the jobserver, keyed by short name (e.g.
+    /// "bcachefs-tools"). "linux" falls back to `linux_repo` if absent.
     #[serde(default)]
-    pub repos: BTreeMap<String, PathBuf>,
+    pub repos: BTreeMap<String, RepoConfig>,
     #[serde(default)]
     pub ci_url: Option<String>,
     /// Git remote name for resolving branch refs (e.g. "bcachefs")
@@ -93,13 +102,20 @@ impl Ktestrc {
     /// Returns None if the name isn't configured (and isn't the
     /// special-case "linux" fallback).
     pub fn repo_path(&self, name: &str) -> Option<&Path> {
-        if let Some(p) = self.repos.get(name) {
-            Some(p.as_path())
+        if let Some(r) = self.repos.get(name) {
+            Some(r.path.as_path())
         } else if name == "linux" {
             Some(self.linux_repo.as_path())
         } else {
             None
         }
+    }
+
+    /// Public fetch URL (git://…) workers clone the repo from. None for
+    /// the "linux" fallback — workers get kernels from the store, not a
+    /// fetch — and for names that aren't configured.
+    pub fn repo_url(&self, name: &str) -> Option<&str> {
+        self.repos.get(name).map(|r| r.url.as_str())
     }
 }
 
