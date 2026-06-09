@@ -306,6 +306,16 @@ finalize_kernel_build()
 
     ln -sfn "lib/modules/$version/build" "$stage/build"
 
+    # vmlinux-gdb.py (at the store root, from build_kernel) is a stub that
+    # imports the `linux` gdb package from ./scripts/gdb relative to itself.
+    # It's release+config-specific (constants.py is generated from this
+    # kernel's .config), so copy this build's into the store root — the stub
+    # then resolves and ktest_kgdb gets lx-symbols. The headers tree has it.
+    if [[ -f "$stage/vmlinux-gdb.py" && -d "$hdrs/scripts/gdb" ]]; then
+        mkdir -p "$stage/scripts"
+        cp -r "$hdrs/scripts/gdb" "$stage/scripts/gdb"
+    fi
+
     cat > "$stage/manifest.json" <<EOF
 {
   "manifest_version": 1,
