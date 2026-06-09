@@ -100,8 +100,6 @@ parse_args_post()
     ktest_out=$(readlink -f "$ktest_out")
     if [[ -n ${ktest_kernel_name:-} ]]; then
 	ktest_kernel_binary=$(resolve_kernel_name "$ktest_kernel_name") || exit 1
-    else
-	ktest_kernel_binary="$ktest_out/kernel.$ktest_arch"
     fi
 
     if $ktest_interactive; then
@@ -289,12 +287,26 @@ ktest_ssh()
     exec "${ssh_cmd[@]}" root@localhost "$@"
 }
 
-ktest_gdb()
+# Resolve the kernel for the gdb/kgdb commands. -k sets it explicitly; with
+# no -k, fall back to the kernel the running VM booted with — start_vm records
+# it as $ktest_out/kernel, so `gdb`/`kgdb` work against a live VM started by
+# either ktest or build-test-kernel.
+resolve_kernel_binary()
 {
-    if [[ -z $ktest_kernel_binary ]]; then
-	echo "Required parameter -k missing: kernel"
+    if [[ -n $ktest_kernel_binary ]]; then
+	return
+    fi
+    if [[ -e $ktest_out/kernel ]]; then
+	ktest_kernel_binary=$(readlink -f "$ktest_out/kernel")
+    else
+	echo "no -k given and no running VM to infer the kernel from"
 	exit 1
     fi
+}
+
+ktest_gdb()
+{
+    resolve_kernel_binary
 
     exec gdb -ex "set remote interrupt-on-connect"			\
 	     -ex "target remote | socat UNIX-CONNECT:$ktest_out/vm/gdb -"\
@@ -303,12 +315,10 @@ ktest_gdb()
 
 ktest_kgdb()
 {
-    if [[ -z $ktest_kernel_binary ]]; then
-	echo "Required parameter -k missing: kernel"
-	exit 1
-    fi
+    resolve_kernel_binary
 
     local gdb_args=(-ex "set remote interrupt-on-connect")
+    gdb_args+=(-iex "set auto-load safe-path /")
 
     # Auto-load kernel gdb helpers (lx-symbols et al) if the kernel was
     # built with CONFIG_GDB_SCRIPTS=y.
@@ -402,6 +412,10 @@ start_vm()
     rm -f "$ktest_out/vmcore"
     rm -f "$ktest_out/vm"
     ln -s "$ktest_tmp" "$ktest_out/vm"
+
+    # Record the kernel this VM booted with, so `ktest kgdb`/`gdb` (and the
+    # same commands under build-test-kernel) can find it without -k.
+    ln -sfn "$(readlink -f "$ktest_kernel_binary")" "$ktest_out/kernel"
 
     local kernelargs=()
 

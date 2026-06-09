@@ -156,6 +156,12 @@ cmd_run()
 	ktest_kernel_config_require+=(GCOV_KERNEL)
     fi
 
+    # kernel.$ktest_arch is build-test-kernel's local build output; libktest
+    # no longer defaults to it, so set it here when -k wasn't given.
+    if [[ -z ${ktest_kernel_name:-} ]]; then
+	ktest_kernel_binary="$ktest_out/kernel.$ktest_arch"
+    fi
+
     if ! $ktest_no_kbuild; then
 	run_quiet "building kernel" build_kernel
     fi
