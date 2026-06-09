@@ -376,15 +376,19 @@ async fn run_ktest_job_inner(
     // so a leftover .git/index.lock is from a previous batch whose git
     // op got SIGKILL'd between O_EXCL-creating the lock and releasing
     // it. Drop it before fetch.
+    // The git:// fetch/clone from the worker is occasionally flaky (transient
+    // network resets); a single failed fetch shouldn't fail the whole batch's
+    // checkout. Wrap the network ops in a shell retry-with-backoff.
     let checkout = format!(
         "set -e; \
+         retry() {{ n=0; until \"$@\"; do n=$((n+1)); [ $n -ge 5 ] && return 1; echo \"checkout: retry $n: $*\" >&2; sleep $((n*n)); done; }}; \
          if [ ! -d {ws}/{repo}/.git ]; then \
              rm -rf {ws}; mkdir -p {ws}; \
-             git -C {ws} clone {url} {repo}; \
+             retry git -C {ws} clone {url} {repo}; \
          fi; \
          cd {ws}/{repo}; \
          rm -f .git/index.lock; \
-         git fetch {url} {commit}; \
+         retry git fetch {url} {commit}; \
          git checkout -f FETCH_HEAD; \
          test \"$(git rev-parse HEAD)\" = \"{commit}\"",
         ws = ws, repo = p.repo, url = p.repo_url, commit = p.commit,
