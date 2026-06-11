@@ -466,7 +466,17 @@ fn cmd_logs(
     Ok(())
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() {
+    // expected failures (bad ref, missing log, no config) print as one
+    // clean line; returning Err from main Debug-prints the whole anyhow
+    // backtrace whenever RUST_BACKTRACE is set
+    if let Err(e) = run() {
+        eprintln!("ci-status: {:#}", e);
+        std::process::exit(1);
+    }
+}
+
+fn run() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let mut ktest = ktestrc_read()?;
