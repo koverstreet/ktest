@@ -1022,7 +1022,7 @@ require-kernel-config NFSD_V4
 test_nfs()
 {
     set_watchdog 10
-    mkdir /export1 /export2
+    mkdir -p /export1 /export2
 
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /export2
