@@ -7,6 +7,7 @@ use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+pub mod api;
 pub mod branchlog_capnp;
 pub mod durations_capnp;
 pub mod jobs;
@@ -1145,7 +1146,13 @@ pub fn last_good_line(results: &[CommitResults], test: &str) -> String {
 
 use branchlog_capnp::branch_log;
 
+/// One commit's rolled-up results in a branch listing. Also the wire
+/// type for the dashboard's `format=json` branch view (the contract
+/// ci-status's server mode consumes) — serde names match ci-status's
+/// pre-existing --json output.
+#[derive(Debug, serde_derive::Serialize, Deserialize)]
 pub struct BranchEntry {
+    #[serde(rename = "commit")]
     pub commit_id: String,
     pub message: String,
     pub passed: u32,
@@ -1155,6 +1162,26 @@ pub struct BranchEntry {
     pub inprogress: u32,
     pub unknown: u32,
     pub duration: u64,
+}
+
+/// Roll commit results up into branch-log entries; commits with no test
+/// results are dropped. Shared by the cgi's JSON view and ci-status.
+pub fn branch_entries(results: Vec<CommitResults>) -> Vec<BranchEntry> {
+    results
+        .into_iter()
+        .filter(|r| !r.tests.is_empty())
+        .map(|r| BranchEntry {
+            duration: r.tests.values().map(|t| t.duration).sum(),
+            passed: count_status(&r.tests, TestStatus::Passed),
+            failed: count_status(&r.tests, TestStatus::Failed),
+            notrun: count_status(&r.tests, TestStatus::Notrun),
+            failed_to_run: count_status(&r.tests, TestStatus::FailedToRun),
+            inprogress: count_status(&r.tests, TestStatus::Inprogress),
+            unknown: count_status(&r.tests, TestStatus::Unknown),
+            commit_id: r.id,
+            message: r.message,
+        })
+        .collect()
 }
 
 pub fn count_status(tests: &TestResultsMap, status: TestStatus) -> u32 {

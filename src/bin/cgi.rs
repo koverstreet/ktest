@@ -4,7 +4,7 @@ extern crate cgi;
 extern crate querystring;
 
 use ci_cgi::{
-    branch_get_results, ciconfig_read, last_good_line, update_lcov, CiConfig,
+    api, branch_get_results, ciconfig_read, last_good_line, update_lcov, CiConfig,
     CommitResults, TestResultsMap, TestStatus, Userrc,
 };
 
@@ -103,6 +103,25 @@ struct Ci {
     branch: Option<String>,
     commit: Option<String>,
     tests_matching: Regex,
+    /// format=json: machine-readable variants of every view, the
+    /// contract ci-status's server mode consumes (src/api.rs)
+    json: bool,
+}
+
+fn json_response<T: serde::Serialize>(val: &T) -> cgi::Response {
+    cgi::binary_response(
+        200,
+        "application/json",
+        serde_json::to_vec_pretty(val).unwrap(),
+    )
+}
+
+fn json_error(msg: String) -> cgi::Response {
+    cgi::binary_response(
+        500,
+        "application/json",
+        serde_json::to_vec(&api::ApiError { error: msg }).unwrap(),
+    )
 }
 
 fn ci_branch_get_results(ci: &Ci) -> Result<Vec<CommitResults>, String> {
@@ -122,10 +141,14 @@ fn ci_log(ci: &Ci) -> cgi::Response {
 
     let commits = ci_branch_get_results(ci);
     if let Err(e) = commits {
-        return error_response(e);
+        return if ci.json { json_error(e) } else { error_response(e) };
     }
 
     let commits = commits.unwrap();
+
+    if ci.json {
+        return json_response(&ci_cgi::branch_entries(commits));
+    }
 
     let mut multiple_test_view = false;
     for r in &commits {
@@ -330,9 +353,26 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
 
     let commits = ci_branch_get_results(ci);
     if let Err(e) = commits {
-        return error_response(e);
+        return if ci.json { json_error(e) } else { error_response(e) };
     }
     let commits = commits.unwrap();
+
+    if ci.json {
+        let r = &commits[0];
+        return json_response(&api::CommitTests {
+            commit: r.id.clone(),
+            message: r.message.clone(),
+            tests: r
+                .tests
+                .iter()
+                .map(|(name, t)| api::TestEntry {
+                    name: name.clone(),
+                    status: t.status.to_str().to_string(),
+                    duration: t.duration,
+                })
+                .collect(),
+        });
+    }
 
     let first_commit = &commits[0];
     let message = &first_commit.message;
@@ -453,14 +493,29 @@ fn ci_list_branches(ci: &Ci, user: &Userrc, out: &mut String) {
     writeln!(out, "</table> </div>").unwrap();
 }
 
+fn user_branches_json(username: &str, u: &Userrc) -> api::UserBranches {
+    api::UserBranches {
+        user: username.to_string(),
+        branches: u.branches.keys().cloned().collect(),
+    }
+}
+
 fn ci_user(ci: &Ci) -> cgi::Response {
     let username = ci.user.as_ref().unwrap();
     let u = ci.rc.users.get(username);
 
     if u.is_none() {
-        return error_response(format!("User {} not found", &username));
+        let e = format!("User {} not found", &username);
+        return if ci.json { json_error(e) } else { error_response(e) };
     }
     let u = u.unwrap();
+
+    if ci.json {
+        return match u {
+            Ok(u) => json_response(&user_branches_json(username, u)),
+            Err(e) => json_error(format!("error parsing user config: {}", e)),
+        };
+    }
 
     let mut out = String::new();
 
@@ -518,6 +573,16 @@ fn ci_list_users(ci: &Ci, out: &mut String) {
 }
 
 fn ci_home(ci: &Ci) -> cgi::Response {
+    if ci.json {
+        let users: Vec<api::UserBranches> = ci
+            .rc
+            .users
+            .iter()
+            .filter_map(|(name, u)| u.as_ref().ok().map(|u| user_branches_json(name, u)))
+            .collect();
+        return json_response(&users);
+    }
+
     let mut out = String::new();
 
     writeln!(&mut out, "<!DOCTYPE HTML>").unwrap();
@@ -815,6 +880,7 @@ cgi::cgi_main! {|request: cgi::Request| -> cgi::Response {
         branch:             query.get("branch").map(|x| x.to_string()),
         commit:             query.get("commit").map(|x| x.to_string()),
         tests_matching:     Regex::new(tests_matching).unwrap_or(Regex::new("").unwrap()),
+        json:               query.get("format").map(|f| *f == "json").unwrap_or(false),
     };
 
     // querify() drops a bare key with no '=', so check the raw string.
