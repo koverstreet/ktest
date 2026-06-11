@@ -74,6 +74,13 @@ dmesg --console-level 8
 echo 1 > /proc/sys/kernel/sysrq
 ulimit -c unlimited
 
+# systemd (PID1 in the VM) sets fs.file-max to LONG_MAX, defeating tests
+# that scale themselves by file-max as a proxy for "what fits in RAM":
+# generic/531's OOM guard divides it by nr_cpus, concludes no cap is
+# needed, and pins ~2GB of open unlinked inodes on a 4GB VM. Restore the
+# kernel's RAM-based default: 10% of memory at ~1KB per file.
+echo $(( $(awk '/MemTotal/ {print $2}' /proc/meminfo) / 10 )) > /proc/sys/fs/file-max
+
 # Log file system visible to host
 
 # Core dump settings

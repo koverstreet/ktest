@@ -17,8 +17,10 @@ setup_tracing()
 {
     local t=/sys/kernel/tracing
 
+    # buffer_size_kb is per CPU; the buffers are load-bearing - threshold
+    # failures scrape them for the triggering events
     echo		> "$t"/trace
-    echo 81920		> "$t"/buffer_size_kb
+    echo 40960		> "$t"/buffer_size_kb
     echo $@		> "$t"/set_event
     echo trace_printk	> "$t"/trace_options
     #echo stacktrace	> "$t"/trace_options
