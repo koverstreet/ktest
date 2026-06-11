@@ -81,6 +81,12 @@ ulimit -c unlimited
 # kernel's RAM-based default: 10% of memory at ~1KB per file.
 echo $(( $(awk '/MemTotal/ {print $2}' /proc/meminfo) / 10 )) > /proc/sys/fs/file-max
 
+# No clock-stepping during tests: timesyncd's first correction after boot
+# can step CLOCK_REALTIME backwards mid-test, and tests that read the clock
+# twice assume it only moves forward (generic/600's quota grace check saw
+# set-1 from exactly this).
+systemctl stop systemd-timesyncd.service 2>/dev/null || true
+
 # Log file system visible to host
 
 # Core dump settings
