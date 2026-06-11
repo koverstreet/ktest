@@ -1,6 +1,6 @@
 use ci_cgi::{
-    branch_get_results, commitdir_get_results_full,
-    count_status, format_duration, ktestrc_read, Ktestrc, BranchEntry,
+    api, branch_entries, branch_get_results, commitdir_get_results_full,
+    format_duration, ktestrc_read, Ktestrc, BranchEntry,
     TestStatus,
 };
 use clap::{Parser, Subcommand};
@@ -12,7 +12,7 @@ struct Args {
     #[command(subcommand)]
     command: Command,
 
-    /// Read from local output_dir (default if ~/.ktest/ktest-ci.json5 exists)
+    /// Read from local output_dir (default if the local config exists)
     #[arg(long, global = true)]
     local: bool,
 
@@ -20,9 +20,68 @@ struct Args {
     #[arg(long, global = true)]
     remote: Option<String>,
 
+    /// CI user: query the dashboard over HTTPS instead of local state.
+    /// Needs no git repos, no results mirror, no config beyond the
+    /// dashboard URL.
+    #[arg(long, short, global = true)]
+    user: Option<String>,
+
+    /// Dashboard URL for --user mode
+    #[arg(long, global = true, default_value = "https://evilpiepirate.org/~testdashboard/ci")]
+    dashboard: String,
+
+    /// Branch context for `show` in --user mode (the server resolves
+    /// commits against the branch's repo)
+    #[arg(long, short, global = true)]
+    branch: Option<String>,
+
     /// Output as JSON
     #[arg(long, global = true)]
     json: bool,
+}
+
+// ---- server mode: the dashboard's format=json API (ci_cgi::api) ------------
+
+fn server_get<T: serde::de::DeserializeOwned>(url: &str) -> anyhow::Result<T> {
+    let resp = reqwest::blocking::get(url)?;
+    let status = resp.status();
+    let body = resp.bytes()?;
+    if !status.is_success() {
+        if let Ok(e) = serde_json::from_slice::<api::ApiError>(&body) {
+            anyhow::bail!("{}", e.error);
+        }
+        anyhow::bail!("{} fetching {}", status, url);
+    }
+    if body.starts_with(b"<") {
+        anyhow::bail!(
+            "server returned HTML, not JSON — dashboard at {} predates format=json?",
+            url.split('?').next().unwrap_or(url)
+        );
+    }
+    Ok(serde_json::from_slice(&body)?)
+}
+
+fn server_log(dashboard: &str, user: &str, branch: &str) -> anyhow::Result<Vec<BranchEntry>> {
+    server_get(&format!(
+        "{}?user={}&branch={}&format=json",
+        dashboard, user, branch
+    ))
+}
+
+fn server_show(
+    dashboard: &str,
+    user: &str,
+    branch: &str,
+    commit: &str,
+) -> anyhow::Result<api::CommitTests> {
+    server_get(&format!(
+        "{}?user={}&branch={}&commit={}&format=json",
+        dashboard, user, branch, commit
+    ))
+}
+
+fn server_branches(dashboard: &str, user: &str) -> anyhow::Result<api::UserBranches> {
+    server_get(&format!("{}?user={}&format=json", dashboard, user))
 }
 
 #[derive(Subcommand)]
@@ -147,39 +206,13 @@ fn cmd_log(
     let results = branch_get_results(&repo, ktest, None, None, Some(&gitref), &all)
         .map_err(|e| anyhow::anyhow!(e))?;
 
-    let entries: Vec<BranchEntry> = results.into_iter()
-        .filter(|r| !r.tests.is_empty())
-        .map(|r| {
-            let duration: u64 = r.tests.values().map(|t| t.duration).sum();
-            BranchEntry {
-                commit_id: r.id,
-                message: r.message,
-                passed: count_status(&r.tests, TestStatus::Passed),
-                failed: count_status(&r.tests, TestStatus::Failed),
-                notrun: count_status(&r.tests, TestStatus::Notrun),
-                failed_to_run: count_status(&r.tests, TestStatus::FailedToRun),
-                inprogress: count_status(&r.tests, TestStatus::Inprogress),
-                unknown: count_status(&r.tests, TestStatus::Unknown),
-                duration,
-            }
-        })
-        .collect();
+    let entries = branch_entries(results);
+    render_log(&entries, branch, json)
+}
 
+fn render_log(entries: &[BranchEntry], branch: &str, json: bool) -> anyhow::Result<()> {
     if json {
-        let json_entries: Vec<serde_json::Value> = entries.iter().map(|e| {
-            serde_json::json!({
-                "commit": &e.commit_id,
-                "message": &e.message,
-                "passed": e.passed,
-                "failed": e.failed,
-                "notrun": e.notrun,
-                "failed_to_run": e.failed_to_run,
-                "inprogress": e.inprogress,
-                "unknown": e.unknown,
-                "duration": e.duration,
-            })
-        }).collect();
-        println!("{}", serde_json::to_string_pretty(&json_entries)?);
+        println!("{}", serde_json::to_string_pretty(entries)?);
         return Ok(());
     }
 
@@ -193,7 +226,7 @@ fn cmd_log(
         "COMMIT", "PASS", "FAIL", "FTRUN", "INPRO", "DURATION", "MESSAGE");
     println!("{}", "-".repeat(80));
 
-    for e in &entries {
+    for e in entries {
         let subject = e.message.lines().next().unwrap_or("");
         let subject = if subject.len() > 50 { &subject[..50] } else { subject };
 
@@ -225,37 +258,42 @@ fn cmd_show(
 
     let full = commitdir_get_results_full(ktest, &commit)?;
 
-    if json {
-        let json_tests: Vec<serde_json::Value> = full.tests.iter().map(|(name, r)| {
-            serde_json::json!({
-                "name": name,
-                "status": r.status.to_str(),
-                "duration": r.duration,
+    let detail = api::CommitTests {
+        commit,
+        message: full.message.clone(),
+        tests: full
+            .tests
+            .iter()
+            .map(|(name, r)| api::TestEntry {
+                name: name.clone(),
+                status: r.status.to_str().to_string(),
+                duration: r.duration,
             })
-        }).collect();
-        let out = serde_json::json!({
-            "commit": commit,
-            "message": &full.message,
-            "tests": json_tests,
-        });
-        println!("{}", serde_json::to_string_pretty(&out)?);
+            .collect(),
+    };
+    render_show(&detail, json)
+}
+
+fn render_show(detail: &api::CommitTests, json: bool) -> anyhow::Result<()> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(detail)?);
         return Ok(());
     }
 
-    if !full.message.is_empty() {
-        let subject = full.message.lines().next().unwrap_or("");
-        println!("{} {}", commit, subject);
+    if !detail.message.is_empty() {
+        let subject = detail.message.lines().next().unwrap_or("");
+        println!("{} {}", detail.commit, subject);
         println!();
     }
 
-    if full.tests.is_empty() {
-        println!("No test results for {}", commit);
+    if detail.tests.is_empty() {
+        println!("No test results for {}", detail.commit);
         return Ok(());
     }
 
     // Sort tests: failed first, then in-progress, then passed, then rest
-    let mut tests: Vec<_> = full.tests.iter().collect();
-    tests.sort_by_key(|(_, r)| match r.status {
+    let mut tests: Vec<_> = detail.tests.iter().collect();
+    tests.sort_by_key(|t| match TestStatus::from_str(&t.status) {
         TestStatus::Failed     => 0,
         TestStatus::Inprogress => 1,
         TestStatus::Notrun     => 2,
@@ -267,26 +305,25 @@ fn cmd_show(
     println!("{:<60} {:>12} {:>8}", "TEST", "STATUS", "DURATION");
     println!("{}", "-".repeat(82));
 
-    for (name, result) in &tests {
+    for t in &tests {
         println!("{:<60} {:>12} {:>8}",
-            name,
-            color_status(result.status),
-            format_duration(result.duration),
+            t.name,
+            color_status(TestStatus::from_str(&t.status)),
+            format_duration(t.duration),
         );
     }
 
-    // Summary line
-    let passed = full.tests.values().filter(|r| r.status == TestStatus::Passed).count();
-    let failed = full.tests.values().filter(|r| r.status == TestStatus::Failed).count();
-    let inprog = full.tests.values().filter(|r| r.status == TestStatus::Inprogress).count();
-    let total_duration: u64 = full.tests.values().map(|r| r.duration).sum();
+    fn count(tests: &[api::TestEntry], s: TestStatus) -> usize {
+        tests.iter().filter(|t| TestStatus::from_str(&t.status) == s).count()
+    }
+    let total_duration: u64 = detail.tests.iter().map(|t| t.duration).sum();
 
     println!();
     println!("{} total: {} passed, {} failed, {} in progress, {}",
-        full.tests.len(),
-        color_passed(&passed.to_string()),
-        color_failed(&failed.to_string()),
-        inprog,
+        detail.tests.len(),
+        color_passed(&count(&detail.tests, TestStatus::Passed).to_string()),
+        color_failed(&count(&detail.tests, TestStatus::Failed).to_string()),
+        count(&detail.tests, TestStatus::Inprogress),
         format_duration(total_duration),
     );
 
@@ -478,6 +515,36 @@ fn main() {
 
 fn run() -> anyhow::Result<()> {
     let args = Args::parse();
+
+    // --user: pure server mode. Everything over HTTPS from the dashboard;
+    // no local repos, no results mirror, no config required.
+    if let Some(ref user) = args.user {
+        return match args.command {
+            Command::Log { ref branch } => {
+                let entries = server_log(&args.dashboard, user, branch)?;
+                render_log(&entries, branch, args.json)
+            }
+            Command::Show { ref commit } => {
+                let branch = args.branch.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("show --user needs --branch (the server resolves commits per-branch)")
+                })?;
+                let detail = server_show(&args.dashboard, user, branch, commit)?;
+                render_show(&detail, args.json)
+            }
+            Command::Branches => {
+                let b = server_branches(&args.dashboard, user)?;
+                if args.json {
+                    println!("{}", serde_json::to_string_pretty(&b)?);
+                } else {
+                    for name in &b.branches {
+                        println!("{}", name);
+                    }
+                }
+                Ok(())
+            }
+            _ => anyhow::bail!("--user mode supports log, show, and branches"),
+        };
+    }
 
     let mut ktest = ktestrc_read()?;
 
