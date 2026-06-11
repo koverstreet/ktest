@@ -3,4 +3,8 @@
 # bs=16k and btree_node_size=64k breaks at shutdown time
 export MKFS_OPTIONS="--errors=ro --block_size=16k --btree_node_size=128k"
 
+# bcachefs/001 (dio_mmap_torture): dio writes fail EINVAL with
+# block_size > PAGE_SIZE; has failed since this config was added
+export FSTESTS_EXPUNGE=bcachefs/001
+
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/fstests.ktest

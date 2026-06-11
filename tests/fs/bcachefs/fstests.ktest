@@ -36,7 +36,9 @@ run_tests()
     # generic/065,generic/336,generic/510: who drunkenly imagined up this "requirement" for fsync()? fsync the thing you want synced
     # generic/484: we don't guarantee that syncfs/fsync only returns the error once
 
-    run_fstests -e generic/064,generic/065,generic/102,generic/275,generic/336,generic/371,generic/414,generic/441,generic/510,generic/558,generic/559,generic/219,generic/328,generic/484,generic/762,generic/757 "$@"
+    # Variant configs (e.g. fstests-largebs) add their own expunges via
+    # $FSTESTS_EXPUNGE, exported before sourcing this file:
+    run_fstests -e generic/064,generic/065,generic/102,generic/275,generic/336,generic/371,generic/414,generic/441,generic/510,generic/558,generic/559,generic/219,generic/328,generic/484,generic/762,generic/757${FSTESTS_EXPUNGE:+,$FSTESTS_EXPUNGE} "$@"
 
     bcachefs_test_end_checks ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
 }
