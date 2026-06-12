@@ -645,8 +645,8 @@ fn make_job_spec(rc: &CiConfig, job: &Job) -> JobSpec<JobParams> {
     // Batch key: everything but the subtest. `\0` can't occur in any
     // field, so distinct keys can't collide.
     let batch_key = format!(
-        "{}\0{}\0{}\0{}\0{}\0{}\0{}",
-        k.user, k.repo, k.branch, k.commit, k.kernel, k.env, k.test,
+        "{}\0{}\0{}\0{}\0{}\0{}",
+        k.user, k.repo, k.commit, k.kernel, k.env, k.test,
     );
     JobSpec::new(name, params)
         .batch_key(batch_key)

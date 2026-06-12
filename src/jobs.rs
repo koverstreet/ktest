@@ -16,7 +16,7 @@ use crate::{
     TestResultsMap, TestResultsStore, TestStats, TestStatus,
 };
 use memmap::MmapOptions;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
 
@@ -26,7 +26,6 @@ use std::sync::{LazyLock, Mutex};
 pub struct JobKey {
     pub user: String,
     pub repo: String,
-    pub branch: String,
     pub commit: String,
     /// Kernel-store id (e.g. "debian/forky"); empty = build from repo.
     pub kernel: String,
@@ -149,7 +148,6 @@ fn job_nice(tg: &RcTestGroup, stats: Option<&TestStats>) -> i64 {
 struct TestSpec<'a> {
     user: String,
     repo: String,
-    branch: String,
     test: String,
     env: String,
     tg: &'a RcTestGroup,
@@ -234,7 +232,6 @@ fn build_test_specs<'a>(rc: &'a CiConfig) -> Vec<TestSpec<'a>> {
                     specs.push(TestSpec {
                         user: user.clone(),
                         repo: branchconfig.repo.clone(),
-                        branch: branch.clone(),
                         test,
                         env: env.clone(),
                         tg,
@@ -314,7 +311,6 @@ pub fn desired_jobs(rc: &CiConfig, results: &TestResultsStore, limit: usize) -> 
                         key: JobKey {
                             user: spec.user.clone(),
                             repo: spec.repo.clone(),
-                            branch: spec.branch.clone(),
                             commit: commit.clone(),
                             kernel: kernel.clone(),
                             env: spec.env.clone(),
@@ -339,6 +335,11 @@ pub fn desired_jobs(rc: &CiConfig, results: &TestResultsStore, limit: usize) -> 
             .then(a.key.env.cmp(&b.key.env))
             .then(a.duration.cmp(&b.duration))
     });
+    // A commit reachable from more than one branch produces one spec per
+    // branch; those collapse to the same JobKey (branch is provenance,
+    // not identity). First wins, so the best-weight instance survives.
+    let mut seen = HashSet::new();
+    out.retain(|j| seen.insert(j.key.clone()));
     out.truncate(limit);
     out
 }
