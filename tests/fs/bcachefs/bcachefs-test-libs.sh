@@ -296,6 +296,26 @@ check_bcachefs_errors()
     done
 }
 
+# Per-device IO error counters from the member section. Checksum errors are
+# never expected in a healthy test VM - they mean we wrote bad data or read
+# the wrong location, even when replication/EC reconstruct silently repairs
+# the damage and the test otherwise passes. Tests that corrupt devices on
+# purpose (scrub tests, read_corrupt_ratio injection) set
+# ktest_expect_device_errors=1 before their end checks.
+check_bcachefs_device_errors()
+{
+    [[ -v ktest_expect_device_errors ]] && return 0
+
+    for i in $@; do
+	if bcachefs show-super -f members_v2 $i|
+	    grep -E '^\s*checksum errors:'|
+	    grep -vE ':\s*0$'; then
+	    echo "nonzero device checksum error counter on $i"
+	    return 1
+	fi
+    done
+}
+
 expect_sysfs()
 {
     prefix=$1
@@ -517,6 +537,7 @@ bcachefs_test_end_checks()
 {
     check_bcachefs_leaks
     check_bcachefs_errors $@
+    check_bcachefs_device_errors $@
     check_bcachefs_counters $@
 }
 

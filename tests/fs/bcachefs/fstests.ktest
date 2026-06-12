@@ -15,6 +15,13 @@ export FSTYP=bcachefs
 
 run_tests()
 {
+    # fstests includes crash-consistency tests (dm-flakey drop_writes,
+    # log-writes) that legitimately produce checksum errors. Counters
+    # reset on each test's mkfs, so what the end checks see is whatever
+    # test formatted the scratch devs last - nondeterministic. Skip the
+    # device error counter check for fstests runs.
+    ktest_expect_device_errors=1
+
     if [[ ! -f /xfstests-init-done ]]; then
 	bcachefs_antagonist
     fi

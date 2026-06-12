@@ -6,6 +6,7 @@ config-timeout $(stress_timeout)
 
 test_scrub_journal()
 {
+    ktest_expect_device_errors=1
     set_watchdog 300
 
     local BUCKET_SIZE_KB=512

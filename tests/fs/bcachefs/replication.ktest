@@ -663,6 +663,7 @@ test_replicas_read_errors()
 
 test_read_corrupt()
 {
+    ktest_expect_device_errors=1
     [[ ! -f /sys/module/bcachefs/parameters/read_corrupt_ratio ]] && return 0
 
     set_watchdog 180
@@ -694,6 +695,7 @@ test_read_corrupt()
 
 test_btree_read_corrupt()
 {
+    ktest_expect_device_errors=1
     [[ ! -f /sys/module/bcachefs/parameters/btree_read_corrupt_ratio ]] && return 0
 
     set_watchdog 180
@@ -756,6 +758,7 @@ test_kill_btree_node()
 
 test_read_corrupt_replicas()
 {
+    ktest_expect_device_errors=1
     [[ ! -f /sys/module/bcachefs/parameters/read_corrupt_ratio ]] && return 0
 
     set_watchdog 180
@@ -786,6 +789,7 @@ test_read_corrupt_replicas()
 
 test_write_corrupt()
 {
+    ktest_expect_device_errors=1
     [[ ! -f /sys/module/bcachefs/parameters/write_corrupt_ratio ]] && return 0
     set_watchdog 180
 
@@ -814,6 +818,7 @@ test_write_corrupt()
 
 test_evacuate_corrupted()
 {
+    ktest_expect_device_errors=1
     [[ ! -f /sys/module/bcachefs/parameters/write_corrupt_ratio ]] && return 0
 
     set_watchdog 180

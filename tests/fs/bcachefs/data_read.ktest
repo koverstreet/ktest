@@ -31,6 +31,7 @@ test_data_read_basic()
 
 test_data_read_poison()
 {
+    ktest_expect_device_errors=1
     [[ ! -f /sys/module/bcachefs/parameters/read_corrupt_ratio ]] && return 0
 
     set_watchdog 120
@@ -64,6 +65,7 @@ test_data_read_poison()
 
 test_unpoison()
 {
+    ktest_expect_device_errors=1
     [[ ! -f /sys/module/bcachefs/parameters/read_corrupt_ratio ]] && return 0
 
     set_watchdog 120

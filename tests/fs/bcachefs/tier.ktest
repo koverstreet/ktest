@@ -408,6 +408,7 @@ test_concurrent_all_device_removal()
 
 test_read_corrupt()
 {
+    ktest_expect_device_errors=1
     [[ ! -f /sys/module/bcachefs/parameters/read_corrupt_ratio ]] && return 0
 
     set_watchdog 300
@@ -450,6 +451,7 @@ test_read_corrupt()
 
 test_btree_read_corrupt()
 {
+    ktest_expect_device_errors=1
     [[ ! -f /sys/module/bcachefs/parameters/btree_read_corrupt_ratio ]] && return 0
 
     setup_tracing
