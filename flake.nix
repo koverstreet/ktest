@@ -28,5 +28,24 @@
           inherit preBuiltKernel srcBuildKernel;
           default = if (import buildRoot).isPreBuilt then preBuiltKernel else srcBuildKernel;
         };
+        devShells.default = pkgs.mkShell {
+          packages = with pkgs; [
+            e2fsprogs
+            wget
+            socat
+            brotli
+            clang
+            bison
+            gcc
+            gnumake
+            flex
+            bc
+            elfutils
+            qemu
+            minicom
+            socat
+            vde2
+          ];
+        };
     });
 }
