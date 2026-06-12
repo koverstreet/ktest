@@ -1248,6 +1248,7 @@ test_force_remove()
 
 do_scrub()
 {
+    ktest_expect_device_errors=1
     local offline=$1
 
     set_watchdog 60
@@ -1294,6 +1295,7 @@ test_scrub_offline()
 
 test_self_healing()
 {
+    ktest_expect_device_errors=1
     [[ ! -f /sys/module/bcachefs/parameters/force_read_device ]] && return 0
 
     set_watchdog 60
