@@ -168,6 +168,17 @@ pub use testresult_capnp::test_result::Status as TestStatus;
 
 impl TestStatus {
     pub fn from_str(status: &str) -> TestStatus {
+        /* exact inverse of to_str() first - the JSON wire format */
+        match status {
+            "In progress"   => return TestStatus::Inprogress,
+            "Passed"        => return TestStatus::Passed,
+            "Failed"        => return TestStatus::Failed,
+            "Not run"       => return TestStatus::Notrun,
+            "Failed to run" => return TestStatus::FailedToRun,
+            "Unknown"       => return TestStatus::Unknown,
+            _ => {}
+        }
+
         if status.is_empty() {
             TestStatus::Inprogress
         } else if status.contains("IN PROGRESS") {
