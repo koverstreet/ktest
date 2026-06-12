@@ -1051,10 +1051,13 @@ test_nfs()
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /export2
 
-    echo "/export1  *(ro,insecure,all_squash,no_subtree_check)" >> /etc/exports
+    # overwrite, not append: leftover entries from a previous run in the
+    # same VM image make exportfs fail with "duplicated export entries"
+    echo "/export1  *(ro,insecure,all_squash,no_subtree_check)" >  /etc/exports
     echo "/export2  *(ro,insecure,all_squash,no_subtree_check)" >> /etc/exports
     exportfs -a
     exportfs -ua
+    echo > /etc/exports
 
     umount /export2
 
