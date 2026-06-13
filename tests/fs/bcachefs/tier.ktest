@@ -79,6 +79,42 @@ test_tiering_misaligned()
 	--background_target=hdd
 }
 
+test_foreground_target_durability_counts()
+{
+    set_watchdog 180
+
+    run_quiet "" bcachefs format -f			\
+	--block_size=4k					\
+	--bucket_size=256k				\
+	--data_replicas=2				\
+	--metadata_replicas=2				\
+	--label=ssd.ssd1 ${ktest_scratch_dev[0]}	\
+	--label=ssd.ssd2 ${ktest_scratch_dev[1]}	\
+	--label=hdd.hdd1 ${ktest_scratch_dev[2]}	\
+	--label=hdd.hdd2 ${ktest_scratch_dev[3]}	\
+	--foreground_target=ssd				\
+	--background_target=hdd
+
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+
+    dd if=/dev/zero of=/mnt/foreground-durable bs=4M count=1 oflag=direct status=progress
+    sync
+
+    timeout 30s bcachefs reconcile wait -t target /mnt || true
+
+    local fs_usage_out=$(bcachefs fs usage -h --all /mnt)
+    echo "$fs_usage_out"
+
+    if grep -q '^cached:' <<<"$fs_usage_out"; then
+	echo "durable foreground target copy became cached"
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_tiering_drop_alloc()
 {
     run_basic_tiering_test
@@ -128,6 +164,35 @@ test_tiering_buffered()
     umount /mnt
 
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_foreground_target_full_fallback()
+{
+    set_watchdog 180
+
+    run_quiet "" bcachefs format -f			\
+	--block_size=4k					\
+	--bucket_size=256k				\
+	--label=ssd.ssd1 ${ktest_scratch_dev[0]}	\
+	--label=hdd.hdd1 ${ktest_scratch_dev[2]}	\
+	--foreground_target=ssd				\
+	--promote_target=ssd				\
+	--background_target=hdd
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[2]} /mnt
+
+    # The foreground target is only a preference.  This write is larger than
+    # the SSD scratch device, so it must complete by falling back to HDD space
+    # instead of waiting forever on SSD/copygc progress.
+    dd if=/dev/zero of=/mnt/foreground-target-fallback bs=16M count=96	\
+	oflag=direct status=progress
+    sync
+    bcachefs fs usage -h /mnt
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[2]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
@@ -310,6 +375,76 @@ test_device_remove_background()
     bcachefs reset-counters --counters=data_update_fail ${ktest_scratch_dev[0]}
     bcachefs reset-counters --counters=bucket_alloc_fail ${ktest_scratch_dev[0]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_failed_device_remove_restores_rw()
+{
+    set_watchdog 180
+
+    run_quiet "" bcachefs format -f			\
+	--block_size=4k					\
+	--bucket_size=256k				\
+	--label=ssd.ssd1 ${ktest_scratch_dev[0]}	\
+	--label=hdd.hdd1 ${ktest_scratch_dev[2]}	\
+	--foreground_target=hdd				\
+	--promote_target=ssd				\
+	--background_target=hdd
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[2]} /mnt
+
+    # Make the HDD member uniquely necessary.  Removing it should fail because
+    # the SSD member is too small, but the failed remove must not leave the
+    # member stuck evacuating/readonly.
+    dd if=/dev/zero of=/mnt/hdd-only bs=16M count=96 oflag=direct status=progress
+    sync
+    bcachefs fs usage -h /mnt
+
+    if bcachefs device remove ${ktest_scratch_dev[2]} /mnt; then
+	echo "device remove unexpectedly succeeded"
+	return 1
+    fi
+
+    bcachefs fs usage -h /mnt
+    grep -q '\[rw\]' /sys/fs/bcachefs/*/dev-1/state
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[2]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_device_remove_rewrites_metadata()
+{
+    set_watchdog 240
+
+    run_quiet "" bcachefs format -f			\
+	--block_size=4k					\
+	--bucket_size=256k				\
+	--label=ssd.ssd1 ${ktest_scratch_dev[0]}	\
+	--label=hdd.hdd1 ${ktest_scratch_dev[2]}	\
+	--metadata_target=ssd				\
+	--foreground_target=hdd				\
+	--promote_target=ssd				\
+	--background_target=hdd
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[2]} /mnt
+
+    # Populate enough small-file metadata that the SSD metadata target owns
+    # btree nodes.  Device removal has to rewrite those nodes elsewhere before
+    # dropping the SSD member's metadata pointers.
+    for i in $(seq 0 100000); do
+	echo $i > /mnt/file-$i
+    done
+    sync
+    bcachefs fs usage -h --all /mnt
+
+    bcachefs device remove ${ktest_scratch_dev[0]} /mnt
+    bcachefs fs usage -h /mnt
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[2]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[2]}
 }
 
 test_mount_umount_torture()
