@@ -200,6 +200,7 @@ require-kernel-config SERIAL_8250_CONSOLE
 require-kernel-config SCSI
 require-kernel-config SCSI_LOWLEVEL	# what's this for?
 require-kernel-config BLK_DEV_SD	# disk support
+require-kernel-config SCSI_DEBUG=m	# fake disks w/ a real model/serial in sysfs (device attr tests)
 
 # Block layer writeback throttling:
 require-kernel-config BLK_WBT
