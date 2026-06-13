@@ -1866,4 +1866,48 @@ test_casefold_overlayfs()
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
 }
 
+test_device_model_stored_partition()
+{
+    set_watchdog 120
+
+    # Regression test for bcachefs-tools #595: a device's model/serial must be
+    # stored in the superblock at attach time. The bug built the sysfs path
+    # from the *partition* name (e.g. sdr1), which doesn't exist under
+    # /sys/block (only whole disks do), so the read failed and the field was
+    # left empty for any partitioned device.
+    #
+    # loop/virtio scratch devices have no model in sysfs, so use scsi_debug,
+    # which presents a real model ("scsi_debug") and a partition table.
+    if ! modprobe scsi_debug dev_size_mb=128 num_parts=1; then
+	echo "scsi_debug not available, skipping"
+	return 0
+    fi
+
+    local disk="" d
+    for d in /sys/block/sd*; do
+	if grep -qi scsi_debug "$d/device/model" 2>/dev/null; then
+	    disk=/dev/$(basename "$d")
+	    break
+	fi
+    done
+    [[ -n $disk ]] || { echo "scsi_debug device not found"; return 1; }
+
+    # wait for the partition node to appear
+    local part="${disk}1" i
+    for i in $(seq 1 10); do [[ -b $part ]] && break; sleep 1; done
+    [[ -b $part ]] || { echo "scsi_debug partition $part not found"; return 1; }
+
+    echo "scsi_debug part=$part sysfs model='$(cat /sys/block/$(basename "$disk")/device/model)'"
+
+    run_quiet "" bcachefs format -f "$part"
+    mount -t bcachefs "$part" /mnt
+    umount /mnt
+
+    local stored
+    stored="$(bcachefs show-super "$part" |
+	      grep 'Last device model:' | sed 's/.*Last device model:[[:space:]]*//')"
+    echo "stored device model='$stored'"
+    [[ -n $stored ]] || { echo "FAIL: device model not stored for partition $part (#595)"; return 1; }
+}
+
 main "$@"
