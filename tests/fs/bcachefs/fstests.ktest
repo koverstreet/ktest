@@ -44,10 +44,16 @@ run_tests()
     # generic/484: we don't guarantee that syncfs/fsync only returns the error once
     #
     # generic/622: test assumes drop_caches fully evicts, but shrinkers have a bug where they don't when nr_seeks == 0
+    #
+    # generic/733: read-vs-reflink race test for the XFS/btrfs lock-avoidance
+    # fixes it names; t_reflink_read_race requires a clone slow enough (>=100ms)
+    # to open the race window. bcachefs reflink is a fast COW metadata op, so the
+    # clone lands just under (e.g. 99.84ms) and the helper aborts with "clone did
+    # not take enough time" rather than running - inapplicable, and timing-flaky.
 
     # Variant configs (e.g. fstests-largebs) add their own expunges via
     # $FSTESTS_EXPUNGE, exported before sourcing this file:
-    run_fstests -e generic/064,generic/065,generic/102,generic/104,generic/275,generic/336,generic/343,generic/371,generic/376,generic/414,generic/441,generic/510,generic/558,generic/559,generic/219,generic/328,generic/484,generic/622,generic/762,generic/757${FSTESTS_EXPUNGE:+,$FSTESTS_EXPUNGE} "$@"
+    run_fstests -e generic/064,generic/065,generic/102,generic/104,generic/275,generic/336,generic/343,generic/371,generic/376,generic/414,generic/441,generic/510,generic/558,generic/559,generic/219,generic/328,generic/484,generic/622,generic/733,generic/762,generic/757${FSTESTS_EXPUNGE:+,$FSTESTS_EXPUNGE} "$@"
 
     bcachefs_test_end_checks ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
 }
