@@ -39,12 +39,35 @@ fi
 
 workers=$(json5_to_json "$CONFIG_PATH" | jq -r '.executors | keys[]')
 
+# Worker-side sync. Resets ~/ktest to origin/master, then refreshes the
+# push-deployed test-infra dependencies.
+#
+# require-git (tests/prelude.sh) clones a dependency once and never updates
+# it, so without this a worker keeps whatever xfstests it first cloned — a
+# fix pushed to the xfstests fork would never reach CI. We deliberately do
+# NOT touch the repos under test (bcachefs-tools, linux): ci-daemon checks
+# those out per job to the exact commit being tested, and their git rev
+# feeds the build cache keys.
+#
+# Deps live per-slot under ~/ktest-ci/<slot>/ on workers, and in the default
+# ~/.ktest/deps/ for non-CI runs; refresh both. Unmatched globs / missing
+# checkouts are skipped by the -d guard.
+read -r -d '' remote_cmd <<'REMOTE' || true
+set -e
+cd ktest && git fetch -q origin && git reset --hard -q origin/master
+git log -1 --format='    ktest    %h %s'
+for d in ~/ktest-ci/*/xfstests ~/.ktest/deps/xfstests; do
+    [ -d "$d/.git" ] || continue
+    git -C "$d" fetch -q origin && git -C "$d" reset --hard -q origin/master
+    echo "    xfstests $d -> $(git -C "$d" rev-parse --short HEAD)"
+done
+REMOTE
+
 failed=0
 while IFS= read -r host; do
     [[ -n $host ]] || continue
     echo "ktest-deploy: $host"
-    if $SSH "$host" \
-	"cd ktest && git fetch -q origin && git reset --hard -q origin/master && git log -1 --format='    %h %s'"; then
+    if $SSH "$host" "$remote_cmd"; then
 	:
     else
 	echo "    FAILED" >&2
