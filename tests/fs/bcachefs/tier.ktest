@@ -38,7 +38,18 @@ test_tiering_torture()
     mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]}:${ktest_scratch_dev[3]} /mnt
     run_fio_randrw
     mv /mnt/fiotest /mnt/fiotest_old
-    run_fio_randrw --loops=50
+
+    # Sustained rewrite pressure to drive promote/demote cycling. 10 loops
+    # of the 3.5G job is ~20 minutes on the slow (lockdep) configs;
+    # run_fio_randrw's own 1200s watchdog is sized for a single loop, so
+    # set our own. (Was --loops=50, which could never fit any watchdog
+    # we'd want to wait out.)
+    set_watchdog 3600
+    run_fio					\
+	--name=randrw				\
+	--rw=randrw				\
+	--bsrange=4k-1M				\
+	--loops=10
 
     mount -o remount,ro /mnt
     umount /mnt
