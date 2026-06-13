@@ -205,6 +205,7 @@ test_writethrough()
     umount /mnt
 
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs reset-counters --counters=trans_restart_upgrade ${ktest_scratch_dev[0]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
