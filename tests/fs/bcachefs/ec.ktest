@@ -28,6 +28,8 @@ test_ec_small()
     dd if=/dev/zero of=/mnt/foo bs=1M count=1 oflag=sync
     #disable_memory_faults
 
+    bcachefs scrub /mnt
+
     mount -o remount,ro /mnt
     bcachefs fs usage /mnt
     df -h /mnt
@@ -61,6 +63,10 @@ test_ec_umount()
 	umount /mnt
     done
 
+    mount -t bcachefs $devs /mnt
+    bcachefs scrub /mnt
+    umount /mnt
+
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
     # Test is too short for this to be meaningful:
     bcachefs reset-counters --counters=trans_restart_would_deadlock ${ktest_scratch_dev[0]}
@@ -91,6 +97,7 @@ do_ec_test()
     #disable_memory_faults
 
     bcachefs fs usage -h /mnt
+    bcachefs scrub /mnt
     umount /mnt
     bcachefs fsck -n "${ktest_scratch_dev[@]}"
 
@@ -152,6 +159,44 @@ test_ec_mixed_tiers()
     #disable_memory_faults
 
     bcachefs fs usage -h /mnt
+    bcachefs scrub /mnt
+    umount /mnt
+
+    # test remount:
+    echo "Testing remount"
+    mount -t bcachefs -o fsck $devs /mnt
+    umount /mnt
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_writethrough()
+{
+    set_watchdog 240
+
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--nocow					\
+	--replicas=2				\
+	--label fast				\
+	${ktest_scratch_dev[0]}			\
+	--label slow				\
+	${ktest_scratch_dev[1]}			\
+	${ktest_scratch_dev[2]}			\
+	${ktest_scratch_dev[3]}			\
+	${ktest_scratch_dev[4]}			\
+	--foreground_target=fast		\
+	--promote_target=slow			\
+	--background_target=fast
+
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
+    mount -t bcachefs $devs /mnt
+
+    run_fio_randrw
+
+    bcachefs fs usage -h /mnt
+    bcachefs scrub /mnt
     umount /mnt
 
     # test remount:
@@ -201,6 +246,7 @@ test_ec_gc()
     done
 
     bcachefs fs usage -h /mnt
+    bcachefs scrub /mnt
     umount /mnt
 
     bcachefs fsck -n "${ktest_scratch_dev[@]}"
@@ -226,6 +272,12 @@ do_remove_test()
 	"${ktest_scratch_dev[@]}"
 
     mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+
+    bcachefs device resize-journal ${ktest_scratch_dev[0]} 512M
+    bcachefs device resize-journal ${ktest_scratch_dev[1]} 512M
+    bcachefs device resize-journal ${ktest_scratch_dev[2]} 512M
+    bcachefs device resize-journal ${ktest_scratch_dev[3]} 512M
+    bcachefs device resize-journal ${ktest_scratch_dev[4]} 512M
 
     local fioout="$ktest_out/fio-out"
     run_fio_randrw >"$fioout" 2>&1 &
@@ -258,6 +310,7 @@ do_remove_test()
 	return 1
     fi
 
+    bcachefs scrub /mnt
     umount /mnt
 
     mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
@@ -311,6 +364,7 @@ test_device_failed()
 	return 1
     fi
 
+    bcachefs scrub /mnt
     umount /mnt
 
     mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
@@ -331,6 +385,7 @@ test_ec_bucket_mismatch()
     # Pass conditions: reconcile makes progress (or completes), OR a
     # clear error is surfaced. Watchdog catches the infinite-loop bug.
     set_watchdog 240
+    setup_tracing bcachefs:trans_restart_upgrade bcachefs:transaction_begin
 
     run_quiet "" bcachefs format -f		\
 	--replicas=2				\
@@ -360,6 +415,7 @@ test_ec_bucket_mismatch()
 
     bcachefs fs usage -h /mnt
 
+    bcachefs scrub /mnt
     umount /mnt
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
     # Test is too short for this to be meaningful:
@@ -407,6 +463,10 @@ test_ec_crash_recovery()
 
 	umount /mnt
     done
+
+    mount -t bcachefs $devs /mnt
+    bcachefs scrub /mnt
+    umount /mnt
 
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
