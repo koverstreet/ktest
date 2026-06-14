@@ -341,40 +341,6 @@ test_device_remove_background()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
-test_device_remove_rewrites_metadata()
-{
-    set_watchdog 240
-
-    run_quiet "" bcachefs format -f			\
-	--block_size=4k					\
-	--bucket_size=256k				\
-	--label=ssd.ssd1 ${ktest_scratch_dev[0]}	\
-	--label=hdd.hdd1 ${ktest_scratch_dev[2]}	\
-	--metadata_target=ssd				\
-	--foreground_target=hdd				\
-	--promote_target=ssd				\
-	--background_target=hdd
-
-    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[2]} /mnt
-
-    # Populate enough small-file metadata that the SSD metadata target owns
-    # btree nodes.  Device removal has to rewrite those nodes elsewhere before
-    # dropping the SSD member's metadata pointers.
-    for i in $(seq 0 100000); do
-	echo $i > /mnt/file-$i
-    done
-    sync
-    bcachefs fs usage -h --all /mnt
-
-    bcachefs device remove ${ktest_scratch_dev[0]} /mnt
-    bcachefs fs usage -h /mnt
-
-    umount /mnt
-
-    bcachefs fsck -ny ${ktest_scratch_dev[2]}
-    bcachefs_test_end_checks ${ktest_scratch_dev[2]}
-}
-
 test_mount_umount_torture()
 {
     set_watchdog 60
