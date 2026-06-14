@@ -69,9 +69,13 @@ ktest_build_variant=""
 ktest_build_destdir=""
 
 while getopts "k:Pc:M:KV:D:h${ktest_args}" arg; do
+    parse_shared_arg=true
     case $arg in
 	k)
 	    ktest_kernel_source="$OPTARG"
+	    # build-test-kernel owns -k as "kernel source"; libktest owns -k as
+	    # "prebuilt kernel". Do not feed this one to the shared parser.
+	    parse_shared_arg=false
 	    ;;
 	P)
 	    ktest_precise=true
@@ -106,7 +110,9 @@ while getopts "k:Pc:M:KV:D:h${ktest_args}" arg; do
 	    exit 0
 	    ;;
     esac
-    parse_ktest_arg $arg
+    if $parse_shared_arg; then
+	parse_ktest_arg $arg
+    fi
 done
 shift $(( OPTIND - 1 ))
 
