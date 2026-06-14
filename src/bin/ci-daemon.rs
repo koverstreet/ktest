@@ -15,20 +15,20 @@
 // on branch change (it currently refills only as the window drains).
 
 use anyhow::Result;
+use chrono::Utc;
 use ci_cgi::jobs::{desired_jobs, Job, JobKey};
 use ci_cgi::{
     ciconfig_read, read_test_result, result_basename, subtest_result_key, CiConfig, TestResult,
     TestResultsMap, TestResultsStore, TestStatus,
 };
-use std::sync::Arc;
-use chrono::Utc;
 use clap::Parser;
 use jobkit::{
-    ClaimedJob, Choir, Command, ExecutorConfig, ExecutorHandle, JobId, JobOutcome, JobSpec,
+    Choir, ClaimedJob, Command, ExecutorConfig, ExecutorHandle, JobId, JobOutcome, JobSpec,
     TaskError,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Bounded job window: jobkit never holds much more than this — the
@@ -47,15 +47,22 @@ const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(30 * 60);
 /// ssh calls to one worker share a single connection. BatchMode so a
 /// missing key fails fast instead of hanging on a prompt.
 const SSH_OPTS: &[&str] = &[
-    "-o", "ControlMaster=auto",
-    "-o", "ControlPath=~/.ssh/ci-master-%r@%h:%p",
-    "-o", "ControlPersist=10m",
-    "-o", "ServerAliveInterval=10",
-    "-o", "ConnectTimeout=20",
-    "-o", "BatchMode=yes",
+    "-o",
+    "ControlMaster=auto",
+    "-o",
+    "ControlPath=~/.ssh/ci-master-%r@%h:%p",
+    "-o",
+    "ControlPersist=10m",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ConnectTimeout=20",
+    "-o",
+    "BatchMode=yes",
     // Trust a worker's host key on first contact (the farm is ours);
     // BatchMode can't prompt, so an unknown host would otherwise fail.
-    "-o", "StrictHostKeyChecking=accept-new",
+    "-o",
+    "StrictHostKeyChecking=accept-new",
 ];
 
 #[derive(Parser)]
@@ -168,7 +175,13 @@ fn format_full_log(
 ) -> Vec<u8> {
     let header = format!(
         "# host={} slot={} commit={} kernel={} test={} env={} subtests={}\n",
-        host, slot, p.commit, p.kernel, p.test, p.env, subtests.join(","),
+        host,
+        slot,
+        p.commit,
+        p.kernel,
+        p.test,
+        p.env,
+        subtests.join(","),
     );
     let exec_slice = std::fs::read(exec_log_path)
         .ok()
@@ -183,7 +196,8 @@ fn format_full_log(
         &exec_slice,
         b"\n# --- supervisor full_log ---\n",
         supervisor_body,
-    ].concat()
+    ]
+    .concat()
 }
 
 /// Brotli-compress `path` to `<path>.br` and remove the original — the
@@ -237,9 +251,7 @@ async fn run_ktest_job(
     let exec_log_offset_start = handle.log_offset();
     let exec_log_path = handle.log_path().to_path_buf();
 
-    let result = run_ktest_job_inner(
-        handle, host, slot, &exec_log_path, results, batch,
-    ).await;
+    let result = run_ktest_job_inner(handle, host, slot, &exec_log_path, results, batch).await;
 
     // Drop the worker-side per-batch ktest-tmp dir (scratch devices,
     // sockets, env files). ktest's own EXIT trap usually cleans it
@@ -247,9 +259,9 @@ async fn run_ktest_job(
     // mechanism the /tmp/ktest-* leaks were going through. Always
     // ssh+rm here so the daemon is the source of truth for that dir.
     let ws = format!("ktest-ci/{}", slot);
-    let _ = handle.run_command(
-        ssh_cmd(host, &format!("rm -rf {}/ktest-tmp", ws), false),
-    ).await;
+    let _ = handle
+        .run_command(ssh_cmd(host, &format!("rm -rf {}/ktest-tmp", ws), false))
+        .await;
 
     let p = &batch[0].payload;
     let commit_dir = p.output_dir.join(&p.commit);
@@ -259,30 +271,49 @@ async fn run_ktest_job(
     // full_log written here so the dashboard has something. The
     // executor-log slice from batch start to now captures whatever
     // ssh output we saw.
-    let missing: Vec<&ClaimedJob<JobParams>> = batch.iter().filter(|j| {
-        let key = subtest_result_key(
-            &j.payload.test, &j.payload.subtest, &j.payload.kernel, &j.payload.env,
-        );
-        !commit_dir.join(&key).join("full_log.br").exists()
-    }).collect();
+    let missing: Vec<&ClaimedJob<JobParams>> = batch
+        .iter()
+        .filter(|j| {
+            let key = subtest_result_key(
+                &j.payload.test,
+                &j.payload.subtest,
+                &j.payload.kernel,
+                &j.payload.env,
+            );
+            !commit_dir.join(&key).join("full_log.br").exists()
+        })
+        .collect();
 
     if !missing.is_empty() {
         let content = format_full_log(
-            host, slot, p, &batch.iter().map(|j| j.payload.subtest.as_str())
+            host,
+            slot,
+            p,
+            &batch
+                .iter()
+                .map(|j| j.payload.subtest.as_str())
                 .collect::<Vec<_>>(),
-            &exec_log_path, exec_log_offset_start,
-            &[],  // no supervisor body — inner didn't reach the pull
+            &exec_log_path,
+            exec_log_offset_start,
+            &[], // no supervisor body — inner didn't reach the pull
         );
         for j in missing {
             let key = subtest_result_key(
-                &j.payload.test, &j.payload.subtest, &j.payload.kernel, &j.payload.env,
+                &j.payload.test,
+                &j.payload.subtest,
+                &j.payload.kernel,
+                &j.payload.env,
             );
             let d = commit_dir.join(&key);
             let full_log_path = d.join("full_log");
-            if let Err(e) = std::fs::create_dir_all(&d)
-                .and_then(|()| std::fs::write(&full_log_path, &content))
+            if let Err(e) =
+                std::fs::create_dir_all(&d).and_then(|()| std::fs::write(&full_log_path, &content))
             {
-                handle.log_line(format!("fallback full_log {}: {}", full_log_path.display(), e));
+                handle.log_line(format!(
+                    "fallback full_log {}: {}",
+                    full_log_path.display(),
+                    e
+                ));
                 continue;
             }
             if let Err(e) = brotli_compress(&full_log_path) {
@@ -303,17 +334,23 @@ async fn run_ktest_job(
         let mut updates = TestResultsMap::new();
         for j in batch {
             let key = subtest_result_key(
-                &j.payload.test, &j.payload.subtest, &j.payload.kernel, &j.payload.env,
+                &j.payload.test,
+                &j.payload.subtest,
+                &j.payload.kernel,
+                &j.payload.env,
             );
             if results.lookup(&p.commit, &key) == Some(TestStatus::Inprogress) {
                 let d = commit_dir.join(&key);
                 let _ = std::fs::create_dir_all(&d)
                     .and_then(|()| std::fs::write(d.join("status"), "FAILED TO RUN\n"));
-                updates.insert(key, TestResult {
-                    status: TestStatus::FailedToRun,
-                    starttime: now,
-                    duration: 0,
-                });
+                updates.insert(
+                    key,
+                    TestResult {
+                        status: TestStatus::FailedToRun,
+                        starttime: now,
+                        duration: 0,
+                    },
+                );
             }
         }
         results.update(&p.commit, updates);
@@ -341,8 +378,7 @@ async fn run_ktest_job_inner(
     handle.log_line(format!("=== batch on {}:{} ===", host, slot));
 
     // Subtests still owed a verdict — the whole claimed batch to start.
-    let mut remaining: Vec<String> =
-        batch.iter().map(|j| j.payload.subtest.clone()).collect();
+    let mut remaining: Vec<String> = batch.iter().map(|j| j.payload.subtest.clone()).collect();
 
     // Mark every subtest in-progress immediately: in the store (which
     // is what the cgi reads via the capnp) and in our output_dir
@@ -361,11 +397,14 @@ async fn run_ktest_job_inner(
         {
             handle.log_line(format!("marking {st} in-progress: {e}"));
         }
-        inprogress_map.insert(key, TestResult {
-            status: TestStatus::Inprogress,
-            starttime: now,
-            duration: 0,
-        });
+        inprogress_map.insert(
+            key,
+            TestResult {
+                status: TestStatus::Inprogress,
+                starttime: now,
+                duration: 0,
+            },
+        );
     }
     results.update(&p.commit, inprogress_map);
 
@@ -396,14 +435,21 @@ async fn run_ktest_job_inner(
     run_step(handle, host, &checkout, "checkout").await?;
 
     // 2. Build the supervisor (idempotent C helper).
-    run_step(handle, host, "make -C ~/ktest/lib supervisor", "build supervisor").await?;
+    run_step(
+        handle,
+        host,
+        "make -C ~/ktest/lib supervisor",
+        "build supervisor",
+    )
+    .await?;
 
     // 3. Clean ktest-out (keep the kernel build cache); mark every
     //    subtest in-progress worker-side too so a dead VM still leaves
     //    a status for the supervisor to scan. Once: the resume loop
     //    re-runs only not-completed subtests and must not wipe the
     //    rest's results.
-    let mark = remaining.iter()
+    let mark = remaining
+        .iter()
         .map(|st| {
             let d = subtest_result_key(&p.test, st, &p.kernel, &p.env);
             format!("mkdir -p ktest-out/out/{d}; echo 'IN PROGRESS' > ktest-out/out/{d}/status")
@@ -416,7 +462,8 @@ async fn run_ktest_job_inner(
              find ktest-out -mindepth 1 -maxdepth 1 ! -name 'kernel*' -exec rm -rf {{}} +; \
          fi; \
          {mark}",
-        ws = ws, mark = mark,
+        ws = ws,
+        mark = mark,
     );
     run_step(handle, host, &prepare, "prepare").await?;
 
@@ -437,7 +484,10 @@ async fn run_ktest_job_inner(
         // teardown below catches it even if bash's EXIT trap doesn't
         // fire (SIGKILL, OOM); avoids /tmp/ktest-* leaks.
         let runner = if p.kernel.is_empty() {
-            format!("~/ktest/build-test-kernel run -k {}/{} -T ktest-tmp -P", ws, p.repo)
+            format!(
+                "~/ktest/build-test-kernel run -k {}/{} -T ktest-tmp -P",
+                ws, p.repo
+            )
         } else {
             format!("~/ktest/ktest run -k {} -T ktest-tmp", p.kernel)
         };
@@ -472,18 +522,22 @@ async fn run_ktest_job_inner(
         let run = format!(
             "( {run} ) || {{ echo '=== run failed -- git clean + retry ==='; \
              git -C ~/{ws}/{repo} clean -fdqx; ( {run} ); }}",
-            run = run, ws = ws, repo = p.repo,
+            run = run,
+            ws = ws,
+            repo = p.repo,
         );
         // -tt: force a pty so a dropped ssh hangs up and SIGHUP reaps
         // the supervisor, the kernel build, and the VM together.
-        handle.run_command(ssh_cmd(host, &run, true))
+        handle
+            .run_command(ssh_cmd(host, &run, true))
             .await
             .map_err(|e| TaskError::Retry(format!("running supervisor: {e}")))?;
 
         // 5. Pull the remaining subtests' result dirs back to the
         //    daemon's output_dir.
         handle.log_line("=== pull results ===".to_string());
-        let dirs = remaining.iter()
+        let dirs = remaining
+            .iter()
             .map(|st| subtest_result_key(&p.test, st, &p.kernel, &p.env))
             .collect::<Vec<_>>()
             .join(" ");
@@ -492,7 +546,9 @@ async fn run_ktest_job_inner(
              | tar -x -C {dst}",
             dst = commit_dir.display(),
             opts = SSH_OPTS.join(" "),
-            host = host, ws = ws, dirs = dirs,
+            host = host,
+            ws = ws,
+            dirs = dirs,
         );
         let mut pull_cmd = Command::new("bash");
         pull_cmd.arg("-c").arg(&pull);
@@ -515,7 +571,8 @@ async fn run_ktest_job_inner(
             let _ = std::fs::remove_file(
                 commit_dir
                     .join(subtest_result_key(&p.test, st, &p.kernel, &p.env))
-                    .join("full_log.br"));
+                    .join("full_log.br"),
+            );
         }
 
         // Compose this iter's full_log: batch header + iter slice of
@@ -527,9 +584,12 @@ async fn run_ktest_job_inner(
         let primary_path = primary_dir.join("full_log");
         let supervisor_body = std::fs::read(&primary_path).unwrap_or_default();
         let content = format_full_log(
-            host, slot, p,
+            host,
+            slot,
+            p,
             &remaining.iter().map(String::as_str).collect::<Vec<_>>(),
-            exec_log_path, iter_offset,
+            exec_log_path,
+            iter_offset,
             &supervisor_body,
         );
         if let Err(e) = std::fs::write(&primary_path, &content) {
@@ -591,7 +651,9 @@ async fn run_ktest_job_inner(
         // failure — re-running the same VM the same way won't help.
         if next.len() == remaining.len() {
             return Err(TaskError::Retry(format!(
-                "run completed no subtests: {}", remaining.join(" "))));
+                "run completed no subtests: {}",
+                remaining.join(" ")
+            )));
         }
         remaining = next;
     }
@@ -627,7 +689,11 @@ async fn run_executor(
 fn make_job_spec(rc: &CiConfig, job: &Job) -> JobSpec<JobParams> {
     let k = &job.key;
     let name = format!("{} {} {}", short_commit(&k.commit), k.test, k.subtest);
-    let repo_url = rc.ktest.repo_url(&k.repo).map(String::from).unwrap_or_default();
+    let repo_url = rc
+        .ktest
+        .repo_url(&k.repo)
+        .map(String::from)
+        .unwrap_or_default();
     let params = JobParams {
         repo: k.repo.clone(),
         commit: k.commit.clone(),
@@ -756,7 +822,11 @@ fn prewarm_ssh_masters(rc: &CiConfig) {
     for (host, mut child) in spawned {
         match child.wait() {
             Ok(s) if s.success() => eprintln!("ci-daemon: ssh master to {} ready", host),
-            Ok(s) => eprintln!("ci-daemon: ssh master to {} failed (exit {:?})", host, s.code()),
+            Ok(s) => eprintln!(
+                "ci-daemon: ssh master to {} failed (exit {:?})",
+                host,
+                s.code()
+            ),
             Err(e) => eprintln!("ci-daemon: ssh master to {}: {}", host, e),
         }
     }
@@ -764,12 +834,7 @@ fn prewarm_ssh_masters(rc: &CiConfig) {
 
 /// `git fetch <fetch>` in `path`, then point the local ref
 /// `<user>/<branch>` at the freshly-fetched FETCH_HEAD.
-fn fetch_branch(
-    path: &std::path::Path,
-    user: &str,
-    branch: &str,
-    fetch: &str,
-) -> Result<()> {
+fn fetch_branch(path: &std::path::Path, user: &str, branch: &str, fetch: &str) -> Result<()> {
     let status = std::process::Command::new("git")
         .arg("-C")
         .arg(path)
@@ -801,10 +866,13 @@ fn spawn_repo_fetcher(rc: &CiConfig) {
         let Ok(userconfig) = userconfig else { continue };
         for (branch, bc) in &userconfig.branches {
             match rc.ktest.repo_path(&bc.repo) {
-                Some(path) =>
-                    branches.push((user.clone(), branch.clone(), path.to_path_buf(), bc.fetch.clone())),
-                None =>
-                    eprintln!("ci-daemon: repo-fetcher: no path for repo {}", bc.repo),
+                Some(path) => branches.push((
+                    user.clone(),
+                    branch.clone(),
+                    path.to_path_buf(),
+                    bc.fetch.clone(),
+                )),
+                None => eprintln!("ci-daemon: repo-fetcher: no path for repo {}", bc.repo),
             }
         }
     }

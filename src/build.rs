@@ -5,7 +5,11 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 fn main() {
-    for schema in ["src/testresult.capnp", "src/durations.capnp", "src/branchlog.capnp"] {
+    for schema in [
+        "src/testresult.capnp",
+        "src/durations.capnp",
+        "src/branchlog.capnp",
+    ] {
         println!("cargo:rerun-if-changed={}", schema);
         capnpc::CompilerCommand::new()
             .output_path(".")

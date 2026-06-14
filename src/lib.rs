@@ -130,10 +130,9 @@ pub fn ktestrc_read() -> anyhow::Result<Ktestrc> {
         .map(|dir| dir.join("public_html/ktest-ci.json5"))
         .find(|p| p.exists())
         .context("public_html/ktest-ci.json5 not found above the binary")?;
-    let config = read_to_string(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    let ktestrc: Ktestrc = json_five::from_str(&config)
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let config = read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let ktestrc: Ktestrc =
+        json_five::from_str(&config).with_context(|| format!("parsing {}", path.display()))?;
     Ok(ktestrc)
 }
 
@@ -170,12 +169,12 @@ impl TestStatus {
     pub fn from_str(status: &str) -> TestStatus {
         /* exact inverse of to_str() first - the JSON wire format */
         match status {
-            "In progress"   => return TestStatus::Inprogress,
-            "Passed"        => return TestStatus::Passed,
-            "Failed"        => return TestStatus::Failed,
-            "Not run"       => return TestStatus::Notrun,
+            "In progress" => return TestStatus::Inprogress,
+            "Passed" => return TestStatus::Passed,
+            "Failed" => return TestStatus::Failed,
+            "Not run" => return TestStatus::Notrun,
             "Failed to run" => return TestStatus::FailedToRun,
-            "Unknown"       => return TestStatus::Unknown,
+            "Unknown" => return TestStatus::Unknown,
             _ => {}
         }
 
@@ -262,8 +261,7 @@ impl TestResultsStore {
     /// capnp) doesn't keep showing the cleared status on the dashboard.
     pub fn load(output_dir: PathBuf, clear_failed_to_run: bool) -> Self {
         let drop_status = |s: TestStatus| -> bool {
-            s == TestStatus::Inprogress
-                || (clear_failed_to_run && s == TestStatus::FailedToRun)
+            s == TestStatus::Inprogress || (clear_failed_to_run && s == TestStatus::FailedToRun)
         };
 
         let mut by_commit: HashMap<String, TestResultsMap> = HashMap::new();
@@ -287,20 +285,18 @@ impl TestResultsStore {
                     Some(c) => c.tests,
                     None => continue,
                 };
-                let stale: Vec<String> = m.iter()
+                let stale: Vec<String> = m
+                    .iter()
                     .filter(|(_, r)| drop_status(r.status))
                     .map(|(k, _)| k.clone())
                     .collect();
                 if !stale.is_empty() {
                     for k in &stale {
                         m.remove(k);
-                        let _ = std::fs::remove_dir_all(
-                            output_dir.join(&commit_id).join(k),
-                        );
+                        let _ = std::fs::remove_dir_all(output_dir.join(&commit_id).join(k));
                     }
                     if let Err(e) = results_to_capnp(&output_dir, &commit_id, None, &m) {
-                        eprintln!("TestResultsStore::load: capnp for {}: {:#}",
-                                  commit_id, e);
+                        eprintln!("TestResultsStore::load: capnp for {}: {:#}", commit_id, e);
                     }
                 }
                 if !m.is_empty() {
@@ -473,11 +469,7 @@ pub fn commit_update_results(output_dir: &Path, commit_id: &str) {
         .ok();
 }
 
-pub fn commit_update_results_with_message(
-    output_dir: &Path,
-    commit_id: &str,
-    message: &str,
-) {
+pub fn commit_update_results_with_message(output_dir: &Path, commit_id: &str, message: &str) {
     let results = commitdir_get_results_fs(output_dir, commit_id);
     results_to_capnp(output_dir, commit_id, Some(message), &results)
         .map_err(|e| eprintln!("error generating capnp for {}: {:#}", commit_id, e))
@@ -494,8 +486,11 @@ pub fn cleanup_inprogress_results(output_dir: &Path) {
     let entries = match output_dir.read_dir() {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("cleanup_inprogress_results: reading {}: {}",
-                      output_dir.display(), e);
+            eprintln!(
+                "cleanup_inprogress_results: reading {}: {}",
+                output_dir.display(),
+                e
+            );
             return;
         }
     };
@@ -518,20 +513,24 @@ pub fn cleanup_inprogress_results(output_dir: &Path) {
         };
         let mut deleted = 0;
         for s in subtests.filter_map(|i| i.ok()) {
-            let status = read_to_string(s.path().join("status"))
-                .map(|t| TestStatus::from_str(&t));
+            let status = read_to_string(s.path().join("status")).map(|t| TestStatus::from_str(&t));
             if matches!(status, Ok(TestStatus::Inprogress)) {
                 match std::fs::remove_dir_all(s.path()) {
                     Ok(()) => deleted += 1,
-                    Err(e) => eprintln!("cleanup_inprogress_results: removing {}: {}",
-                                        s.path().display(), e),
+                    Err(e) => eprintln!(
+                        "cleanup_inprogress_results: removing {}: {}",
+                        s.path().display(),
+                        e
+                    ),
                 }
             }
         }
 
         if deleted != 0 {
-            eprintln!("cleanup_inprogress_results: {commit_id}: deleted \
-                       {deleted} stale in-progress result(s)");
+            eprintln!(
+                "cleanup_inprogress_results: {commit_id}: deleted \
+                       {deleted} stale in-progress result(s)"
+            );
             commit_update_results(output_dir, &commit_id);
         }
     }
@@ -561,11 +560,15 @@ fn parse_test_results(f: &[u8]) -> anyhow::Result<CommitResultsCapnp> {
         serialize::read_message_from_flat_slice(&mut &f[..], capnp::message::ReaderOptions::new())?;
     let root = message_reader.get_root::<test_results::Reader>()?;
 
-    let message = root.get_message()
-        .ok().and_then(|s| s.to_string().ok())
+    let message = root
+        .get_message()
+        .ok()
+        .and_then(|s| s.to_string().ok())
         .unwrap_or_default();
-    let commit_id = root.get_commit_id()
-        .ok().and_then(|s| s.to_string().ok())
+    let commit_id = root
+        .get_commit_id()
+        .ok()
+        .and_then(|s| s.to_string().ok())
         .unwrap_or_default();
     let entries = root.get_entries()?;
 
@@ -604,8 +607,10 @@ fn fetch_capnp_cached(
     if let Ok(meta) = std::fs::metadata(&cache_path) {
         if let Ok(mtime) = meta.modified() {
             let dt: DateTime<Utc> = mtime.into();
-            req = req.header("If-Modified-Since",
-                dt.format("%a, %d %b %Y %H:%M:%S GMT").to_string());
+            req = req.header(
+                "If-Modified-Since",
+                dt.format("%a, %d %b %Y %H:%M:%S GMT").to_string(),
+            );
         }
     }
 
@@ -618,7 +623,7 @@ fn fetch_capnp_cached(
             Ok(true)
         }
         404 => Ok(false),
-        s   => anyhow::bail!("HTTP {}: {}", s, url),
+        s => anyhow::bail!("HTTP {}: {}", s, url),
     }
 }
 
@@ -633,7 +638,9 @@ fn prefetch_capnp(base_url: &str, cache_dir: &Path, commit_ids: &[String]) {
     // the rest only fetch if not cached at all.
     const N_FRESH: usize = 5;
 
-    let to_fetch: Vec<(&str, bool)> = commit_ids.iter().enumerate()
+    let to_fetch: Vec<(&str, bool)> = commit_ids
+        .iter()
+        .enumerate()
         .filter_map(|(i, id)| {
             let cache_path = cache_dir.join(format!("{}.capnp", id));
             let cached = cache_path.exists();
@@ -642,14 +649,16 @@ fn prefetch_capnp(base_url: &str, cache_dir: &Path, commit_ids: &[String]) {
                 // Recent: always check (conditional request if cached)
                 Some((id.as_str(), cached))
             } else if cached {
-                None  // Old + cached: skip entirely
+                None // Old + cached: skip entirely
             } else {
-                Some((id.as_str(), false))  // Old + not cached: fetch
+                Some((id.as_str(), false)) // Old + not cached: fetch
             }
         })
         .collect();
 
-    if to_fetch.is_empty() { return; }
+    if to_fetch.is_empty() {
+        return;
+    }
 
     let client = reqwest::blocking::Client::new();
     let n_threads = 8.min(to_fetch.len()).max(1);
@@ -670,14 +679,19 @@ fn prefetch_capnp(base_url: &str, cache_dir: &Path, commit_ids: &[String]) {
 }
 
 fn commit_read_capnp(ktestrc: &Ktestrc, commit_id: &str) -> anyhow::Result<Vec<u8>> {
-    Ok(std::fs::read(ktestrc.output_dir.join(format!("{}.capnp", commit_id)))?)
+    Ok(std::fs::read(
+        ktestrc.output_dir.join(format!("{}.capnp", commit_id)),
+    )?)
 }
 
 pub fn commitdir_get_results(ktestrc: &Ktestrc, commit_id: &str) -> anyhow::Result<TestResultsMap> {
     Ok(parse_test_results(&commit_read_capnp(ktestrc, commit_id)?)?.tests)
 }
 
-pub fn commitdir_get_results_full(ktestrc: &Ktestrc, commit_id: &str) -> anyhow::Result<CommitResultsCapnp> {
+pub fn commitdir_get_results_full(
+    ktestrc: &Ktestrc,
+    commit_id: &str,
+) -> anyhow::Result<CommitResultsCapnp> {
     // For single-commit access, ensure cache is fresh
     if let Some(ref base_url) = ktestrc.ci_url {
         let _ = create_dir_all(&ktestrc.output_dir);
@@ -826,7 +840,11 @@ pub fn subtest_result_key(test: &str, subtest: &str, kernel: &str, env: &str) ->
     // result-dir name. commit_update_results() keys the capnp by dir
     // name, so this key and that name must agree exactly — otherwise
     // desired_jobs() never finds the result and re-runs the job forever.
-    format!("{}.{}", result_basename(test, kernel, env), subtest.replace('/', "."))
+    format!(
+        "{}.{}",
+        result_basename(test, kernel, env),
+        subtest.replace('/', ".")
+    )
 }
 
 /// Wire format for the env column in `jobs.<user>` and the TEST_JOB
@@ -837,8 +855,7 @@ pub fn subtest_result_key(test: &str, subtest: &str, kernel: &str, env: &str) ->
 /// path component.
 pub fn encode_env(env: &std::collections::BTreeMap<String, String>) -> anyhow::Result<String> {
     use anyhow::anyhow;
-    let bad =
-        |s: &str| s.contains(' ') || s.contains('=') || s.contains(',') || s.contains('/');
+    let bad = |s: &str| s.contains(' ') || s.contains('=') || s.contains(',') || s.contains('/');
     let mut parts = Vec::with_capacity(env.len());
     for (k, v) in env {
         if k.is_empty() || bad(k) {
@@ -858,7 +875,10 @@ mod encode_env_tests {
     use std::collections::BTreeMap;
 
     fn m(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
@@ -915,7 +935,12 @@ mod kernel_key_tests {
         // `@` separates from the test prefix; supervisor's
         // `<basename>.<subtest>` layout still slots in cleanly.
         assert_eq!(
-            subtest_result_key("fs/bcachefs/single_device.ktest", "first_thing", "debian/forky", ""),
+            subtest_result_key(
+                "fs/bcachefs/single_device.ktest",
+                "first_thing",
+                "debian/forky",
+                ""
+            ),
             "fs.bcachefs.single_device@debian_forky.first_thing"
         );
         assert_eq!(
@@ -934,7 +959,10 @@ mod kernel_key_tests {
         );
         assert_eq!(
             subtest_result_key(
-                "fs/bcachefs/ec.ktest", "ec", "upstream/stable-default", "ktest_x=1"
+                "fs/bcachefs/ec.ktest",
+                "ec",
+                "upstream/stable-default",
+                "ktest_x=1"
             ),
             "fs.bcachefs.ec@upstream_stable-default@ktest_x=1.ec"
         );
@@ -955,8 +983,13 @@ pub struct TestStats {
 }
 
 use durations_capnp::durations;
-pub fn test_stats(durations: Option<&[u8]>, test: &str, subtest: &str,
-                  kernel: &str, env: &str) -> Option<TestStats> {
+pub fn test_stats(
+    durations: Option<&[u8]>,
+    test: &str,
+    subtest: &str,
+    kernel: &str,
+    env: &str,
+) -> Option<TestStats> {
     if let Some(d) = durations {
         let mut d = d;
 
@@ -1288,7 +1321,15 @@ pub fn branchlog_parse(f: &[u8]) -> anyhow::Result<Vec<BranchEntry>> {
     Ok(result)
 }
 
-pub fn branchlog_get(ktest: &Ktestrc, user: &str, branch: &str) -> anyhow::Result<Vec<BranchEntry>> {
-    let f = std::fs::read(ktest.output_dir.join(format!("branch.{}.{}.capnp", user, branch)))?;
+pub fn branchlog_get(
+    ktest: &Ktestrc,
+    user: &str,
+    branch: &str,
+) -> anyhow::Result<Vec<BranchEntry>> {
+    let f = std::fs::read(
+        ktest
+            .output_dir
+            .join(format!("branch.{}.{}.capnp", user, branch)),
+    )?;
     branchlog_parse(&f)
 }

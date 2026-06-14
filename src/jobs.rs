@@ -71,8 +71,11 @@ fn get_subtests(test_path: PathBuf) -> Vec<String> {
             .map(|s| s.to_string())
             .collect(),
         Ok(o) => {
-            eprintln!("listing subtests of {:?}: list-tests exited {:?}",
-                      test_path, o.status.code());
+            eprintln!(
+                "listing subtests of {:?}: list-tests exited {:?}",
+                test_path,
+                o.status.code()
+            );
             Vec::new()
         }
         Err(e) => {
@@ -107,9 +110,10 @@ fn get_subtests(test_path: PathBuf) -> Vec<String> {
 /// Whitelist, not blacklist: a future TestStatus variant defaults to
 /// "not done" — at worst a wasted re-run, never a silent loss.
 fn result_is_done(status: TestStatus) -> bool {
-    matches!(status,
-             TestStatus::Passed | TestStatus::Failed |
-             TestStatus::Notrun | TestStatus::FailedToRun)
+    matches!(
+        status,
+        TestStatus::Passed | TestStatus::Failed | TestStatus::Notrun | TestStatus::FailedToRun
+    )
 }
 
 /// Whether desired_jobs() should emit a job for a subtest, given its
@@ -296,8 +300,10 @@ pub fn desired_jobs(rc: &CiConfig, results: &TestResultsStore, limit: usize) -> 
                 // gen-job-list did, and summed into the weight. The per-kernel
                 // duration below is only jobkit's batch-sizing cost — it must
                 // not feed the priority ordering.
-                let nice = job_nice(spec.tg,
-                                    test_stats(durations, &spec.test, subtest, "", "").as_ref());
+                let nice = job_nice(
+                    spec.tg,
+                    test_stats(durations, &spec.test, subtest, "", "").as_ref(),
+                );
 
                 for kernel in &spec.kernels {
                     let duration = test_stats(durations, &spec.test, subtest, kernel, &spec.env)
@@ -355,16 +361,16 @@ mod tests {
         assert!(result_is_done(TestStatus::Failed));
         assert!(result_is_done(TestStatus::Notrun));
         assert!(result_is_done(TestStatus::FailedToRun)); // daemon failed to run — terminal
-        // not verdicts — must re-run, not silently "done"
+                                                          // not verdicts — must re-run, not silently "done"
         assert!(!result_is_done(TestStatus::Inprogress)); // still running
-        assert!(!result_is_done(TestStatus::Unknown));    // garbled status
+        assert!(!result_is_done(TestStatus::Unknown)); // garbled status
     }
 
     #[test]
     fn inprogress_is_not_re_emitted() {
-        assert!(job_wanted(None));                          // never run
-        assert!(job_wanted(Some(TestStatus::Unknown)));     // garbled — re-run
-        assert!(!job_wanted(Some(TestStatus::Passed)));     // verdict
+        assert!(job_wanted(None)); // never run
+        assert!(job_wanted(Some(TestStatus::Unknown))); // garbled — re-run
+        assert!(!job_wanted(Some(TestStatus::Passed))); // verdict
         assert!(!job_wanted(Some(TestStatus::Inprogress))); // in flight — don't double-run
     }
 }

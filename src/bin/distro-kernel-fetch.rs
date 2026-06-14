@@ -92,7 +92,8 @@ struct Source {
 }
 
 fn deserialize_repo_url<'de, D>(d: D) -> Result<Vec<String>, D::Error>
-where D: serde::Deserializer<'de>
+where
+    D: serde::Deserializer<'de>,
 {
     #[derive(Deserialize)]
     #[serde(untagged)]
@@ -102,8 +103,9 @@ where D: serde::Deserializer<'de>
     }
     match StringOrList::deserialize(d)? {
         StringOrList::Single(s) => Ok(vec![s]),
-        StringOrList::Multiple(v) if v.is_empty() =>
-            Err(serde::de::Error::custom("repo_url must have at least one entry")),
+        StringOrList::Multiple(v) if v.is_empty() => Err(serde::de::Error::custom(
+            "repo_url must have at least one entry",
+        )),
         StringOrList::Multiple(v) => Ok(v),
     }
 }
@@ -167,13 +169,13 @@ trait DistroFetcher {
 // ============================================================================
 
 fn http_get_bytes(url: &str) -> Result<Vec<u8>> {
-    let resp = reqwest::blocking::get(url)
-        .with_context(|| format!("GET {}", url))?;
+    let resp = reqwest::blocking::get(url).with_context(|| format!("GET {}", url))?;
     let status = resp.status();
     if !status.is_success() {
         bail!("GET {}: HTTP {}", url, status);
     }
-    let bytes = resp.bytes()
+    let bytes = resp
+        .bytes()
         .with_context(|| format!("reading body of {}", url))?;
     Ok(bytes.to_vec())
 }
@@ -260,12 +262,18 @@ fn natural_cmp(a: &str, b: &str) -> Ordering {
                     let (na, ra) = take_digits(a);
                     let (nb, rb) = take_digits(b);
                     match na.cmp(&nb) {
-                        Ordering::Equal => { a = ra; b = rb; }
+                        Ordering::Equal => {
+                            a = ra;
+                            b = rb;
+                        }
                         o => return o,
                     }
                 } else {
                     match ca.cmp(&cb) {
-                        Ordering::Equal => { a = &a[1..]; b = &b[1..]; }
+                        Ordering::Equal => {
+                            a = &a[1..];
+                            b = &b[1..];
+                        }
                         o => return o,
                     }
                 }
@@ -276,7 +284,10 @@ fn natural_cmp(a: &str, b: &str) -> Ordering {
 
 fn take_digits(s: &[u8]) -> (u64, &[u8]) {
     let end = s.iter().take_while(|c| c.is_ascii_digit()).count();
-    let n: u64 = std::str::from_utf8(&s[..end]).unwrap_or("0").parse().unwrap_or(0);
+    let n: u64 = std::str::from_utf8(&s[..end])
+        .unwrap_or("0")
+        .parse()
+        .unwrap_or(0);
     (n, &s[end..])
 }
 
@@ -309,7 +320,10 @@ fn apt_fetch_stanzas(src: &Source) -> Result<Vec<AptStanza>> {
         let text = String::from_utf8(gunzip(&body)?)
             .with_context(|| format!("Packages.gz from {} not UTF-8", url))?;
         for fields in parse_packages(&text) {
-            all.push(AptStanza { repo: repo.clone(), fields });
+            all.push(AptStanza {
+                repo: repo.clone(),
+                fields,
+            });
         }
     }
     Ok(all)
@@ -326,7 +340,11 @@ fn apt_stanza_to_pkgfile(s: &AptStanza) -> Option<PkgFile> {
     let filename = s.fields.get("Filename")?;
     let url = apt_url(&s.repo, filename);
     let sha256 = s.fields.get("SHA256").cloned();
-    Some(PkgFile { url, sha256, role: None })
+    Some(PkgFile {
+        url,
+        sha256,
+        role: None,
+    })
 }
 
 // ----------- Debian -----------
@@ -340,7 +358,9 @@ fn debian_abi_from_image<'a>(name: &'a str, arch: &str) -> Option<&'a str> {
 }
 
 fn debian_is_vanilla_image(name: &str, arch: &str) -> bool {
-    let Some(abi) = debian_abi_from_image(name, arch) else { return false };
+    let Some(abi) = debian_abi_from_image(name, arch) else {
+        return false;
+    };
     abi.chars().next().is_some_and(|c| c.is_ascii_digit())
         && !abi.contains("cloud")
         && !abi.ends_with("-rt")
@@ -384,12 +404,15 @@ fn debian_fixup(extracted: &Path, stage: &Path, version: &str) -> Result<()> {
     }
     if let Some(src) = kbuild_dir {
         let stage_lib = stage.join("lib");
-        fs::create_dir_all(&stage_lib)
-            .with_context(|| format!("mkdir {}", stage_lib.display()))?;
+        fs::create_dir_all(&stage_lib).with_context(|| format!("mkdir {}", stage_lib.display()))?;
         let dst = stage_lib.join(src.file_name().unwrap());
-        rename_or_copy(&src, &dst)
-            .with_context(|| format!("placing linux-kbuild {} -> {}",
-                                     src.display(), dst.display()))?;
+        rename_or_copy(&src, &dst).with_context(|| {
+            format!(
+                "placing linux-kbuild {} -> {}",
+                src.display(),
+                dst.display()
+            )
+        })?;
     } else {
         // Not fatal — older Debian releases (where headers shipped their
         // own scripts) didn't have this split. Pre-forky bookworm/trixie
@@ -416,7 +439,8 @@ fn debian_fixup(extracted: &Path, stage: &Path, version: &str) -> Result<()> {
     // Substitute `/usr/src/` → `$(THIS_DIR)/../` (since the Makefile lives
     // inside one of those /usr/src/linux-headers-<...> dirs, .. takes you
     // up to the equivalent of /usr/src, where the sibling dirs sit).
-    let hdrs_amd64 = stage.join("headers")
+    let hdrs_amd64 = stage
+        .join("headers")
         .join(format!("linux-headers-{}", version));
     let makefile = hdrs_amd64.join("Makefile");
     if makefile.is_file() {
@@ -427,7 +451,8 @@ fn debian_fixup(extracted: &Path, stage: &Path, version: &str) -> Result<()> {
                 "# Rewritten by distro-kernel-fetch — was /usr/src-anchored.\n\
                  THIS_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))\n\
                  {}",
-                text.replace("/usr/src/", "$(THIS_DIR)/../"));
+                text.replace("/usr/src/", "$(THIS_DIR)/../")
+            );
             use std::os::unix::fs::PermissionsExt;
             let mut perms = fs::metadata(&makefile)?.permissions();
             perms.set_mode(perms.mode() | 0o200);
@@ -461,10 +486,14 @@ fn opensuse_fixup(stage: &Path) -> Result<()> {
         Err(_) => return Ok(()),
     };
     let makefile = obj_dir.join("Makefile");
-    if !makefile.is_file() { return Ok(()) }
-    let text = fs::read_to_string(&makefile)
-        .with_context(|| format!("reading {}", makefile.display()))?;
-    if !text.contains("/usr/src/") { return Ok(()) }
+    if !makefile.is_file() {
+        return Ok(());
+    }
+    let text =
+        fs::read_to_string(&makefile).with_context(|| format!("reading {}", makefile.display()))?;
+    if !text.contains("/usr/src/") {
+        return Ok(());
+    }
 
     // The KBUILD_OUTPUT path always names this very directory, so map any
     // `/usr/src/linux-<...>-obj/<arch>/<flavor>` reference to $(THIS_DIR).
@@ -492,8 +521,7 @@ fn opensuse_fixup(stage: &Path) -> Result<()> {
     perms.set_mode(perms.mode() | 0o200);
     fs::set_permissions(&makefile, perms)
         .with_context(|| format!("chmod +w {}", makefile.display()))?;
-    fs::write(&makefile, out)
-        .with_context(|| format!("rewriting {}", makefile.display()))?;
+    fs::write(&makefile, out).with_context(|| format!("rewriting {}", makefile.display()))?;
     Ok(())
 }
 
@@ -501,25 +529,39 @@ struct DebianFetcher;
 impl DistroFetcher for DebianFetcher {
     fn latest_kernels(&self, src: &Source) -> Result<Vec<KernelPkg>> {
         let stanzas = apt_fetch_stanzas(src)?;
-        let by_name: HashMap<&str, &AptStanza> = stanzas.iter()
+        let by_name: HashMap<&str, &AptStanza> = stanzas
+            .iter()
             .filter_map(|s| s.fields.get("Package").map(|n| (n.as_str(), s)))
             .collect();
 
         let mut candidates: Vec<(&str, &str, &str)> = Vec::new();
         for s in &stanzas {
-            let Some(name) = s.fields.get("Package") else { continue };
-            if !debian_is_vanilla_image(name, &src.arch) { continue }
-            let Some(version) = s.fields.get("Version") else { continue };
-            let Some(abi) = debian_abi_from_image(name, &src.arch) else { continue };
+            let Some(name) = s.fields.get("Package") else {
+                continue;
+            };
+            if !debian_is_vanilla_image(name, &src.arch) {
+                continue;
+            }
+            let Some(version) = s.fields.get("Version") else {
+                continue;
+            };
+            let Some(abi) = debian_abi_from_image(name, &src.arch) else {
+                continue;
+            };
             candidates.push((name.as_str(), version.as_str(), abi));
         }
         if candidates.is_empty() {
-            bail!("no kernel-image packages found for {}/{}", src.distro, src.release);
+            bail!(
+                "no kernel-image packages found for {}/{}",
+                src.distro,
+                src.release
+            );
         }
         candidates.sort_by(|a, b| natural_cmp(a.1, b.1));
         let (img_name, _img_ver, abi) = *candidates.last().unwrap();
 
-        let img_stanza = by_name.get(img_name)
+        let img_stanza = by_name
+            .get(img_name)
             .ok_or_else(|| anyhow!("{}: stanza lost", img_name))?;
         let image = apt_stanza_to_pkgfile(img_stanza)
             .ok_or_else(|| anyhow!("{}: no Filename", img_name))?;
@@ -544,13 +586,19 @@ impl DistroFetcher for DebianFetcher {
         //
         // Silently skip any of the binary/modules pair that doesn't exist —
         // pre-forky releases ship them inside linux-image.
-        let arch_hdr   = format!("linux-headers-{}-{}", abi, src.arch);
+        let arch_hdr = format!("linux-headers-{}-{}", abi, src.arch);
         let common_hdr = format!("linux-headers-{}-common", abi);
         let kbuild_pkg = format!("linux-kbuild-{}", abi);
         let binary_pkg = format!("linux-binary-{}-{}", abi, src.arch);
         let modules_pkg = format!("linux-modules-{}-{}", abi, src.arch);
         let mut headers = Vec::new();
-        for hdr in [&arch_hdr, &common_hdr, &kbuild_pkg, &binary_pkg, &modules_pkg] {
+        for hdr in [
+            &arch_hdr,
+            &common_hdr,
+            &kbuild_pkg,
+            &binary_pkg,
+            &modules_pkg,
+        ] {
             if let Some(stanza) = by_name.get(hdr.as_str()) {
                 if let Some(p) = apt_stanza_to_pkgfile(stanza) {
                     headers.push(p);
@@ -586,7 +634,9 @@ fn ubuntu_abi_from_image(name: &str) -> Option<&str> {
 }
 
 fn ubuntu_is_vanilla_image(name: &str) -> bool {
-    let Some(abi) = ubuntu_abi_from_image(name) else { return false };
+    let Some(abi) = ubuntu_abi_from_image(name) else {
+        return false;
+    };
     abi.chars().next().is_some_and(|c| c.is_ascii_digit())
         && !abi.contains("-unsigned")
         && !abi.contains("-dbgsym")
@@ -596,18 +646,29 @@ struct UbuntuFetcher;
 impl DistroFetcher for UbuntuFetcher {
     fn latest_kernels(&self, src: &Source) -> Result<Vec<KernelPkg>> {
         let stanzas = apt_fetch_stanzas(src)?;
-        let by_name: HashMap<&str, &AptStanza> = stanzas.iter()
+        let by_name: HashMap<&str, &AptStanza> = stanzas
+            .iter()
             .filter_map(|s| s.fields.get("Package").map(|n| (n.as_str(), s)))
             .collect();
 
         let mut candidates: Vec<(&str, &str, &str)> = Vec::new();
         for s in &stanzas {
-            let Some(name) = s.fields.get("Package") else { continue };
-            if !ubuntu_is_vanilla_image(name) { continue }
+            let Some(name) = s.fields.get("Package") else {
+                continue;
+            };
+            if !ubuntu_is_vanilla_image(name) {
+                continue;
+            }
             // Filter to Architecture matching src.arch (Ubuntu has -generic on all arches).
-            if s.fields.get("Architecture").map(String::as_str) != Some(src.arch.as_str()) { continue }
-            let Some(version) = s.fields.get("Version") else { continue };
-            let Some(abi) = ubuntu_abi_from_image(name) else { continue };
+            if s.fields.get("Architecture").map(String::as_str) != Some(src.arch.as_str()) {
+                continue;
+            }
+            let Some(version) = s.fields.get("Version") else {
+                continue;
+            };
+            let Some(abi) = ubuntu_abi_from_image(name) else {
+                continue;
+            };
             candidates.push((name.as_str(), version.as_str(), abi));
         }
         if candidates.is_empty() {
@@ -616,7 +677,8 @@ impl DistroFetcher for UbuntuFetcher {
         candidates.sort_by(|a, b| natural_cmp(a.1, b.1));
         let (img_name, _img_ver, abi) = *candidates.last().unwrap();
 
-        let img_stanza = by_name.get(img_name)
+        let img_stanza = by_name
+            .get(img_name)
             .ok_or_else(|| anyhow!("{}: stanza lost", img_name))?;
         let image = apt_stanza_to_pkgfile(img_stanza)
             .ok_or_else(|| anyhow!("{}: no Filename", img_name))?;
@@ -643,15 +705,16 @@ impl DistroFetcher for UbuntuFetcher {
         // Packages list as Architecture: all (linux-riscv-X.Y on amd64,
         // etc.).
         let hdr_suffix = format!("-headers-{}", abi);
-        let flavor_stanza = by_name.get(flavor_hdr.as_str())
+        let flavor_stanza = by_name
+            .get(flavor_hdr.as_str())
             .ok_or_else(|| anyhow!("{}: flavor headers stanza missing", flavor_hdr))?;
-        let flavor_source = flavor_stanza.fields.get("Source")
-            .map(String::as_str);
-        let common_hdrs: Vec<&str> = by_name.iter()
+        let flavor_source = flavor_stanza.fields.get("Source").map(String::as_str);
+        let common_hdrs: Vec<&str> = by_name
+            .iter()
             .filter(|(name, stanza)| {
                 **name != flavor_hdr
-                && name.ends_with(&hdr_suffix)
-                && stanza.fields.get("Source").map(String::as_str) == flavor_source
+                    && name.ends_with(&hdr_suffix)
+                    && stanza.fields.get("Source").map(String::as_str) == flavor_source
             })
             .map(|(name, _)| *name)
             .collect();
@@ -682,7 +745,8 @@ impl DistroFetcher for UbuntuFetcher {
         let lib_rust_suffix = format!("-lib-rust-{}-generic", abi);
         for (name, stanza) in by_name.iter() {
             if name.ends_with(&lib_rust_suffix)
-                && stanza.fields.get("Source").map(String::as_str) == flavor_source {
+                && stanza.fields.get("Source").map(String::as_str) == flavor_source
+            {
                 if let Some(p) = apt_stanza_to_pkgfile(stanza) {
                     headers.push(p);
                 }
@@ -716,9 +780,9 @@ impl DistroFetcher for UbuntuFetcher {
 struct DnfPkg {
     name: String,
     arch: String,
-    version: String,   // <ver>
-    release: String,   // <rel>
-    location: String,  // href, relative to repo_base
+    version: String,  // <ver>
+    release: String,  // <rel>
+    location: String, // href, relative to repo_base
     sha256: Option<String>,
     /// The repo_url this package came from. RHEL-likes have kernel-core
     /// in BaseOS and kernel-devel in AppStream; storing repo_base on each
@@ -758,9 +822,7 @@ fn dnf_fetch_primary_url(repo: &str) -> Result<String> {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) if e.name().as_ref() == b"data" => {
                 for attr in e.attributes().flatten() {
-                    if attr.key.as_ref() == b"type"
-                        && attr.value.as_ref() == b"primary"
-                    {
+                    if attr.key.as_ref() == b"type" && attr.value.as_ref() == b"primary" {
                         in_primary = true;
                     }
                 }
@@ -808,8 +870,10 @@ fn dnf_fetch_packages(repo: &str) -> Result<Vec<DnfPkg>> {
                 match e.name().as_ref() {
                     b"package" => {
                         // Confirm type="rpm".
-                        let is_rpm = e.attributes().flatten().any(|a|
-                            a.key.as_ref() == b"type" && a.value.as_ref() == b"rpm");
+                        let is_rpm = e
+                            .attributes()
+                            .flatten()
+                            .any(|a| a.key.as_ref() == b"type" && a.value.as_ref() == b"rpm");
                         if is_rpm {
                             in_package = true;
                             cur = Some(DnfPkg {
@@ -827,39 +891,41 @@ fn dnf_fetch_packages(repo: &str) -> Result<Vec<DnfPkg>> {
                     b"arch" if in_package => text_target = Some("arch"),
                     b"checksum" if in_package => {
                         // Only capture sha256 — the only one we verify.
-                        let is_sha256 = e.attributes().flatten().any(|a|
-                            a.key.as_ref() == b"type" && a.value.as_ref() == b"sha256");
-                        if is_sha256 { text_target = Some("sha256"); }
-                    }
-                    _ => {}
-                }
-            }
-            Ok(Event::Empty(e)) if in_package => {
-                match e.name().as_ref() {
-                    b"version" => {
-                        if let Some(c) = cur.as_mut() {
-                            for attr in e.attributes().flatten() {
-                                let v = String::from_utf8_lossy(&attr.value).to_string();
-                                match attr.key.as_ref() {
-                                    b"ver" => c.version = v,
-                                    b"rel" => c.release = v,
-                                    _ => {}
-                                }
-                            }
-                        }
-                    }
-                    b"location" => {
-                        if let Some(c) = cur.as_mut() {
-                            for attr in e.attributes().flatten() {
-                                if attr.key.as_ref() == b"href" {
-                                    c.location = String::from_utf8_lossy(&attr.value).to_string();
-                                }
-                            }
+                        let is_sha256 = e
+                            .attributes()
+                            .flatten()
+                            .any(|a| a.key.as_ref() == b"type" && a.value.as_ref() == b"sha256");
+                        if is_sha256 {
+                            text_target = Some("sha256");
                         }
                     }
                     _ => {}
                 }
             }
+            Ok(Event::Empty(e)) if in_package => match e.name().as_ref() {
+                b"version" => {
+                    if let Some(c) = cur.as_mut() {
+                        for attr in e.attributes().flatten() {
+                            let v = String::from_utf8_lossy(&attr.value).to_string();
+                            match attr.key.as_ref() {
+                                b"ver" => c.version = v,
+                                b"rel" => c.release = v,
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                b"location" => {
+                    if let Some(c) = cur.as_mut() {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.as_ref() == b"href" {
+                                c.location = String::from_utf8_lossy(&attr.value).to_string();
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            },
             Ok(Event::Text(t)) => {
                 if let Some(target) = text_target {
                     if let Some(c) = cur.as_mut() {
@@ -877,20 +943,18 @@ fn dnf_fetch_packages(repo: &str) -> Result<Vec<DnfPkg>> {
                 }
                 text_target = None;
             }
-            Ok(Event::End(e)) => {
-                match e.name().as_ref() {
-                    b"package" if in_package => {
-                        if let Some(c) = cur.take() {
-                            if !c.name.is_empty() {
-                                packages.push(c);
-                            }
+            Ok(Event::End(e)) => match e.name().as_ref() {
+                b"package" if in_package => {
+                    if let Some(c) = cur.take() {
+                        if !c.name.is_empty() {
+                            packages.push(c);
                         }
-                        in_package = false;
                     }
-                    b"name" | b"arch" | b"checksum" => text_target = None,
-                    _ => {}
+                    in_package = false;
                 }
-            }
+                b"name" | b"arch" | b"checksum" => text_target = None,
+                _ => {}
+            },
             Ok(Event::Eof) => break,
             Err(e) => bail!("parsing primary.xml: {}", e),
             _ => {}
@@ -932,18 +996,27 @@ fn fetch_dnf_kernel_core_family(src: &Source) -> Result<Vec<KernelPkg>> {
     let image = core.to_pkgfile();
 
     // Collect aux packages at the same version-release.
-    let aux_names = ["kernel-modules-core", "kernel-modules",
-                     "kernel-modules-extra", "kernel-devel"];
+    let aux_names = [
+        "kernel-modules-core",
+        "kernel-modules",
+        "kernel-modules-extra",
+        "kernel-devel",
+    ];
     let mut headers = Vec::new();
     for name in aux_names {
-        if let Some(p) = pkgs.iter().find(|p|
-            p.name == name && p.arch == src.arch && p.full_version() == core_ver)
+        if let Some(p) = pkgs
+            .iter()
+            .find(|p| p.name == name && p.arch == src.arch && p.full_version() == core_ver)
         {
             headers.push(p.to_pkgfile());
         }
     }
     if headers.is_empty() {
-        bail!("no kernel aux packages found at v {} for {}", core_ver, src.distro);
+        bail!(
+            "no kernel aux packages found at v {} for {}",
+            core_ver,
+            src.distro
+        );
     }
 
     Ok(vec![KernelPkg {
@@ -999,24 +1072,27 @@ impl DistroFetcher for SuseFetcher {
         //     different patchlevels (e.g. .21.2 vs kernel-default's .21.3) but
         //     extract to a dir whose name aligns at the SP-release level, so
         //     loose match (latest matching name+arch) is right
-        let tight = ["kernel-default-devel", "kernel-default-base",
-                     "kernel-default-extra"];
+        let tight = [
+            "kernel-default-devel",
+            "kernel-default-base",
+            "kernel-default-extra",
+        ];
         let loose = ["kernel-devel", "kernel-source", "kernel-syms"];
         let mut headers = Vec::new();
         for name in tight {
-            if let Some(p) = pkgs.iter().find(|p|
+            if let Some(p) = pkgs.iter().find(|p| {
                 p.name == name
-                && (p.arch == src.arch || p.arch == "noarch")
-                && p.full_version() == kver)
-            {
+                    && (p.arch == src.arch || p.arch == "noarch")
+                    && p.full_version() == kver
+            }) {
                 headers.push(p.to_pkgfile());
             }
         }
         // Pick the latest matching name+arch (drop the strict version-lock).
         for name in loose {
-            if let Some(p) = pkgs.iter()
-                .filter(|p| p.name == name
-                            && (p.arch == src.arch || p.arch == "noarch"))
+            if let Some(p) = pkgs
+                .iter()
+                .filter(|p| p.name == name && (p.arch == src.arch || p.arch == "noarch"))
                 .max_by(|a, b| natural_cmp(&a.full_version(), &b.full_version()))
             {
                 headers.push(p.to_pkgfile());
@@ -1062,10 +1138,14 @@ fn pacman_fetch_packages(db_url: &str) -> Result<Vec<PacmanPkg>> {
     for entry in archive.entries().context("pacman db: read entries")? {
         let mut entry = entry.context("pacman db: bad entry")?;
         let path = entry.path().context("pacman db: bad entry path")?;
-        if !path.ends_with("desc") { continue }
+        if !path.ends_with("desc") {
+            continue;
+        }
 
         let mut text = String::new();
-        entry.read_to_string(&mut text).context("pacman db: read desc")?;
+        entry
+            .read_to_string(&mut text)
+            .context("pacman db: read desc")?;
         packages.push(parse_pacman_desc(&text));
     }
     Ok(packages.into_iter().flatten().collect())
@@ -1088,7 +1168,9 @@ fn parse_pacman_desc(text: &str) -> Option<PacmanPkg> {
                 _ => "_",
             });
         } else if cur_key.is_some() && !line.is_empty() {
-            if !cur_val.is_empty() { cur_val.push('\n'); }
+            if !cur_val.is_empty() {
+                cur_val.push('\n');
+            }
             cur_val.push_str(line);
         }
     }
@@ -1125,20 +1207,22 @@ impl DistroFetcher for ArchFetcher {
         for repo in &src.repo_url {
             let base = format!("{}/core/os/{}", repo.trim_end_matches('/'), src.arch);
             let db_url = format!("{}/core.db", base);
-            let pkgs = pacman_fetch_packages(&db_url)
-                .with_context(|| format!("fetching {}", db_url))?;
+            let pkgs =
+                pacman_fetch_packages(&db_url).with_context(|| format!("fetching {}", db_url))?;
             for pkg in pkgs {
                 all.push((base.clone(), pkg));
             }
         }
 
         // The plain `linux` package; also pair with `linux-headers`.
-        let (kernel_base, kernel) = all.iter()
+        let (kernel_base, kernel) = all
+            .iter()
             .filter(|(_, p)| p.name == "linux")
             .max_by(|a, b| natural_cmp(&a.1.version, &b.1.version))
             .ok_or_else(|| anyhow!("no `linux` package in any of {:?}", src.repo_url))?;
-        let headers_pkg = all.iter().find(|(_, p)|
-            p.name == "linux-headers" && p.version == kernel.version);
+        let headers_pkg = all
+            .iter()
+            .find(|(_, p)| p.name == "linux-headers" && p.version == kernel.version);
 
         let image = PkgFile {
             url: format!("{}/{}", kernel_base, kernel.filename),
@@ -1214,11 +1298,20 @@ const NIXOS_CACHE_BASE: &str = "https://cache.nixos.org";
 /// The attr is the part before `.<arch>` — caller appends e.g. `.x86_64-linux`.
 fn nixos_jobset_attr(release: &str) -> (String, &'static str) {
     if release == "unstable" {
-        ("unstable".to_string(), "nixpkgs.linuxPackages_latest.kernel")
+        (
+            "unstable".to_string(),
+            "nixpkgs.linuxPackages_latest.kernel",
+        )
     } else if let Some(rel) = release.strip_suffix("-latest") {
-        (format!("release-{}", rel), "nixpkgs.linuxPackages_latest.kernel")
+        (
+            format!("release-{}", rel),
+            "nixpkgs.linuxPackages_latest.kernel",
+        )
     } else {
-        (format!("release-{}", release), "nixpkgs.linuxPackages.kernel")
+        (
+            format!("release-{}", release),
+            "nixpkgs.linuxPackages.kernel",
+        )
     }
 }
 
@@ -1226,16 +1319,19 @@ fn nixos_jobset_attr(release: &str) -> (String, &'static str) {
 /// uses "x86_64-linux" / "aarch64-linux". Map.
 fn nixos_hydra_arch(arch: &str) -> Result<&'static str> {
     match arch {
-        "x86_64"  => Ok("x86_64-linux"),
+        "x86_64" => Ok("x86_64-linux"),
         "aarch64" => Ok("aarch64-linux"),
-        a => bail!("nixos: unsupported arch `{}` (expected x86_64 or aarch64)", a),
+        a => bail!(
+            "nixos: unsupported arch `{}` (expected x86_64 or aarch64)",
+            a
+        ),
     }
 }
 
 #[derive(Debug)]
 struct HydraOutputs {
-    nixname: String,    // e.g. "linux-7.0.5"
-    out_path: String,   // /nix/store/<hash>-linux-X.Y.Z
+    nixname: String,  // e.g. "linux-7.0.5"
+    out_path: String, // /nix/store/<hash>-linux-X.Y.Z
     modules_path: String,
     dev_path: String,
 }
@@ -1244,35 +1340,42 @@ struct HydraOutputs {
 /// redirects /job/nixos/trunk-combined/* → /job/nixos/unstable/*. We rely on
 /// the default redirect policy and add an explicit Accept header.
 fn nixos_fetch_hydra(jobset: &str, attr: &str, hydra_arch: &str) -> Result<HydraOutputs> {
-    let url = format!("{}/job/nixos/{}/{}.{}/latest-finished",
-                      NIXOS_HYDRA_BASE, jobset, attr, hydra_arch);
+    let url = format!(
+        "{}/job/nixos/{}/{}.{}/latest-finished",
+        NIXOS_HYDRA_BASE, jobset, attr, hydra_arch
+    );
     let client = reqwest::blocking::Client::builder()
         .build()
         .context("building reqwest client")?;
-    let resp = client.get(&url)
+    let resp = client
+        .get(&url)
         .header("Accept", "application/json")
         .send()
         .with_context(|| format!("GET {}", url))?;
     if !resp.status().is_success() {
         bail!("Hydra GET {}: HTTP {}", url, resp.status());
     }
-    let body = resp.bytes()
+    let body = resp
+        .bytes()
         .with_context(|| format!("reading Hydra body from {}", url))?;
     let v: serde_json::Value = serde_json::from_slice(&body)
         .with_context(|| format!("parsing Hydra JSON from {}", url))?;
-    let nixname = v["nixname"].as_str()
-        .ok_or_else(|| anyhow!("{}: missing nixname", url))?.to_string();
+    let nixname = v["nixname"]
+        .as_str()
+        .ok_or_else(|| anyhow!("{}: missing nixname", url))?
+        .to_string();
     let outputs = &v["buildoutputs"];
     let read = |key: &str| -> Result<String> {
-        outputs[key]["path"].as_str()
+        outputs[key]["path"]
+            .as_str()
             .map(str::to_string)
             .ok_or_else(|| anyhow!("{}: missing buildoutputs.{}.path", url, key))
     };
     Ok(HydraOutputs {
         nixname,
-        out_path:     read("out")?,
+        out_path: read("out")?,
         modules_path: read("modules")?,
-        dev_path:     read("dev")?,
+        dev_path: read("dev")?,
     })
 }
 
@@ -1292,13 +1395,13 @@ struct NarInfo {
 /// trust HTTPS-to-cache.nixos.org for integrity. The existing PkgFile.sha256
 /// is therefore None for nixos.
 fn nixos_fetch_narinfo(store_path: &str) -> Result<NarInfo> {
-    let hash = store_path.strip_prefix("/nix/store/")
+    let hash = store_path
+        .strip_prefix("/nix/store/")
         .and_then(|s| s.split('-').next())
         .ok_or_else(|| anyhow!("malformed store path: {}", store_path))?;
     let url = format!("{}/{}.narinfo", NIXOS_CACHE_BASE, hash);
     let bytes = http_get_bytes(&url)?;
-    let text = std::str::from_utf8(&bytes)
-        .with_context(|| format!("narinfo {}: not utf8", url))?;
+    let text = std::str::from_utf8(&bytes).with_context(|| format!("narinfo {}: not utf8", url))?;
     let mut nar_url: Option<String> = None;
     for line in text.lines() {
         if let Some(v) = line.strip_prefix("URL: ") {
@@ -1326,17 +1429,19 @@ fn nixos_extract_and_layout(
     // 1. Index by role and extract.
     let mut role_dir: HashMap<String, PathBuf> = HashMap::new();
     for (file, path) in downloaded {
-        let role = file.role.as_deref()
+        let role = file
+            .role
+            .as_deref()
             .ok_or_else(|| anyhow!("nixos: PkgFile {} missing role", file.url))?;
         let dst = extracted.join(role);
         // nix-nar's Decoder::unpack refuses to write into an existing
         // directory — it wants to mkdir it. Don't pre-create.
-        extract_nar_xz(path, &dst)
-            .with_context(|| format!("extracting nixos {} NAR", role))?;
+        extract_nar_xz(path, &dst).with_context(|| format!("extracting nixos {} NAR", role))?;
         role_dir.insert(role.to_string(), dst);
     }
     let get = |r: &str| -> Result<&Path> {
-        role_dir.get(r)
+        role_dir
+            .get(r)
             .map(PathBuf::as_path)
             .ok_or_else(|| anyhow!("nixos: missing `{}` role in downloads", r))
     };
@@ -1347,16 +1452,18 @@ fn nixos_extract_and_layout(
     //    handles both name forms.
     let vmlinuz = find_vmlinuz(out)
         .with_context(|| format!("locating vmlinuz in nixos `out` ({})", out.display()))?;
-    rename_or_copy(&vmlinuz, &stage.join("vmlinuz"))
-        .context("placing nixos vmlinuz")?;
+    rename_or_copy(&vmlinuz, &stage.join("vmlinuz")).context("placing nixos vmlinuz")?;
 
     // 3. Place modules tree. The dangling symlinks `build` and `source`
     //    inside lib/modules/<v>/ point into /nix/store; remove them before
     //    moving so we can drop the real headers tree at build/ in step 4.
     let mods_src = modules.join("lib").join("modules").join(version);
     if !mods_src.is_dir() {
-        bail!("nixos modules NAR missing lib/modules/{} at {}",
-              version, modules.display());
+        bail!(
+            "nixos modules NAR missing lib/modules/{} at {}",
+            version,
+            modules.display()
+        );
     }
     for stale in ["build", "source"] {
         let p = mods_src.join(stale);
@@ -1370,8 +1477,7 @@ fn nixos_extract_and_layout(
     }
     let mods_dst = stage.join("lib").join("modules").join(version);
     fs::create_dir_all(mods_dst.parent().unwrap())?;
-    rename_or_copy(&mods_src, &mods_dst)
-        .context("placing nixos modules")?;
+    rename_or_copy(&mods_src, &mods_dst).context("placing nixos modules")?;
 
     // 4. Place the build (and source) trees from the dev NAR. nixpkgs's
     //    dev output lays its content out at
@@ -1385,12 +1491,17 @@ fn nixos_extract_and_layout(
     //    nix-support is just a propagated-build-inputs marker.)
     let dev_inner = dev.join("lib").join("modules").join(version);
     if !dev_inner.is_dir() {
-        bail!("nixos dev NAR missing lib/modules/{} at {}",
-              version, dev.display());
+        bail!(
+            "nixos dev NAR missing lib/modules/{} at {}",
+            version,
+            dev.display()
+        );
     }
     for kind in ["build", "source"] {
         let src = dev_inner.join(kind);
-        if !src.exists() { continue }
+        if !src.exists() {
+            continue;
+        }
         let dst = mods_dst.join(kind);
         rename_or_copy(&src, &dst)
             .with_context(|| format!("placing nixos kernel.dev `{}` tree", kind))?;
@@ -1400,8 +1511,11 @@ fn nixos_extract_and_layout(
     let bd = mods_dst.join("build");
     for required in ["Makefile", "Module.symvers"] {
         if !bd.join(required).exists() {
-            bail!("nixos kernel.dev didn't yield {}/{} — layout changed?",
-                  bd.display(), required);
+            bail!(
+                "nixos kernel.dev didn't yield {}/{} — layout changed?",
+                bd.display(),
+                required
+            );
         }
     }
 
@@ -1428,7 +1542,8 @@ include $(THIS_DIR)/../source/Makefile
         // regular files). Bump +w before writing.
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&stub)
-            .with_context(|| format!("stat {}", stub.display()))?.permissions();
+            .with_context(|| format!("stat {}", stub.display()))?
+            .permissions();
         perms.set_mode(perms.mode() | 0o200);
         fs::set_permissions(&stub, perms)
             .with_context(|| format!("chmod +w {}", stub.display()))?;
@@ -1440,8 +1555,7 @@ include $(THIS_DIR)/../source/Makefile
     //    patchelf any ELF interpreters. Without this, `make modules` fails
     //    on the first script (e.g. scripts/pahole-version.sh) or pre-built
     //    binary (e.g. tools/objtool/objtool).
-    nixos_denixify_tree(&mods_dst)
-        .context("de-nixifying kernel.dev tree")?;
+    nixos_denixify_tree(&mods_dst).context("de-nixifying kernel.dev tree")?;
 
     // 6. Standard uniform build symlink — relative path into our own tree.
     create_build_symlink(stage, version)?;
@@ -1462,8 +1576,10 @@ fn nixos_denixify_tree(root: &Path) -> Result<()> {
     // tree and fail in the middle.
     let pe_check = Command::new("patchelf").arg("--version").output();
     if pe_check.is_err() || !pe_check.unwrap().status.success() {
-        bail!("nixos kernel.dev fixup requires `patchelf` on PATH \
-               (install via `apt install patchelf` / `dnf install patchelf`)");
+        bail!(
+            "nixos kernel.dev fixup requires `patchelf` on PATH \
+               (install via `apt install patchelf` / `dnf install patchelf`)"
+        );
     }
 
     // Canonical paths of the host's glibc dynamic linker, keyed by
@@ -1471,30 +1587,41 @@ fn nixos_denixify_tree(root: &Path) -> Result<()> {
     // whatever ld.so the host has — that's what dkms-built userspace
     // helpers (fixdep, modpost, ...) would use anyway.
     let ldso_candidates: &[&str] = match std::env::consts::ARCH {
-        "x86_64"  => &["/lib64/ld-linux-x86-64.so.2", "/lib/ld-linux-x86-64.so.2"],
+        "x86_64" => &["/lib64/ld-linux-x86-64.so.2", "/lib/ld-linux-x86-64.so.2"],
         "aarch64" => &["/lib/ld-linux-aarch64.so.1"],
         "riscv64" => &["/lib/ld-linux-riscv64-lp64d.so.1"],
-        other     => bail!("no host glibc ld.so candidates known for arch {}", other),
+        other => bail!("no host glibc ld.so candidates known for arch {}", other),
     };
-    let host_ldso = ldso_candidates.iter().map(Path::new).find(|p| p.exists())
-        .ok_or_else(|| anyhow!("no glibc dynamic linker on this host (tried {:?})",
-                               ldso_candidates))?;
+    let host_ldso = ldso_candidates
+        .iter()
+        .map(Path::new)
+        .find(|p| p.exists())
+        .ok_or_else(|| {
+            anyhow!(
+                "no glibc dynamic linker on this host (tried {:?})",
+                ldso_candidates
+            )
+        })?;
 
     let mut shebangs_patched = 0usize;
     let mut elfs_patched = 0usize;
 
     for entry in walkdir::WalkDir::new(root).follow_links(false) {
         let entry = entry.context("walking tree for de-nixify")?;
-        if !entry.file_type().is_file() { continue }
+        if !entry.file_type().is_file() {
+            continue;
+        }
         let path = entry.path();
 
         // Peek the first few bytes. ELF magic = "\x7fELF"; shebang = "#!".
         let mut hdr = [0u8; 4];
         let n = match fs::File::open(path).and_then(|mut f| std::io::Read::read(&mut f, &mut hdr)) {
             Ok(n) => n,
-            Err(_) => continue,  // unreadable file — leave it alone
+            Err(_) => continue, // unreadable file — leave it alone
         };
-        if n < 2 { continue }
+        if n < 2 {
+            continue;
+        }
 
         let ensure_writable = |p: &Path| -> Result<()> {
             let mut perms = fs::metadata(p)?.permissions();
@@ -1509,13 +1636,15 @@ fn nixos_denixify_tree(root: &Path) -> Result<()> {
             // Shebang: read first line, check for /nix/store prefix, rewrite.
             let text = match fs::read_to_string(path) {
                 Ok(t) => t,
-                Err(_) => continue,  // binary with #! prefix coincidence? leave.
+                Err(_) => continue, // binary with #! prefix coincidence? leave.
             };
             let (first, rest) = match text.split_once('\n') {
                 Some(pair) => pair,
-                None       => (text.as_str(), ""),
+                None => (text.as_str(), ""),
             };
-            if !first.starts_with("#!/nix/store/") { continue }
+            if !first.starts_with("#!/nix/store/") {
+                continue;
+            }
             // The path after #! is `/nix/store/<hash>-<pkg>/bin/<binary>` plus
             // optional args. Pick the binary name and route through /usr/bin/env
             // — bash, perl, python3 all live in different places across distros;
@@ -1524,9 +1653,10 @@ fn nixos_denixify_tree(root: &Path) -> Result<()> {
             let cmd_line = first.trim_start_matches("#!").trim();
             let (interp_path, args) = match cmd_line.split_once(char::is_whitespace) {
                 Some((p, a)) => (p, a.trim()),
-                None         => (cmd_line, ""),
+                None => (cmd_line, ""),
             };
-            let binary = Path::new(interp_path).file_name()
+            let binary = Path::new(interp_path)
+                .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("sh");
             let new_first = if args.is_empty() {
@@ -1536,8 +1666,7 @@ fn nixos_denixify_tree(root: &Path) -> Result<()> {
                 // we conservatively pass through for shells that ignore extras.
                 format!("#!/usr/bin/env -S {} {}", binary, args)
             };
-            ensure_writable(path)
-                .with_context(|| format!("chmod +w {}", path.display()))?;
+            ensure_writable(path).with_context(|| format!("chmod +w {}", path.display()))?;
             let new_text = format!("{}\n{}", new_first, rest);
             fs::write(path, new_text)
                 .with_context(|| format!("rewriting shebang in {}", path.display()))?;
@@ -1549,24 +1678,26 @@ fn nixos_denixify_tree(root: &Path) -> Result<()> {
             // Ask patchelf what the current interpreter is. If it's not a
             // /nix/store path, no work to do (some .o files have no INTERP).
             let out = Command::new("patchelf")
-                .args(["--print-interpreter"]).arg(path)
+                .args(["--print-interpreter"])
+                .arg(path)
                 .output()
-                .with_context(|| format!("patchelf --print-interpreter {}",
-                                         path.display()))?;
-            if !out.status.success() { continue }
+                .with_context(|| format!("patchelf --print-interpreter {}", path.display()))?;
+            if !out.status.success() {
+                continue;
+            }
             let interp = String::from_utf8_lossy(&out.stdout);
             let interp = interp.trim();
-            if !interp.starts_with("/nix/store/") { continue }
+            if !interp.starts_with("/nix/store/") {
+                continue;
+            }
 
-            ensure_writable(path)
-                .with_context(|| format!("chmod +w {}", path.display()))?;
+            ensure_writable(path).with_context(|| format!("chmod +w {}", path.display()))?;
             let status = Command::new("patchelf")
                 .args(["--set-interpreter"])
                 .arg(host_ldso)
                 .arg(path)
                 .status()
-                .with_context(|| format!("patchelf --set-interpreter on {}",
-                                         path.display()))?;
+                .with_context(|| format!("patchelf --set-interpreter on {}", path.display()))?;
             if !status.success() {
                 bail!("patchelf failed on {}: exit {}", path.display(), status);
             }
@@ -1575,8 +1706,10 @@ fn nixos_denixify_tree(root: &Path) -> Result<()> {
     }
 
     if shebangs_patched + elfs_patched > 0 {
-        eprintln!("    de-nixify: rewrote {} shebangs, patched {} ELF interpreters",
-                  shebangs_patched, elfs_patched);
+        eprintln!(
+            "    de-nixify: rewrote {} shebangs, patched {} ELF interpreters",
+            shebangs_patched, elfs_patched
+        );
     }
     Ok(())
 }
@@ -1590,9 +1723,15 @@ impl DistroFetcher for NixosFetcher {
             .with_context(|| format!("Hydra lookup for nixos/{}", src.release))?;
 
         // nixname is "linux-X.Y.Z"; uname -r inside the booted kernel is "X.Y.Z".
-        let version = outs.nixname.strip_prefix("linux-")
-            .ok_or_else(|| anyhow!("unexpected nixname `{}` (expected linux-X.Y.Z)",
-                                   outs.nixname))?
+        let version = outs
+            .nixname
+            .strip_prefix("linux-")
+            .ok_or_else(|| {
+                anyhow!(
+                    "unexpected nixname `{}` (expected linux-X.Y.Z)",
+                    outs.nixname
+                )
+            })?
             .to_string();
 
         let out_nar = nixos_fetch_narinfo(&outs.out_path)?;
@@ -1610,11 +1749,8 @@ impl DistroFetcher for NixosFetcher {
             release: src.release.clone(),
             arch: src.arch.clone(),
             version,
-            image:   tag(out_nar, "out"),
-            headers: vec![
-                tag(modules_nar, "modules"),
-                tag(dev_nar, "dev"),
-            ],
+            image: tag(out_nar, "out"),
+            headers: vec![tag(modules_nar, "modules"), tag(dev_nar, "dev")],
         }])
     }
 }
@@ -1625,15 +1761,13 @@ impl DistroFetcher for NixosFetcher {
 
 fn fetcher_for(distro: &str) -> Result<Box<dyn DistroFetcher>> {
     match distro {
-        "debian"    => Ok(Box::new(DebianFetcher)),
-        "ubuntu"    => Ok(Box::new(UbuntuFetcher)),
-        "fedora"    => Ok(Box::new(FedoraFetcher)),
-        "centos" | "rhel" | "rocky" | "alma"
-                    => Ok(Box::new(CentosFetcher)),
-        "opensuse" | "suse"
-                    => Ok(Box::new(SuseFetcher)),
-        "arch"      => Ok(Box::new(ArchFetcher)),
-        "nixos"     => Ok(Box::new(NixosFetcher)),
+        "debian" => Ok(Box::new(DebianFetcher)),
+        "ubuntu" => Ok(Box::new(UbuntuFetcher)),
+        "fedora" => Ok(Box::new(FedoraFetcher)),
+        "centos" | "rhel" | "rocky" | "alma" => Ok(Box::new(CentosFetcher)),
+        "opensuse" | "suse" => Ok(Box::new(SuseFetcher)),
+        "arch" => Ok(Box::new(ArchFetcher)),
+        "nixos" => Ok(Box::new(NixosFetcher)),
         d => Err(anyhow!("unsupported distro: {}", d)),
     }
 }
@@ -1649,7 +1783,10 @@ fn source_dir(output: &Path, pkg: &KernelPkg) -> PathBuf {
 }
 
 fn already_have(output: &Path, pkg: &KernelPkg) -> bool {
-    source_dir(output, pkg).join(&pkg.version).join("manifest.json").exists()
+    source_dir(output, pkg)
+        .join(&pkg.version)
+        .join("manifest.json")
+        .exists()
 }
 
 /// Delete every version subdirectory under the source dir except `keep`.
@@ -1663,12 +1800,15 @@ fn prune_older_versions(src_dir: &Path, keep: &str) -> Result<()> {
     for entry in entries {
         let entry = entry?;
         let name = entry.file_name();
-        if name == keep { continue }
+        if name == keep {
+            continue;
+        }
         let path = entry.path();
         // Skip files (e.g. `_work` doesn't live here, but be defensive).
-        if !path.is_dir() { continue }
-        fs::remove_dir_all(&path)
-            .with_context(|| format!("pruning {}", path.display()))?;
+        if !path.is_dir() {
+            continue;
+        }
+        fs::remove_dir_all(&path).with_context(|| format!("pruning {}", path.display()))?;
     }
     Ok(())
 }
@@ -1686,20 +1826,18 @@ fn prune_older_versions(src_dir: &Path, keep: &str) -> Result<()> {
 // ============================================================================
 
 fn download_to(url: &str, dst: &Path) -> Result<()> {
-    let mut resp = reqwest::blocking::get(url)
-        .with_context(|| format!("GET {}", url))?;
+    let mut resp = reqwest::blocking::get(url).with_context(|| format!("GET {}", url))?;
     if !resp.status().is_success() {
         bail!("GET {}: HTTP {}", url, resp.status());
     }
-    let mut out = fs::File::create(dst)
-        .with_context(|| format!("creating {}", dst.display()))?;
-    std::io::copy(&mut resp, &mut out)
-        .with_context(|| format!("downloading {}", url))?;
+    let mut out = fs::File::create(dst).with_context(|| format!("creating {}", dst.display()))?;
+    std::io::copy(&mut resp, &mut out).with_context(|| format!("downloading {}", url))?;
     Ok(())
 }
 
 fn run_extractor(mut cmd: Command, what: &str) -> Result<()> {
-    let status = cmd.status()
+    let status = cmd
+        .status()
         .with_context(|| format!("spawning extractor for {}", what))?;
     if !status.success() {
         bail!("extractor failed on {}: exit {}", what, status);
@@ -1708,7 +1846,8 @@ fn run_extractor(mut cmd: Command, what: &str) -> Result<()> {
 }
 
 fn extract_archive(archive: &Path, dst: &Path) -> Result<()> {
-    let fname = archive.file_name()
+    let fname = archive
+        .file_name()
         .and_then(|f| f.to_str())
         .ok_or_else(|| anyhow!("bad archive path: {}", archive.display()))?;
     let a = archive.to_str().unwrap();
@@ -1726,7 +1865,9 @@ fn extract_archive(archive: &Path, dst: &Path) -> Result<()> {
             .stdout(Stdio::piped())
             .spawn()
             .with_context(|| format!("spawning rpm2cpio on {}", fname))?;
-        let stdout = r2c.stdout.take()
+        let stdout = r2c
+            .stdout
+            .take()
             .ok_or_else(|| anyhow!("rpm2cpio: no stdout"))?;
         let cpio_status = Command::new("cpio")
             .args(["-idm", "--quiet"])
@@ -1766,16 +1907,14 @@ fn extract_archive(archive: &Path, dst: &Path) -> Result<()> {
 /// under it). Compared to the deb/rpm/tar branches we don't shell out: xz
 /// and NAR are both in-process via crates.
 fn extract_nar_xz(archive: &Path, dst: &Path) -> Result<()> {
-    let xz_bytes = fs::read(archive)
-        .with_context(|| format!("reading {}", archive.display()))?;
+    let xz_bytes = fs::read(archive).with_context(|| format!("reading {}", archive.display()))?;
     let mut nar_bytes = Vec::with_capacity(xz_bytes.len() * 4);
     lzma_rs::xz_decompress(&mut std::io::Cursor::new(&xz_bytes), &mut nar_bytes)
         .with_context(|| format!("xz-decompressing {}", archive.display()))?;
     let dec = nix_nar::Decoder::new(std::io::Cursor::new(&nar_bytes))
         .with_context(|| format!("opening NAR {}", archive.display()))?;
     dec.unpack(dst)
-        .with_context(|| format!("unpacking NAR {} -> {}",
-                                 archive.display(), dst.display()))?;
+        .with_context(|| format!("unpacking NAR {} -> {}", archive.display(), dst.display()))?;
     Ok(())
 }
 
@@ -1787,15 +1926,23 @@ fn find_vmlinuz(root: &Path) -> Result<PathBuf> {
     let mut best: Option<(PathBuf, u64)> = None;
     for entry in walkdir::WalkDir::new(root).follow_links(false) {
         let entry = entry.context("walking for vmlinuz")?;
-        if !entry.file_type().is_file() { continue }
+        if !entry.file_type().is_file() {
+            continue;
+        }
         let name = entry.file_name().to_string_lossy();
         let is_image = name.starts_with("vmlinuz")
             || name.starts_with("bzImage")
-            || name == "Image" || name.starts_with("Image.")
-            || name == "zImage" || name.starts_with("zImage.");
-        if !is_image { continue }
+            || name == "Image"
+            || name.starts_with("Image.")
+            || name == "zImage"
+            || name.starts_with("zImage.");
+        if !is_image {
+            continue;
+        }
         let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-        if size < 1024 * 1024 { continue }
+        if size < 1024 * 1024 {
+            continue;
+        }
         if best.as_ref().map(|(_, s)| size > *s).unwrap_or(true) {
             best = Some((entry.path().to_path_buf(), size));
         }
@@ -1809,12 +1956,17 @@ fn find_vmlinuz(root: &Path) -> Result<PathBuf> {
 fn find_modules_dir(root: &Path) -> Result<PathBuf> {
     for entry in walkdir::WalkDir::new(root).follow_links(false) {
         let entry = entry.context("walking for modules dir")?;
-        if !entry.file_type().is_dir() { continue }
+        if !entry.file_type().is_dir() {
+            continue;
+        }
         let path = entry.path();
-        let parent_name = path.parent()
+        let parent_name = path
+            .parent()
             .and_then(|p| p.file_name())
             .and_then(|f| f.to_str());
-        if parent_name != Some("modules") { continue }
+        if parent_name != Some("modules") {
+            continue;
+        }
         if path.join("modules.order").exists() || path.join("kernel").is_dir() {
             return Ok(path.to_path_buf());
         }
@@ -1825,33 +1977,32 @@ fn find_modules_dir(root: &Path) -> Result<PathBuf> {
 /// Move src into dst. If they're on different filesystems, fall back to
 /// recursive copy + remove.
 fn rename_or_copy(src: &Path, dst: &Path) -> Result<()> {
-    if fs::rename(src, dst).is_ok() { return Ok(()); }
+    if fs::rename(src, dst).is_ok() {
+        return Ok(());
+    }
     copy_dir_recursive(src, dst)?;
     fs::remove_dir_all(src).ok();
     Ok(())
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
-    fs::create_dir_all(dst)
-        .with_context(|| format!("mkdir {}", dst.display()))?;
-    for entry in fs::read_dir(src)
-        .with_context(|| format!("read_dir {}", src.display()))?
-    {
+    fs::create_dir_all(dst).with_context(|| format!("mkdir {}", dst.display()))?;
+    for entry in fs::read_dir(src).with_context(|| format!("read_dir {}", src.display()))? {
         let entry = entry?;
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
         let ft = entry.file_type()?;
         if ft.is_symlink() {
             let target = fs::read_link(&src_path)?;
-            std::os::unix::fs::symlink(&target, &dst_path)
-                .with_context(|| format!("symlink {} -> {}",
-                                         dst_path.display(), target.display()))?;
+            std::os::unix::fs::symlink(&target, &dst_path).with_context(|| {
+                format!("symlink {} -> {}", dst_path.display(), target.display())
+            })?;
         } else if ft.is_dir() {
             copy_dir_recursive(&src_path, &dst_path)?;
         } else {
-            fs::copy(&src_path, &dst_path)
-                .with_context(|| format!("copy {} -> {}",
-                                         src_path.display(), dst_path.display()))?;
+            fs::copy(&src_path, &dst_path).with_context(|| {
+                format!("copy {} -> {}", src_path.display(), dst_path.display())
+            })?;
         }
     }
     Ok(())
@@ -1872,9 +2023,16 @@ fn collect_headers(extracted: &Path, stage: &Path, uname_r: &str) -> Result<()> 
             .with_context(|| format!("collecting headers from {}", usrsrc.display()))?;
         return Ok(());
     }
-    let modules_build = stage.join("lib").join("modules").join(uname_r).join("build");
+    let modules_build = stage
+        .join("lib")
+        .join("modules")
+        .join(uname_r)
+        .join("build");
     if modules_build.is_dir() {
-        let target = PathBuf::from("lib").join("modules").join(uname_r).join("build");
+        let target = PathBuf::from("lib")
+            .join("modules")
+            .join(uname_r)
+            .join("build");
         std::os::unix::fs::symlink(&target, &dst_headers)
             .with_context(|| format!("symlinking headers -> {}", target.display()))?;
         return Ok(());
@@ -1893,8 +2051,7 @@ fn write_manifest(stage: &Path, pkg: &KernelPkg) -> Result<()> {
         headers: pkg.headers.clone(),
         fetched_at: Utc::now().to_rfc3339(),
     };
-    let text = serde_json::to_string_pretty(&manifest)
-        .context("serializing manifest")?;
+    let text = serde_json::to_string_pretty(&manifest).context("serializing manifest")?;
     fs::write(stage.join("manifest.json"), text)
         .with_context(|| format!("writing {}/manifest.json", stage.display()))?;
     Ok(())
@@ -1903,12 +2060,13 @@ fn write_manifest(stage: &Path, pkg: &KernelPkg) -> Result<()> {
 fn sha256_file(path: &Path) -> Result<String> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
-    let mut f = fs::File::open(path)
-        .with_context(|| format!("opening {} for hashing", path.display()))?;
+    let mut f =
+        fs::File::open(path).with_context(|| format!("opening {} for hashing", path.display()))?;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 64 * 1024];
     loop {
-        let n = f.read(&mut buf)
+        let n = f
+            .read(&mut buf)
             .with_context(|| format!("reading {} for hashing", path.display()))?;
         if n == 0 {
             break;
@@ -1921,8 +2079,12 @@ fn sha256_file(path: &Path) -> Result<String> {
 fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
     let actual = sha256_file(path)?;
     if !actual.eq_ignore_ascii_case(expected) {
-        bail!("SHA256 mismatch for {}: expected {}, got {}",
-              path.display(), expected, actual);
+        bail!(
+            "SHA256 mismatch for {}: expected {}, got {}",
+            path.display(),
+            expected,
+            actual
+        );
     }
     Ok(())
 }
@@ -1937,13 +2099,16 @@ fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
 /// `<stage>/headers/`, we just rebase the target. For Arch, that path is
 /// itself the real build directory.
 fn create_build_symlink(stage: &Path, uname_r: &str) -> Result<()> {
-    let modules_build = stage.join("lib").join("modules").join(uname_r).join("build");
+    let modules_build = stage
+        .join("lib")
+        .join("modules")
+        .join(uname_r)
+        .join("build");
     let meta = fs::symlink_metadata(&modules_build)
         .with_context(|| format!("no modules/build at {}", modules_build.display()))?;
 
     let rel = if meta.file_type().is_symlink() {
-        let target = fs::read_link(&modules_build)
-            .context("reading modules/build symlink")?;
+        let target = fs::read_link(&modules_build).context("reading modules/build symlink")?;
         // Target may be absolute (`/usr/src/linux-headers-<v>-<arch>`) or
         // relative (`../../../src/linux-headers-...`, Debian trixie's
         // Usr-Merge style). Either way it lands under `/usr/src/` in the
@@ -1954,14 +2119,21 @@ fn create_build_symlink(stage: &Path, uname_r: &str) -> Result<()> {
             std::path::Component::Normal(n) => n.to_str() == Some("src"),
             _ => false,
         });
-        let src_pos = src_pos.ok_or_else(|| anyhow!(
-            "modules/build target {} has no `src` component — can't rebase \
-             into headers/", target.display()))?;
+        let src_pos = src_pos.ok_or_else(|| {
+            anyhow!(
+                "modules/build target {} has no `src` component — can't rebase \
+             into headers/",
+                target.display()
+            )
+        })?;
         let rest: PathBuf = components[src_pos + 1..].iter().collect();
         PathBuf::from("headers").join(rest)
     } else {
         // Arch / Arch-like: lib/modules/<v>/build is the real build directory.
-        PathBuf::from("lib").join("modules").join(uname_r).join("build")
+        PathBuf::from("lib")
+            .join("modules")
+            .join(uname_r)
+            .join("build")
     };
 
     if !stage.join(&rel).exists() {
@@ -1982,9 +2154,13 @@ fn create_build_symlink(stage: &Path, uname_r: &str) -> Result<()> {
         let rel_from_modules = Path::new("../../..").join(&rel);
         fs::remove_file(&modules_build)
             .with_context(|| format!("removing stale {}", modules_build.display()))?;
-        std::os::unix::fs::symlink(&rel_from_modules, &modules_build)
-            .with_context(|| format!("repointing {} -> {}",
-                                     modules_build.display(), rel_from_modules.display()))?;
+        std::os::unix::fs::symlink(&rel_from_modules, &modules_build).with_context(|| {
+            format!(
+                "repointing {} -> {}",
+                modules_build.display(),
+                rel_from_modules.display()
+            )
+        })?;
     }
     Ok(())
 }
@@ -2051,10 +2227,12 @@ struct ModuleInfo {
 /// Strip ".ko" + any compression suffix, take basename, convert `-` to `_`
 /// (the kernel module-name convention).
 fn module_name_from_path(path: &str) -> String {
-    let stem = Path::new(path).file_name()
+    let stem = Path::new(path)
+        .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or(path);
-    let stem = stem.strip_suffix(".ko.gz")
+    let stem = stem
+        .strip_suffix(".ko.gz")
         .or_else(|| stem.strip_suffix(".ko.xz"))
         .or_else(|| stem.strip_suffix(".ko.zst"))
         .or_else(|| stem.strip_suffix(".ko"))
@@ -2065,17 +2243,25 @@ fn module_name_from_path(path: &str) -> String {
 fn parse_modules_dep(text: &str) -> HashMap<String, ModuleInfo> {
     let mut out = HashMap::new();
     for line in text.lines() {
-        let Some((mod_path, deps_str)) = line.split_once(':') else { continue };
+        let Some((mod_path, deps_str)) = line.split_once(':') else {
+            continue;
+        };
         let mod_path = mod_path.trim();
-        if mod_path.is_empty() { continue }
+        if mod_path.is_empty() {
+            continue;
+        }
         let name = module_name_from_path(mod_path);
-        let deps: Vec<String> = deps_str.split_whitespace()
+        let deps: Vec<String> = deps_str
+            .split_whitespace()
             .map(module_name_from_path)
             .collect();
-        out.insert(name, ModuleInfo {
-            rel_path: PathBuf::from(mod_path),
-            deps,
-        });
+        out.insert(
+            name,
+            ModuleInfo {
+                rel_path: PathBuf::from(mod_path),
+                deps,
+            },
+        );
     }
     out
 }
@@ -2085,10 +2271,7 @@ fn parse_modules_dep(text: &str) -> HashMap<String, ModuleInfo> {
 /// either built into the kernel (no insmod needed; symbols already resolved
 /// against vmlinux) or genuinely missing (which insmod would have failed on
 /// anyway). Seed skips get an eprintln so the user can spot a typo.
-fn module_load_order(
-    modules: &HashMap<String, ModuleInfo>,
-    seeds: &[&str],
-) -> Vec<String> {
+fn module_load_order(modules: &HashMap<String, ModuleInfo>, seeds: &[&str]) -> Vec<String> {
     use std::collections::HashSet;
     let mut visited: HashSet<String> = HashSet::new();
     let mut ordered: Vec<String> = Vec::new();
@@ -2099,8 +2282,12 @@ fn module_load_order(
         visited: &mut HashSet<String>,
         ordered: &mut Vec<String>,
     ) {
-        if !visited.insert(name.to_string()) { return }
-        let Some(info) = modules.get(name) else { return };
+        if !visited.insert(name.to_string()) {
+            return;
+        }
+        let Some(info) = modules.get(name) else {
+            return;
+        };
         for dep in &info.deps {
             visit(dep, modules, visited, ordered);
         }
@@ -2161,8 +2348,11 @@ fn klibc_lib_dir() -> Result<PathBuf> {
             return Ok(c.clone());
         }
     }
-    bail!("klibc not found — tried {:?} (install klibc-utils + libklibc, \
-           or `nix profile install nixpkgs#klibc`)", candidates)
+    bail!(
+        "klibc not found — tried {:?} (install klibc-utils + libklibc, \
+           or `nix profile install nixpkgs#klibc`)",
+        candidates
+    )
 }
 
 /// Find klibc-<hash>.so — the runtime interpreter for klibc binaries.
@@ -2197,7 +2387,8 @@ fn run_depmod(stage: &Path, uname_r: &str) -> Result<()> {
     if let Ok(path) = std::env::var("PATH") {
         candidates.extend(std::env::split_paths(&path).map(|p| p.join("depmod")));
     }
-    let depmod_bin = candidates.iter()
+    let depmod_bin = candidates
+        .iter()
         .find(|p| p.is_file())
         .ok_or_else(|| anyhow!("depmod not found in /sbin, /usr/sbin, or $PATH"))?;
     let status = Command::new(depmod_bin)
@@ -2223,7 +2414,9 @@ fn generate_initramfs(stage: &Path, uname_r: &str) -> Result<()> {
 
     // Stage the initramfs filesystem tree.
     let irfs = stage.join("_irfs");
-    if irfs.exists() { fs::remove_dir_all(&irfs)?; }
+    if irfs.exists() {
+        fs::remove_dir_all(&irfs)?;
+    }
     for sub in ["bin", "usr/lib", "modules", "dev", "proc", "sys", "newroot"] {
         fs::create_dir_all(irfs.join(sub))?;
     }
@@ -2311,7 +2504,7 @@ fn generate_initramfs(stage: &Path, uname_r: &str) -> Result<()> {
         .context("spawning cpio")?;
     let cpio_stdout = cpio.stdout.unwrap();
     let gzip_status = Command::new("gzip")
-        .arg("-n")  // suppress timestamp for reproducibility
+        .arg("-n") // suppress timestamp for reproducibility
         .stdin(Stdio::from(cpio_stdout))
         .stdout(initramfs_file)
         .status()
@@ -2338,9 +2531,13 @@ fn repair_dangling_symlinks(root: &Path) -> Result<()> {
             let path = entry?.path();
             let md = fs::symlink_metadata(&path)?;
             if md.file_type().is_symlink() {
-                if path.exists() { continue; }              // already resolves
+                if path.exists() {
+                    continue;
+                } // already resolves
                 let target = fs::read_link(&path)?;
-                if target.is_absolute() { continue; }       // not our concern
+                if target.is_absolute() {
+                    continue;
+                } // not our concern
                 let parent = path.parent().unwrap();
                 let comps: Vec<_> = target.components().collect();
                 let mut cur = parent.to_path_buf();
@@ -2353,10 +2550,14 @@ fn repair_dangling_symlinks(root: &Path) -> Result<()> {
                         let missing = next.file_name().map(|n| n.to_owned());
                         for sib in fs::read_dir(&cur)? {
                             let sib = sib?.file_name();
-                            if Some(&sib) == missing.as_ref() { continue; }
+                            if Some(&sib) == missing.as_ref() {
+                                continue;
+                            }
                             if cur.join(&sib).join(&remainder).exists() {
                                 let mut newt = PathBuf::new();
-                                for cc in &comps[..i] { newt.push(cc); }
+                                for cc in &comps[..i] {
+                                    newt.push(cc);
+                                }
                                 newt.push(&sib);
                                 newt.push(&remainder);
                                 fs::remove_file(&path)?;
@@ -2382,11 +2583,12 @@ fn fetch_and_convert(output: &Path, pkg: &KernelPkg) -> Result<()> {
     let dst = src_dir.join(&pkg.version);
 
     // Work area sits under output/ so rename(work, dst) is intra-filesystem.
-    let work = output.join("_work").join(format!("{}-{}-{}-{}",
-        pkg.distro, pkg.release, pkg.arch, pkg.version));
+    let work = output.join("_work").join(format!(
+        "{}-{}-{}-{}",
+        pkg.distro, pkg.release, pkg.arch, pkg.version
+    ));
     if work.exists() {
-        fs::remove_dir_all(&work)
-            .with_context(|| format!("cleaning {}", work.display()))?;
+        fs::remove_dir_all(&work).with_context(|| format!("cleaning {}", work.display()))?;
     }
     let dl = work.join("dl");
     let extracted = work.join("extracted");
@@ -2407,8 +2609,7 @@ fn fetch_and_convert(output: &Path, pkg: &KernelPkg) -> Result<()> {
         let path = dl.join(fname);
         download_to(&f.url, &path)?;
         if let Some(expected) = &f.sha256 {
-            verify_sha256(&path, expected)
-                .with_context(|| format!("verifying {}", f.url))?;
+            verify_sha256(&path, expected).with_context(|| format!("verifying {}", f.url))?;
         }
         downloaded.push((f, path));
     }
@@ -2425,14 +2626,12 @@ fn fetch_and_convert(output: &Path, pkg: &KernelPkg) -> Result<()> {
                 .with_context(|| format!("extracting {}", archive.display()))?;
         }
         let vmlinuz = find_vmlinuz(&extracted)?;
-        rename_or_copy(&vmlinuz, &stage.join("vmlinuz"))
-            .context("placing vmlinuz")?;
+        rename_or_copy(&vmlinuz, &stage.join("vmlinuz")).context("placing vmlinuz")?;
 
         let modules = find_modules_dir(&extracted)?;
         let modules_dst = stage.join("lib").join("modules").join(&pkg.version);
         fs::create_dir_all(modules_dst.parent().unwrap())?;
-        rename_or_copy(&modules, &modules_dst)
-            .context("placing modules")?;
+        rename_or_copy(&modules, &modules_dst).context("placing modules")?;
 
         collect_headers(&extracted, &stage, &pkg.version)?;
         create_build_symlink(&stage, &pkg.version)?;
@@ -2452,8 +2651,7 @@ fn fetch_and_convert(output: &Path, pkg: &KernelPkg) -> Result<()> {
 
         // After all per-distro placement, repoint any dangling symlinks
         // (e.g. Ubuntu's headers `rust/` -> the differently-named lib-rust dir).
-        repair_dangling_symlinks(&stage)
-            .context("repairing dangling symlinks")?;
+        repair_dangling_symlinks(&stage).context("repairing dangling symlinks")?;
     }
     generate_initramfs(&stage, &pkg.version)
         .with_context(|| format!("generating initramfs for {}", pkg.version))?;
@@ -2465,11 +2663,9 @@ fn fetch_and_convert(output: &Path, pkg: &KernelPkg) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     if dst.exists() {
-        fs::remove_dir_all(&dst)
-            .with_context(|| format!("removing stale {}", dst.display()))?;
+        fs::remove_dir_all(&dst).with_context(|| format!("removing stale {}", dst.display()))?;
     }
-    fs::rename(&stage, &dst)
-        .with_context(|| format!("publishing to {}", dst.display()))?;
+    fs::rename(&stage, &dst).with_context(|| format!("publishing to {}", dst.display()))?;
 
     // 5. Drop older versions of this source.
     prune_older_versions(&src_dir, &pkg.version)
@@ -2482,12 +2678,18 @@ fn fetch_and_convert(output: &Path, pkg: &KernelPkg) -> Result<()> {
 
 fn process_source(args: &Args, output: &Path, src: &Source) -> Result<()> {
     let fetcher = fetcher_for(&src.distro)?;
-    let pkgs = fetcher.latest_kernels(src)
+    let pkgs = fetcher
+        .latest_kernels(src)
         .with_context(|| format!("listing kernels for {}/{}", src.distro, src.release))?;
 
     if args.verbose {
-        eprintln!("{}/{}/{}: {} candidate(s)",
-                  src.distro, src.release, src.arch, pkgs.len());
+        eprintln!(
+            "{}/{}/{}: {} candidate(s)",
+            src.distro,
+            src.release,
+            src.arch,
+            pkgs.len()
+        );
     }
 
     for pkg in pkgs {
@@ -2505,9 +2707,12 @@ fn process_source(args: &Args, output: &Path, src: &Source) -> Result<()> {
             continue;
         }
         eprintln!("  fetching {}", pkg.version);
-        fetch_and_convert(output, &pkg)
-            .with_context(|| format!("fetching {} for {}/{}",
-                                     pkg.version, pkg.distro, pkg.release))?;
+        fetch_and_convert(output, &pkg).with_context(|| {
+            format!(
+                "fetching {} for {}/{}",
+                pkg.version, pkg.distro, pkg.release
+            )
+        })?;
     }
     Ok(())
 }
@@ -2524,9 +2729,13 @@ fn ktest_data_dir() -> PathBuf {
 fn main() -> Result<()> {
     let args = Args::parse();
     let data_dir = ktest_data_dir();
-    let config_path = args.config.clone()
+    let config_path = args
+        .config
+        .clone()
         .unwrap_or_else(|| data_dir.join("distro-sources.json5"));
-    let output = args.output.clone()
+    let output = args
+        .output
+        .clone()
         .unwrap_or_else(|| data_dir.join("kernels"));
 
     let config_text = std::fs::read_to_string(&config_path)
@@ -2537,7 +2746,10 @@ fn main() -> Result<()> {
     let mut failed = 0;
     for src in &config.sources {
         if let Err(e) = process_source(&args, &output, src) {
-            eprintln!("ERROR: {}/{}/{}: {:#}", src.distro, src.release, src.arch, e);
+            eprintln!(
+                "ERROR: {}/{}/{}: {:#}",
+                src.distro, src.release, src.arch, e
+            );
             failed += 1;
         }
     }
@@ -2558,19 +2770,39 @@ mod tests {
 
     #[test]
     fn debian_vanilla_filter() {
-        assert!(debian_is_vanilla_image("linux-image-6.1.0-39-amd64", "amd64"));
+        assert!(debian_is_vanilla_image(
+            "linux-image-6.1.0-39-amd64",
+            "amd64"
+        ));
         assert!(!debian_is_vanilla_image("linux-image-amd64", "amd64"));
-        assert!(!debian_is_vanilla_image("linux-image-6.1.0-39-amd64-dbg", "amd64"));
-        assert!(!debian_is_vanilla_image("linux-image-6.1.0-39-amd64-unsigned", "amd64"));
-        assert!(!debian_is_vanilla_image("linux-image-6.1.0-39-cloud-amd64", "amd64"));
-        assert!(!debian_is_vanilla_image("linux-image-6.1.0-39-rt-amd64", "amd64"));
-        assert!(!debian_is_vanilla_image("linux-headers-6.1.0-39-amd64", "amd64"));
+        assert!(!debian_is_vanilla_image(
+            "linux-image-6.1.0-39-amd64-dbg",
+            "amd64"
+        ));
+        assert!(!debian_is_vanilla_image(
+            "linux-image-6.1.0-39-amd64-unsigned",
+            "amd64"
+        ));
+        assert!(!debian_is_vanilla_image(
+            "linux-image-6.1.0-39-cloud-amd64",
+            "amd64"
+        ));
+        assert!(!debian_is_vanilla_image(
+            "linux-image-6.1.0-39-rt-amd64",
+            "amd64"
+        ));
+        assert!(!debian_is_vanilla_image(
+            "linux-headers-6.1.0-39-amd64",
+            "amd64"
+        ));
     }
 
     #[test]
     fn debian_abi() {
-        assert_eq!(debian_abi_from_image("linux-image-6.1.0-39-amd64", "amd64"),
-                   Some("6.1.0-39"));
+        assert_eq!(
+            debian_abi_from_image("linux-image-6.1.0-39-amd64", "amd64"),
+            Some("6.1.0-39")
+        );
         assert_eq!(debian_abi_from_image("linux-image-amd64", "amd64"), None);
         assert_eq!(debian_abi_from_image("vim", "amd64"), None);
     }
@@ -2579,7 +2811,9 @@ mod tests {
     fn ubuntu_vanilla_filter() {
         assert!(ubuntu_is_vanilla_image("linux-image-6.8.0-31-generic"));
         assert!(!ubuntu_is_vanilla_image("linux-image-generic"));
-        assert!(!ubuntu_is_vanilla_image("linux-image-unsigned-6.8.0-31-generic"));
+        assert!(!ubuntu_is_vanilla_image(
+            "linux-image-unsigned-6.8.0-31-generic"
+        ));
         assert!(!ubuntu_is_vanilla_image("linux-headers-6.8.0-31-generic"));
     }
 
@@ -2606,8 +2840,10 @@ mod tests {
         let stanzas = parse_packages(text);
         assert_eq!(stanzas.len(), 2);
         assert_eq!(stanzas[0].get("Package").map(String::as_str), Some("foo"));
-        assert_eq!(stanzas[0].get("Description").map(String::as_str),
-                   Some("line one\nline two"));
+        assert_eq!(
+            stanzas[0].get("Description").map(String::as_str),
+            Some("line one\nline two")
+        );
         assert_eq!(stanzas[1].get("Package").map(String::as_str), Some("bar"));
     }
 
@@ -2629,18 +2865,27 @@ kernel/fs/mbcache.ko.xz:
     #[test]
     fn module_load_order_is_post_order() {
         let mut modules = HashMap::new();
-        modules.insert("ext4".to_string(), ModuleInfo {
-            rel_path: PathBuf::from("ext4.ko"),
-            deps: vec!["jbd2".to_string(), "mbcache".to_string()],
-        });
-        modules.insert("jbd2".to_string(), ModuleInfo {
-            rel_path: PathBuf::from("jbd2.ko"),
-            deps: vec![],
-        });
-        modules.insert("mbcache".to_string(), ModuleInfo {
-            rel_path: PathBuf::from("mbcache.ko"),
-            deps: vec![],
-        });
+        modules.insert(
+            "ext4".to_string(),
+            ModuleInfo {
+                rel_path: PathBuf::from("ext4.ko"),
+                deps: vec!["jbd2".to_string(), "mbcache".to_string()],
+            },
+        );
+        modules.insert(
+            "jbd2".to_string(),
+            ModuleInfo {
+                rel_path: PathBuf::from("jbd2.ko"),
+                deps: vec![],
+            },
+        );
+        modules.insert(
+            "mbcache".to_string(),
+            ModuleInfo {
+                rel_path: PathBuf::from("mbcache.ko"),
+                deps: vec![],
+            },
+        );
         let order = module_load_order(&modules, &["ext4"]);
         // jbd2 + mbcache must precede ext4.
         let pos = |n: &str| order.iter().position(|x| x == n).unwrap();

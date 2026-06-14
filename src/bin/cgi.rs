@@ -4,8 +4,8 @@ extern crate cgi;
 extern crate querystring;
 
 use ci_cgi::{
-    api, branch_get_results, ciconfig_read, last_good_line, update_lcov, CiConfig,
-    CommitResults, TestResultsMap, TestStatus, Userrc,
+    api, branch_get_results, ciconfig_read, last_good_line, update_lcov, CiConfig, CommitResults,
+    TestResultsMap, TestStatus, Userrc,
 };
 
 const STYLESHEET: &str = "bootstrap.min.css";
@@ -141,7 +141,11 @@ fn ci_log(ci: &Ci) -> cgi::Response {
 
     let commits = ci_branch_get_results(ci);
     if let Err(e) = commits {
-        return if ci.json { json_error(e) } else { error_response(e) };
+        return if ci.json {
+            json_error(e)
+        } else {
+            error_response(e)
+        };
     }
 
     let commits = commits.unwrap();
@@ -353,7 +357,11 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
 
     let commits = ci_branch_get_results(ci);
     if let Err(e) = commits {
-        return if ci.json { json_error(e) } else { error_response(e) };
+        return if ci.json {
+            json_error(e)
+        } else {
+            error_response(e)
+        };
     }
     let commits = commits.unwrap();
 
@@ -506,7 +514,11 @@ fn ci_user(ci: &Ci) -> cgi::Response {
 
     if u.is_none() {
         let e = format!("User {} not found", &username);
-        return if ci.json { json_error(e) } else { error_response(e) };
+        return if ci.json {
+            json_error(e)
+        } else {
+            error_response(e)
+        };
     }
     let u = u.unwrap();
 
@@ -630,7 +642,6 @@ fn error_response(msg: String) -> cgi::Response {
     writeln!(&mut out, "env: {:?}", env).unwrap();
     cgi::text_response(200, out)
 }
-
 
 /// CSS for the live status page.
 const STATUS_CSS: &str = "

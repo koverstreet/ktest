@@ -27,7 +27,9 @@ struct RawTestGroup {
     env: Option<BTreeMap<String, String>>,
 }
 
-fn default_repo() -> String { "linux".to_string() }
+fn default_repo() -> String {
+    "linux".to_string()
+}
 
 #[derive(Deserialize)]
 struct RawBranch {
@@ -96,7 +98,10 @@ fn resolve_group(
     let parent: Option<&RcTestGroup> = g.extends.as_deref().and_then(|p| resolved.get(p));
 
     let resolved_group = RcTestGroup {
-        max_commits: g.max_commits.or(parent.map(|p| p.max_commits)).unwrap_or(50),
+        max_commits: g
+            .max_commits
+            .or(parent.map(|p| p.max_commits))
+            .unwrap_or(50),
         nice: g.nice.or(parent.map(|p| p.nice)).unwrap_or(0),
         test_duration_nice: g
             .test_duration_nice
@@ -175,8 +180,7 @@ pub fn userrc_read_str(s: &str) -> anyhow::Result<Userrc> {
 }
 
 pub fn userrc_read(path: &Path) -> anyhow::Result<Userrc> {
-    let config = read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let config = read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     userrc_read_str(&config).with_context(|| format!("parsing {}", path.display()))
 }
 
@@ -186,7 +190,8 @@ mod tests {
 
     #[test]
     fn extends_inherits_tests_and_overrides_kernels() {
-        let rc = userrc_read_str(r#"{
+        let rc = userrc_read_str(
+            r#"{
             test_groups: {
                 base: {
                     max_commits: 100,
@@ -204,19 +209,28 @@ mod tests {
             branches: {
                 br: { fetch: "linux master", repo: "linux", test_groups: ["base", "ext"] },
             },
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
         let base = &rc.test_groups["base"];
         let ext = &rc.test_groups["ext"];
         assert_eq!(base.kernels, vec!["upstream/stable-default"]);
-        assert_eq!(ext.tests, vec![PathBuf::from("a.ktest"), PathBuf::from("b.ktest")]);
-        assert_eq!(ext.kernels, vec!["upstream/stable-kasan", "upstream/stable-lockdep"]);
+        assert_eq!(
+            ext.tests,
+            vec![PathBuf::from("a.ktest"), PathBuf::from("b.ktest")]
+        );
+        assert_eq!(
+            ext.kernels,
+            vec!["upstream/stable-kasan", "upstream/stable-lockdep"]
+        );
         assert_eq!(ext.max_commits, 5);
         assert_eq!(ext.nice, 5);
     }
 
     #[test]
     fn env_merges_with_parent() {
-        let rc = userrc_read_str(r#"{
+        let rc = userrc_read_str(
+            r#"{
             test_groups: {
                 base: {
                     tests: ["a.ktest"],
@@ -229,7 +243,9 @@ mod tests {
                 },
             },
             branches: {},
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
         let ext = &rc.test_groups["ext"];
         assert_eq!(ext.env.get("FOO").map(String::as_str), Some("1"));
         assert_eq!(ext.env.get("BAR").map(String::as_str), Some("child"));
@@ -238,22 +254,30 @@ mod tests {
 
     #[test]
     fn cycle_detected() {
-        let err = userrc_read_str(r#"{
+        let err = userrc_read_str(
+            r#"{
             test_groups: {
                 a: { extends: "b" },
                 b: { extends: "a" },
             },
             branches: {},
-        }"#).err().expect("expected cycle error");
+        }"#,
+        )
+        .err()
+        .expect("expected cycle error");
         assert!(err.to_string().contains("cycle"), "got: {}", err);
     }
 
     #[test]
     fn unknown_test_group_ref_errors() {
-        let err = userrc_read_str(r#"{
+        let err = userrc_read_str(
+            r#"{
             test_groups: { base: { tests: ["a.ktest"], kernels: ["k"] } },
             branches: { br: { fetch: "x", test_groups: ["base", "nope"] } },
-        }"#).err().expect("expected undefined test_group error");
+        }"#,
+        )
+        .err()
+        .expect("expected undefined test_group error");
         assert!(err.to_string().contains("nope"), "got: {}", err);
     }
 }

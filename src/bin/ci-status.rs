@@ -1,7 +1,6 @@
 use ci_cgi::{
-    api, branch_entries, branch_get_results, commitdir_get_results_full,
-    format_duration, ktestrc_read, Ktestrc, BranchEntry,
-    TestStatus,
+    api, branch_entries, branch_get_results, commitdir_get_results_full, format_duration,
+    ktestrc_read, BranchEntry, Ktestrc, TestStatus,
 };
 use clap::{Parser, Subcommand};
 use std::io::Read;
@@ -27,7 +26,11 @@ struct Args {
     user: Option<String>,
 
     /// Dashboard URL for --user mode
-    #[arg(long, global = true, default_value = "https://evilpiepirate.org/~testdashboard/ci")]
+    #[arg(
+        long,
+        global = true,
+        default_value = "https://evilpiepirate.org/~testdashboard/ci"
+    )]
     dashboard: String,
 
     /// Branch context for `show` in --user mode (the server resolves
@@ -117,18 +120,26 @@ enum Command {
 }
 
 // ANSI color helpers
-fn color_passed(s: &str) -> String   { format!("\x1b[32m{}\x1b[0m", s) }
-fn color_failed(s: &str) -> String   { format!("\x1b[31m{}\x1b[0m", s) }
-fn color_inprog(s: &str) -> String   { format!("\x1b[33m{}\x1b[0m", s) }
-fn color_dim(s: &str) -> String      { format!("\x1b[2m{}\x1b[0m", s) }
+fn color_passed(s: &str) -> String {
+    format!("\x1b[32m{}\x1b[0m", s)
+}
+fn color_failed(s: &str) -> String {
+    format!("\x1b[31m{}\x1b[0m", s)
+}
+fn color_inprog(s: &str) -> String {
+    format!("\x1b[33m{}\x1b[0m", s)
+}
+fn color_dim(s: &str) -> String {
+    format!("\x1b[2m{}\x1b[0m", s)
+}
 
 fn color_status(status: TestStatus) -> String {
     let s = status.to_str();
     match status {
-        TestStatus::Passed     => color_passed(s),
-        TestStatus::Failed     => color_failed(s),
+        TestStatus::Passed => color_passed(s),
+        TestStatus::Failed => color_failed(s),
         TestStatus::Inprogress => color_inprog(s),
-        _                      => color_dim(s),
+        _ => color_dim(s),
     }
 }
 
@@ -149,7 +160,10 @@ fn resolve_branch(repo: &git2::Repository, ktest: &Ktestrc, name: &str) -> anyho
         return Ok(name.to_string());
     }
 
-    anyhow::bail!("can't resolve '{}' — try a full ref like 'remote/branch'", name)
+    anyhow::bail!(
+        "can't resolve '{}' — try a full ref like 'remote/branch'",
+        name
+    )
 }
 
 /// Open the git repo a branch's commits live in. Branches name their
@@ -161,7 +175,8 @@ fn open_branch_repo(ktest: &Ktestrc, branch: &str) -> anyhow::Result<git2::Repos
         let userrc = ci_cgi::users::userrc_read_str(&config).ok()?;
         let b = userrc.branches.get(branch)?;
         ktest.repo_path(&b.repo).map(|p| p.to_path_buf())
-    })().unwrap_or_else(|| ktest.linux_repo.clone());
+    })()
+    .unwrap_or_else(|| ktest.linux_repo.clone());
 
     Ok(git2::Repository::open(repo_path)?)
 }
@@ -190,11 +205,7 @@ fn resolve_commit_prefix(ktest: &Ktestrc, prefix: &str) -> anyhow::Result<String
     }
 }
 
-fn cmd_log(
-    branch: &str,
-    ktest: &Ktestrc,
-    json: bool,
-) -> anyhow::Result<()> {
+fn cmd_log(branch: &str, ktest: &Ktestrc, json: bool) -> anyhow::Result<()> {
     unsafe {
         git2::opts::set_verify_owner_validation(false)
             .expect("set_verify_owner_validation should never fail");
@@ -222,23 +233,42 @@ fn render_log(entries: &[BranchEntry], branch: &str, json: bool) -> anyhow::Resu
     }
 
     // Header
-    println!("{:<14} {:>6} {:>6} {:>6} {:>6} {:>8}  {}",
-        "COMMIT", "PASS", "FAIL", "FTRUN", "INPRO", "DURATION", "MESSAGE");
+    println!(
+        "{:<14} {:>6} {:>6} {:>6} {:>6} {:>8}  {}",
+        "COMMIT", "PASS", "FAIL", "FTRUN", "INPRO", "DURATION", "MESSAGE"
+    );
     println!("{}", "-".repeat(80));
 
     for e in entries {
         let subject = e.message.lines().next().unwrap_or("");
-        let subject = if subject.len() > 50 { &subject[..50] } else { subject };
+        let subject = if subject.len() > 50 {
+            &subject[..50]
+        } else {
+            subject
+        };
 
-        let commit = if e.commit_id.len() >= 12 { &e.commit_id[..12] } else { &e.commit_id };
+        let commit = if e.commit_id.len() >= 12 {
+            &e.commit_id[..12]
+        } else {
+            &e.commit_id
+        };
 
         let pass_s = format!("{}", e.passed);
         let fail_s = format!("{}", e.failed);
 
-        println!("{:<14} {:>6} {:>6} {:>6} {:>6} {:>8}  {}",
+        println!(
+            "{:<14} {:>6} {:>6} {:>6} {:>6} {:>8}  {}",
             commit,
-            if e.passed > 0 { color_passed(&pass_s) } else { pass_s },
-            if e.failed > 0 { color_failed(&fail_s) } else { fail_s },
+            if e.passed > 0 {
+                color_passed(&pass_s)
+            } else {
+                pass_s
+            },
+            if e.failed > 0 {
+                color_failed(&fail_s)
+            } else {
+                fail_s
+            },
             e.failed_to_run,
             e.inprogress,
             format_duration(e.duration),
@@ -249,11 +279,7 @@ fn render_log(entries: &[BranchEntry], branch: &str, json: bool) -> anyhow::Resu
     Ok(())
 }
 
-fn cmd_show(
-    commit: &str,
-    ktest: &Ktestrc,
-    json: bool,
-) -> anyhow::Result<()> {
+fn cmd_show(commit: &str, ktest: &Ktestrc, json: bool) -> anyhow::Result<()> {
     let commit = resolve_commit_prefix(ktest, commit)?;
 
     let full = commitdir_get_results_full(ktest, &commit)?;
@@ -294,19 +320,20 @@ fn render_show(detail: &api::CommitTests, json: bool) -> anyhow::Result<()> {
     // Sort tests: failed first, then in-progress, then passed, then rest
     let mut tests: Vec<_> = detail.tests.iter().collect();
     tests.sort_by_key(|t| match TestStatus::from_str(&t.status) {
-        TestStatus::Failed     => 0,
+        TestStatus::Failed => 0,
         TestStatus::Inprogress => 1,
-        TestStatus::Notrun     => 2,
-        TestStatus::Unknown    => 3,
+        TestStatus::Notrun => 2,
+        TestStatus::Unknown => 3,
         TestStatus::FailedToRun => 4,
-        TestStatus::Passed     => 5,
+        TestStatus::Passed => 5,
     });
 
     println!("{:<60} {:>12} {:>8}", "TEST", "STATUS", "DURATION");
     println!("{}", "-".repeat(82));
 
     for t in &tests {
-        println!("{:<60} {:>12} {:>8}",
+        println!(
+            "{:<60} {:>12} {:>8}",
             t.name,
             color_status(TestStatus::from_str(&t.status)),
             format_duration(t.duration),
@@ -314,12 +341,16 @@ fn render_show(detail: &api::CommitTests, json: bool) -> anyhow::Result<()> {
     }
 
     fn count(tests: &[api::TestEntry], s: TestStatus) -> usize {
-        tests.iter().filter(|t| TestStatus::from_str(&t.status) == s).count()
+        tests
+            .iter()
+            .filter(|t| TestStatus::from_str(&t.status) == s)
+            .count()
     }
     let total_duration: u64 = detail.tests.iter().map(|t| t.duration).sum();
 
     println!();
-    println!("{} total: {} passed, {} failed, {} in progress, {}",
+    println!(
+        "{} total: {} passed, {} failed, {} in progress, {}",
         detail.tests.len(),
         color_passed(&count(&detail.tests, TestStatus::Passed).to_string()),
         color_failed(&count(&detail.tests, TestStatus::Failed).to_string()),
@@ -335,7 +366,9 @@ fn user_config_path(ktest: &Ktestrc) -> std::path::PathBuf {
 }
 
 fn ci_scp_path(ktest: &Ktestrc) -> anyhow::Result<String> {
-    let host = ktest.ci_host.as_deref()
+    let host = ktest
+        .ci_host
+        .as_deref()
         .ok_or_else(|| anyhow::anyhow!("ci_host not set in config"))?;
     Ok(format!("{}:ci.json5", host))
 }
@@ -351,7 +384,10 @@ fn cmd_pull_config(ktest: &Ktestrc) -> anyhow::Result<()> {
         .status()?;
 
     if !status.success() {
-        anyhow::bail!("scp {} failed — you may need to set up ~/ci.json5 on the server", remote);
+        anyhow::bail!(
+            "scp {} failed — you may need to set up ~/ci.json5 on the server",
+            remote
+        );
     }
 
     println!("Config saved to {}", dest.display());
@@ -363,7 +399,10 @@ fn cmd_push_config(ktest: &Ktestrc) -> anyhow::Result<()> {
     let src = user_config_path(ktest);
 
     if !src.exists() {
-        anyhow::bail!("no local config at {} — run pull-config first", src.display());
+        anyhow::bail!(
+            "no local config at {} — run pull-config first",
+            src.display()
+        );
     }
 
     let status = std::process::Command::new("scp")
@@ -386,13 +425,17 @@ fn cmd_branches(ktest: &Ktestrc, json: bool) -> anyhow::Result<()> {
     let userrc = ci_cgi::users::userrc_read_str(&config)?;
 
     if json {
-        let branches: Vec<serde_json::Value> = userrc.branches.iter().map(|(name, b)| {
-            serde_json::json!({
-                "name": name,
-                "fetch": &b.fetch,
-                "test_groups": &b.test_groups,
+        let branches: Vec<serde_json::Value> = userrc
+            .branches
+            .iter()
+            .map(|(name, b)| {
+                serde_json::json!({
+                    "name": name,
+                    "fetch": &b.fetch,
+                    "test_groups": &b.test_groups,
+                })
             })
-        }).collect();
+            .collect();
         println!("{}", serde_json::to_string_pretty(&branches)?);
         return Ok(());
     }
@@ -423,7 +466,9 @@ fn fetch_log(ktest: &Ktestrc, commit: &str, test: &str, full: bool) -> anyhow::R
     }
 
     // Fall back to remote
-    let ci_url = ktest.ci_url.as_deref()
+    let ci_url = ktest
+        .ci_url
+        .as_deref()
         .ok_or_else(|| anyhow::anyhow!("no ci_url configured and log not found locally"))?;
 
     let url = format!("{}/{}/{}/{}", ci_url, commit, test, filename);
@@ -437,12 +482,7 @@ fn fetch_log(ktest: &Ktestrc, commit: &str, test: &str, full: bool) -> anyhow::R
     decompress_brotli(&data)
 }
 
-fn cmd_logs(
-    commit: &str,
-    test: Option<&str>,
-    full: bool,
-    ktest: &Ktestrc,
-) -> anyhow::Result<()> {
+fn cmd_logs(commit: &str, test: Option<&str>, full: bool, ktest: &Ktestrc) -> anyhow::Result<()> {
     let commit = resolve_commit_prefix(ktest, commit)?;
 
     let results = commitdir_get_results_full(ktest, &commit)?;
@@ -450,7 +490,9 @@ fn cmd_logs(
     match test {
         Some(filter) => {
             // Find matching test(s)
-            let matches: Vec<_> = results.tests.iter()
+            let matches: Vec<_> = results
+                .tests
+                .iter()
                 .filter(|(name, _)| name.contains(filter))
                 .collect();
 
@@ -482,7 +524,9 @@ fn cmd_logs(
         }
         None => {
             // No test specified — list failed tests
-            let mut failed: Vec<_> = results.tests.iter()
+            let mut failed: Vec<_> = results
+                .tests
+                .iter()
                 .filter(|(_, r)| r.status == TestStatus::Failed)
                 .collect();
             failed.sort_by_key(|(name, _)| (*name).clone());
@@ -496,7 +540,10 @@ fn cmd_logs(
             for (i, (name, r)) in failed.iter().enumerate() {
                 println!("  {:>3}. {} ({}s)", i + 1, name, r.duration);
             }
-            println!("\nUse: ci-status logs {} <test-name-or-substring>", &commit[..12]);
+            println!(
+                "\nUse: ci-status logs {} <test-name-or-substring>",
+                &commit[..12]
+            );
         }
     }
 
@@ -526,7 +573,9 @@ fn run() -> anyhow::Result<()> {
             }
             Command::Show { ref commit } => {
                 let branch = args.branch.as_deref().ok_or_else(|| {
-                    anyhow::anyhow!("show --user needs --branch (the server resolves commits per-branch)")
+                    anyhow::anyhow!(
+                        "show --user needs --branch (the server resolves commits per-branch)"
+                    )
                 })?;
                 let detail = server_show(&args.dashboard, user, branch, commit)?;
                 render_show(&detail, args.json)
@@ -554,23 +603,11 @@ fn run() -> anyhow::Result<()> {
     }
 
     match args.command {
-        Command::Log { branch } => {
-            cmd_log(&branch, &ktest, args.json)
-        }
-        Command::Show { commit } => {
-            cmd_show(&commit, &ktest, args.json)
-        }
-        Command::Logs { commit, test, full } => {
-            cmd_logs(&commit, test.as_deref(), full, &ktest)
-        }
-        Command::Branches => {
-            cmd_branches(&ktest, args.json)
-        }
-        Command::PullConfig => {
-            cmd_pull_config(&ktest)
-        }
-        Command::PushConfig => {
-            cmd_push_config(&ktest)
-        }
+        Command::Log { branch } => cmd_log(&branch, &ktest, args.json),
+        Command::Show { commit } => cmd_show(&commit, &ktest, args.json),
+        Command::Logs { commit, test, full } => cmd_logs(&commit, test.as_deref(), full, &ktest),
+        Command::Branches => cmd_branches(&ktest, args.json),
+        Command::PullConfig => cmd_pull_config(&ktest),
+        Command::PushConfig => cmd_push_config(&ktest),
     }
 }

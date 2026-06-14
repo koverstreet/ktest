@@ -19,8 +19,11 @@ fn read_duration_sums(rc: &Ktestrc) -> TestDurationMap {
     let entries = match std::fs::read_dir(&rc.output_dir) {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("gen-avg-duration: reading {}: {}",
-                      rc.output_dir.display(), e);
+            eprintln!(
+                "gen-avg-duration: reading {}: {}",
+                rc.output_dir.display(),
+                e
+            );
             return durations;
         }
     };
