@@ -1065,6 +1065,8 @@ test_striping()
 
     umount /mnt
 
+    # Test is too short for this to be meaningful:
+    bcachefs reset-counters --counters=trans_restart_upgrade ${ktest_scratch_dev[0]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
