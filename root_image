@@ -187,7 +187,10 @@ export CHROOT=$(which chroot)
 
 _chroot()
 {
-    PATH=/usr/sbin:/usr/bin:/sbin:/bin "$CHROOT" "$@"
+    # Pin TMPDIR/TMP too: NixOS/nix-shell points them at a per-session dir
+    # under /tmp that doesn't exist inside the chroot, so apt/dpkg tempfiles
+    # blow up. /tmp always exists in a debootstrap'd rootfs.
+    PATH=/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=/tmp TMP=/tmp "$CHROOT" "$@"
 }
 
 update_files()
