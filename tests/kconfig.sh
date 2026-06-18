@@ -184,6 +184,12 @@ esac
 
 # PCI:
 require-kernel-config PCI
+# Without MSI-X, virtio-pci falls back to legacy shared INTx: a single
+# IO-APIC line per device, no per-virtqueue vectors, no coalescing. Under
+# I/O-heavy loads (e.g. a build over the 9p host mount) that one line storms
+# at tens of thousands of interrupts/sec, pegging qemu's main thread and
+# stalling the guest. MSI-X gives each virtqueue its own coalesced vector.
+require-kernel-config PCI_MSI
 
 # Rng:
 require-kernel-config HW_RANDOM
