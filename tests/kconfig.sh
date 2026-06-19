@@ -271,8 +271,16 @@ require-kernel-config RANDOMIZE_MEMORY=n
 # Profiling:
 require-kernel-config PROFILING
 require-kernel-config JUMP_LABEL
-require-kernel-config MEM_ALLOC_PROFILING
 require-kernel-config SHRINKER_DEBUG
+
+# MEM_ALLOC_PROFILING (/proc/allocinfo, per-callsite alloc accounting) is part
+# of the profiling set we enable — but on >= 7.0 kernels it's on by default
+# (CONFIG_MEM_ALLOC_PROFILING_ENABLED_BY_DEFAULT) and instruments every
+# allocation; that overhead skews the perf tests. ktest builds from allnoconfig,
+# so just not requiring it leaves it off there — require it on only for < 7.0.
+if ! version-ge "${ktest_kernel_version:-}" 7.0; then
+	require-kernel-config MEM_ALLOC_PROFILING
+fi
 
 # iotop:
 require-kernel-config TASK_DELAY_ACCT

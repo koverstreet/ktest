@@ -153,6 +153,14 @@ require-kernel-config-soft()
     ktest_kernel_config_require_soft+=("$1")
 }
 
+# True if dotted-numeric version $1 >= $2 (sort -V ordering). An empty $1 — e.g.
+# $ktest_kernel_version outside a kernel build — sorts below everything, so it
+# compares as false.
+version-ge()
+{
+    [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" = "$1" ]]
+}
+
 require-qemu-append()
 {
     ktest_qemu_append+=("$@")

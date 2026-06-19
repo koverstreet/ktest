@@ -122,6 +122,13 @@ fi
 
 ktest_kernel_source=$(readlink -e "$ktest_kernel_source")
 
+# Version we're building against, exposed for version-conditional kernel config
+# in kconfig.sh (options that only exist or only apply on newer kernels). `make
+# kernelversion` just reads VERSION/PATCHLEVEL/SUBLEVEL from the top Makefile, so
+# it works on an unconfigured tree.
+ktest_kernel_version=$(make -s -C "$ktest_kernel_source" kernelversion 2>/dev/null)
+export ktest_kernel_version
+
 ktest_kernel_build="$ktest_out/kernel_build.$ktest_arch"
 mkdir -p "$ktest_kernel_build"
 
