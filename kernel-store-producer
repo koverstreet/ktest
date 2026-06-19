@@ -103,6 +103,26 @@ run() {
     fi
 }
 
+# Deploy the packed store to a single worker. Returns non-zero on any failure
+# (unreachable host, scp/ssh error) instead of aborting, so the deploy loop can
+# tolerate individual worker failures — one dead box must not waste the whole
+# build.
+deploy_to() {
+    local worker=$1
+    run scp -q "$tarball" "$worker:.ktest/kernel-store.tar.zst" || return 1
+    run $SSH "$worker" '
+        set -e
+        cd .ktest
+        rm -rf kernels-new
+        tar --zstd -xf kernel-store.tar.zst
+        # -T: kernels is the literal target, not a dir to move into.
+        # mkdir -p: --exchange needs both dirs (first deploy has none).
+        mkdir -p kernels
+        mv -T --exchange kernels-new kernels
+        rm -rf kernels-new
+    ' || return 1
+}
+
 main() {
     if $do_pack; then
         log "fetching distro kernels"
@@ -120,21 +140,30 @@ main() {
     if $do_deploy; then
         [[ -f $tarball ]] || { log "no tarball at $tarball (run --pack-only first?)"; exit 1; }
 
-        for worker in $(read_workers); do
+        # A single unreachable / decommissioned worker must not abort the run:
+        # the build is expensive and the reachable workers still need the
+        # store. Warn-and-continue per worker; fail only if none took it.
+        local -a workers failed
+        mapfile -t workers < <(read_workers)
+        local ok=0
+
+        for worker in "${workers[@]}"; do
             log "deploying to $worker"
-            run scp -q "$tarball" "$worker:.ktest/kernel-store.tar.zst"
-            run $SSH "$worker" '
-                set -e
-                cd .ktest
-                rm -rf kernels-new
-                tar --zstd -xf kernel-store.tar.zst
-                # -T: kernels is the literal target, not a dir to move into.
-                # mkdir -p: --exchange needs both dirs (first deploy has none).
-                mkdir -p kernels
-                mv -T --exchange kernels-new kernels
-                rm -rf kernels-new
-            '
-	done
+            if deploy_to "$worker"; then
+                ok=$((ok + 1))
+            else
+                log "WARNING: deploy to $worker failed — store NOT updated there, continuing"
+                failed+=("$worker")
+            fi
+        done
+
+        if (( ${#failed[@]} )); then
+            log "deployed to $ok/${#workers[@]} workers; failed: ${failed[*]}"
+        fi
+        if (( ok == 0 )); then
+            log "deploy failed: no workers received the store"
+            exit 1
+        fi
     fi
 
     log "done"
