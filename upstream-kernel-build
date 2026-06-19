@@ -167,7 +167,12 @@ ensure_bare_clone() {
 	$DRY_RUN || git clone --quiet --bare "$url" "$dir"
     else
 	vlog "fetching $dir"
-	$DRY_RUN || git -C "$dir" fetch --quiet --tags --force origin
+	# `git clone --bare` configures no branch fetch refspec, so a plain
+	# `fetch` only updates tags and existing branches — a stable line added
+	# upstream after the clone (e.g. linux-7.1.y) would never appear, and
+	# branch-restricted tag resolution for it finds nothing. Fetch all heads
+	# explicitly so new branches show up.
+	$DRY_RUN || git -C "$dir" fetch --quiet --tags --force origin '+refs/heads/*:refs/heads/*'
     fi
 }
 
