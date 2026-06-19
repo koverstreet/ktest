@@ -187,6 +187,17 @@ init_build_bcachefs_tools() {
     fi
 
     if ! [[ -e /sys/fs/bcachefs ]]; then
+	if $ktest_interactive; then
+		# Dev loop: fast incremental in-place build — no dkms, no cache.
+		# The build tree persists under /ktest-out across the fresh-every-
+		# run VM, so kbuild only recompiles what actually changed.
+		if ! make -j$jobs -C "$tools" dkms-reload-interactive; then
+			echo "init_build_bcachefs_tools: interactive module build failed" >&2
+			return 1
+		fi
+		return
+	fi
+
 	local kver=$(uname -r)
 	local ko="/lib/modules/$kver/updates/dkms/bcachefs.ko"
 	local key=$(dkms_cache_key "$tools")
