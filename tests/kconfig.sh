@@ -90,7 +90,7 @@ require-kernel-config DEVTMPFS_MOUNT
 require-kernel-config BINFMT_ELF
 require-kernel-config BINFMT_SCRIPT
 
-require-kernel-config COMPACTION	# virtfs doesn't do well without it
+require-kernel-config COMPACTION	# host fs passthrough doesn't do well without it
 
 # bcachefs encryption uses the kernel keyring; also stops linux/keys.h's
 # !CONFIG_KEYS macro stubs from colliding with bkey_ops.key_validate
@@ -186,7 +186,7 @@ esac
 require-kernel-config PCI
 # Without MSI-X, virtio-pci falls back to legacy shared INTx: a single
 # IO-APIC line per device, no per-virtqueue vectors, no coalescing. Under
-# I/O-heavy loads (e.g. a build over the 9p host mount) that one line storms
+# I/O-heavy loads (e.g. a build over the virtiofs host mount) that one line storms
 # at tens of thousands of interrupts/sec, pegging qemu's main thread and
 # stalling the guest. MSI-X gives each virtqueue its own coalesced vector.
 require-kernel-config PCI_MSI
@@ -240,6 +240,11 @@ require-kernel-config EXT4_FS_SECURITY
 # use xfs as a comparison filesystem.
 require-kernel-config XFS_FS
 
+# Host filesystem passthrough is virtiofs (FUSE over vhost-user/virtio); see
+# lib/libktest.sh and lib/fstab. The 9p configs are kept for now as a
+# transitional fallback and can be dropped once virtiofs is proven fleet-wide.
+require-kernel-config FUSE_FS
+require-kernel-config VIRTIO_FS
 require-kernel-config NET_9P
 require-kernel-config NETWORK_FILESYSTEMS
 require-kernel-config 9P_FS

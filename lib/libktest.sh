@@ -390,6 +390,7 @@ start_vm()
 
     checkdep socat
     checkdep $QEMU_BIN $QEMU_PACKAGE
+    checkdep virtiofsd
     check_root_image_exists
 
     if [[ -z $ktest_kernel_binary ]]; then
@@ -476,7 +477,18 @@ start_vm()
 	-monitor	"unix:$ktest_out/vm/mon,server,nowait"		\
 	-gdb		"unix:$ktest_out/vm/gdb,server,nowait"		\
 	-device		virtio-rng-pci					\
-	-virtfs		local,path=/,mount_tag=host,security_model=none,multidevs=remap	\
+    )
+
+    # Host filesystem passthrough: virtiofsd (a userspace daemon) exports the
+    # host's / over a vhost-user socket; the guest mounts it as virtiofs at
+    # /host (see lib/fstab). vhost-user requires the guest's RAM to live in
+    # shared memory so the daemon can map the virtqueues, hence the memfd
+    # backend + single NUMA node. virtiofsd is started just before qemu below.
+    qemu_cmd+=(								\
+	-object		memory-backend-memfd,id=mem,size=${ktest_mem}M,share=on	\
+	-numa		node,memdev=mem					\
+	-chardev	socket,id=virtiofs,path=$ktest_out/vm/virtiofsd.sock	\
+	-device		vhost-user-fs-pci,chardev=virtiofs,tag=host	\
     )
 
     if [[ -f $ktest_kernel_binary/initramfs ]]; then
@@ -588,8 +600,37 @@ start_vm()
 
     set +o errexit
     save_env
-  
+
+    # Start virtiofsd and wait for it to listen before qemu connects. We kill
+    # it explicitly after qemu exits (fast path); as a backstop it's a
+    # background job, so ktest_exit's `kill -9 $(jobs -rp)` reaps it on any
+    # trapped exit (signal/error). Only an untrappable SIGKILL/OOM of this
+    # shell leaks it — the same window the foreground qemu child also leaks in.
+    #
+    # qemu runs unprivileged (start_vm refuses root), so virtiofsd does too:
+    # --sandbox none needs no namespace or root, and translating guest root to
+    # the invoking user means guest-root file ops on /host need no CAP_CHOWN.
+    # This mirrors 9p security_model=none, which also ran as the unprivileged
+    # user. The only cost is no file handles (more fds — ulimit is raised below).
+    rm -f "$ktest_out/vm/virtiofsd.sock"
+    virtiofsd	--socket-path="$ktest_out/vm/virtiofsd.sock"		\
+		--shared-dir / --sandbox none				\
+		--translate-uid map:0:$(id -u):1			\
+		--translate-gid map:0:$(id -g):1			\
+		>& "$ktest_out/vm/virtiofsd.log" &
+    local virtiofsd_pid=$!
+    while [[ ! -S "$ktest_out/vm/virtiofsd.sock" ]]; do
+	if ! kill -0 $virtiofsd_pid 2>/dev/null; then
+	    echo "virtiofsd failed to start:" >&2
+	    cat "$ktest_out/vm/virtiofsd.log" >&2
+	    exit 1
+	fi
+	sleep 0.1
+    done
+
     "${qemu_cmd[@]}"
+
+    kill $virtiofsd_pid 2>/dev/null
 }
 
 map_clang_version() {

@@ -32,8 +32,8 @@ ln -sf /host/$home $home
 
 # Per-slot cargo home: $ktest_deps_dir is this slot's own workspace, so
 # the N VMs sharing a host don't fight over one ~/.cargo — cargo's
-# package-cache lock doesn't coordinate across 9p clients and concurrent
-# builds wedge. mkdir -p keeps it from being a dangling symlink.
+# package-cache lock doesn't coordinate across host-mount clients and
+# concurrent builds wedge. mkdir -p keeps it from being a dangling symlink.
 rm -rf /root/.cargo
 mkdir -p $ktest_deps_dir/.cargo
 ln -s $ktest_deps_dir/.cargo /root/.cargo
@@ -54,7 +54,7 @@ mkdir -p /lib/modules
 # a single dir-symlink, so we can override /lib/modules/<kver>/updates
 # with a writable symlink to /ktest-out. DKMS install lays bcachefs.ko
 # under /lib/modules/<kver>/updates/dkms/ — the store entry is on the
-# 9p-mounted host fs and root-owned from the nspawn build, so a direct
+# virtiofs-mounted host fs and root-owned from the nspawn build, so a direct
 # write there fails inside the VM. Redirecting just `updates` keeps the
 # rest of the layout at the standard path (depmod, modprobe lookups,
 # tooling that walks /lib/modules all keep working).
