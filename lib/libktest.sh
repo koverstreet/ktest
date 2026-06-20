@@ -8,8 +8,7 @@ ktest_root_image=""	# virtual machine root filesystem
                         #       defaults: /var/lib/ktest/root
                         #       auto-override: $HOME/.ktest/root
 ktest_kernel_source="."	# dir of kernel source
-			#       set with: -k <path>
-			#       defaults: current directory
+			#       build-test-kernel: -k <dir>, defaults to cwd
 ktest_kernel_build=
 ktest_out="./ktest-out"	# dir for test output (logs, code coverage, etc.)
 

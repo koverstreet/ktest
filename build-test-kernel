@@ -43,7 +43,7 @@ usage()
     echo
     echo " options for build-test-kernel run:"
     ktest_usage_run_opts
-    echo "      -k <dir>        kernel source dir"
+    echo "      -k <dir>        kernel source dir to build from (default: cwd)"
     echo "      -c <dir>        enable coverage for this dir (only valid without -K)"
     echo "      -M <arg>        extra arguments to be passed to make when building the kernel"
     echo "      -K              keep existing kernel .config"
@@ -71,7 +71,13 @@ ktest_build_destdir=""
 while getopts "k:Pc:M:KV:D:h${ktest_args}" arg; do
     case $arg in
 	k)
+	    # build-test-kernel's -k is the kernel SOURCE dir to build from
+	    # (default: cwd). continue past parse_ktest_arg, which would
+	    # otherwise also bind -k to ktest_kernel_name — the pre-built-kernel
+	    # selector that the run path resolves to ktest_kernel_binary and
+	    # rm -rf's as its build output dir.
 	    ktest_kernel_source="$OPTARG"
+	    continue
 	    ;;
 	P)
 	    ktest_precise=true
@@ -111,9 +117,6 @@ done
 shift $(( OPTIND - 1 ))
 
 parse_args_post
-
-# default parameters
-[[ -z $ktest_kernel_source ]]	&& ktest_kernel_source="."
 
 if [[ ! -d $ktest_kernel_source ]]; then
     echo "kernel source directory $ktest_kernel_source does not exist"
@@ -164,10 +167,8 @@ cmd_run()
     fi
 
     # kernel.$ktest_arch is build-test-kernel's local build output; libktest
-    # no longer defaults to it, so set it here when -k wasn't given.
-    if [[ -z ${ktest_kernel_name:-} ]]; then
-	ktest_kernel_binary="$ktest_out/kernel.$ktest_arch"
-    fi
+    # no longer defaults to it, so set it here.
+    ktest_kernel_binary="$ktest_out/kernel.$ktest_arch"
 
     if ! $ktest_no_kbuild; then
 	run_quiet "building kernel" build_kernel
