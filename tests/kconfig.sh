@@ -284,7 +284,7 @@ require-kernel-config SHRINKER_DEBUG
 # allocation; that overhead skews the perf tests. ktest builds from allnoconfig,
 # so just not requiring it leaves it off there — require it on only for < 7.0.
 if ! version-ge "${ktest_kernel_version:-}" 7.0; then
-	require-kernel-config MEM_ALLOC_PROFILING
+    require-kernel-config MEM_ALLOC_PROFILING
 fi
 
 # iotop:

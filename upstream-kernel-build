@@ -299,6 +299,14 @@ build_one() {
     local build_uid build_gid
     build_uid=$(id -u)
     build_gid=$(id -g)
+
+    # make kernelversion is unreliable inside the nspawn rootfs; detect it on
+    # the host (where it works) and pass it in, so kconfig.sh's version guards
+    # don't misfire on an empty version.
+    local kernel_version
+    kernel_version=$(make -s -C "$build_repo" kernelversion 2>/dev/null)
+    log "$release-$variant: kernel version ${kernel_version:-UNKNOWN}"
+
     sudo systemd-nspawn \
 	--image="$rootfs" \
 	--read-only \
@@ -312,6 +320,7 @@ build_one() {
 	--bind="$(dirname "$destdir")" \
 	--setenv=HOME=/root \
 	--setenv=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+	--setenv=ktest_kernel_version="$kernel_version" \
 	/bin/bash -c "
 	    set -e
 	    $pre_cmd
