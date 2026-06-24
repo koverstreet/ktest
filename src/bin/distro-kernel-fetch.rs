@@ -1331,7 +1331,7 @@ fn nixos_extract_and_layout(
         let dst = extracted.join(role);
         // nix-nar's Decoder::unpack refuses to write into an existing
         // directory — it wants to mkdir it. Don't pre-create.
-        extract_nar_xz(path, &dst)
+        extract_nar(path, &dst)
             .with_context(|| format!("extracting nixos {} NAR", role))?;
         role_dir.insert(role.to_string(), dst);
     }
@@ -1754,23 +1754,38 @@ fn extract_archive(archive: &Path, dst: &Path) -> Result<()> {
         let mut c = Command::new("tar");
         c.args(["-xzf", a, "-C", d]);
         run_extractor(c, fname)
-    } else if fname.ends_with(".nar.xz") {
-        extract_nar_xz(archive, dst)
+    } else if fname.ends_with(".nar.xz") || fname.ends_with(".nar.zst")
+           || fname.ends_with(".nar") {
+        extract_nar(archive, dst)
     } else {
         bail!("unsupported archive extension: {}", fname)
     }
 }
 
-/// Decompress a `.nar.xz` and unpack the NAR into `dst`. The NAR's root
-/// becomes the contents of `dst` (directories/files/symlinks land directly
-/// under it). Compared to the deb/rpm/tar branches we don't shell out: xz
-/// and NAR are both in-process via crates.
-fn extract_nar_xz(archive: &Path, dst: &Path) -> Result<()> {
-    let xz_bytes = fs::read(archive)
+/// Decompress a NAR and unpack it into `dst`. The NAR's root becomes the
+/// contents of `dst` (directories/files/symlinks land directly under it).
+/// Compared to the deb/rpm/tar branches we don't shell out: decompression
+/// and NAR are both in-process via crates. cache.nixos.org serves NARs xz-
+/// or zstd-compressed (or, rarely, uncompressed); the URL suffix says which.
+/// Dispatch on it — don't assume xz (cache.nixos.org has been migrating to
+/// zstd).
+fn extract_nar(archive: &Path, dst: &Path) -> Result<()> {
+    let raw = fs::read(archive)
         .with_context(|| format!("reading {}", archive.display()))?;
-    let mut nar_bytes = Vec::with_capacity(xz_bytes.len() * 4);
-    lzma_rs::xz_decompress(&mut std::io::Cursor::new(&xz_bytes), &mut nar_bytes)
-        .with_context(|| format!("xz-decompressing {}", archive.display()))?;
+    let name = archive.to_string_lossy();
+    let nar_bytes = if name.ends_with(".nar.zst") {
+        zstd_decompress(&raw)
+            .with_context(|| format!("zstd-decompressing {}", archive.display()))?
+    } else if name.ends_with(".nar.xz") {
+        let mut out = Vec::with_capacity(raw.len() * 4);
+        lzma_rs::xz_decompress(&mut std::io::Cursor::new(&raw), &mut out)
+            .with_context(|| format!("xz-decompressing {}", archive.display()))?;
+        out
+    } else if name.ends_with(".nar") {
+        raw
+    } else {
+        bail!("unrecognized NAR compression suffix: {}", archive.display());
+    };
     let dec = nix_nar::Decoder::new(std::io::Cursor::new(&nar_bytes))
         .with_context(|| format!("opening NAR {}", archive.display()))?;
     dec.unpack(dst)
