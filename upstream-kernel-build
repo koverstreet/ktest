@@ -6,10 +6,14 @@
 # Drives build-test-kernel's `build` command under the hood. Config is
 # json5 (see upstream-builds.json5.example); state lives under $HOME/.ktest/:
 #
-#   upstream-srcs/<release>.git/             bare clones (one per source, fetched)
-#   upstream-builds/<release>-<variant>/     dedicated working clones
-#                                            (one per release×variant; sidesteps
-#                                             git's multi-process worktree races)
+#   upstream-srcs/linux.git/                 one shared bare repo; every source is
+#                                            a remote (refs/remotes/<source>/*), so
+#                                            all upstream trees share a single
+#                                            object store instead of a clone each
+#   upstream-builds/<release>-<variant>/     working clone per release×variant,
+#                                            borrowing objects from the shared bare
+#                                            via alternates (sidesteps git's
+#                                            multi-process worktree races)
 #   kernels/upstream/<release>-<variant>/<arch>/<version>/   store entries
 #
 # Run periodically; memoized by manifest.json presence (a successful build
@@ -65,6 +69,12 @@ while getopts "c:a:b:o:fnpvh" arg; do
 done
 
 SRCS_DIR="$KTEST_DATA/upstream-srcs"
+# One shared bare repo for every source. The upstream linux trees (stable,
+# mainline, rc, ...) are the same history with different refs, so a single
+# object store dedups them; each source is a git remote, its heads fetched into
+# refs/remotes/<source>/* (namespaced — stable and mainline both carry a
+# 'master', which would otherwise collide).
+SHARED_BARE="$SRCS_DIR/linux.git"
 BUILDS_DIR="$KTEST_DATA/upstream-builds"
 # A plain run publishes into the live store, so an interactive build can
 # be booted straight away. -p builds into a staging dir and never touches
@@ -141,54 +151,72 @@ list_builds() {
 # rc releases pick vX.Y-rcN; everything else picks vX.Y.Z.
 resolve_tag() {
     local release=$1 source=$2 branch=$3
-    local bare="$SRCS_DIR/$source.git"
     local pattern
     case "$release" in
 	*rc*)    pattern='^v[0-9]+\.[0-9]+-rc[0-9]+$' ;;
 	*)       pattern='^v[0-9]+\.[0-9]+(\.[0-9]+)?$' ;;
     esac
+    # Scope to the source's own refs: a branch resolves the latest tag merged
+    # into refs/remotes/<source>/<branch>; branchless ("-") falls back to the
+    # source's default head (refs/remotes/<source>/HEAD, set in fetch_source).
+    local ref
     if [[ $branch != "-" ]]; then
-	git -C "$bare" tag --merged "$branch" --sort=-v:refname \
-	    | grep -E "$pattern" \
-	    | head -1
+	ref="refs/remotes/$source/$branch"
     else
-	git -C "$bare" tag --sort=-v:refname \
-	    | grep -E "$pattern" \
-	    | head -1
+	ref="refs/remotes/$source/HEAD"
     fi
+    git -C "$SHARED_BARE" tag --merged "$ref" --sort=-v:refname \
+	| grep -E "$pattern" \
+	| head -1
 }
 
-ensure_bare_clone() {
-    local source=$1 url=$2
-    local dir="$SRCS_DIR/$source.git"
+ensure_shared_bare() {
     mkdir -p "$SRCS_DIR"
-    if [[ ! -d $dir ]]; then
-	log "cloning $url → $dir (first run, may take a while)"
-	$DRY_RUN || git clone --quiet --bare "$url" "$dir"
-    else
-	vlog "fetching $dir"
-	# `git clone --bare` configures no branch fetch refspec, so a plain
-	# `fetch` only updates tags and existing branches — a stable line added
-	# upstream after the clone (e.g. linux-7.1.y) would never appear, and
-	# branch-restricted tag resolution for it finds nothing. Fetch all heads
-	# explicitly so new branches show up.
-	$DRY_RUN || git -C "$dir" fetch --quiet --tags --force origin '+refs/heads/*:refs/heads/*'
-    fi
+    [[ -d $SHARED_BARE ]] && return 0
+    log "init shared bare repo $SHARED_BARE"
+    $DRY_RUN || git init --quiet --bare "$SHARED_BARE"
 }
 
-# A dedicated working clone per (release, variant). `--reference <bare>`
-# shares object storage with the bare clone so we don't duplicate the
-# kernel's history on disk per variant; each clone has its own .git
-# state, so concurrent builds across variants don't race on refs/HEAD.
-ensure_build_repo() {
-    local source=$1 release=$2 variant=$3
-    local bare="$SRCS_DIR/$source.git"
-    local dir="$BUILDS_DIR/$release-$variant"
-    mkdir -p "$BUILDS_DIR"
-    if [[ ! -d $dir/.git ]]; then
-	log "init build repo $dir"
-	$DRY_RUN || git clone --quiet --reference "$bare" --shared "$bare" "$dir"
+# Add (once) a remote per source and fetch it into the shared bare. Heads land
+# in refs/remotes/<source>/* (per-source, so cross-source branches like stable's
+# and mainline's both-named 'master' don't collide); tags are global, which is
+# fine — the same tag names the same object in every upstream tree. Because all
+# sources share this one object store, a second source (mainline alongside
+# stable) costs only its unique objects, not a full copy of kernel history.
+fetch_source() {
+    local source=$1 url=$2
+    if $DRY_RUN; then
+	log "would fetch source $source ($url) into $SHARED_BARE"
+	return 0
     fi
+    if ! git -C "$SHARED_BARE" remote get-url "$source" >/dev/null 2>&1; then
+	git -C "$SHARED_BARE" remote add "$source" "$url"
+	# Record the remote's default branch so a branchless release resolves
+	# its tags from refs/remotes/<source>/HEAD. Best-effort (one ls-remote).
+	git -C "$SHARED_BARE" remote set-head "$source" --auto >/dev/null 2>&1 || true
+    else
+	git -C "$SHARED_BARE" remote set-url "$source" "$url"
+    fi
+    vlog "fetching $source"
+    git -C "$SHARED_BARE" fetch --quiet --tags --force "$source" \
+	"+refs/heads/*:refs/remotes/$source/*"
+}
+
+# A dedicated working clone per (release, variant), borrowing objects from the
+# shared bare via alternates so we don't duplicate kernel history on disk per
+# variant; each has its own .git state, so concurrent builds across variants
+# don't race on refs/HEAD. Plain `git init` + alternates rather than `git clone`
+# because the shared bare is headless (it carries only refs/remotes/*); the
+# tag is fetched and checked out in build_one.
+ensure_build_repo() {
+    local release=$1 variant=$2
+    local dir="$BUILDS_DIR/$release-$variant"
+    [[ -d $dir/.git ]] && return 0
+    mkdir -p "$BUILDS_DIR"
+    log "init build repo $dir"
+    $DRY_RUN && return 0
+    git init --quiet "$dir"
+    printf '%s\n' "$SHARED_BARE/objects" > "$dir/.git/objects/info/alternates"
 }
 
 already_have() {
@@ -198,7 +226,7 @@ already_have() {
 
 build_one() {
     local release=$1 variant=$2 source=$3 branch=$4 url=$5
-    local bare="$SRCS_DIR/$source.git"
+    local bare="$SHARED_BARE"
     local build_repo="$BUILDS_DIR/$release-$variant"
 
     # On a dry-run the bare clone hasn't been fetched, so we can't
@@ -224,7 +252,7 @@ build_one() {
 	return 0
     fi
 
-    ensure_build_repo "$source" "$release" "$variant"
+    ensure_build_repo "$release" "$variant"
     git -C "$build_repo" fetch --quiet "$bare" "+refs/tags/$tag:refs/tags/$tag"
     git -C "$build_repo" reset --quiet --hard "$tag"
     git -C "$build_repo" clean -qfdx
@@ -335,11 +363,12 @@ build_one() {
 main() {
     mkdir -p "$KERNELS_DIR" "$WORK_DIR"
 
-    # Phase 1: fetch every distinct source tree. Sources are now
-    # shared across releases (eg. stable, stable-6.17, stable-6.18 all
-    # alias one linux-stable bare clone).
+    # Phase 1: one shared bare repo, one remote per source. Every upstream
+    # linux tree shares this single object store; refs are namespaced per
+    # source (refs/remotes/<source>/*).
+    ensure_shared_bare
     while IFS=$'\t' read -r source url; do
-	ensure_bare_clone "$source" "$url"
+	fetch_source "$source" "$url"
     done < <(list_sources)
 
     # Phase 2: build each (release, variant) that isn't already in the store.
