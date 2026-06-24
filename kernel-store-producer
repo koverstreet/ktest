@@ -26,6 +26,11 @@ KTEST_DATA="${KTEST_DATA:-$HOME/.ktest}"
 CONFIG_PATH="${KTEST_CI_CONFIG:-$KTEST_DATA/ktest-ci.json5}"
 
 SSH="ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new"
+# Same options for scp. A freshly-(re)deployed worker presents a new host key
+# that accept-new must add; a bare scp fails non-interactively on the unknown
+# key (manifests as "scp: Connection closed") before the $SSH step below could
+# accept it.
+SCP="scp -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new"
 
 # Build the store into a real-disk staging dir (it's many GB — keep it off
 # /tmp, which may be tmpfs). Script-scoped, not main()-local, so the EXIT
@@ -109,7 +114,7 @@ run() {
 # build.
 deploy_to() {
     local worker=$1
-    run scp -q "$tarball" "$worker:.ktest/kernel-store.tar.zst" || return 1
+    run $SCP -q "$tarball" "$worker:.ktest/kernel-store.tar.zst" || return 1
     run $SSH "$worker" '
         set -e
         cd .ktest
