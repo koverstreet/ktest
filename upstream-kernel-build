@@ -163,7 +163,12 @@ resolve_tag() {
     if [[ $branch != "-" ]]; then
 	ref="refs/remotes/$source/$branch"
     else
-	ref="refs/remotes/$source/HEAD"
+	# set-head --auto is best-effort and often leaves refs/remotes/<source>/HEAD
+	# unset, which silently resolves zero tags; fall back to the usual default
+	# branch names so a branchless source can't vanish without a trace.
+	ref=$(for r in "refs/remotes/$source/HEAD" "refs/remotes/$source/master" "refs/remotes/$source/main"; do
+		git -C "$SHARED_BARE" rev-parse --verify --quiet "$r" >/dev/null 2>&1 && { echo "$r"; break; }
+	done)
     fi
     git -C "$SHARED_BARE" tag --merged "$ref" --sort=-v:refname \
 	| grep -E "$pattern" \
