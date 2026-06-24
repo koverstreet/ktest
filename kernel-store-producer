@@ -148,7 +148,7 @@ main() {
         # A single unreachable / decommissioned worker must not abort the run:
         # the build is expensive and the reachable workers still need the
         # store. Warn-and-continue per worker; fail only if none took it.
-        local -a workers failed
+        local -a workers failed=()
         mapfile -t workers < <(read_workers)
         local ok=0
 
