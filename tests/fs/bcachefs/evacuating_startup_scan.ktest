@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config BCACHEFS_FS=y
+
+config-mem 4G
+config-scratch-devs 512M
+config-scratch-devs 512M
+config-scratch-devs 512M
+
+devs()
+{
+    join_by : "${ktest_scratch_dev[@]}"
+}
+
+dump_debug()
+{
+    bcachefs fs usage -h --all /mnt || true
+    cat /sys/fs/bcachefs/*/dev-0/state || true
+    cat /sys/fs/bcachefs/*/dev-0/has_data || true
+    cat /sys/fs/bcachefs/*/dev-0/alloc_debug || true
+    cat /sys/fs/bcachefs/*/reconcile_status || true
+    cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
+}
+
+dev0_has_user_data()
+{
+    awk '$1 == "user" { found = $2 > 0 } END { exit !found }' \
+	/sys/fs/bcachefs/*/dev-0/alloc_debug
+}
+
+test_offline_evacuating_device_schedules_scan()
+{
+    set_watchdog 240
+
+    run_quiet "" bcachefs format -f		\
+	--block_size=4k				\
+	--bucket_size=256k			\
+	--replicas=1				\
+	--foreground_target=src			\
+	--label=src ${ktest_scratch_dev[0]}	\
+	--label=dst ${ktest_scratch_dev[1]}	\
+	--label=dst ${ktest_scratch_dev[2]}
+
+    mount -t bcachefs "$(devs)" /mnt
+
+    dd if=/dev/zero of=/mnt/src-data bs=4M count=16 oflag=direct status=none
+    sync
+
+    if ! dev0_has_user_data; then
+	echo "test setup failed: initial write did not place user data on dev 0"
+	dump_debug
+	return 1
+    fi
+
+    umount /mnt
+
+    bcachefs device set-state --offline --force evacuating ${ktest_scratch_dev[0]}
+    bcachefs show-super --field-only members_v2 ${ktest_scratch_dev[0]} |
+	grep -E 'Needs reconcile scan:[[:space:]]+1'
+
+    mount -t bcachefs "$(devs)" /mnt
+
+    bcachefs reconcile wait -t high_priority /mnt
+
+    if dev0_has_user_data; then
+	echo "evacuating device still has user data after rw mount and high-priority reconcile"
+	dump_debug
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    ! bcachefs show-super --field-only members_v2 ${ktest_scratch_dev[0]} |
+	grep -E 'Needs reconcile scan:[[:space:]]+1'
+    bcachefs reset-counters --counters=trans_restart_upgrade ${ktest_scratch_dev[1]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[1]}
+}
+
+main "$@"
