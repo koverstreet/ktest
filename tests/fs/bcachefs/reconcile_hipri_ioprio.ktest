@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+require-kernel-config BCACHEFS_FS=y
+
+config-mem 4G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+
+devs()
+{
+    join_by : "${ktest_scratch_dev[@]}"
+}
+
+dump_reconcile_debug()
+{
+    bcachefs fs usage -h --all /mnt || true
+    cat /sys/fs/bcachefs/*/reconcile_status || true
+    cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
+    tail -n 500 /sys/kernel/tracing/trace || true
+}
+
+check_hipri_reconcile_ioprio()
+{
+    for _ in $(seq 1 100); do
+	if trace_has_data_update_ioprio reconcile best-effort:7; then
+	    return 0
+	fi
+	sleep .1
+    done
+
+    echo "did not observe high-priority reconcile data_update at best-effort:7"
+    dump_reconcile_debug
+    return 1
+}
+
+trace_has_data_update_ioprio()
+{
+    local operation=$1
+    local priority=$2
+
+    awk -v operation="$operation" -v priority="$priority" '
+	function finish_event() {
+	    if (in_event && saw_operation && saw_priority)
+		found = 1
+	}
+	/bcachefs:[[:alnum:]_]+:/ {
+	    finish_event()
+	    in_event = $0 ~ /bcachefs:data_update:/
+	    saw_operation = in_event && index($0, ": " operation)
+	    saw_priority = in_event && index($0, "ioprio: " priority)
+	    next
+	}
+	in_event && index($0, "ioprio:") && index($0, priority) {
+	    saw_priority = 1
+	}
+	END {
+	    finish_event()
+	    exit !found
+	}
+    ' /sys/kernel/tracing/trace
+}
+
+src_has_user_data()
+{
+    awk '$1 == "user" { found = $2 > 0 } END { exit !found }' \
+	/sys/fs/bcachefs/*/dev-0/alloc_debug
+}
+
+wait_for_src_user_data_evacuated()
+{
+    local has_data
+
+    for _ in $(seq 1 1200); do
+	has_data=$(cat /sys/fs/bcachefs/*/dev-0/has_data)
+	if ! grep -qw user <<< "$has_data"; then
+	    return 0
+	fi
+	sleep .1
+    done
+
+    echo "source device still has user data after evacuation wait"
+    dump_reconcile_debug
+    return 1
+}
+
+test_hipri_reconcile_uses_best_effort_ioprio()
+{
+    set_watchdog 240
+
+    run_quiet "" bcachefs format -f			\
+	--block_size=4k					\
+	--bucket_size=256k				\
+	--replicas=1					\
+	--foreground_target=src			\
+	--background_target=src			\
+	--rotational=1 --label=src ${ktest_scratch_dev[0]} \
+	--rotational=1 --label=dst ${ktest_scratch_dev[1]} \
+	--rotational=1 --label=dst ${ktest_scratch_dev[2]}
+
+    mount -t bcachefs "$(devs)" /mnt
+
+    dd if=/dev/zero of=/mnt/src-only-data bs=4M count=64 oflag=direct status=none
+    sync
+
+    if ! src_has_user_data; then
+	echo "test setup failed: source device has no user data"
+	dump_reconcile_debug
+	return 1
+    fi
+
+    setup_tracing 'bcachefs:data_update bcachefs:data_update_no_io bcachefs:data_update_read bcachefs:data_update_write'
+
+    echo none > /sys/fs/bcachefs/*/options/foreground_target
+    echo none > /sys/fs/bcachefs/*/options/background_target
+    echo evacuating > /sys/fs/bcachefs/*/dev-0/state
+    wait_for_src_user_data_evacuated
+    check_hipri_reconcile_ioprio
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+main "$@"
