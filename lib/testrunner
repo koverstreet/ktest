@@ -50,6 +50,17 @@ else
 fi
 
 mkdir -p /lib/modules
+
+# Kernel build trees are produced on the host and often record absolute
+# source/output paths in generated Makefiles. Mirror those paths inside the VM
+# so in-guest external module builds (DKMS) can follow them through /host.
+for path in "$ktest_kernel_source" "$ktest_kernel_build"; do
+    if [[ $path = /* && ! -e $path ]]; then
+        mkdir -p "$(dirname "$path")"
+        ln -sfn "/host$path" "$path"
+    fi
+done
+
 # Mirror the kernel store entry into /lib/modules per-kver instead of as
 # a single dir-symlink, so we can override /lib/modules/<kver>/updates
 # with a writable symlink to /ktest-out. DKMS install lays bcachefs.ko
@@ -62,7 +73,17 @@ for kver_src in /host/$ktest_kernel_binary/lib/modules/*; do
     kver=$(basename "$kver_src")
     mkdir -p "/lib/modules/$kver"
     for entry in "$kver_src"/*; do
-        ln -sf "$entry" "/lib/modules/$kver/$(basename "$entry")"
+        if [[ -L $entry ]]; then
+            target=$(readlink "$entry")
+            if [[ $target = /* ]]; then
+                target="/host$target"
+            else
+                target="$(dirname "$entry")/$target"
+            fi
+            ln -sf "$target" "/lib/modules/$kver/$(basename "$entry")"
+        else
+            ln -sf "$entry" "/lib/modules/$kver/$(basename "$entry")"
+        fi
     done
     mkdir -p /ktest-out/dkms
     ln -sfn /ktest-out/dkms "/lib/modules/$kver/updates"
