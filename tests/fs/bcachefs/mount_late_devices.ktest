@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config BLK_DEV_LOOP
+
+config-mem 2G
+
+tmpdir=
+reattach_pid=
+
+detach_loop_image()
+{
+    [[ -f $1 ]] || return 0
+
+    losetup -j "$1" | cut -d: -f1 | while read -r dev; do
+	[[ -n $dev ]] && losetup -d "$dev" || true
+    done
+}
+
+cleanup_mount_late_devices()
+{
+    set +e
+
+    [[ -n ${reattach_pid:-} ]] && kill "$reattach_pid" 2>/dev/null || true
+    umount /mnt 2>/dev/null || true
+
+    if [[ -n ${tmpdir:-} ]]; then
+	detach_loop_image "$tmpdir/dev0.img"
+	detach_loop_image "$tmpdir/dev1.img"
+	rm -rf "$tmpdir"
+    fi
+}
+
+trap cleanup_mount_late_devices EXIT
+
+test_mount_uuid_waits_for_late_device()
+{
+    local loop0 loop1 uuid reattach_log
+
+    set_watchdog 120
+
+    modprobe loop
+
+    tmpdir=$(mktemp -d /root/bcachefs-late-device.XXXXXX)
+    truncate -s 512M "$tmpdir/dev0.img" "$tmpdir/dev1.img"
+
+    loop0=$(losetup --find --show "$tmpdir/dev0.img")
+    loop1=$(losetup --find --show "$tmpdir/dev1.img")
+
+    run_quiet "" bcachefs format -f --replicas=2 "$loop0" "$loop1"
+
+    uuid=$(blkid -p -s UUID -o value "$loop0")
+    if [[ -z $uuid ]]; then
+	echo "failed to read bcachefs UUID from $loop0"
+	return 1
+    fi
+
+    losetup -d "$loop1"
+    udevadm settle || true
+
+    if bcachefs wait-devices --timeout 1 "UUID=$uuid"; then
+	echo "wait-devices unexpectedly succeeded while one loop member was detached"
+	return 1
+    fi
+
+    reattach_log="$tmpdir/reattach-loop"
+    (
+	sleep 2
+	losetup --find --show "$tmpdir/dev1.img" > "$reattach_log"
+	udevadm settle || true
+    ) &
+    reattach_pid=$!
+
+    BCACHEFS_MOUNT_DEVICE_WAIT_SECS=10 mount -t bcachefs "UUID=$uuid" /mnt
+    wait "$reattach_pid"
+    reattach_pid=
+
+    loop1=$(cat "$reattach_log")
+
+    dd if=/dev/zero of=/mnt/late-device-mounted bs=4k count=1 oflag=direct status=none
+    umount /mnt
+
+    bcachefs fsck -ny "$loop0" "$loop1"
+    check_bcachefs_leaks
+    check_bcachefs_device_errors "$loop0"
+    check_bcachefs_counters "$loop0"
+}
+
+main "$@"
