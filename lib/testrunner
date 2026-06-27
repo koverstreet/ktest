@@ -58,11 +58,44 @@ mkdir -p /lib/modules
 # write there fails inside the VM. Redirecting just `updates` keeps the
 # rest of the layout at the standard path (depmod, modprobe lookups,
 # tooling that walks /lib/modules all keep working).
+make_host_path_visible()
+{
+    local path="$1"
+
+    [[ $path = /* ]] || return 0
+
+    local visible="" part
+    local old_ifs="$IFS"
+    IFS=/
+    for part in ${path#/}; do
+        IFS="$old_ifs"
+        [[ -n $part ]] || continue
+        visible="$visible/$part"
+        [[ $visible = /host ]] && return 0
+        [[ -e $visible ]] && continue
+        if [[ -e /host$visible ]]; then
+            ln -s "/host$visible" "$visible"
+        fi
+        return 0
+    done
+    IFS="$old_ifs"
+}
+
+make_host_path_visible "$ktest_kernel_binary"
+
 for kver_src in /host/$ktest_kernel_binary/lib/modules/*; do
     kver=$(basename "$kver_src")
     mkdir -p "/lib/modules/$kver"
     for entry in "$kver_src"/*; do
-        ln -sf "$entry" "/lib/modules/$kver/$(basename "$entry")"
+        target="$entry"
+        if [[ -L $entry ]]; then
+            link_target=$(readlink "$entry")
+            if [[ $link_target = /* && -e "/host$link_target" ]]; then
+                make_host_path_visible "$link_target"
+                target="/host$link_target"
+            fi
+        fi
+        ln -sf "$target" "/lib/modules/$kver/$(basename "$entry")"
     done
     mkdir -p /ktest-out/dkms
     ln -sfn /ktest-out/dkms "/lib/modules/$kver/updates"
