@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config BCACHEFS_FS=y
+
+config-mem 4G
+config-scratch-devs 512M
+config-scratch-devs 512M
+config-scratch-devs 512M
+config-scratch-devs 512M
+config-scratch-devs 512M
+config-scratch-devs 512M
+config-scratch-devs 512M
+config-scratch-devs 512M
+
+devs()
+{
+    join_by : "${ktest_scratch_dev[@]}"
+}
+
+dump_reconcile_debug()
+{
+    bcachefs fs usage -h --all /mnt || true
+    cat /sys/fs/bcachefs/*/reconcile_status || true
+    cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
+}
+
+reconcile_phys_considered()
+{
+    awk '/phys workers last phase:/ { print $6 }' /sys/fs/bcachefs/*/reconcile_status
+}
+
+reconcile_phys_started()
+{
+    awk '/phys workers last phase:/ { print $8 }' /sys/fs/bcachefs/*/reconcile_status
+}
+
+reconcile_phys_skipped_empty()
+{
+    awk '/phys workers last phase:/ { print $11 }' /sys/fs/bcachefs/*/reconcile_status
+}
+
+assert_reconcile_phys_skipped_empty_devices()
+{
+    local considered=$(reconcile_phys_considered)
+    local started=$(reconcile_phys_started)
+    local skipped=$(reconcile_phys_skipped_empty)
+
+    if [[ -z $considered || -z $started || -z $skipped ]]; then
+	echo "reconcile_status did not expose phys worker fanout diagnostics"
+	dump_reconcile_debug
+	return 1
+    fi
+
+    if (( considered < 6 || skipped < 4 )); then
+	echo "phys reconcile did not skip empty rotational devices"
+	echo "considered=$considered started=$started skipped_empty=$skipped"
+	dump_reconcile_debug
+	return 1
+    fi
+}
+
+test_reconcile_phys_skips_empty_rotational_devices()
+{
+    set_watchdog 180
+
+    run_quiet "" bcachefs format -f		    \
+	--block_size=4k				    \
+	--bucket_size=256k			    \
+	--replicas=1				    \
+	--foreground_target=src		    \
+	--background_target=src		    \
+	--rotational=1 --label=src ${ktest_scratch_dev[0]}    \
+	--rotational=1 --label=dst ${ktest_scratch_dev[1]}    \
+	--rotational=1 --label=empty ${ktest_scratch_dev[2]}  \
+	--rotational=1 --label=empty ${ktest_scratch_dev[3]}  \
+	--rotational=1 --label=empty ${ktest_scratch_dev[4]}  \
+	--rotational=1 --label=empty ${ktest_scratch_dev[5]}  \
+	--rotational=1 --label=empty ${ktest_scratch_dev[6]}  \
+	--rotational=1 --label=empty ${ktest_scratch_dev[7]}
+
+    mount -t bcachefs "$(devs)" /mnt
+
+    dd if=/dev/zero of=/mnt/src-only-data bs=4M count=8 oflag=direct status=none
+    sync
+
+    echo 2 > /sys/fs/bcachefs/*/options/data_replicas
+    bcachefs reconcile wait -t replicas /mnt
+
+    assert_reconcile_phys_skipped_empty_devices
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+main "$@"
