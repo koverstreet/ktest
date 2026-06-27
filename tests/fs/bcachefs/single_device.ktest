@@ -861,6 +861,29 @@ test_crypto_locked_mnt()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+test_unlock_empty_passphrase_file()
+{
+    set_watchdog 30
+
+    echo foo|bcachefs format -f --encrypted ${ktest_scratch_dev[0]}
+
+    set +o errexit
+    bcachefs unlock -f /dev/null ${ktest_scratch_dev[0]} </dev/null
+    local ret=$?
+    set -o errexit
+
+    [[ $ret -ne 0 ]] || { echo "unlock unexpectedly accepted empty passphrase"; return 1; }
+    [[ $ret -ne 139 ]] || { echo "unlock segfaulted on empty passphrase file"; return 1; }
+    [[ $ret -ne 134 ]] || { echo "unlock aborted on empty passphrase file"; return 1; }
+
+    echo foo|bcachefs unlock -k session ${ktest_scratch_dev[0]}
+    mount -t bcachefs -o verbose ${ktest_scratch_dev[0]} /mnt
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_crypto()
 {
     run_basic_fio_test				\
