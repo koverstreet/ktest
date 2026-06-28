@@ -3,10 +3,10 @@
 . "$ktest_dir/lib/util.sh"
 . "$ktest_dir/lib/parse-test.sh"
 
-ktest_root_image=""	# virtual machine root filesystem
-                        #       set with: -i <path>
-                        #       defaults: /var/lib/ktest/root
-                        #       auto-override: $HOME/.ktest/root
+ktest_root_image="${ktest_root_image:-}" # virtual machine root filesystem
+			#       set with: -i <path>
+			#       defaults: /var/lib/ktest/root
+			#       auto-override: $HOME/.ktest/root
 ktest_kernel_source="."	# dir of kernel source
 			#       build-test-kernel: -k <dir>, defaults to cwd
 ktest_kernel_build=
@@ -38,7 +38,7 @@ ktest_no_vm=false
 
 # args:
 
-ktest_args="a:k:o:p:T:ISFLvxn:N:"
+ktest_args="a:i:k:o:p:T:ISFLvxn:N:"
 parse_ktest_arg()
 {
     local arg=$1
@@ -46,6 +46,9 @@ parse_ktest_arg()
     case $arg in
 	a)
 	    ktest_arch=$OPTARG
+	    ;;
+	i)
+	    ktest_root_image=$OPTARG
 	    ;;
 	k)
 	    ktest_kernel_name=$OPTARG
@@ -203,6 +206,7 @@ resolve_kernel_name()
 
 ktest_usage_run_opts()
 {
+    echo "      -i <image>      VM root filesystem image"
     echo "      -p <num>        hint for test duration (higher is longer, default is 0)"
     echo "      -I              interactive mode - don't shut down VM automatically"
     echo "      -S              exit on test success"

@@ -13,6 +13,35 @@ export PATH=$PATH:/root/.cargo/bin
 
 . /host/$ktest_env
 
+select_test_compiler()
+{
+    local cc cxx
+
+    case "$ktest_compiler" in
+    gcc-[0-9]*)
+	if ! cc=$(command -v "$ktest_compiler"); then
+	    echo "ktest compiler $ktest_compiler is not installed in the VM root image"
+	    echo "Rebuild or update the root image with $ktest_compiler before running DKMS tests"
+	    exit 1
+	fi
+
+	mkdir -p /usr/local/bin
+	ln -sf "$cc" /usr/local/bin/gcc
+	ln -sf "$cc" /usr/local/bin/cc
+
+	cxx="g++-${ktest_compiler#gcc-}"
+	if command -v "$cxx" >/dev/null; then
+	    ln -sf "$(command -v "$cxx")" /usr/local/bin/g++
+	    ln -sf "$(command -v "$cxx")" /usr/local/bin/c++
+	fi
+
+	export PATH="/usr/local/bin:$PATH"
+	;;
+    esac
+}
+
+select_test_compiler
+
 ktest_dir="/host/$ktest_dir"
 ktest_tmp="/host/$ktest_tmp"
 ktest_out="/host/$ktest_out"
