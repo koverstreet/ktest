@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+
+# shellcheck disable=SC1091,SC2034,SC2154
+NO_BCACHEFS_DEBUG=1
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+require-kernel-config BCACHEFS_FS=y
+
+config-mem 4G
+config-scratch-devs 2G
+config-scratch-devs 2G
+config-scratch-devs 2G
+
+devs()
+{
+    join_by : "${ktest_scratch_dev[@]}"
+}
+
+trace_events()
+{
+    local t=/sys/kernel/tracing/events
+    local events=(
+	bcachefs:data_update_write
+	bcachefs:data_update_fail
+	bcachefs:bucket_alloc_fail
+	bcachefs:open_bucket_alloc_fail
+	bcachefs:journal_write
+	block:block_bio_queue
+	block:block_bio_complete
+    )
+
+    for event in "${events[@]}"; do
+	local path="${event%%:*}/${event#*:}"
+	if [[ -e $t/$path/enable ]]; then
+	    echo "$event"
+	fi
+    done
+}
+
+dump_evacuate_perf_debug()
+{
+    bcachefs fs usage -h --all /mnt || true
+    cat /sys/fs/bcachefs/*/reconcile_status || true
+    cat /sys/fs/bcachefs/*/internal/copy_gc_wait || true
+    cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
+    cat /sys/kernel/debug/bcachefs/*/write_points || true
+    tail -n 1200 /sys/kernel/tracing/trace || true
+}
+
+read_bytes_per_sec()
+{
+    local file=$1
+    local size=$2
+    local start end elapsed_ns
+
+    sync
+    echo 3 > /proc/sys/vm/drop_caches
+
+    start=$(date +%s%N)
+    dd if="$file" of=/dev/null bs=4M iflag=direct status=none
+    end=$(date +%s%N)
+
+    elapsed_ns=$((end - start))
+    (( elapsed_ns > 0 ))
+    echo $((size * 1000000000 / elapsed_ns))
+}
+
+evacuate_bytes_per_sec()
+{
+    local dev=$1
+    local size=$2
+    local start end elapsed_ns
+    local log=/tmp/evacuate_perf_device_evac.log
+
+    start=$(date +%s%N)
+    if ! bcachefs device evacuate "$dev" >"$log" 2>&1; then
+	cat "$log"
+	return 1
+    fi
+    end=$(date +%s%N)
+
+    elapsed_ns=$((end - start))
+    (( elapsed_ns > 0 ))
+    echo $((size * 1000000000 / elapsed_ns))
+}
+
+print_rate()
+{
+    local name=$1
+    local bps=$2
+    awk -v name="$name" -v bps="$bps" 'BEGIN {
+	printf "%s: %.1f MiB/s\n", name, bps / 1048576
+    }'
+}
+
+test_evacuate_not_much_slower_than_source_read()
+{
+    set_watchdog 600
+
+    local data_size=$((512 * 1024 * 1024))
+    local min_abs_bps=$((16 * 1024 * 1024))
+
+    run_quiet "" bcachefs format -f			\
+	--block_size=4k					\
+	--bucket_size=256k				\
+	--replicas=1					\
+	--foreground_target=src				\
+	--background_target=src				\
+	--metadata_target=dst				\
+	--rotational=1 --label=src "${ktest_scratch_dev[0]}" \
+	--rotational=1 --label=dst "${ktest_scratch_dev[1]}" \
+	--rotational=1 --label=dst "${ktest_scratch_dev[2]}"
+
+    mount -t bcachefs "$(devs)" /mnt
+
+    dd if=/dev/zero of=/mnt/src-only-data bs=4M count=128 oflag=direct status=none
+    sync
+
+    local read_bps
+    read_bps=$(read_bytes_per_sec /mnt/src-only-data "$data_size")
+    print_rate "source direct read" "$read_bps"
+
+    local events
+    events=$(trace_events | xargs)
+    if [[ -n $events ]]; then
+	setup_tracing "$events"
+    fi
+
+    local evac_bps
+    evac_bps=$(evacuate_bytes_per_sec "${ktest_scratch_dev[0]}" "$data_size")
+    print_rate "device evacuate" "$evac_bps"
+
+    bcachefs fs usage -h --all /mnt
+    cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
+    cat /sys/kernel/debug/bcachefs/*/write_points || true
+
+    if (( evac_bps < min_abs_bps && evac_bps * 4 < read_bps )); then
+	echo "evacuation is much slower than source direct read"
+	dump_evacuate_perf_debug
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+}
+
+main "$@"
