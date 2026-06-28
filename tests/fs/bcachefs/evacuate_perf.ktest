@@ -147,7 +147,7 @@ test_evacuate_not_much_slower_than_source_read()
     set_watchdog 600
 
     local data_size=$((512 * 1024 * 1024))
-    local min_abs_bps=$((16 * 1024 * 1024))
+    local min_abs_bps=$((64 * 1024 * 1024))
 
     format_evacuate_perf_fs
 
@@ -188,7 +188,7 @@ test_evacuate_not_much_slower_with_busy_destination()
     set_watchdog 900
 
     local data_size=$((512 * 1024 * 1024))
-    local min_abs_bps=$((16 * 1024 * 1024))
+    local min_abs_bps=$((64 * 1024 * 1024))
     local baseline_bps
     local contended_bps
     local fioout="$ktest_out/dst-pressure-fio-out"
