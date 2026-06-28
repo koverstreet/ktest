@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+
+script_dir=$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")
+# shellcheck source=tests/fs/bcachefs/bcachefs-test-libs.sh
+. "$script_dir/bcachefs-test-libs.sh"
+
+require-kernel-config BCACHEFS_FS=y
+
+config-scratch-devs 8G
+config-timeout "$(stress_timeout)"
+
+discard_seq_write()
+{
+    local label=$1
+    local json=/root/fio-${label}.json
+
+    fio --eta=always				\
+	--output-format=json			\
+	--group_reporting			\
+	--exitall_on_error=1			\
+	--ioengine=libaio			\
+	--iodepth=32				\
+	--iodepth_batch=16			\
+	--direct=1				\
+	--numjobs=1				\
+	--refill_buffers=1			\
+	--buffer_compress_percentage=0		\
+	--filename=/mnt/discard-seq-write	\
+	--name="$label"			\
+	--rw=write				\
+	--bs=1M				\
+	--size=2G				\
+	>"$json"
+
+    sync
+
+    local bw_bytes
+    bw_bytes=$(jq -r '.jobs[0].write.bw_bytes // 0' "$json")
+    local bw_mib
+    bw_mib=$(awk -v bw="$bw_bytes" 'BEGIN { printf "%.2f", bw / 1048576 }')
+
+    echo "discard-seq-write $label bw_bytes=$bw_bytes bw_mib_s=$bw_mib"
+}
+
+log_need_discard()
+{
+    local label=$1
+
+    echo "=== fs usage: $label ==="
+    bcachefs fs usage -h --all /mnt || true
+}
+
+need_discard_bytes()
+{
+    bcachefs fs usage --all /mnt 2>/dev/null		|
+	awk '
+	    /need_discard/ {
+		for (i = 1; i <= NF; i++)
+		    if ($i ~ /^[0-9]+$/)
+			sum += $i
+	    }
+	    END { print sum + 0 }
+	'
+}
+
+wait_for_discard_drain()
+{
+    local timeout=120
+    local start
+    start=$(date +%s)
+
+    while true; do
+	local bytes
+	bytes=$(need_discard_bytes)
+	[[ $bytes = 0 ]] && return 0
+
+	local now
+	now=$(date +%s)
+	if [[ $((now - start)) -ge $timeout ]]; then
+	    echo "need_discard still nonzero after ${timeout}s: $bytes"
+	    return 0
+	fi
+
+	sleep 2
+    done
+}
+
+test_seq_write_during_discard()
+{
+    set_watchdog 900
+
+    # shellcheck disable=SC2154
+    blkdiscard "${ktest_scratch_dev[0]}" || true
+    run_quiet "" bcachefs format -f --discard --no_initialize "${ktest_scratch_dev[0]}"
+
+    mount -t bcachefs "${ktest_scratch_dev[0]}" /mnt
+
+    discard_seq_write baseline
+    rm -f /mnt/discard-seq-write
+    sync
+    log_need_discard after-delete-baseline
+
+    discard_seq_write during-discard
+    rm -f /mnt/discard-seq-write
+    sync
+    log_need_discard after-delete-during
+
+    wait_for_discard_drain
+    log_need_discard after-drain
+
+    discard_seq_write after-drain
+    log_need_discard final
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[0]}"
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+main "$@"
