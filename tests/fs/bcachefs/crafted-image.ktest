@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+
+# shellcheck source=tests/fs/bcachefs/bcachefs-test-libs.sh
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+config-mem 2G
+
+run_may_reject()
+{
+    local desc=$1
+    shift
+    local log=/root/crafted-image-${desc}.log
+
+    echo "--- $desc ---"
+    if timeout 60 "$@" > "$log" 2>&1; then
+	cat "$log"
+	return 0
+    fi
+
+    local ret=$?
+    cat "$log"
+
+    case $ret in
+	124|125|126|127|130|134|139)
+	    echo "ERROR: $desc failed with unexpected status $ret"
+	    exit 1
+	    ;;
+    esac
+
+    echo "$desc rejected crafted image with status $ret"
+}
+
+mutate_image()
+{
+    local src=$1
+    local dst=$2
+    local seek=$3
+    local count=$4
+    local size sector_count
+
+    cp --reflink=auto "$src" "$dst"
+    size=$(stat -c %s "$dst")
+    sector_count=$((size / 512))
+
+    if (( seek + count >= sector_count )); then
+	echo "ERROR: mutation beyond end of image: seek=$seek count=$count sectors=$sector_count"
+	exit 1
+    fi
+
+    dd if=/dev/urandom of="$dst" bs=512 seek="$seek" count="$count" \
+	conv=notrunc status=none
+}
+
+nonzero_sector_runs()
+{
+    local image=$1
+
+    od -An -v -tx1 -w512 "$image" | awk '
+    {
+	nonzero = 0
+	for (i = 1; i <= NF; i++)
+	    if ($i != "00")
+		nonzero = 1
+
+	if (nonzero) {
+	    if (start == "") {
+		start = sector
+		len = 1
+	    } else if (start + len == sector) {
+		len++
+	    } else {
+		print start, len
+		start = sector
+		len = 1
+	    }
+	}
+
+	sector++
+    }
+    END {
+	if (start != "")
+	    print start, len
+    }'
+}
+
+test_crafted_image_fuzz_smoke()
+{
+    set_watchdog 240
+
+    local source=/root/crafted-image-source
+    local clean=/root/crafted-clean.image
+    local mutated=/root/crafted-mutated.image
+
+    rm -rf "$source" "$clean" "$mutated"
+    mkdir -p "$source/dir"
+    printf 'small file\n' > "$source/dir/small"
+    dd if=/dev/urandom of="$source/dir/blob" bs=4k count=16 status=none
+    ln "$source/dir/small" "$source/dir/small-hardlink"
+    ln -s dir/small "$source/small-symlink"
+    setfattr -n user.crafted_image -v smoke "$source/dir/small"
+
+    truncate -s 64M "$clean"
+    bcachefs format -f				\
+	--source="$source"			\
+	--metadata_checksum=none		\
+	--data_checksum=none			\
+	"$clean"
+
+    bcachefs list_journal --headers-only "$clean"
+
+    local nr=0
+    local seek count corrupt_count
+    while read -r seek count; do
+	corrupt_count=$count
+	(( corrupt_count > 8 )) && corrupt_count=8
+
+	echo "Mutating nonzero run $nr at sector $seek for $corrupt_count sectors"
+	mutate_image "$clean" "$mutated" "$seek" "$corrupt_count"
+	run_may_reject "list-journal-run-$nr" bcachefs list_journal --headers-only "$mutated"
+
+	nr=$((nr + 1))
+	(( nr >= 6 )) && break
+    done < <(nonzero_sector_runs "$clean")
+
+    if (( nr == 0 )); then
+	echo "ERROR: no nonzero sectors found in clean image"
+	exit 1
+    fi
+
+    echo "Crafted image fuzz smoke completed"
+}
+
+main "$@"
