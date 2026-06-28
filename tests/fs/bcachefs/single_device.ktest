@@ -861,6 +861,33 @@ test_crypto_locked_mnt()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+test_crypto_mount_session_keyring()
+{
+    if ! bcachefs mount --help | grep -q 'session keyring'; then
+	echo "bcachefs mount lacks session-keyring prompted-key support, skipping"
+	return 0
+    fi
+
+    echo foo|bcachefs format -f --encrypted ${ktest_scratch_dev[0]}
+
+    local uuid=$(bcachefs show-super ${ktest_scratch_dev[0]} |
+		 awk '/^External UUID:/ { print $3; exit }')
+    [[ -n $uuid ]]
+
+    keyctl session - sh -ec '
+	keyctl unlink @u @s 2>/dev/null || true
+
+	echo foo|bcachefs mount -k stdin "$2" /mnt
+	keyctl search @s user "bcachefs:$1" >/dev/null
+	! keyctl search @u user "bcachefs:$1" >/dev/null
+	umount /mnt
+    ' sh "$uuid" ${ktest_scratch_dev[0]}
+
+    echo foo|bcachefs unlock -k session ${ktest_scratch_dev[0]}
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_crypto()
 {
     run_basic_fio_test				\
