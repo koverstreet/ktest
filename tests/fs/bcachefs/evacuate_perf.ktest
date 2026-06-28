@@ -9,9 +9,9 @@ NO_BCACHEFS_DEBUG_KEEP_LATENCY_ACCT=1
 require-kernel-config BCACHEFS_FS=y
 
 config-mem 4G
-config-scratch-devs 2G
-config-scratch-devs 2G
-config-scratch-devs 2G
+config-scratch-slowdevs 2G
+config-scratch-slowdevs 2G
+config-scratch-slowdevs 2G
 
 devs()
 {
@@ -330,7 +330,7 @@ test_evacuate_not_much_slower_with_busy_destination()
     sleep 3
 
     if ! contended_bps=$(evacuate_bytes_per_sec \
-	"${ktest_scratch_dev[0]}" "$data_size" "$min_abs_bps"); then
+	"${ktest_scratch_dev[0]}" "$data_size" "$((baseline_bps / 2))"); then
 	cat "$fioout" || true
 	kill "$fiopid" 2>/dev/null || true
 	wait "$fiopid" 2>/dev/null || true
