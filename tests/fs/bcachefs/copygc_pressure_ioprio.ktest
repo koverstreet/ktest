@@ -10,8 +10,27 @@ config-scratch-devs 768M
 dump_copygc_debug()
 {
     bcachefs fs usage -h --all /mnt || true
+    cat /sys/fs/bcachefs/*/internal/copy_gc_wait || true
     cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
     tail -n 500 /sys/kernel/tracing/trace || true
+}
+
+check_copygc_pressure_accounting()
+{
+    local pressure_runs
+
+    for _ in $(seq 1 30); do
+	pressure_runs=$(awk '/pressure run count:/ { print $NF; exit }' \
+	    /sys/fs/bcachefs/*/internal/copy_gc_wait)
+	if [[ -n "$pressure_runs" ]] && (( pressure_runs > 0 )); then
+	    return 0
+	fi
+	sleep .1
+    done
+
+    echo "did not observe copygc pressure accounting"
+    dump_copygc_debug
+    return 1
 }
 
 check_pressure_copygc_ioprio()
@@ -64,6 +83,7 @@ test_pressure_copygc_uses_best_effort_ioprio()
     done
 
     check_pressure_copygc_ioprio
+    check_copygc_pressure_accounting
 
     rm -f /mnt/fiotest
     umount /mnt

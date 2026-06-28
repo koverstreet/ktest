@@ -17,9 +17,24 @@ devs()
 dump_evacuate_pressure_debug()
 {
     bcachefs fs usage -h --all /mnt || true
+    cat /sys/fs/bcachefs/*/internal/copy_gc_wait || true
     cat /sys/fs/bcachefs/*/reconcile_status || true
     cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
     tail -n 800 /sys/kernel/tracing/trace || true
+}
+
+check_move_wait_diagnostics()
+{
+    for _ in $(seq 1 60); do
+	if grep -q 'wait reason:' /sys/fs/bcachefs/*/internal/moving_ctxts; then
+	    return 0
+	fi
+	sleep .1
+    done
+
+    echo "did not observe move wait diagnostics"
+    dump_evacuate_pressure_debug
+    return 1
 }
 
 check_hipri_reconcile_ioprio()
@@ -82,6 +97,8 @@ test_evacuating_source_under_pressure_makes_progress()
 
     dd if=/dev/zero of=/mnt/fiotest bs=16M count=88 oflag=direct status=none || true
     sync
+
+    check_move_wait_diagnostics
 
     for i in $(seq 1 4); do
 	run_fio_base				\
