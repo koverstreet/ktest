@@ -48,6 +48,26 @@ dump_evacuate_perf_debug()
     tail -n 1200 /sys/kernel/tracing/trace || true
 }
 
+format_evacuate_perf_fs()
+{
+    run_quiet "" bcachefs format -f			\
+	--block_size=4k					\
+	--bucket_size=256k				\
+	--replicas=1					\
+	--foreground_target=src				\
+	--background_target=src				\
+	--metadata_target=dst				\
+	--rotational=1 --label=src "${ktest_scratch_dev[0]}" \
+	--rotational=1 --label=dst "${ktest_scratch_dev[1]}" \
+	--rotational=1 --label=dst "${ktest_scratch_dev[2]}"
+}
+
+seed_source_data()
+{
+    dd if=/dev/zero of=/mnt/src-only-data bs=4M count=128 oflag=direct status=none
+    sync
+}
+
 read_bytes_per_sec()
 {
     local file=$1
@@ -64,6 +84,34 @@ read_bytes_per_sec()
     elapsed_ns=$((end - start))
     (( elapsed_ns > 0 ))
     echo $((size * 1000000000 / elapsed_ns))
+}
+
+start_dst_pressure()
+{
+    local log=$1
+
+    mkdir -p /mnt/dst-pressure
+    bcachefs set-file-option --foreground_target=dst /mnt/dst-pressure
+    dd if=/dev/zero of=/mnt/dst-pressure/hotfile bs=4M count=128 oflag=direct status=none
+    sync
+    echo 3 > /proc/sys/vm/drop_caches
+
+    fio --eta=always				\
+	--exitall_on_error=1			\
+	--ioengine=libaio			\
+	--iodepth=64				\
+	--iodepth_batch=16			\
+	--direct=1				\
+	--numjobs=1				\
+	--time_based				\
+	--runtime=180				\
+	--name=dst-pressure			\
+	--rw=randread				\
+	--bs=256k				\
+	--filesize=512M			\
+	--filename=/mnt/dst-pressure/hotfile	\
+	>"$log" 2>&1 &
+    echo $!
 }
 
 evacuate_bytes_per_sec()
@@ -101,21 +149,11 @@ test_evacuate_not_much_slower_than_source_read()
     local data_size=$((512 * 1024 * 1024))
     local min_abs_bps=$((16 * 1024 * 1024))
 
-    run_quiet "" bcachefs format -f			\
-	--block_size=4k					\
-	--bucket_size=256k				\
-	--replicas=1					\
-	--foreground_target=src				\
-	--background_target=src				\
-	--metadata_target=dst				\
-	--rotational=1 --label=src "${ktest_scratch_dev[0]}" \
-	--rotational=1 --label=dst "${ktest_scratch_dev[1]}" \
-	--rotational=1 --label=dst "${ktest_scratch_dev[2]}"
+    format_evacuate_perf_fs
 
     mount -t bcachefs "$(devs)" /mnt
 
-    dd if=/dev/zero of=/mnt/src-only-data bs=4M count=128 oflag=direct status=none
-    sync
+    seed_source_data
 
     local read_bps
     read_bps=$(read_bytes_per_sec /mnt/src-only-data "$data_size")
@@ -137,6 +175,67 @@ test_evacuate_not_much_slower_than_source_read()
 
     if (( evac_bps < min_abs_bps && evac_bps * 4 < read_bps )); then
 	echo "evacuation is much slower than source direct read"
+	dump_evacuate_perf_debug
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+}
+
+test_evacuate_not_much_slower_with_busy_destination()
+{
+    set_watchdog 900
+
+    local data_size=$((512 * 1024 * 1024))
+    local min_abs_bps=$((16 * 1024 * 1024))
+    local baseline_bps
+    local contended_bps
+    local fioout="$ktest_out/dst-pressure-fio-out"
+    local fiopid
+
+    format_evacuate_perf_fs
+    mount -t bcachefs "$(devs)" /mnt
+    seed_source_data
+
+    baseline_bps=$(evacuate_bytes_per_sec "${ktest_scratch_dev[0]}" "$data_size")
+    print_rate "baseline device evacuate" "$baseline_bps"
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+
+    format_evacuate_perf_fs
+    mount -t bcachefs "$(devs)" /mnt
+    seed_source_data
+
+    local events
+    events=$(trace_events | xargs)
+    if [[ -n $events ]]; then
+	setup_tracing "$events"
+    fi
+
+    fiopid=$(start_dst_pressure "$fioout")
+    sleep 3
+
+    if ! contended_bps=$(evacuate_bytes_per_sec "${ktest_scratch_dev[0]}" "$data_size"); then
+	cat "$fioout" || true
+	kill "$fiopid" 2>/dev/null || true
+	wait "$fiopid" 2>/dev/null || true
+	dump_evacuate_perf_debug
+	return 1
+    fi
+    print_rate "contended device evacuate" "$contended_bps"
+
+    kill "$fiopid" 2>/dev/null || true
+    wait "$fiopid" 2>/dev/null || true
+
+    bcachefs fs usage -h --all /mnt
+    cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
+    cat /sys/kernel/debug/bcachefs/*/write_points || true
+
+    if (( contended_bps < min_abs_bps && contended_bps * 2 < baseline_bps )); then
+	echo "evacuation is much slower when destination is busy"
+	cat "$fioout" || true
 	dump_evacuate_perf_debug
 	return 1
     fi
