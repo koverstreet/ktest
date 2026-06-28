@@ -125,6 +125,12 @@ init_build_bcachefs_tools() {
     local jobs=$(( $(nproc) / 2 ))
     (( jobs < 1 )) && jobs=1
     local tools="$ktest_deps_dir/bcachefs-tools"
+    local module_cc="$ktest_compiler"
+
+    if ! command -v "$module_cc" >/dev/null 2>&1 &&
+       [[ -x /host/usr/bin/$module_cc ]]; then
+	module_cc="/host/usr/bin/$module_cc"
+    fi
 
     # bcachefs-tools build cache: building the bcachefs binary is a slow
     # Rust + C compile. The build is done once into a DESTDIR and tarred
@@ -191,7 +197,7 @@ init_build_bcachefs_tools() {
 		# Dev loop: fast incremental in-place build — no dkms, no cache.
 		# The build tree persists under /ktest-out across the fresh-every-
 		# run VM, so kbuild only recompiles what actually changed.
-		if ! make -j$jobs -C "$tools" dkms-reload-interactive; then
+		if ! make -j$jobs -C "$tools" CC="$module_cc" dkms-reload-interactive; then
 			echo "init_build_bcachefs_tools: interactive module build failed" >&2
 			return 1
 		fi
@@ -217,7 +223,7 @@ init_build_bcachefs_tools() {
 
 	# On DKMS build failure, surface the compiler output — otherwise the
 	# test log just shows "Bad return status" with no reason.
-	if ! make -j$jobs -C "$tools" PREFIX=/usr dkms-reload; then
+	if ! make -j$jobs -C "$tools" PREFIX=/usr CC="$module_cc" dkms-reload; then
 	    echo "init_build_bcachefs_tools: DKMS build failed; dumping make.log" >&2
 	    local log found=0
 	    while IFS= read -r log; do
