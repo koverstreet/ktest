@@ -152,6 +152,29 @@ test_mount_options()
     bcachefs_test_end_checks $dev
 }
 
+test_mount_by_filesystem_label()
+{
+    local dev=${ktest_scratch_dev[0]}
+    local label=ktest_mount_by_label
+
+    set_watchdog 10
+
+    if ! bcachefs mount --help 2>&1 | grep -q 'LABEL='; then
+        echo "bcachefs mount LABEL= support not available, skipping"
+        return 0
+    fi
+
+    run_quiet "" bcachefs format -f -L "$label" $dev
+
+    echo "test: mount by filesystem label"
+    mount -t bcachefs "LABEL=$label" /mnt
+    touch /mnt/mounted-by-label
+    umount /mnt
+
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
 test_extent_merge2()
 {
     local p=/sys/module/bcachefs/parameters/debug_check_iterators
