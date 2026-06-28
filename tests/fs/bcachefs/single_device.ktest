@@ -1266,6 +1266,31 @@ test_set_option()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+test_update_command()
+{
+    set_watchdog 60
+
+    if ! bcachefs update --help | grep -q 'Upgrade a mounted filesystem'; then
+	echo "bcachefs update command not available, skipping"
+	return 0
+    fi
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    bcachefs update /mnt
+
+    local version_upgrade
+    version_upgrade="$(cat /sys/fs/bcachefs/*/options/version_upgrade)"
+    echo "version_upgrade after bcachefs update: $version_upgrade"
+    [[ $version_upgrade == none ]]
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 disabled_test_swapfile()
 {
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
