@@ -2,6 +2,7 @@
 
 # shellcheck disable=SC1091,SC2034,SC2154
 NO_BCACHEFS_DEBUG=1
+NO_BCACHEFS_DEBUG_KEEP_LATENCY_ACCT=1
 
 . "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
 
@@ -118,7 +119,8 @@ start_dst_pressure()
 	--time_based				\
 	--runtime=180				\
 	--name=dst-pressure			\
-	--rw=randread				\
+	--rw=randwrite				\
+	--fsync=1				\
 	--bs=256k				\
 	--filesize=512M			\
 	--filename=/mnt/dst-pressure/hotfile	\
@@ -126,15 +128,113 @@ start_dst_pressure()
     echo $!
 }
 
+human_to_bytes()
+{
+    local value=$1
+
+    awk -v value="$value" 'BEGIN {
+	unit = substr(value, length(value), 1)
+	num = value + 0
+
+	if (unit == "K")
+	    num *= 1000
+	else if (unit == "M")
+	    num *= 1000 * 1000
+	else if (unit == "G")
+	    num *= 1000 * 1000 * 1000
+	else if (unit == "T")
+	    num *= 1000 * 1000 * 1000 * 1000
+
+	printf "%.0f\n", num
+    }'
+}
+
+reconcile_bytes_moved()
+{
+    local moved
+
+    moved=$(
+	awk '
+	    /^reconcile_/ { in_reconcile = 1; next }
+	    /^[^[:space:]]/ { in_reconcile = 0 }
+	    in_reconcile && $1 == "bytes" && $2 == "moved:" {
+		print $3
+		exit
+	    }
+	' /sys/fs/bcachefs/*/internal/moving_ctxts
+    )
+
+    if [[ -z $moved ]]; then
+	echo 0
+	return
+    fi
+
+    human_to_bytes "$moved"
+}
+
+monitor_evacuate_progress()
+{
+    local pid=$1
+    local min_bps=$2
+    local interval=5
+    local max_slow_windows=2
+    local min_delta=$((min_bps * interval))
+    local slow_windows=0
+    local last current delta
+
+    last=$(reconcile_bytes_moved)
+
+    while kill -0 "$pid" 2>/dev/null; do
+	sleep "$interval"
+
+	current=$(reconcile_bytes_moved)
+	delta=$((current - last))
+	if (( delta < 0 )); then
+	    delta=0
+	fi
+
+	printf 'evacuation progress window: %s bytes in %ss\n' \
+	    "$delta" "$interval" >&2
+
+	if (( delta < min_delta )); then
+	    slow_windows=$((slow_windows + 1))
+	else
+	    slow_windows=0
+	fi
+
+	if (( slow_windows >= max_slow_windows )); then
+	    echo "evacuation progress stalled below window floor" >&2
+	    echo "minimum expected: $min_delta bytes per ${interval}s" >&2
+	    dump_evacuate_perf_debug >&2
+	    return 1
+	fi
+
+	last=$current
+    done
+}
+
 evacuate_bytes_per_sec()
 {
     local dev=$1
     local size=$2
+    local min_progress_bps=${3:-0}
     local start end elapsed_ns
     local log=/tmp/evacuate_perf_device_evac.log
+    local evacpid
 
     start=$(date +%s%N)
-    if ! bcachefs device evacuate "$dev" >"$log" 2>&1; then
+    bcachefs device evacuate "$dev" >"$log" 2>&1 &
+    evacpid=$!
+
+    if (( min_progress_bps )) &&
+	! monitor_evacuate_progress "$evacpid" "$min_progress_bps"; then
+	kill "$evacpid" 2>/dev/null || true
+	wait "$evacpid" 2>/dev/null || true
+	cat "$log"
+	return 1
+    fi
+
+    if ! wait "$evacpid"; then
 	cat "$log"
 	return 1
     fi
@@ -229,7 +329,8 @@ test_evacuate_not_much_slower_with_busy_destination()
     fiopid=$(start_dst_pressure "$fioout")
     sleep 3
 
-    if ! contended_bps=$(evacuate_bytes_per_sec "${ktest_scratch_dev[0]}" "$data_size"); then
+    if ! contended_bps=$(evacuate_bytes_per_sec \
+	"${ktest_scratch_dev[0]}" "$data_size" "$min_abs_bps"); then
 	cat "$fioout" || true
 	kill "$fiopid" 2>/dev/null || true
 	wait "$fiopid" 2>/dev/null || true
