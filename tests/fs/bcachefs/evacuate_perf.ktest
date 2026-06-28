@@ -25,7 +25,11 @@ trace_events()
 	bcachefs:data_update_fail
 	bcachefs:bucket_alloc_fail
 	bcachefs:open_bucket_alloc_fail
+	bcachefs:journal_flush
 	bcachefs:journal_write
+	bcachefs:journal_reclaim_start
+	bcachefs:journal_reclaim_finish
+	bcachefs:journal_res_get_blocked
 	block:block_bio_queue
 	block:block_bio_complete
     )
@@ -44,6 +48,14 @@ dump_evacuate_perf_debug()
     cat /sys/fs/bcachefs/*/reconcile_status || true
     cat /sys/fs/bcachefs/*/internal/copy_gc_wait || true
     cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
+    cat /sys/fs/bcachefs/*/journal_reclaim || true
+    cat /sys/fs/bcachefs/*/time_stats/journal_flush_write || true
+    cat /sys/fs/bcachefs/*/time_stats/journal_flush_seq || true
+    cat /sys/fs/bcachefs/*/time_stats/journal_noflush_write || true
+    cat /sys/fs/bcachefs/*/time_stats/blocked_journal_low_on_space || true
+    cat /sys/fs/bcachefs/*/time_stats/blocked_journal_low_on_pin || true
+    cat /sys/fs/bcachefs/*/time_stats/blocked_journal_max_in_flight || true
+    cat /sys/fs/bcachefs/*/time_stats/blocked_journal_max_open || true
     cat /sys/kernel/debug/bcachefs/*/write_points || true
     tail -n 1200 /sys/kernel/tracing/trace || true
 }
