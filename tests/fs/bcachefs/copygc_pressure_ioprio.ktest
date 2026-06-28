@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config BCACHEFS_FS=y
+
+config-mem 4G
+config-scratch-devs 768M
+
+dump_copygc_debug()
+{
+    bcachefs fs usage -h --all /mnt || true
+    cat /sys/fs/bcachefs/*/internal/copy_gc_wait || true
+    cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
+    tail -n 500 /sys/kernel/tracing/trace || true
+}
+
+check_copygc_pressure_accounting()
+{
+    local pressure_runs
+
+    for _ in $(seq 1 30); do
+	pressure_runs=$(awk '/pressure run count:/ { print $NF; exit }' \
+	    /sys/fs/bcachefs/*/internal/copy_gc_wait)
+	if [[ -n "$pressure_runs" ]] && (( pressure_runs > 0 )); then
+	    return 0
+	fi
+	sleep .1
+    done
+
+    echo "did not observe copygc pressure accounting"
+    dump_copygc_debug
+    return 1
+}
+
+check_pressure_copygc_ioprio()
+{
+    for _ in $(seq 1 30); do
+	if grep -q 'copygc' /sys/kernel/tracing/trace &&
+	   grep -q 'best-effort:7' /sys/kernel/tracing/trace; then
+	    return 0
+	fi
+	sleep .1
+    done
+
+    echo "did not observe pressure copygc data_update at best-effort:7"
+    dump_copygc_debug
+    return 1
+}
+
+check_no_idle_ioprio()
+{
+    if grep -q 'idle:0' /sys/kernel/tracing/trace; then
+	echo "observed idle ioprio in data_update trace"
+	dump_copygc_debug
+	return 1
+    fi
+}
+
+test_pressure_copygc_uses_best_effort_ioprio()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f		\
+	--data_checksum=none			\
+	--bucket_size=32k			\
+	--btree_node_size=32k			\
+	"${ktest_scratch_dev[0]}"
+
+    mount -t bcachefs "${ktest_scratch_dev[0]}" /mnt
+
+    fill_device /mnt/fiotest
+
+    setup_tracing 'bcachefs:data_update bcachefs:data_update_no_io bcachefs:data_update_read bcachefs:data_update_write'
+
+    for i in $(seq 1 3); do
+	run_fio_base				\
+	    --buffer_compress_percentage=50	\
+	    --name="pressure-copygc-$i"		\
+	    --rw=randwrite			\
+	    --bsrange=4k-128k			\
+	    --time_based=1			\
+	    --runtime=5
+
+	check_pressure_copygc_ioprio && break
+
+	local cur_size=$(stat -c '%s' /mnt/fiotest)
+	local new_size=$((cur_size - 1048576))
+	if (( new_size > 0 )); then
+	    truncate --size="$new_size" /mnt/fiotest
+	fi
+    done
+
+    check_pressure_copygc_ioprio
+    check_copygc_pressure_accounting
+    check_no_idle_ioprio
+
+    rm -f /mnt/fiotest
+    umount /mnt
+
+    bcachefs fsck -ny "${ktest_scratch_dev[0]}"
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+main "$@"

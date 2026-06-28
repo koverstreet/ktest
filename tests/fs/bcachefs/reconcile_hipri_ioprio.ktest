@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config BCACHEFS_FS=y
+
+config-mem 4G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+
+devs()
+{
+    join_by : "${ktest_scratch_dev[@]}"
+}
+
+dump_reconcile_debug()
+{
+    bcachefs fs usage -h --all /mnt || true
+    cat /sys/fs/bcachefs/*/internal/copy_gc_wait || true
+    cat /sys/fs/bcachefs/*/reconcile_status || true
+    cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
+    tail -n 500 /sys/kernel/tracing/trace || true
+}
+
+check_move_wait_diagnostics()
+{
+    for _ in $(seq 1 60); do
+	if grep -q 'wait reason:' /sys/fs/bcachefs/*/internal/moving_ctxts; then
+	    return 0
+	fi
+	sleep .1
+    done
+
+    echo "did not observe move wait diagnostics"
+    dump_reconcile_debug
+    return 1
+}
+
+check_hipri_reconcile_ioprio()
+{
+    for _ in $(seq 1 100); do
+	if grep -q 'best-effort:7' /sys/kernel/tracing/trace; then
+	    return 0
+	fi
+	sleep .1
+    done
+
+    echo "did not observe high-priority reconcile data_update at best-effort:7"
+    dump_reconcile_debug
+    return 1
+}
+
+wait_for_src_user_data_evacuated()
+{
+    local has_data
+
+    for _ in $(seq 1 1200); do
+	has_data=$(cat /sys/fs/bcachefs/*/dev-0/has_data)
+	if ! grep -qw user <<< "$has_data"; then
+	    return 0
+	fi
+	sleep .1
+    done
+
+    echo "source device still has user data after evacuation wait"
+    dump_reconcile_debug
+    return 1
+}
+
+test_hipri_reconcile_uses_best_effort_ioprio()
+{
+    set_watchdog 240
+
+    run_quiet "" bcachefs format -f			\
+	--block_size=4k					\
+	--bucket_size=256k				\
+	--replicas=1					\
+	--foreground_target=src			\
+	--background_target=dst			\
+	--rotational=1 --label=src ${ktest_scratch_dev[0]} \
+	--rotational=1 --label=dst ${ktest_scratch_dev[1]} \
+	--rotational=1 --label=dst ${ktest_scratch_dev[2]}
+
+    mount -t bcachefs "$(devs)" /mnt
+
+    dd if=/dev/zero of=/mnt/src-only-data bs=4M count=64 oflag=direct status=none
+    sync
+
+    setup_tracing 'bcachefs:data_update bcachefs:data_update_no_io bcachefs:data_update_read bcachefs:data_update_write'
+
+    echo evacuating > /sys/fs/bcachefs/*/dev-0/state
+    check_move_wait_diagnostics
+    wait_for_src_user_data_evacuated
+    check_hipri_reconcile_ioprio
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+main "$@"

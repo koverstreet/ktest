@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config BCACHEFS_FS=y
+
+config-mem 4G
+config-scratch-devs 768M
+config-scratch-devs 768M
+config-scratch-devs 768M
+
+devs()
+{
+    join_by : "${ktest_scratch_dev[@]}"
+}
+
+dump_evacuate_pressure_debug()
+{
+    bcachefs fs usage -h --all /mnt || true
+    cat /sys/fs/bcachefs/*/internal/copy_gc_wait || true
+    cat /sys/fs/bcachefs/*/reconcile_status || true
+    cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
+    tail -n 800 /sys/kernel/tracing/trace || true
+}
+
+check_move_wait_diagnostics()
+{
+    for _ in $(seq 1 60); do
+	if grep -q 'wait reason:' /sys/fs/bcachefs/*/internal/moving_ctxts; then
+	    return 0
+	fi
+	sleep .1
+    done
+
+    echo "did not observe move wait diagnostics"
+    dump_evacuate_pressure_debug
+    return 1
+}
+
+check_hipri_reconcile_ioprio()
+{
+    for _ in $(seq 1 120); do
+	if grep -q 'reconcile' /sys/kernel/tracing/trace &&
+	   grep -q 'best-effort:7' /sys/kernel/tracing/trace; then
+	    return 0
+	fi
+	sleep .1
+    done
+
+    echo "did not observe high-priority reconcile data_update at best-effort:7"
+    dump_evacuate_pressure_debug
+    return 1
+}
+
+check_no_idle_ioprio()
+{
+    if grep -q 'idle:0' /sys/kernel/tracing/trace; then
+	echo "observed idle ioprio in data_update trace"
+	dump_evacuate_pressure_debug
+	return 1
+    fi
+}
+
+wait_for_src_user_data_evacuated()
+{
+    local has_data
+
+    for _ in $(seq 1 1200); do
+	has_data=$(cat /sys/fs/bcachefs/*/dev-0/has_data)
+	if ! grep -qw user <<< "$has_data"; then
+	    return 0
+	fi
+	sleep .1
+    done
+
+    echo "source device still has user data after pressure evacuation wait"
+    dump_evacuate_pressure_debug
+    return 1
+}
+
+test_evacuating_source_under_pressure_makes_progress()
+{
+    set_watchdog 420
+
+    run_quiet "" bcachefs format -f			\
+	--data_checksum=none				\
+	--block_size=4k					\
+	--bucket_size=32k				\
+	--btree_node_size=32k				\
+	--replicas=1					\
+	--foreground_target=src				\
+	--background_target=dst				\
+	--rotational=1 --label=src ${ktest_scratch_dev[0]} \
+	--rotational=1 --label=dst ${ktest_scratch_dev[1]} \
+	--rotational=1 --label=dst ${ktest_scratch_dev[2]}
+
+    mount -t bcachefs "$(devs)" /mnt
+
+    dd if=/dev/zero of=/mnt/src-only-data bs=4M count=32 oflag=direct status=none
+    sync
+
+    setup_tracing 'bcachefs:data_update bcachefs:data_update_no_io bcachefs:data_update_read bcachefs:data_update_write'
+
+    echo evacuating > /sys/fs/bcachefs/*/dev-0/state
+    echo dst > /sys/fs/bcachefs/*/options/foreground_target
+
+    dd if=/dev/zero of=/mnt/fiotest bs=16M count=88 oflag=direct status=none || true
+    sync
+
+    check_move_wait_diagnostics
+
+    for i in $(seq 1 4); do
+	run_fio_base				\
+	    --buffer_compress_percentage=50	\
+	    --name="evac-pressure-$i"		\
+	    --rw=randwrite			\
+	    --bsrange=4k-128k			\
+	    --time_based=1			\
+	    --runtime=5 || true
+
+	local cur_size=$(stat -c '%s' /mnt/fiotest)
+	local new_size=$((cur_size - 1048576))
+	if (( new_size > 0 )); then
+	    truncate --size="$new_size" /mnt/fiotest
+	fi
+
+	if ! grep -qw user /sys/fs/bcachefs/*/dev-0/has_data; then
+	    break
+	fi
+    done
+
+    wait_for_src_user_data_evacuated
+    check_hipri_reconcile_ioprio
+    check_no_idle_ioprio
+
+    rm -f /mnt/fiotest /mnt/src-only-data
+    umount /mnt
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+main "$@"

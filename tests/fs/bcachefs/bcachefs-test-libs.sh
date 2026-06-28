@@ -87,7 +87,8 @@ dkms_cache_key() {
     {
         printf '%s\0' "$kver" "$rev" \
             "${BCACHEFS_DEBUG-}" "${BCACHEFS_TESTS-}" \
-            "${BCACHEFS_INJECT_TRANSACTION_RESTARTS-}"
+            "${BCACHEFS_INJECT_TRANSACTION_RESTARTS-}" \
+            "${ktest_bcachefs_dkms_cc-}"
         cat "$config"
     } | sha256sum | cut -d' ' -f1
 }
@@ -191,7 +192,11 @@ init_build_bcachefs_tools() {
 		# Dev loop: fast incremental in-place build — no dkms, no cache.
 		# The build tree persists under /ktest-out across the fresh-every-
 		# run VM, so kbuild only recompiles what actually changed.
-		if ! make -j$jobs -C "$tools" dkms-reload-interactive; then
+		local make_args=()
+		if [[ -n ${ktest_bcachefs_dkms_cc-} ]]; then
+			make_args+=(CC="$ktest_bcachefs_dkms_cc")
+		fi
+		if ! make -j$jobs -C "$tools" "${make_args[@]}" dkms-reload-interactive; then
 			echo "init_build_bcachefs_tools: interactive module build failed" >&2
 			return 1
 		fi
@@ -217,7 +222,11 @@ init_build_bcachefs_tools() {
 
 	# On DKMS build failure, surface the compiler output — otherwise the
 	# test log just shows "Bad return status" with no reason.
-	if ! make -j$jobs -C "$tools" PREFIX=/usr dkms-reload; then
+	local make_args=()
+	if [[ -n ${ktest_bcachefs_dkms_cc-} ]]; then
+		make_args+=(CC="$ktest_bcachefs_dkms_cc")
+	fi
+	if ! make -j$jobs -C "$tools" PREFIX=/usr "${make_args[@]}" dkms-reload; then
 	    echo "init_build_bcachefs_tools: DKMS build failed; dumping make.log" >&2
 	    local log found=0
 	    while IFS= read -r log; do
