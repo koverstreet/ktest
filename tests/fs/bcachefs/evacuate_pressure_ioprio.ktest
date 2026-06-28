@@ -52,6 +52,15 @@ check_hipri_reconcile_ioprio()
     return 1
 }
 
+check_no_idle_ioprio()
+{
+    if grep -q 'idle:0' /sys/kernel/tracing/trace; then
+	echo "observed idle ioprio in data_update trace"
+	dump_evacuate_pressure_debug
+	return 1
+    fi
+}
+
 wait_for_src_user_data_evacuated()
 {
     local has_data
@@ -122,6 +131,7 @@ test_evacuating_source_under_pressure_makes_progress()
 
     wait_for_src_user_data_evacuated
     check_hipri_reconcile_ioprio
+    check_no_idle_ioprio
 
     rm -f /mnt/fiotest /mnt/src-only-data
     umount /mnt

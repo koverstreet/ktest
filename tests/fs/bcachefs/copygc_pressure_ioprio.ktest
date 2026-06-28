@@ -48,6 +48,15 @@ check_pressure_copygc_ioprio()
     return 1
 }
 
+check_no_idle_ioprio()
+{
+    if grep -q 'idle:0' /sys/kernel/tracing/trace; then
+	echo "observed idle ioprio in data_update trace"
+	dump_copygc_debug
+	return 1
+    fi
+}
+
 test_pressure_copygc_uses_best_effort_ioprio()
 {
     set_watchdog 300
@@ -84,6 +93,7 @@ test_pressure_copygc_uses_best_effort_ioprio()
 
     check_pressure_copygc_ioprio
     check_copygc_pressure_accounting
+    check_no_idle_ioprio
 
     rm -f /mnt/fiotest
     umount /mnt
