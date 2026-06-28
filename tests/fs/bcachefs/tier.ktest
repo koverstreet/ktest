@@ -232,6 +232,59 @@ test_tiering_replication()
     run_basic_tiering_test --replicas=2
 }
 
+test_tiering_cached_replicas()
+{
+    set_watchdog 240
+
+    run_quiet "" bcachefs format -f			\
+	--block_size=4k					\
+	--bucket_size=256k				\
+	--replicas=2					\
+	--label=ssd.ssd1 ${ktest_scratch_dev[0]}	\
+	--label=ssd.ssd2 ${ktest_scratch_dev[1]}	\
+	--label=hdd.hdd1 ${ktest_scratch_dev[2]}	\
+	--label=hdd.hdd2 ${ktest_scratch_dev[3]}	\
+	--foreground_target=ssd				\
+	--promote_target=ssd				\
+	--background_target=hdd
+
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+
+    dd if=/dev/zero of=/mnt/cached-replicas bs=16M count=16 oflag=direct
+    sync
+
+    bcachefs reconcile wait -t target /mnt
+
+    local usage=/tmp/tiering-cached-replicas-usage.txt
+    bcachefs fs usage -a -h /mnt > "$usage"
+
+    local dev cached
+    for dev in ssd.ssd1 ssd.ssd2; do
+	cached=$(awk -v dev="$dev" '
+	    $1 == dev && $2 == "(device" { in_dev = 1; next }
+	    in_dev && $1 == "cached:" { print $2; found = 1; exit }
+	    END { if (!found) exit 1 }
+	' "$usage") || {
+	    echo "No cached usage line found for $dev"
+	    cat "$usage"
+	    return 1
+	}
+
+	case "$cached" in
+	0|0B|0.00*)
+	    echo "$dev has no cached data"
+	    cat "$usage"
+	    return 1
+	    ;;
+	esac
+    done
+
+    umount /mnt
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_tiering_variable_buckets()
 {
     run_basic_fio_test					\
