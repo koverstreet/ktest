@@ -193,6 +193,29 @@ stress_move_flushes()
 	echo 4 > /sys/fs/bcachefs/*/options/move_ios_in_flight
 }
 
+assert_default_move_window_not_io_starved()
+{
+	local bytes
+	local ios
+	local min_ios
+
+	bytes=$(human_to_bytes "$(cat /sys/fs/bcachefs/*/options/move_bytes_in_flight)")
+	ios=$(cat /sys/fs/bcachefs/*/options/move_ios_in_flight)
+
+	# Reconcile usually moves checksum extents in 64 KiB chunks. The default
+	# IO-count window must be large enough to keep the byte window occupied.
+	min_ios=$((bytes / (64 * 1024)))
+	if (( min_ios < 1 )); then
+	    min_ios=1
+	fi
+
+	if (( ios < min_ios )); then
+	    echo "move_ios_in_flight default underfills move byte window"
+	    echo "move_bytes_in_flight=$bytes move_ios_in_flight=$ios min_ios=$min_ios"
+	    return 1
+	fi
+}
+
 human_to_bytes()
 {
     local value=$1
@@ -359,6 +382,7 @@ test_evacuate_not_much_slower_than_source_read()
     format_evacuate_perf_fs
 
     mount -t bcachefs "$(devs)" /mnt
+    assert_default_move_window_not_io_starved
 
     seed_source_data
 
