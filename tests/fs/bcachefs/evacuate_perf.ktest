@@ -92,7 +92,10 @@ format_hot_cool_dst_fs()
 
 seed_source_data()
 {
-    dd if=/dev/zero of=/mnt/src-only-data bs=4M count=128 oflag=direct status=none
+    local size=${1:-$((512 * 1024 * 1024))}
+
+    dd if=/dev/zero of=/mnt/src-only-data bs=4M count=$((size / (4 * 1024 * 1024))) \
+	oflag=direct status=none
     sync
 }
 
@@ -159,6 +162,31 @@ count_reconcile_write_bios()
 
     grep -Ec "block_bio_queue: ${dev_id} W[^ ]* [0-9]+ \\+ [0-9]+ \\[(bch-reconcile|kworker/u[0-9]+:)" \
 	/sys/kernel/tracing/trace || true
+}
+
+summarize_block_trace()
+{
+    awk '
+	/block_bio_queue:/ {
+	    dev = $6
+	    sub(/,$/, "", dev)
+	    op = $7
+	    sectors = $10 + 0
+	    rw = substr(op, 1, 1)
+	    key = dev " " rw
+	    count[key]++
+	    total[key] += sectors
+	}
+	END {
+	    printf "block trace summary (queued bios):\n"
+	    for (key in count) {
+		split(key, f, " ")
+		printf "  dev=%s op=%s bios=%u bytes=%u avg_bytes=%u\n",
+		    f[1], f[2], count[key], total[key] * 512,
+		    count[key] ? total[key] * 512 / count[key] : 0
+	    }
+	}
+    ' /sys/kernel/tracing/trace
 }
 
 assert_reconcile_prefers_cool_destination()
@@ -404,6 +432,7 @@ evacuate_bytes_per_sec()
 	cat "$log"
 	return 1
     fi
+    summarize_block_trace >&2
     end=$(date +%s%N)
 
     elapsed_ns=$((end - start))
@@ -432,7 +461,7 @@ test_evacuate_not_much_slower_than_source_read()
     mount -t bcachefs "$(devs)" /mnt
     assert_default_move_window_not_io_starved
 
-    seed_source_data
+    seed_source_data "$data_size"
 
     local read_bps
     read_bps=$(read_bytes_per_sec /mnt/src-only-data "$data_size")
@@ -475,7 +504,7 @@ test_evacuate_not_much_slower_with_busy_destination()
 
     format_evacuate_perf_fs
     mount -t bcachefs "$(devs)" /mnt
-    seed_source_data
+    seed_source_data "$data_size"
 
     baseline_bps=$(evacuate_bytes_per_sec "${ktest_scratch_dev[0]}" "$data_size")
     print_rate "baseline device evacuate" "$baseline_bps"
@@ -485,7 +514,7 @@ test_evacuate_not_much_slower_with_busy_destination()
 
     format_evacuate_perf_fs
     mount -t bcachefs "$(devs)" /mnt
-    seed_source_data
+    seed_source_data "$data_size"
 
     local events
     events=$(trace_events | xargs)
@@ -537,7 +566,7 @@ test_evacuate_keeps_progress_with_flush_delay()
 
 	format_evacuate_perf_fs
 	mount -t bcachefs "$(devs)" /mnt
-	seed_source_data
+	seed_source_data "$data_size"
 	stress_move_flushes
 
 	baseline_bps=$(evacuate_bytes_per_sec "${ktest_scratch_dev[0]}" "$data_size")
@@ -548,7 +577,7 @@ test_evacuate_keeps_progress_with_flush_delay()
 
 	format_evacuate_perf_fs
 	mount -t bcachefs "$(devs)" /mnt
-	seed_source_data
+	seed_source_data "$data_size"
 	stress_move_flushes
 
 	local events
@@ -601,7 +630,7 @@ test_evacuate_moves_away_from_busy_destination()
 
 	format_hot_cool_dst_fs
 	mount -t bcachefs "$(devs)" /mnt
-	seed_source_data
+	seed_source_data "$data_size"
 
 	mkdir -p /mnt/cool-prefill
 	bcachefs set-file-option --foreground_target=dst.cool /mnt/cool-prefill
@@ -642,14 +671,15 @@ test_evacuate_progress_with_partial_open_buckets()
 {
 	set_watchdog 900
 
-	local data_size=$((512 * 1024 * 1024))
+	local data_size=${EVACUATE_PERF_DATA_SIZE:-$((512 * 1024 * 1024))}
 	local min_progress_bps=$((4 * 1024 * 1024))
+	local min_evac_bps=$((16 * 1024 * 1024))
 	local evac_bps
 
 	format_evacuate_perf_fs
 	mount -t bcachefs "$(devs)" /mnt
 	assert_default_move_window_not_io_starved
-	seed_source_data
+	seed_source_data "$data_size"
 
 	local events
 	events=$(trace_events | xargs)
@@ -666,6 +696,12 @@ test_evacuate_progress_with_partial_open_buckets()
 	    return 1
 	fi
 	print_rate "partial-open-bucket-pressure evacuate" "$evac_bps"
+
+	if (( evac_bps < min_evac_bps )); then
+	    echo "evacuation stayed too slow under partial-open-bucket pressure"
+	    dump_evacuate_perf_debug
+	    return 1
+	fi
 
 	echo "open buckets after evacuation:"
 	dump_open_bucket_pressure_state
