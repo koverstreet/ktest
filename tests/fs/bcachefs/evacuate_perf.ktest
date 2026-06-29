@@ -172,6 +172,32 @@ reconcile_bytes_moved()
     human_to_bytes "$moved"
 }
 
+move_write_window_violations()
+{
+    awk '
+	$1 == "writes:" && $2 == "ios" && $4 == "sectors" {
+	    split($3, ios, "/")
+	    split($5, sectors, "/")
+	    if (ios[1] + 0 > ios[2] + 0 ||
+		sectors[1] + 0 > sectors[2] + 0)
+		print
+	}
+    ' /sys/fs/bcachefs/*/internal/moving_ctxts
+}
+
+assert_move_write_windows()
+{
+    local violations
+
+    violations=$(move_write_window_violations)
+    if [[ -n $violations ]]; then
+	echo "move writes exceeded effective in-flight window" >&2
+	echo "$violations" >&2
+	dump_evacuate_perf_debug >&2
+	return 1
+    fi
+}
+
 monitor_evacuate_progress()
 {
     local pid=$1
@@ -195,6 +221,10 @@ monitor_evacuate_progress()
 
 	printf 'evacuation progress window: %s bytes in %ss\n' \
 	    "$delta" "$interval" >&2
+
+	if ! assert_move_write_windows; then
+	    return 1
+	fi
 
 	if (( delta < min_delta )); then
 	    slow_windows=$((slow_windows + 1))
