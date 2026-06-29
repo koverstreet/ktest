@@ -62,6 +62,25 @@ dump_evacuate_perf_debug()
     tail -n 1200 /sys/kernel/tracing/trace || true
 }
 
+teardown_evacuate_perf_fs()
+{
+    echo "testing read-only shutdown after evacuation pressure"
+
+    if ! timeout 90 mount -o remount,ro /mnt; then
+	echo "remount,ro did not complete after evacuation pressure" >&2
+	dump_evacuate_perf_debug >&2
+	return 1
+    fi
+
+    if ! timeout 90 umount /mnt; then
+	echo "umount did not complete after evacuation pressure" >&2
+	dump_evacuate_perf_debug >&2
+	return 1
+    fi
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+}
+
 format_evacuate_perf_fs()
 {
     run_quiet "" bcachefs format -f			\
@@ -595,8 +614,7 @@ test_evacuate_not_much_slower_with_busy_destination()
 	return 1
     fi
 
-	umount /mnt
-	bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+	teardown_evacuate_perf_fs
 }
 
 test_evacuate_keeps_progress_with_flush_delay()
@@ -659,8 +677,7 @@ test_evacuate_keeps_progress_with_flush_delay()
 	    return 1
 	fi
 
-	umount /mnt
-	bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+	teardown_evacuate_perf_fs
 }
 
 test_evacuate_moves_away_from_busy_destination()
@@ -758,8 +775,7 @@ test_evacuate_progress_with_partial_open_buckets()
 	    return 1
 	fi
 
-	umount /mnt
-	bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+	teardown_evacuate_perf_fs
 }
 
 main "$@"
