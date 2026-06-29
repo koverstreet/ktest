@@ -28,7 +28,11 @@ if [[ ! -v NO_BCACHEFS_DEBUG ]]; then
     # signal.
     export BCACHEFS_DEBUG=1
 else
-    require-kernel-config BCACHEFS_NO_LATENCY_ACCT=y
+    if [[ -v NO_BCACHEFS_DEBUG_KEEP_LATENCY_ACCT ]]; then
+	require-kernel-config BCACHEFS_NO_LATENCY_ACCT=n
+    else
+	require-kernel-config BCACHEFS_NO_LATENCY_ACCT=y
+    fi
 fi
 
 if [[ -v ktest_bcachefs_inject_transaction_restarts ]]; then

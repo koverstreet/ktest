@@ -50,6 +50,7 @@ ktest_images=()
 ktest_rw_images=()
 ktest_scratch_dev=()
 ktest_scratch_dev_sizes=()
+ktest_scratch_slowdevs=()
 ktest_scratch_dev_count=0
 ktest_make_install=()
 ktest_kernel_config_require=()
@@ -197,6 +198,16 @@ config-scratch-devs()
     ktest_scratch_dev_count=$((ktest_scratch_dev_count + 1))
 
     ktest_scratch_dev_sizes+=("$1")
+}
+
+config-scratch-slowdevs()
+{
+    local chars=( {b..z} )
+
+    ktest_scratch_dev+=("/dev/${ktest_dev_prefix}${chars[$ktest_scratch_dev_count]}")
+    ktest_scratch_dev_count=$((ktest_scratch_dev_count + 1))
+
+    ktest_scratch_slowdevs+=("$1")
 }
 
 config-pmem-devs()
@@ -444,6 +455,7 @@ main()
 	    echo "ktest_images=(${ktest_images[@]})"
 	    echo "ktest_rw_images=(${ktest_rw_images[@]})"
 	    echo "ktest_scratch_dev_sizes=(${ktest_scratch_dev_sizes[@]})"
+	    echo "ktest_scratch_slowdevs=(${ktest_scratch_slowdevs[@]})"
 	    echo "ktest_make_install=(${ktest_make_install[@]})"
 	    echo "ktest_kernel_config_require=(${ktest_kernel_config_require[@]})"
 	    echo "ktest_kernel_config_require_soft=(${ktest_kernel_config_require_soft[@]})"

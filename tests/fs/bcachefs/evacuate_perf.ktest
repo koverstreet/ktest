@@ -1,0 +1,858 @@
+#!/usr/bin/env bash
+
+# shellcheck disable=SC1091,SC2034,SC2154
+NO_BCACHEFS_DEBUG=1
+NO_BCACHEFS_DEBUG_KEEP_LATENCY_ACCT=1
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+require-kernel-config BCACHEFS_FS=y
+
+config-mem 4G
+config-scratch-slowdevs 2G
+config-scratch-slowdevs 2G
+config-scratch-slowdevs 2G
+
+devs()
+{
+    join_by : "${ktest_scratch_dev[@]}"
+}
+
+trace_events()
+{
+    local t=/sys/kernel/tracing/events
+    local events=(
+	bcachefs:data_update_write
+	bcachefs:data_update_fail
+	bcachefs:bucket_alloc_fail
+	bcachefs:open_bucket_alloc_fail
+	bcachefs:journal_flush
+	bcachefs:journal_write
+	bcachefs:journal_reclaim_start
+	bcachefs:journal_reclaim_finish
+	bcachefs:journal_res_get_blocked
+	block:block_bio_queue
+	block:block_bio_complete
+    )
+
+    for event in "${events[@]}"; do
+	local path="${event%%:*}/${event#*:}"
+	if [[ -e $t/$path/enable ]]; then
+	    echo "$event"
+	fi
+    done
+}
+
+dump_evacuate_perf_debug()
+{
+    findmnt /mnt || true
+    fuser -vm /mnt || true
+    for p in /proc/[0-9]*; do
+	local pid=${p##*/}
+	local cwd
+
+	cwd=$(readlink "$p/cwd" 2>/dev/null || true)
+	if [[ $cwd == /mnt* ]]; then
+	    echo "pid $pid cwd $cwd cmd $(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)"
+	fi
+	for fd in "$p"/fd/*; do
+	    local target
+
+	    target=$(readlink "$fd" 2>/dev/null || true)
+	    if [[ $target == /mnt* ]]; then
+		echo "pid $pid fd ${fd##*/} $target cmd $(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)"
+	    fi
+	done
+    done
+    bcachefs fs usage -h --all /mnt || true
+    cat /sys/fs/bcachefs/*/reconcile_status || true
+    cat /sys/fs/bcachefs/*/internal/copy_gc_wait || true
+    cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
+    cat /sys/fs/bcachefs/*/journal_reclaim || true
+    cat /sys/fs/bcachefs/*/time_stats/journal_flush_write || true
+    cat /sys/fs/bcachefs/*/time_stats/journal_flush_seq || true
+    cat /sys/fs/bcachefs/*/time_stats/journal_noflush_write || true
+    cat /sys/fs/bcachefs/*/time_stats/blocked_journal_low_on_space || true
+    cat /sys/fs/bcachefs/*/time_stats/blocked_journal_low_on_pin || true
+    cat /sys/fs/bcachefs/*/time_stats/blocked_journal_max_in_flight || true
+    cat /sys/fs/bcachefs/*/time_stats/blocked_journal_max_open || true
+    dump_open_bucket_pressure_state || true
+    cat /sys/kernel/debug/bcachefs/*/write_points || true
+    tail -n 1200 /sys/kernel/tracing/trace || true
+}
+
+teardown_evacuate_perf_fs()
+{
+    echo "testing read-only shutdown after evacuation pressure"
+
+    if ! timeout 90 mount -o remount,ro /mnt; then
+	echo "remount,ro did not complete after evacuation pressure" >&2
+	dump_evacuate_perf_debug >&2
+	return 1
+    fi
+
+    if ! timeout 90 umount /mnt; then
+	echo "umount did not complete after evacuation pressure" >&2
+	dump_evacuate_perf_debug >&2
+	return 1
+    fi
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+}
+
+format_evacuate_perf_fs()
+{
+    run_quiet "" bcachefs format -f			\
+	--block_size=4k					\
+	--bucket_size=256k				\
+	--replicas=1					\
+	--foreground_target=src				\
+	--background_target=src				\
+	--metadata_target=dst				\
+	--rotational=1 --label=src "${ktest_scratch_dev[0]}" \
+	--rotational=1 --label=dst "${ktest_scratch_dev[1]}" \
+	--rotational=1 --label=dst "${ktest_scratch_dev[2]}"
+}
+
+format_hot_cool_dst_fs()
+{
+    run_quiet "" bcachefs format -f			\
+	--block_size=4k					\
+	--bucket_size=256k				\
+	--replicas=1					\
+	--foreground_target=src				\
+	--background_target=src				\
+	--metadata_target=dst				\
+	--rotational=1 --label=src "${ktest_scratch_dev[0]}" \
+	--rotational=1 --label=dst.hot "${ktest_scratch_dev[1]}" \
+	--rotational=1 --label=dst.cool "${ktest_scratch_dev[2]}"
+}
+
+seed_source_data()
+{
+    local size=${1:-$((512 * 1024 * 1024))}
+
+    dd if=/dev/zero of=/mnt/src-only-data bs=4M count=$((size / (4 * 1024 * 1024))) \
+	oflag=direct status=none
+    sync
+}
+
+read_bytes_per_sec()
+{
+    local file=$1
+    local size=$2
+    local start end elapsed_ns
+
+    sync
+    echo 3 > /proc/sys/vm/drop_caches
+
+    start=$(date +%s%N)
+    dd if="$file" of=/dev/null bs=4M iflag=direct status=none
+    end=$(date +%s%N)
+
+    elapsed_ns=$((end - start))
+    (( elapsed_ns > 0 ))
+    echo $((size * 1000000000 / elapsed_ns))
+}
+
+start_dst_pressure()
+{
+    local log=$1
+    local target=${2:-dst}
+
+    mkdir -p /mnt/dst-pressure
+    bcachefs set-file-option --foreground_target="$target" /mnt/dst-pressure
+    dd if=/dev/zero of=/mnt/dst-pressure/hotfile bs=4M count=128 oflag=direct status=none
+    sync
+    echo 3 > /proc/sys/vm/drop_caches
+
+    setsid fio --eta=always			\
+	--exitall_on_error=1			\
+	--ioengine=libaio			\
+	--iodepth=64				\
+	--iodepth_batch=16			\
+	--direct=1				\
+	--numjobs=1				\
+	--time_based				\
+	--runtime=180				\
+	--name=dst-pressure			\
+	--rw=randwrite				\
+	--fsync=1				\
+	--bs=256k				\
+	--filesize=512M			\
+	--filename=/mnt/dst-pressure/hotfile	\
+	>"$log" 2>&1 &
+	echo $!
+}
+
+stop_dst_pressure()
+{
+    local pid=${1:-}
+
+    [[ -n $pid ]] || return 0
+
+    kill -- "-$pid" 2>/dev/null || true
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+
+    local p hpid target
+    local holders=()
+
+    for p in /proc/[0-9]*; do
+	hpid=${p##*/}
+	target=$(readlink "$p/cwd" 2>/dev/null || true)
+	[[ $target == /mnt/dst-pressure* ]] && holders+=("$hpid") && continue
+	target=$(readlink "$p/root" 2>/dev/null || true)
+	[[ $target == /mnt/dst-pressure* ]] && holders+=("$hpid") && continue
+
+	for fd in "$p"/fd/*; do
+	    target=$(readlink "$fd" 2>/dev/null || true)
+	    [[ $target == /mnt/dst-pressure/* ]] && holders+=("$hpid") && break
+	done
+    done
+
+    ((${#holders[@]} == 0)) && return 0
+
+    kill "${holders[@]}" 2>/dev/null || true
+    kill -KILL "${holders[@]}" 2>/dev/null || true
+}
+
+trace_dev_id()
+{
+    local dev=$1
+    local id
+
+    id=$(cat "/sys/class/block/${dev##*/}/dev")
+    echo "${id/:/,}"
+}
+
+count_reconcile_write_bios()
+{
+    local dev_id=$1
+
+    grep -Ec "block_bio_queue: ${dev_id} W[^ ]* [0-9]+ \\+ [0-9]+ \\[(bch-reconcile|kworker/u[0-9]+:)" \
+	/sys/kernel/tracing/trace || true
+}
+
+summarize_block_trace()
+{
+    awk '
+	/block_bio_queue:/ {
+	    dev = $6
+	    sub(/,$/, "", dev)
+	    op = $7
+	    sectors = $10 + 0
+	    rw = substr(op, 1, 1)
+	    key = dev " " rw
+	    count[key]++
+	    total[key] += sectors
+	}
+	END {
+	    printf "block trace summary (queued bios):\n"
+	    for (key in count) {
+		split(key, f, " ")
+		printf "  dev=%s op=%s bios=%u bytes=%u avg_bytes=%u\n",
+		    f[1], f[2], count[key], total[key] * 512,
+		    count[key] ? total[key] * 512 / count[key] : 0
+	    }
+	}
+    ' /sys/kernel/tracing/trace
+}
+
+assert_reconcile_prefers_cool_destination()
+{
+    local hot_id=$1
+    local cool_id=$2
+    local hot_writes
+    local cool_writes
+
+    hot_writes=$(count_reconcile_write_bios "$hot_id")
+    cool_writes=$(count_reconcile_write_bios "$cool_id")
+
+    echo "reconcile writes to busy dst.hot: $hot_writes"
+    echo "reconcile writes to cool dst.cool: $cool_writes"
+
+    if (( cool_writes < 4 )); then
+	echo "did not observe enough reconcile writes to the cool destination"
+	dump_evacuate_perf_debug
+	return 1
+    fi
+
+    if (( hot_writes >= cool_writes )); then
+	echo "reconcile kept preferring the busy destination"
+	dump_evacuate_perf_debug
+	return 1
+    fi
+}
+
+stress_move_flushes()
+{
+	echo 1000 > /sys/fs/bcachefs/*/options/journal_flush_delay
+	echo 256k > /sys/fs/bcachefs/*/options/move_bytes_in_flight
+	echo 4 > /sys/fs/bcachefs/*/options/move_ios_in_flight
+}
+
+assert_default_move_window_not_io_starved()
+{
+	local bytes
+	local ios
+	local min_ios
+
+	bytes=$(human_to_bytes "$(cat /sys/fs/bcachefs/*/options/move_bytes_in_flight)")
+	ios=$(cat /sys/fs/bcachefs/*/options/move_ios_in_flight)
+
+	# Reconcile usually moves checksum extents in 64 KiB chunks. The default
+	# IO-count window must be large enough to keep the byte window occupied.
+	min_ios=$((bytes / (64 * 1024)))
+	if (( min_ios < 1 )); then
+	    min_ios=1
+	fi
+
+	if (( ios < min_ios )); then
+	    echo "move_ios_in_flight default underfills move byte window"
+	    echo "move_bytes_in_flight=$bytes move_ios_in_flight=$ios min_ios=$min_ios"
+	    return 1
+	fi
+}
+
+open_buckets_partial_count()
+{
+    cat /sys/fs/bcachefs/*/internal/open_buckets_partial 2>/dev/null | wc -l
+}
+
+dump_open_bucket_pressure_state()
+{
+    echo "partials=$(open_buckets_partial_count)"
+    cat /sys/fs/bcachefs/*/internal/alloc_debug 2>/dev/null || true
+    find /sys/fs/bcachefs -maxdepth 3 -type f -path '*/internal/open_buckets*' -print \
+	-exec sh -c 'tail -n 120 "$1"' _ {} \; 2>/dev/null || true
+}
+
+seed_partial_open_bucket_pressure()
+{
+    local writes=${1:-2300}
+    local min_partials=${2:-64}
+
+    mkdir -p /mnt/partial-pressure
+    bcachefs set-file-option --foreground_target=dst /mnt/partial-pressure
+
+    echo "open buckets before pressure:"
+    dump_open_bucket_pressure_state
+
+    for i in $(seq 1 "$writes"); do
+	dd if=/dev/zero of="/mnt/partial-pressure/file-$i" \
+	    bs=64k count=1 oflag=direct status=none
+
+	if (( i % 128 == 0 )); then
+	    echo "partial pressure writes=$i partials=$(open_buckets_partial_count)"
+	fi
+    done
+    sync
+
+    local partials
+    partials=$(open_buckets_partial_count)
+    echo "open buckets after pressure:"
+    dump_open_bucket_pressure_state
+
+    if (( partials < min_partials )); then
+	echo "partial-open-bucket pressure did not expose enough partials" >&2
+	echo "minimum expected exported partials: $min_partials" >&2
+	dump_evacuate_perf_debug >&2
+	return 1
+    fi
+}
+
+human_to_bytes()
+{
+    local value=$1
+
+    awk -v value="$value" 'BEGIN {
+	unit = substr(value, length(value), 1)
+	num = value + 0
+
+	if (unit == "K")
+	    num *= 1000
+	else if (unit == "M")
+	    num *= 1000 * 1000
+	else if (unit == "G")
+	    num *= 1000 * 1000 * 1000
+	else if (unit == "T")
+	    num *= 1000 * 1000 * 1000 * 1000
+
+	printf "%.0f\n", num
+    }'
+}
+
+reconcile_bytes_moved()
+{
+    local moved
+
+    moved=$(
+	awk '
+	    /^reconcile_/ { in_reconcile = 1; next }
+	    /^[^[:space:]]/ { in_reconcile = 0 }
+	    in_reconcile && $1 == "bytes" && $2 == "moved:" {
+		print $3
+		exit
+	    }
+	' /sys/fs/bcachefs/*/internal/moving_ctxts
+    )
+
+    if [[ -z $moved ]]; then
+	echo 0
+	return
+    fi
+
+    human_to_bytes "$moved"
+}
+
+evacuating_source_user_bytes()
+{
+    bcachefs fs usage -h --all /mnt | awk '
+	/^[^[:space:]].*\(device [0-9]+\):/ {
+	    in_evacuating = /evacuating/
+	    next
+	}
+	in_evacuating && $1 == "user:" {
+	    print $2
+	    exit
+	}
+    '
+}
+
+move_write_window_violations()
+{
+    awk '
+	$1 == "writes:" && $2 == "ios" && $4 == "sectors" {
+	    split($3, ios, "/")
+	    split($5, sectors, "/")
+	    if (ios[1] + 0 > ios[2] + 0 ||
+		sectors[1] + 0 > sectors[2] + 0)
+		print
+	}
+    ' /sys/fs/bcachefs/*/internal/moving_ctxts
+}
+
+move_noflush_window_violations()
+{
+    local min_sectors
+
+    min_sectors=$(($(human_to_bytes "$(cat /sys/fs/bcachefs/*/options/move_bytes_in_flight | head -n1)") / 512))
+
+    awk -v min_sectors="$min_sectors" '
+	$1 == "noflush" && $2 == "sectors:" {
+	    split($3, sectors, "/")
+	    if (sectors[2] + 0 < min_sectors)
+		print
+	}
+    ' /sys/fs/bcachefs/*/internal/moving_ctxts
+}
+
+move_pressure_window_violations()
+{
+	local min_pressure_sectors=$((16 * 1024 * 1024 / 512))
+	local max_pressure_ios=128
+	local max_pressure_sectors=$min_pressure_sectors
+
+	awk -v min_pressure_sectors="$min_pressure_sectors" '
+		/^[^[:space:]]/ { pressure = 0 }
+		$1 == "ioprio:" && $2 == "best-effort:7" { pressure = 1 }
+		pressure && $1 == "writes:" && $2 == "ios" && $4 == "sectors" {
+			split($5, sectors, "/")
+			if (sectors[2] + 0 < min_pressure_sectors)
+				print
+		}
+	' /sys/fs/bcachefs/*/internal/moving_ctxts
+
+	awk -v max_pressure_ios="$max_pressure_ios" \
+	    -v max_pressure_sectors="$max_pressure_sectors" '
+		/^[^[:space:]]/ { pressure = 0 }
+		$1 == "ioprio:" && $2 == "best-effort:7" { pressure = 1 }
+		pressure && $1 == "writes:" && $2 == "ios" && $4 == "sectors" {
+			split($3, ios, "/")
+			split($5, sectors, "/")
+			if (ios[2] + 0 > max_pressure_ios ||
+			    sectors[2] + 0 > max_pressure_sectors)
+				print
+		}
+	' /sys/fs/bcachefs/*/internal/moving_ctxts
+}
+
+assert_move_write_windows()
+{
+    local violations
+
+    violations=$(move_write_window_violations)
+    if [[ -n $violations ]]; then
+	echo "move writes exceeded effective in-flight window" >&2
+	echo "$violations" >&2
+	dump_evacuate_perf_debug >&2
+	return 1
+    fi
+
+    violations=$(move_noflush_window_violations)
+    if [[ -n $violations ]]; then
+	echo "move noflush flush window was clamped below the global move byte window" >&2
+	echo "$violations" >&2
+	dump_evacuate_perf_debug >&2
+	return 1
+    fi
+
+	violations=$(move_pressure_window_violations)
+	if [[ -n $violations ]]; then
+		echo "pressure-priority move writes missed the rotational hipri window" >&2
+		echo "$violations" >&2
+		dump_evacuate_perf_debug >&2
+		return 1
+	fi
+}
+
+monitor_evacuate_progress()
+{
+    local pid=$1
+    local min_bps=$2
+    local interval=5
+    local max_slow_windows=2
+    local min_delta=$((min_bps * interval))
+    local slow_windows=0
+    local last current delta
+
+    last=$(reconcile_bytes_moved)
+
+    while kill -0 "$pid" 2>/dev/null; do
+	sleep "$interval"
+
+	current=$(reconcile_bytes_moved)
+	delta=$((current - last))
+	if (( delta < 0 )); then
+	    delta=0
+	fi
+
+	if [[ $(evacuating_source_user_bytes) == 0 ]]; then
+	    return 0
+	fi
+
+	printf 'evacuation progress window: %s bytes in %ss\n' \
+	    "$delta" "$interval" >&2
+
+	if ! assert_move_write_windows; then
+	    return 1
+	fi
+
+	if (( delta < min_delta )); then
+	    slow_windows=$((slow_windows + 1))
+	else
+	    slow_windows=0
+	fi
+
+	if (( slow_windows >= max_slow_windows )); then
+	    echo "evacuation progress stalled below window floor" >&2
+	    echo "minimum expected: $min_delta bytes per ${interval}s" >&2
+	    dump_evacuate_perf_debug >&2
+	    return 1
+	fi
+
+	last=$current
+    done
+}
+
+evacuate_bytes_per_sec()
+{
+    local dev=$1
+    local size=$2
+    local min_progress_bps=${3:-0}
+    local start end elapsed_ns
+    local log=/tmp/evacuate_perf_device_evac.log
+    local evacpid
+
+    start=$(date +%s%N)
+    bcachefs device evacuate "$dev" >"$log" 2>&1 &
+    evacpid=$!
+
+    if (( min_progress_bps )) &&
+	! monitor_evacuate_progress "$evacpid" "$min_progress_bps"; then
+	kill "$evacpid" 2>/dev/null || true
+	wait "$evacpid" 2>/dev/null || true
+	cat "$log"
+	return 1
+    fi
+
+    if ! wait "$evacpid"; then
+	cat "$log"
+	return 1
+    fi
+    summarize_block_trace >&2
+    end=$(date +%s%N)
+
+    elapsed_ns=$((end - start))
+    (( elapsed_ns > 0 ))
+    echo $((size * 1000000000 / elapsed_ns))
+}
+
+print_rate()
+{
+    local name=$1
+    local bps=$2
+    awk -v name="$name" -v bps="$bps" 'BEGIN {
+	printf "%s: %.1f MiB/s\n", name, bps / 1048576
+    }'
+}
+
+test_evacuate_not_much_slower_than_source_read()
+{
+    set_watchdog 600
+
+    local data_size=$((512 * 1024 * 1024))
+    local min_abs_bps=$((64 * 1024 * 1024))
+
+    format_evacuate_perf_fs
+
+    mount -t bcachefs "$(devs)" /mnt
+    assert_default_move_window_not_io_starved
+
+    seed_source_data "$data_size"
+
+    local read_bps
+    read_bps=$(read_bytes_per_sec /mnt/src-only-data "$data_size")
+    print_rate "source direct read" "$read_bps"
+
+    local events
+    events=$(trace_events | xargs)
+    if [[ -n $events ]]; then
+	setup_tracing "$events"
+    fi
+
+    local evac_bps
+    evac_bps=$(evacuate_bytes_per_sec "${ktest_scratch_dev[0]}" "$data_size")
+    print_rate "device evacuate" "$evac_bps"
+
+    bcachefs fs usage -h --all /mnt
+    cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
+    cat /sys/kernel/debug/bcachefs/*/write_points || true
+
+    if (( evac_bps < min_abs_bps && evac_bps * 4 < read_bps )); then
+	echo "evacuation is much slower than source direct read"
+	dump_evacuate_perf_debug
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+}
+
+test_evacuate_not_much_slower_with_busy_destination()
+{
+    set_watchdog 900
+
+    local data_size=$((512 * 1024 * 1024))
+    local min_abs_bps=$((64 * 1024 * 1024))
+    local baseline_bps
+    local contended_bps
+    local fioout="$ktest_out/dst-pressure-fio-out"
+    local fiopid
+
+    format_evacuate_perf_fs
+    mount -t bcachefs "$(devs)" /mnt
+    seed_source_data "$data_size"
+
+    baseline_bps=$(evacuate_bytes_per_sec "${ktest_scratch_dev[0]}" "$data_size")
+    print_rate "baseline device evacuate" "$baseline_bps"
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+
+    format_evacuate_perf_fs
+    mount -t bcachefs "$(devs)" /mnt
+    seed_source_data "$data_size"
+
+    local events
+    events=$(trace_events | xargs)
+    if [[ -n $events ]]; then
+	setup_tracing "$events"
+    fi
+
+    fiopid=$(start_dst_pressure "$fioout")
+    sleep 3
+
+    if ! contended_bps=$(evacuate_bytes_per_sec \
+	"${ktest_scratch_dev[0]}" "$data_size" "$((baseline_bps / 2))"); then
+	cat "$fioout" || true
+	stop_dst_pressure "$fiopid"
+	dump_evacuate_perf_debug
+	return 1
+    fi
+    print_rate "contended device evacuate" "$contended_bps"
+
+    stop_dst_pressure "$fiopid"
+
+    bcachefs fs usage -h --all /mnt
+    cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
+    cat /sys/kernel/debug/bcachefs/*/write_points || true
+
+    if (( contended_bps < min_abs_bps && contended_bps * 2 < baseline_bps )); then
+	echo "evacuation is much slower when destination is busy"
+	cat "$fioout" || true
+	dump_evacuate_perf_debug
+	return 1
+    fi
+
+	teardown_evacuate_perf_fs
+}
+
+test_evacuate_keeps_progress_with_flush_delay()
+{
+	set_watchdog 900
+
+	local data_size=$((512 * 1024 * 1024))
+	local min_abs_bps=$((8 * 1024 * 1024))
+	local baseline_bps
+	local contended_bps
+	local fioout="$ktest_out/dst-pressure-flush-fio-out"
+	local fiopid
+
+	format_evacuate_perf_fs
+	mount -t bcachefs "$(devs)" /mnt
+	seed_source_data "$data_size"
+	stress_move_flushes
+
+	baseline_bps=$(evacuate_bytes_per_sec "${ktest_scratch_dev[0]}" "$data_size")
+	print_rate "flush-delayed baseline evacuate" "$baseline_bps"
+
+	umount /mnt
+	bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+
+	format_evacuate_perf_fs
+	mount -t bcachefs "$(devs)" /mnt
+	seed_source_data "$data_size"
+	stress_move_flushes
+
+	local events
+	events=$(trace_events | xargs)
+	if [[ -n $events ]]; then
+	    setup_tracing "$events"
+	fi
+
+	fiopid=$(start_dst_pressure "$fioout")
+	sleep 3
+
+	if ! contended_bps=$(evacuate_bytes_per_sec \
+	    "${ktest_scratch_dev[0]}" "$data_size" "$((baseline_bps / 4))"); then
+	    cat "$fioout" || true
+	    stop_dst_pressure "$fiopid"
+	    dump_evacuate_perf_debug
+	    return 1
+	fi
+	print_rate "flush-delayed contended evacuate" "$contended_bps"
+
+	stop_dst_pressure "$fiopid"
+
+	bcachefs fs usage -h --all /mnt
+	cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
+	cat /sys/kernel/debug/bcachefs/*/write_points || true
+
+	if (( contended_bps < min_abs_bps && contended_bps * 4 < baseline_bps )); then
+	    echo "evacuation is much slower with delayed journal flushes"
+	    cat "$fioout" || true
+	    dump_evacuate_perf_debug
+	    return 1
+	fi
+
+	teardown_evacuate_perf_fs
+}
+
+test_evacuate_moves_away_from_busy_destination()
+{
+	set_watchdog 900
+
+	local data_size=$((512 * 1024 * 1024))
+	local fioout="$ktest_out/dst-hot-pressure-fio-out"
+	local hot_id
+	local cool_id
+	local fiopid
+	local evac_bps
+
+	format_hot_cool_dst_fs
+	mount -t bcachefs "$(devs)" /mnt
+	seed_source_data "$data_size"
+
+	mkdir -p /mnt/cool-prefill
+	bcachefs set-file-option --foreground_target=dst.cool /mnt/cool-prefill
+	dd if=/dev/zero of=/mnt/cool-prefill/file bs=4M count=64 oflag=direct status=none
+	sync
+
+	local events
+	events=$(trace_events | xargs)
+	if [[ -n $events ]]; then
+	    setup_tracing "$events"
+	fi
+
+	hot_id=$(trace_dev_id "${ktest_scratch_dev[1]}")
+	cool_id=$(trace_dev_id "${ktest_scratch_dev[2]}")
+
+	fiopid=$(start_dst_pressure "$fioout" dst.hot)
+	: > /sys/kernel/tracing/trace
+
+	if ! evac_bps=$(evacuate_bytes_per_sec "${ktest_scratch_dev[0]}" "$data_size"); then
+	    cat "$fioout" || true
+	    stop_dst_pressure "$fiopid"
+	    dump_evacuate_perf_debug
+	    return 1
+	fi
+	print_rate "busy-destination-avoidance evacuate" "$evac_bps"
+
+	stop_dst_pressure "$fiopid"
+
+	assert_reconcile_prefers_cool_destination "$hot_id" "$cool_id"
+
+	teardown_evacuate_perf_fs
+}
+
+test_evacuate_progress_with_partial_open_buckets()
+{
+	set_watchdog 900
+
+	local data_size=${EVACUATE_PERF_DATA_SIZE:-$((512 * 1024 * 1024))}
+	local min_progress_bps=$((4 * 1024 * 1024))
+	local min_evac_bps=$((16 * 1024 * 1024))
+	local evac_bps
+
+	format_evacuate_perf_fs
+	mount -t bcachefs "$(devs)" /mnt
+	assert_default_move_window_not_io_starved
+	seed_source_data "$data_size"
+
+	local events
+	events=$(trace_events | xargs)
+	if [[ -n $events ]]; then
+	    setup_tracing "$events"
+	fi
+
+	seed_partial_open_bucket_pressure
+	: > /sys/kernel/tracing/trace
+
+	if ! evac_bps=$(evacuate_bytes_per_sec \
+	    "${ktest_scratch_dev[0]}" "$data_size" "$min_progress_bps"); then
+	    dump_evacuate_perf_debug
+	    return 1
+	fi
+	print_rate "partial-open-bucket-pressure evacuate" "$evac_bps"
+
+	if (( evac_bps < min_evac_bps )); then
+	    echo "evacuation stayed too slow under partial-open-bucket pressure"
+	    dump_evacuate_perf_debug
+	    return 1
+	fi
+
+	echo "open buckets after evacuation:"
+	dump_open_bucket_pressure_state
+
+	if grep -q 'bcachefs:open_bucket_alloc_fail' /sys/kernel/tracing/trace; then
+	    echo "evacuation hit open_bucket_alloc_fail under partial-bucket pressure"
+	    dump_evacuate_perf_debug
+	    return 1
+	fi
+
+	teardown_evacuate_perf_fs
+}
+
+main "$@"
