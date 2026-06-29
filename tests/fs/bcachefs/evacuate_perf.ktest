@@ -406,6 +406,20 @@ reconcile_bytes_moved()
     human_to_bytes "$moved"
 }
 
+evacuating_source_user_bytes()
+{
+    bcachefs fs usage -h --all /mnt | awk '
+	/^[^[:space:]].*\(device [0-9]+\):/ {
+	    in_evacuating = /evacuating/
+	    next
+	}
+	in_evacuating && $1 == "user:" {
+	    print $2
+	    exit
+	}
+    '
+}
+
 move_write_window_violations()
 {
     awk '
@@ -497,6 +511,10 @@ monitor_evacuate_progress()
 	delta=$((current - last))
 	if (( delta < 0 )); then
 	    delta=0
+	fi
+
+	if [[ $(evacuating_source_user_bytes) == 0 ]]; then
+	    return 0
 	fi
 
 	printf 'evacuation progress window: %s bytes in %ss\n' \
