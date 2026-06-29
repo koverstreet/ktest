@@ -131,6 +131,62 @@ test_ec_crypto_lz4()
     do_ec_test --encrypted --no_passphrase --compression=lz4
 }
 
+test_ec_crypto_background_target_scrub_before_remount()
+{
+    set_watchdog 360
+
+    run_quiet "" bcachefs format -f			\
+	--encrypted --no_passphrase			\
+	--erasure_code					\
+	--replicas=2					\
+	--bucket_size=256k				\
+	--label=ssd.ssd0 ${ktest_scratch_dev[0]}	\
+	--label=ssd.ssd1 ${ktest_scratch_dev[1]}	\
+	--label=hdd.hdd0 ${ktest_scratch_dev[2]}	\
+	--label=hdd.hdd1 ${ktest_scratch_dev[3]}	\
+	--label=hdd.hdd2 ${ktest_scratch_dev[4]}	\
+	--foreground_target=ssd				\
+	--promote_target=ssd				\
+	--background_target=hdd
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
+
+    mount -t bcachefs $devs /mnt
+
+    dd if=/dev/zero of=/mnt/ec-background-file bs=1M count=256 oflag=direct status=progress
+    md5sum /mnt/ec-background-file > /root/ec-background-file.md5
+
+    for i in $(seq 1 120); do
+	bcachefs list -b extents "${ktest_scratch_dev[@]}" > /tmp/ec-background-extents
+	if grep -q stripe_ptr /tmp/ec-background-extents; then
+	    break
+	fi
+	sleep 1
+    done
+
+    bcachefs fs usage -h /mnt
+
+    bcachefs list -b extents "${ktest_scratch_dev[@]}" > /tmp/ec-background-extents
+    if ! grep -q stripe_ptr /tmp/ec-background-extents; then
+	echo "expected extents to move to erasure-coded background target"
+	exit 1
+    fi
+
+    bcachefs scrub /mnt
+    echo 3 > /proc/sys/vm/drop_caches
+    md5sum -c /root/ec-background-file.md5
+
+    umount /mnt
+
+    mount -t bcachefs $devs /mnt
+    bcachefs scrub /mnt
+    echo 3 > /proc/sys/vm/drop_caches
+    md5sum -c /root/ec-background-file.md5
+    umount /mnt
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_ec_mixed_tiers()
 {
     set_watchdog 240
