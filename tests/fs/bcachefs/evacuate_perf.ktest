@@ -125,7 +125,14 @@ start_dst_pressure()
 	--filesize=512M			\
 	--filename=/mnt/dst-pressure/hotfile	\
 	>"$log" 2>&1 &
-    echo $!
+	echo $!
+}
+
+stress_move_flushes()
+{
+	echo 1000 > /sys/fs/bcachefs/*/options/journal_flush_delay
+	echo 256k > /sys/fs/bcachefs/*/options/move_bytes_in_flight
+	echo 4 > /sys/fs/bcachefs/*/options/move_ios_in_flight
 }
 
 human_to_bytes()
@@ -383,8 +390,72 @@ test_evacuate_not_much_slower_with_busy_destination()
 	return 1
     fi
 
-    umount /mnt
-    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+	umount /mnt
+	bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+}
+
+test_evacuate_keeps_progress_with_flush_delay()
+{
+	set_watchdog 900
+
+	local data_size=$((512 * 1024 * 1024))
+	local min_abs_bps=$((8 * 1024 * 1024))
+	local baseline_bps
+	local contended_bps
+	local fioout="$ktest_out/dst-pressure-flush-fio-out"
+	local fiopid
+
+	format_evacuate_perf_fs
+	mount -t bcachefs "$(devs)" /mnt
+	seed_source_data
+	stress_move_flushes
+
+	baseline_bps=$(evacuate_bytes_per_sec "${ktest_scratch_dev[0]}" "$data_size")
+	print_rate "flush-delayed baseline evacuate" "$baseline_bps"
+
+	umount /mnt
+	bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+
+	format_evacuate_perf_fs
+	mount -t bcachefs "$(devs)" /mnt
+	seed_source_data
+	stress_move_flushes
+
+	local events
+	events=$(trace_events | xargs)
+	if [[ -n $events ]]; then
+	    setup_tracing "$events"
+	fi
+
+	fiopid=$(start_dst_pressure "$fioout")
+	sleep 3
+
+	if ! contended_bps=$(evacuate_bytes_per_sec \
+	    "${ktest_scratch_dev[0]}" "$data_size" "$((baseline_bps / 4))"); then
+	    cat "$fioout" || true
+	    kill "$fiopid" 2>/dev/null || true
+	    wait "$fiopid" 2>/dev/null || true
+	    dump_evacuate_perf_debug
+	    return 1
+	fi
+	print_rate "flush-delayed contended evacuate" "$contended_bps"
+
+	kill "$fiopid" 2>/dev/null || true
+	wait "$fiopid" 2>/dev/null || true
+
+	bcachefs fs usage -h --all /mnt
+	cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
+	cat /sys/kernel/debug/bcachefs/*/write_points || true
+
+	if (( contended_bps < min_abs_bps && contended_bps * 4 < baseline_bps )); then
+	    echo "evacuation is much slower with delayed journal flushes"
+	    cat "$fioout" || true
+	    dump_evacuate_perf_debug
+	    return 1
+	fi
+
+	umount /mnt
+	bcachefs fsck -ny "${ktest_scratch_dev[@]}"
 }
 
 main "$@"
