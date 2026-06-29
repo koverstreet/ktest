@@ -57,6 +57,7 @@ dump_evacuate_perf_debug()
     cat /sys/fs/bcachefs/*/time_stats/blocked_journal_low_on_pin || true
     cat /sys/fs/bcachefs/*/time_stats/blocked_journal_max_in_flight || true
     cat /sys/fs/bcachefs/*/time_stats/blocked_journal_max_open || true
+    dump_open_bucket_pressure_state || true
     cat /sys/kernel/debug/bcachefs/*/write_points || true
     tail -n 1200 /sys/kernel/tracing/trace || true
 }
@@ -214,6 +215,53 @@ assert_default_move_window_not_io_starved()
 	    echo "move_bytes_in_flight=$bytes move_ios_in_flight=$ios min_ios=$min_ios"
 	    return 1
 	fi
+}
+
+open_buckets_partial_count()
+{
+    cat /sys/fs/bcachefs/*/internal/open_buckets_partial 2>/dev/null | wc -l
+}
+
+dump_open_bucket_pressure_state()
+{
+    echo "partials=$(open_buckets_partial_count)"
+    cat /sys/fs/bcachefs/*/internal/alloc_debug 2>/dev/null || true
+    find /sys/fs/bcachefs -maxdepth 3 -type f -path '*/internal/open_buckets*' -print \
+	-exec sh -c 'tail -n 120 "$1"' _ {} \; 2>/dev/null || true
+}
+
+seed_partial_open_bucket_pressure()
+{
+    local writes=${1:-2300}
+    local min_partials=${2:-64}
+
+    mkdir -p /mnt/partial-pressure
+    bcachefs set-file-option --foreground_target=dst /mnt/partial-pressure
+
+    echo "open buckets before pressure:"
+    dump_open_bucket_pressure_state
+
+    for i in $(seq 1 "$writes"); do
+	dd if=/dev/zero of="/mnt/partial-pressure/file-$i" \
+	    bs=64k count=1 oflag=direct status=none
+
+	if (( i % 128 == 0 )); then
+	    echo "partial pressure writes=$i partials=$(open_buckets_partial_count)"
+	fi
+    done
+    sync
+
+    local partials
+    partials=$(open_buckets_partial_count)
+    echo "open buckets after pressure:"
+    dump_open_bucket_pressure_state
+
+    if (( partials < min_partials )); then
+	echo "partial-open-bucket pressure did not expose enough partials" >&2
+	echo "minimum expected exported partials: $min_partials" >&2
+	dump_evacuate_perf_debug >&2
+	return 1
+    fi
 }
 
 human_to_bytes()
@@ -585,6 +633,48 @@ test_evacuate_moves_away_from_busy_destination()
 	wait "$fiopid" 2>/dev/null || true
 
 	assert_reconcile_prefers_cool_destination "$hot_id" "$cool_id"
+
+	umount /mnt
+	bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+}
+
+test_evacuate_progress_with_partial_open_buckets()
+{
+	set_watchdog 900
+
+	local data_size=$((512 * 1024 * 1024))
+	local min_progress_bps=$((4 * 1024 * 1024))
+	local evac_bps
+
+	format_evacuate_perf_fs
+	mount -t bcachefs "$(devs)" /mnt
+	assert_default_move_window_not_io_starved
+	seed_source_data
+
+	local events
+	events=$(trace_events | xargs)
+	if [[ -n $events ]]; then
+	    setup_tracing "$events"
+	fi
+
+	seed_partial_open_bucket_pressure
+	: > /sys/kernel/tracing/trace
+
+	if ! evac_bps=$(evacuate_bytes_per_sec \
+	    "${ktest_scratch_dev[0]}" "$data_size" "$min_progress_bps"); then
+	    dump_evacuate_perf_debug
+	    return 1
+	fi
+	print_rate "partial-open-bucket-pressure evacuate" "$evac_bps"
+
+	echo "open buckets after evacuation:"
+	dump_open_bucket_pressure_state
+
+	if grep -q 'bcachefs:open_bucket_alloc_fail' /sys/kernel/tracing/trace; then
+	    echo "evacuation hit open_bucket_alloc_fail under partial-bucket pressure"
+	    dump_evacuate_perf_debug
+	    return 1
+	fi
 
 	umount /mnt
 	bcachefs fsck -ny "${ktest_scratch_dev[@]}"
