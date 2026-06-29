@@ -45,6 +45,25 @@ trace_events()
 
 dump_evacuate_perf_debug()
 {
+    findmnt /mnt || true
+    fuser -vm /mnt || true
+    for p in /proc/[0-9]*; do
+	local pid=${p##*/}
+	local cwd
+
+	cwd=$(readlink "$p/cwd" 2>/dev/null || true)
+	if [[ $cwd == /mnt* ]]; then
+	    echo "pid $pid cwd $cwd cmd $(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)"
+	fi
+	for fd in "$p"/fd/*; do
+	    local target
+
+	    target=$(readlink "$fd" 2>/dev/null || true)
+	    if [[ $target == /mnt* ]]; then
+		echo "pid $pid fd ${fd##*/} $target cmd $(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)"
+	    fi
+	done
+    done
     bcachefs fs usage -h --all /mnt || true
     cat /sys/fs/bcachefs/*/reconcile_status || true
     cat /sys/fs/bcachefs/*/internal/copy_gc_wait || true
@@ -726,8 +745,7 @@ test_evacuate_moves_away_from_busy_destination()
 
 	assert_reconcile_prefers_cool_destination "$hot_id" "$cool_id"
 
-	umount /mnt
-	bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+	teardown_evacuate_perf_fs
 }
 
 test_evacuate_progress_with_partial_open_buckets()
