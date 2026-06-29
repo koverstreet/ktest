@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2154
 
-. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
 
 require-kernel-config BCACHEFS_FS
 require-kernel-config BCACHEFS_DEBUG
@@ -20,11 +21,11 @@ run_test_inner()
     run_quiet "" bcachefs format -f		\
 	--bucket_size=$btree_node_size		\
 	--btree_node_size=$btree_node_size	\
-	${ktest_scratch_dev[0]}
-    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+	"${ktest_scratch_dev[0]}"
+    mount -t bcachefs "${ktest_scratch_dev[0]}" /mnt
     ln -sf /sys/fs/bcachefs/*/perf_test p
 
-    for i in $@; do
+    for i in "$@"; do
 	echo "test_$i 100k 1"	> p
     done
 
@@ -38,11 +39,11 @@ run_test()
     echo 1 > /sys/module/bcachefs/parameters/debug_check_iterators
     echo 1 > /sys/module/bcachefs/parameters/key_merging_disabled
 
-    run_test_inner $@
+    run_test_inner "$@"
 
     echo 0 > /sys/module/bcachefs/parameters/key_merging_disabled
 
-    run_test_inner $@
+    run_test_inner "$@"
 }
 
 list_tests()
@@ -59,6 +60,7 @@ list_tests()
     echo extent_overwrite_back
     echo extent_overwrite_middle
     echo extent_overwrite_all
+    echo btree_ptr_stale_dirty
     echo snapshots
 }
 
