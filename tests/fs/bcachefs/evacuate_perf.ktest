@@ -166,7 +166,7 @@ start_dst_pressure()
     sync
     echo 3 > /proc/sys/vm/drop_caches
 
-    fio --eta=always				\
+    setsid fio --eta=always			\
 	--exitall_on_error=1			\
 	--ioengine=libaio			\
 	--iodepth=64				\
@@ -183,6 +183,38 @@ start_dst_pressure()
 	--filename=/mnt/dst-pressure/hotfile	\
 	>"$log" 2>&1 &
 	echo $!
+}
+
+stop_dst_pressure()
+{
+    local pid=${1:-}
+
+    [[ -n $pid ]] || return 0
+
+    kill -- "-$pid" 2>/dev/null || true
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+
+    local p hpid target
+    local holders=()
+
+    for p in /proc/[0-9]*; do
+	hpid=${p##*/}
+	target=$(readlink "$p/cwd" 2>/dev/null || true)
+	[[ $target == /mnt/dst-pressure* ]] && holders+=("$hpid") && continue
+	target=$(readlink "$p/root" 2>/dev/null || true)
+	[[ $target == /mnt/dst-pressure* ]] && holders+=("$hpid") && continue
+
+	for fd in "$p"/fd/*; do
+	    target=$(readlink "$fd" 2>/dev/null || true)
+	    [[ $target == /mnt/dst-pressure/* ]] && holders+=("$hpid") && break
+	done
+    done
+
+    ((${#holders[@]} == 0)) && return 0
+
+    kill "${holders[@]}" 2>/dev/null || true
+    kill -KILL "${holders[@]}" 2>/dev/null || true
 }
 
 trace_dev_id()
@@ -612,15 +644,13 @@ test_evacuate_not_much_slower_with_busy_destination()
     if ! contended_bps=$(evacuate_bytes_per_sec \
 	"${ktest_scratch_dev[0]}" "$data_size" "$((baseline_bps / 2))"); then
 	cat "$fioout" || true
-	kill "$fiopid" 2>/dev/null || true
-	wait "$fiopid" 2>/dev/null || true
+	stop_dst_pressure "$fiopid"
 	dump_evacuate_perf_debug
 	return 1
     fi
     print_rate "contended device evacuate" "$contended_bps"
 
-    kill "$fiopid" 2>/dev/null || true
-    wait "$fiopid" 2>/dev/null || true
+    stop_dst_pressure "$fiopid"
 
     bcachefs fs usage -h --all /mnt
     cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
@@ -675,15 +705,13 @@ test_evacuate_keeps_progress_with_flush_delay()
 	if ! contended_bps=$(evacuate_bytes_per_sec \
 	    "${ktest_scratch_dev[0]}" "$data_size" "$((baseline_bps / 4))"); then
 	    cat "$fioout" || true
-	    kill "$fiopid" 2>/dev/null || true
-	    wait "$fiopid" 2>/dev/null || true
+	    stop_dst_pressure "$fiopid"
 	    dump_evacuate_perf_debug
 	    return 1
 	fi
 	print_rate "flush-delayed contended evacuate" "$contended_bps"
 
-	kill "$fiopid" 2>/dev/null || true
-	wait "$fiopid" 2>/dev/null || true
+	stop_dst_pressure "$fiopid"
 
 	bcachefs fs usage -h --all /mnt
 	cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
@@ -733,15 +761,13 @@ test_evacuate_moves_away_from_busy_destination()
 
 	if ! evac_bps=$(evacuate_bytes_per_sec "${ktest_scratch_dev[0]}" "$data_size"); then
 	    cat "$fioout" || true
-	    kill "$fiopid" 2>/dev/null || true
-	    wait "$fiopid" 2>/dev/null || true
+	    stop_dst_pressure "$fiopid"
 	    dump_evacuate_perf_debug
 	    return 1
 	fi
 	print_rate "busy-destination-avoidance evacuate" "$evac_bps"
 
-	kill "$fiopid" 2>/dev/null || true
-	wait "$fiopid" 2>/dev/null || true
+	stop_dst_pressure "$fiopid"
 
 	assert_reconcile_prefers_cool_destination "$hot_id" "$cool_id"
 
