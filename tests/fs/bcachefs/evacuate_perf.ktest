@@ -450,17 +450,32 @@ move_noflush_window_violations()
 
 move_pressure_window_violations()
 {
-    local min_pressure_sectors=$((16 * 1024 * 1024 / 512))
+	local min_pressure_sectors=$((16 * 1024 * 1024 / 512))
+	local max_pressure_ios=128
+	local max_pressure_sectors=$min_pressure_sectors
 
-    awk -v min_pressure_sectors="$min_pressure_sectors" '
-	/^[^[:space:]]/ { pressure = 0 }
-	$1 == "ioprio:" && $2 == "best-effort:7" { pressure = 1 }
-	pressure && $1 == "writes:" && $2 == "ios" && $4 == "sectors" {
-	    split($5, sectors, "/")
-	    if (sectors[2] + 0 < min_pressure_sectors)
-		print
-	}
-    ' /sys/fs/bcachefs/*/internal/moving_ctxts
+	awk -v min_pressure_sectors="$min_pressure_sectors" '
+		/^[^[:space:]]/ { pressure = 0 }
+		$1 == "ioprio:" && $2 == "best-effort:7" { pressure = 1 }
+		pressure && $1 == "writes:" && $2 == "ios" && $4 == "sectors" {
+			split($5, sectors, "/")
+			if (sectors[2] + 0 < min_pressure_sectors)
+				print
+		}
+	' /sys/fs/bcachefs/*/internal/moving_ctxts
+
+	awk -v max_pressure_ios="$max_pressure_ios" \
+	    -v max_pressure_sectors="$max_pressure_sectors" '
+		/^[^[:space:]]/ { pressure = 0 }
+		$1 == "ioprio:" && $2 == "best-effort:7" { pressure = 1 }
+		pressure && $1 == "writes:" && $2 == "ios" && $4 == "sectors" {
+			split($3, ios, "/")
+			split($5, sectors, "/")
+			if (ios[2] + 0 > max_pressure_ios ||
+			    sectors[2] + 0 > max_pressure_sectors)
+				print
+		}
+	' /sys/fs/bcachefs/*/internal/moving_ctxts
 }
 
 assert_move_write_windows()
@@ -483,13 +498,13 @@ assert_move_write_windows()
 	return 1
     fi
 
-    violations=$(move_pressure_window_violations)
-    if [[ -n $violations ]]; then
-	echo "pressure-priority move writes were clamped to the background rotational window" >&2
-	echo "$violations" >&2
-	dump_evacuate_perf_debug >&2
-	return 1
-    fi
+	violations=$(move_pressure_window_violations)
+	if [[ -n $violations ]]; then
+		echo "pressure-priority move writes missed the rotational hipri window" >&2
+		echo "$violations" >&2
+		dump_evacuate_perf_debug >&2
+		return 1
+	fi
 }
 
 monitor_evacuate_progress()
