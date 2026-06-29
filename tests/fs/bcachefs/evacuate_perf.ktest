@@ -75,6 +75,20 @@ format_evacuate_perf_fs()
 	--rotational=1 --label=dst "${ktest_scratch_dev[2]}"
 }
 
+format_hot_cool_dst_fs()
+{
+    run_quiet "" bcachefs format -f			\
+	--block_size=4k					\
+	--bucket_size=256k				\
+	--replicas=1					\
+	--foreground_target=src				\
+	--background_target=src				\
+	--metadata_target=dst				\
+	--rotational=1 --label=src "${ktest_scratch_dev[0]}" \
+	--rotational=1 --label=dst.hot "${ktest_scratch_dev[1]}" \
+	--rotational=1 --label=dst.cool "${ktest_scratch_dev[2]}"
+}
+
 seed_source_data()
 {
     dd if=/dev/zero of=/mnt/src-only-data bs=4M count=128 oflag=direct status=none
@@ -102,9 +116,10 @@ read_bytes_per_sec()
 start_dst_pressure()
 {
     local log=$1
+    local target=${2:-dst}
 
     mkdir -p /mnt/dst-pressure
-    bcachefs set-file-option --foreground_target=dst /mnt/dst-pressure
+    bcachefs set-file-option --foreground_target="$target" /mnt/dst-pressure
     dd if=/dev/zero of=/mnt/dst-pressure/hotfile bs=4M count=128 oflag=direct status=none
     sync
     echo 3 > /proc/sys/vm/drop_caches
@@ -126,6 +141,49 @@ start_dst_pressure()
 	--filename=/mnt/dst-pressure/hotfile	\
 	>"$log" 2>&1 &
 	echo $!
+}
+
+trace_dev_id()
+{
+    local dev=$1
+    local id
+
+    id=$(cat "/sys/class/block/${dev##*/}/dev")
+    echo "${id/:/,}"
+}
+
+count_reconcile_write_bios()
+{
+    local dev_id=$1
+
+    grep -Ec "block_bio_queue: ${dev_id} W[^ ]* [0-9]+ \\+ [0-9]+ \\[(bch-reconcile|kworker/u[0-9]+:)" \
+	/sys/kernel/tracing/trace || true
+}
+
+assert_reconcile_prefers_cool_destination()
+{
+    local hot_id=$1
+    local cool_id=$2
+    local hot_writes
+    local cool_writes
+
+    hot_writes=$(count_reconcile_write_bios "$hot_id")
+    cool_writes=$(count_reconcile_write_bios "$cool_id")
+
+    echo "reconcile writes to busy dst.hot: $hot_writes"
+    echo "reconcile writes to cool dst.cool: $cool_writes"
+
+    if (( cool_writes < 4 )); then
+	echo "did not observe enough reconcile writes to the cool destination"
+	dump_evacuate_perf_debug
+	return 1
+    fi
+
+    if (( hot_writes >= cool_writes )); then
+	echo "reconcile kept preferring the busy destination"
+	dump_evacuate_perf_debug
+	return 1
+    fi
 }
 
 stress_move_flushes()
@@ -453,6 +511,56 @@ test_evacuate_keeps_progress_with_flush_delay()
 	    dump_evacuate_perf_debug
 	    return 1
 	fi
+
+	umount /mnt
+	bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+}
+
+test_evacuate_moves_away_from_busy_destination()
+{
+	set_watchdog 900
+
+	local data_size=$((512 * 1024 * 1024))
+	local fioout="$ktest_out/dst-hot-pressure-fio-out"
+	local hot_id
+	local cool_id
+	local fiopid
+	local evac_bps
+
+	format_hot_cool_dst_fs
+	mount -t bcachefs "$(devs)" /mnt
+	seed_source_data
+
+	mkdir -p /mnt/cool-prefill
+	bcachefs set-file-option --foreground_target=dst.cool /mnt/cool-prefill
+	dd if=/dev/zero of=/mnt/cool-prefill/file bs=4M count=64 oflag=direct status=none
+	sync
+
+	local events
+	events=$(trace_events | xargs)
+	if [[ -n $events ]]; then
+	    setup_tracing "$events"
+	fi
+
+	hot_id=$(trace_dev_id "${ktest_scratch_dev[1]}")
+	cool_id=$(trace_dev_id "${ktest_scratch_dev[2]}")
+
+	fiopid=$(start_dst_pressure "$fioout" dst.hot)
+	: > /sys/kernel/tracing/trace
+
+	if ! evac_bps=$(evacuate_bytes_per_sec "${ktest_scratch_dev[0]}" "$data_size"); then
+	    cat "$fioout" || true
+	    kill "$fiopid" 2>/dev/null || true
+	    wait "$fiopid" 2>/dev/null || true
+	    dump_evacuate_perf_debug
+	    return 1
+	fi
+	print_rate "busy-destination-avoidance evacuate" "$evac_bps"
+
+	kill "$fiopid" 2>/dev/null || true
+	wait "$fiopid" 2>/dev/null || true
+
+	assert_reconcile_prefers_cool_destination "$hot_id" "$cool_id"
 
 	umount /mnt
 	bcachefs fsck -ny "${ktest_scratch_dev[@]}"
