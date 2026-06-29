@@ -71,6 +71,22 @@ ZZ
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    mkdir /mnt/option_dir
+    bcachefs set-file-option --inodes_32bit /mnt/option_dir
+
+    for i in $(seq 1 512); do
+	touch /mnt/option_dir/file_$i
+    done
+
+    /root/readdir32 /mnt/option_dir 514
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
