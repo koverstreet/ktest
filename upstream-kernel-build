@@ -301,7 +301,12 @@ build_one() {
 	  $host_debian_arch = $debian_arch ]]; then
 	log "host is $host_distro/$host_debian_arch matching target — skipping nspawn"
 	$FORCE && rm -rf "$destdir"
-	"$ktest_dir/build-test-kernel" build \
+	# -P regenerates .config from kconfig.sh each build: the build dir is
+	# reused across runs, and without it a stale .config silently overrides
+	# kconfig.sh changes that DISABLE an option (the require-loop only sets
+	# options on, and olddefconfig preserves the rest) — e.g. CONFIG_RUST=n
+	# wouldn't take.
+	"$ktest_dir/build-test-kernel" build -P \
 	    -V "$variant" -a "$ARCH" -k "$build_repo" -o "$workdir" -D "$destdir"
 	return
     fi
@@ -313,7 +318,8 @@ build_one() {
     if [[ -z $rootfs ]]; then
 	log "no Debian root image (root.$debian_arch) found; falling back to host build"
 	$FORCE && rm -rf "$destdir"
-	"$ktest_dir/build-test-kernel" build \
+	# -P: fresh .config from kconfig.sh each build (see note above)
+	"$ktest_dir/build-test-kernel" build -P \
 	    -V "$variant" -a "$ARCH" -k "$build_repo" -o "$workdir" -D "$destdir"
 	return
     fi
@@ -362,7 +368,7 @@ build_one() {
 	    set -e
 	    $pre_cmd
 	    git config --global --add safe.directory '$build_repo'
-	    '$ktest_dir/build-test-kernel' build \
+	    '$ktest_dir/build-test-kernel' build -P \
 		-V '$variant' -a '$ARCH' \
 		-k '$build_repo' -o '$workdir' -D '$destdir'
 	    chown -R $build_uid:$build_gid '$destdir'
