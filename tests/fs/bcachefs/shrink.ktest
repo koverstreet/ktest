@@ -81,21 +81,8 @@ assert_resize_target_inactive()
     fi
 }
 
-# Shrink or grow a device via the bcachefs-tools library (offline path).
-# The filesystem must not be mounted by the kernel.
-offline_device_resize()
-{
-    local dev=$1
-    local size=$2
-
-    bcachefs device resize "$dev" "$size"
-    assert_member_size_bytes "$dev" "$size"
-    assert_resize_target_inactive "$dev"
-}
-
 _do_empty_shrink()
 {
-    local mode=$1
     local devs=("${ktest_scratch_dev[0]}")
 
     run_quiet "" bcachefs format -f		\
@@ -105,13 +92,7 @@ _do_empty_shrink()
     mount_mnt "${devs[0]}"
     df -h /mnt
 
-    if [[ $mode == offline ]]; then
-	umount /mnt
-	offline_device_resize "${devs[0]}" 500M
-	mount_mnt "${devs[0]}"
-    else
-	bcachefs device resize "${devs[0]}" 500M
-    fi
+    bcachefs device resize "${devs[0]}" 500M
 
     df -h /mnt
     finish "" "${devs[@]}"
@@ -119,7 +100,6 @@ _do_empty_shrink()
 
 _do_two_device_data_shrink()
 {
-    local mode=$1
     local devs=("${ktest_scratch_dev[0]}" "${ktest_scratch_dev[1]}")
 
     run_quiet "" bcachefs format -f		\
@@ -133,13 +113,7 @@ _do_two_device_data_shrink()
     record_checksums "$ktest_out/do-two-device-data.md5" foo
     df -h /mnt
 
-    if [[ $mode == offline ]]; then
-	umount /mnt
-	offline_device_resize "${devs[0]}" 256M
-	mount_mnt "${devs[@]}"
-    else
-	bcachefs device resize "${devs[0]}" 256M
-    fi
+    bcachefs device resize "${devs[0]}" 256M
 
     verify_checksums "$ktest_out/do-two-device-data.md5"
     df -h /mnt
@@ -148,7 +122,6 @@ _do_two_device_data_shrink()
 
 _do_impossible_shrink()
 {
-    local mode=$1
     local devs=("${ktest_scratch_dev[0]}" "${ktest_scratch_dev[1]}")
     local resizeout="$ktest_out/do-impossible-shrink.out"
 
@@ -164,10 +137,6 @@ _do_impossible_shrink()
     impossible_shrink_dev="${devs[0]}"
     record_checksums "$impossible_shrink_md5" impossible.bin
 
-    if [[ $mode == offline ]]; then
-	umount /mnt
-    fi
-
     if bcachefs device resize "${devs[0]}" 256M >"$resizeout" 2>&1; then
 	echo "Impossible shrink unexpectedly succeeded"
 	cat "$resizeout"
@@ -175,10 +144,6 @@ _do_impossible_shrink()
     fi
 
     assert_resize_target_inactive "${devs[0]}"
-
-    if [[ $mode == offline ]]; then
-	mount_mnt "${devs[@]}"
-    fi
 
     finish verify_impossible_shrink "${devs[@]}"
 }
@@ -426,14 +391,14 @@ test_online_empty_shrink()
 {
     set_watchdog 60
     bcachefs_antagonist
-    _do_empty_shrink online
+    _do_empty_shrink
 }
 
 test_online_two_device_data_shrink()
 {
     set_watchdog 60
     bcachefs_antagonist
-    _do_two_device_data_shrink online
+    _do_two_device_data_shrink
 }
 
 test_online_three_device_replicas_shrink()
@@ -468,7 +433,7 @@ test_online_two_device_replicas_impossible_shrink()
 {
     set_watchdog 420
     bcachefs_antagonist
-    _do_impossible_shrink online
+    _do_impossible_shrink
 }
 
 test_online_three_device_ec_shrink()
@@ -915,27 +880,6 @@ test_online_three_device_replicas_metadata_under_randrw_shrink()
     fi
 
     finish verify_replicas_metadata "${devs[@]}"
-}
-
-test_offline_empty_shrink()
-{
-    set_watchdog 60
-    bcachefs_antagonist
-    _do_empty_shrink offline
-}
-
-test_offline_two_device_data_shrink()
-{
-    set_watchdog 120
-    bcachefs_antagonist
-    _do_two_device_data_shrink offline
-}
-
-test_offline_impossible_shrink()
-{
-    set_watchdog 120
-    bcachefs_antagonist
-    _do_impossible_shrink offline
 }
 
 main "$@"
