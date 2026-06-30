@@ -145,34 +145,44 @@ list_builds() {
     '
 }
 
-# Resolve a release to its latest tag. With a branch, only tags reachable
-# from that branch are considered (so stable-6.17 tied to linux-6.17.y
-# picks the latest v6.17.* rather than the highest tag in the repo).
-# rc releases pick vX.Y-rcN; everything else picks vX.Y.Z.
-resolve_tag() {
-    local release=$1 source=$2 branch=$3
-    local pattern
-    case "$release" in
-	*rc*)    pattern='^v[0-9]+\.[0-9]+-rc[0-9]+$' ;;
-	*)       pattern='^v[0-9]+\.[0-9]+(\.[0-9]+)?$' ;;
-    esac
-    # Scope to the source's own refs: a branch resolves the latest tag merged
-    # into refs/remotes/<source>/<branch>; branchless ("-") falls back to the
-    # source's default head (refs/remotes/<source>/HEAD, set in fetch_source).
+# Resolve a (source, branch) to the ref we'll build and a version string
+# for the store path. We always build the *head* of the branch — no tag
+# resolution — so what gets built is exactly what's upstream, never a
+# stale "latest tag reachable from the branch" surprise. (The old scheme
+# picked the highest vX.Y.Z tag and silently turned a `tip` release
+# tracking master into "latest stable", i.e. it built 7.1 instead of
+# 7.2-rc1.)
+#
+# The version is `git describe` of the ref: `v7.2-rc1` when the tip sits
+# exactly on a tag, `v7.2-rc1-5-gdeadbeef` when it's past the last tag.
+# That's commit-unique once you're ahead of a tag, so the memoization key
+# (the store path) changes when the tip actually moves — a stale manifest
+# can't mask a new tip — and it sorts correctly under `sort -V` (the
+# consumer in libktest.sh's resolve_kernel_name picks the newest), since
+# rc2 > rc1-N-g… > rc1.
+#
+# A branchless release ("-") falls back to the source's default head.
+resolve_ref() {
+    local source=$1 branch=$2
     local ref
     if [[ $branch != "-" ]]; then
 	ref="refs/remotes/$source/$branch"
     else
 	# set-head --auto is best-effort and often leaves refs/remotes/<source>/HEAD
-	# unset, which silently resolves zero tags; fall back to the usual default
+	# unset, which silently resolves nothing; fall back to the usual default
 	# branch names so a branchless source can't vanish without a trace.
 	ref=$(for r in "refs/remotes/$source/HEAD" "refs/remotes/$source/master" "refs/remotes/$source/main"; do
 		git -C "$SHARED_BARE" rev-parse --verify --quiet "$r" >/dev/null 2>&1 && { echo "$r"; break; }
 	done)
     fi
-    git -C "$SHARED_BARE" tag --merged "$ref" --sort=-v:refname \
-	| grep -E "$pattern" \
-	| head -1
+    if [[ -z $ref ]]; then
+	log "no ref for source=$source branch=$branch (skipping)"
+	return 1
+    fi
+    local version
+    version=$(git -C "$SHARED_BARE" describe --always "$ref" 2>/dev/null \
+	|| git -C "$SHARED_BARE" rev-parse --short "$ref")
+    printf '%s\t%s\n' "$ref" "${version#v}"
 }
 
 ensure_shared_bare() {
@@ -197,7 +207,7 @@ fetch_source() {
     if ! git -C "$SHARED_BARE" remote get-url "$source" >/dev/null 2>&1; then
 	git -C "$SHARED_BARE" remote add "$source" "$url"
 	# Record the remote's default branch so a branchless release resolves
-	# its tags from refs/remotes/<source>/HEAD. Best-effort (one ls-remote).
+	# its head from refs/remotes/<source>/HEAD. Best-effort (one ls-remote).
 	git -C "$SHARED_BARE" remote set-head "$source" --auto >/dev/null 2>&1 || true
     else
 	git -C "$SHARED_BARE" remote set-url "$source" "$url"
@@ -212,7 +222,7 @@ fetch_source() {
 # variant; each has its own .git state, so concurrent builds across variants
 # don't race on refs/HEAD. Plain `git init` + alternates rather than `git clone`
 # because the shared bare is headless (it carries only refs/remotes/*); the
-# tag is fetched and checked out in build_one.
+# branch tip is fetched and checked out in build_one.
 ensure_build_repo() {
     local release=$1 variant=$2
     local dir="$BUILDS_DIR/$release-$variant"
@@ -235,20 +245,18 @@ build_one() {
     local build_repo="$BUILDS_DIR/$release-$variant"
 
     # On a dry-run the bare clone hasn't been fetched, so we can't
-    # resolve_tag. Report the intended action and bail without touching
+    # resolve_ref. Report the intended action and bail without touching
     # the filesystem.
     if $DRY_RUN; then
-	log "would build upstream/$release-$variant (tag resolved at run time)"
+	log "would build upstream/$release-$variant (ref resolved at run time)"
 	return 0
     fi
 
-    local tag
-    tag=$(resolve_tag "$release" "$source" "$branch") || true
-    if [[ -z $tag ]]; then
-	log "no matching tag for release=$release (skipping $variant)"
+    local ref version
+    if ! ref_version=$(resolve_ref "$source" "$branch"); then
 	return 0
     fi
-    local version=${tag#v}
+    IFS=$'\t' read -r ref version <<< "$ref_version"
 
     local destdir="$KERNELS_DIR/$release-$variant/$ARCH/$version"
 
@@ -258,14 +266,16 @@ build_one() {
     fi
 
     ensure_build_repo "$release" "$variant"
-    git -C "$build_repo" fetch --quiet "$bare" "+refs/tags/$tag:refs/tags/$tag"
-    git -C "$build_repo" reset --quiet --hard "$tag"
+    # Fetch the branch tip into the build repo and build exactly that.
+    # Objects are shared with the bare via alternates, so this is cheap.
+    git -C "$build_repo" fetch --quiet "$bare" "$ref"
+    git -C "$build_repo" reset --quiet --hard FETCH_HEAD
     git -C "$build_repo" clean -qfdx
 
     local workdir="$WORK_DIR/upstream-$release-$variant-$ARCH"
     mkdir -p "$workdir" "$(dirname "$destdir")"
 
-    log "building upstream/$release-$variant @ $tag → $destdir"
+    log "building upstream/$release-$variant @ $version → $destdir"
 
     # Build inside a Debian rootfs via systemd-nspawn. The kernel's
     # scripts/* (fixdep, modpost, dtc, ...) become real ELF binaries
