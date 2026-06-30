@@ -325,6 +325,10 @@ build_one() {
     # nix-store PATH into the container, where none of the Debian binaries
     # are reachable. Override with a Debian-sensible PATH.
     local machine="ktest-build-$$-$release-$variant"
+    # nspawn machine names must be valid hostnames (RFC 1123): no underscores.
+    # $release config keys can carry them (e.g. stable_618), so map any
+    # invalid character to a hyphen.
+    machine="${machine//[^a-zA-Z0-9-]/-}"
     # The build runs as root inside nspawn, so $destdir lands root-owned.
     # Chown it back to the invoking user as the final in-container step —
     # we're root there already, so no sudo rule is needed. Numeric IDs:
