@@ -186,6 +186,24 @@ wait_for_canceled_resize()
     fi
 }
 
+resize_allow_superseded()
+{
+    local dev=$1
+    local size=$2
+    local output=$3
+
+    if bcachefs device resize "$dev" "$size" >"$output" 2>&1; then
+	return 0
+    fi
+
+    if grep -q "Resize request superseded\\|Operation canceled" "$output"; then
+	return 0
+    fi
+
+    cat "$output"
+    return 1
+}
+
 finish()
 {
     local verify_fn=$1
@@ -707,7 +725,7 @@ test_online_two_device_shrink_retarget_larger()
     local resizepid=$!
 
     wait_for_resize_to_start "$resizepid" "$resizeout"
-    bcachefs device resize "${devs[0]}" 1G
+    resize_allow_superseded "${devs[0]}" 1G "$ktest_out/shrink-retarget-larger-retarget.out"
     wait_for_canceled_resize "$resizepid" "$resizeout"
 
     finish verify_retarget_resize "${devs[@]}"
@@ -749,7 +767,7 @@ test_online_two_device_shrink_retarget_cancel()
     local resizepid=$!
 
     wait_for_resize_to_start "$resizepid" "$resizeout"
-    bcachefs device resize "${devs[0]}" 3G
+    resize_allow_superseded "${devs[0]}" 3G "$ktest_out/shrink-retarget-cancel-retarget.out"
     wait_for_canceled_resize "$resizepid" "$resizeout"
 
     finish verify_retarget_resize "${devs[@]}"
@@ -789,7 +807,7 @@ test_online_two_device_shrink_retarget_grow()
     local resizepid=$!
 
     wait_for_resize_to_start "$resizepid" "$resizeout"
-    bcachefs device resize "${devs[0]}" 3584M
+    resize_allow_superseded "${devs[0]}" 3584M "$ktest_out/shrink-retarget-grow-retarget.out"
     wait_for_canceled_resize "$resizepid" "$resizeout"
 
     finish verify_retarget_resize "${devs[@]}"
