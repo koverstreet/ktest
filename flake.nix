@@ -46,6 +46,7 @@
             socat
             vde2
             virtiofsd
+            rust-bindgen
           ];
         };
     });
