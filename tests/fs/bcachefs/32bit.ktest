@@ -5,10 +5,87 @@ ktest_arch=x86
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
 
 config-timeout 30
+config-scratch-devs 1G
 
 test_boot()
 {
     true
+}
+
+test_readdir_inodes_32bit()
+{
+    set_watchdog 60
+
+    cat > /root/readdir32.c <<-ZZ
+#include <dirent.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+int main(int argc, char **argv)
+{
+    if (argc != 3) {
+	fprintf(stderr, "usage: %s <path> <min_entries>\\n", argv[0]);
+	return 2;
+    }
+
+    DIR *dir = opendir(argv[1]);
+    if (!dir) {
+	perror("opendir");
+	return 1;
+    }
+
+    errno = 0;
+    unsigned entries = 0;
+    while (readdir(dir))
+	entries++;
+
+    if (errno) {
+	perror("readdir");
+	return 1;
+    }
+
+    if (entries < strtoul(argv[2], NULL, 10)) {
+	fprintf(stderr, "saw only %u entries\\n", entries);
+	return 1;
+    }
+
+    return 0;
+}
+ZZ
+
+    gcc -Wall -Wextra -O2 -o /root/readdir32 /root/readdir32.c
+
+    run_quiet "" bcachefs format -f --inodes_32bit ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    mkdir /mnt/child
+    for i in $(seq 1 512); do
+	touch /mnt/root_$i
+	touch /mnt/child/file_$i
+    done
+
+    /root/readdir32 /mnt 514
+    /root/readdir32 /mnt/child 514
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    mkdir /mnt/option_dir
+    if bcachefs set-file-option --inodes_32bit /mnt/option_dir 2> /root/inodes32.err; then
+	echo "set-file-option --inodes_32bit unexpectedly accepted unsafe parents"
+	exit 1
+    fi
+    grep -q "parent chain is not 32-bit-dirent-safe" /root/inodes32.err
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 main "$@"
