@@ -45,6 +45,7 @@
             minicom
             socat
             vde2
+            virtiofsd
           ];
         };
     });
