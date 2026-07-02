@@ -62,7 +62,10 @@ for kver_src in /host/$ktest_kernel_binary/lib/modules/*; do
     kver=$(basename "$kver_src")
     mkdir -p "/lib/modules/$kver"
     for entry in "$kver_src"/*; do
-        ln -sf "$entry" "/lib/modules/$kver/$(basename "$entry")"
+        # -n: if the link name already exists as a symlink to a directory
+        # (e.g. rerun in the same VM, or a previous run with the same kver),
+        # replace the symlink itself instead of dereferencing into it
+        ln -sfn "$entry" "/lib/modules/$kver/$(basename "$entry")"
     done
     mkdir -p /ktest-out/dkms
     ln -sfn /ktest-out/dkms "/lib/modules/$kver/updates"
