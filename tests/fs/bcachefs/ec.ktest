@@ -473,4 +473,63 @@ test_ec_crash_recovery()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+test_ec_repair_stripe_ptr()
+{
+    # Reproduce the "stripe pointer doesn't match stripe" inconsistency seen in
+    # the field (d5cf3484) and exercise the erasure-coding repair path.
+    #
+    # Lay down erasure-coded data, then corrupt one extent's stripe pointer with
+    # the test_inject_stripe_ptr_mismatch error injector (fs/debug/tests.rs): it
+    # bumps a stripe_ptr entry's block index so bch2_ptr_matches_stripe() fails
+    # against the (still-present) stripe. fsck must then repair the inconsistency
+    # without going emergency read-only, and a second fsck must find it clean.
+    #
+    # Skips check_bcachefs_errors (like the other repair tests) since we record a
+    # repairable error on purpose.
+    set_watchdog 180
+
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	"${ktest_scratch_dev[@]}"
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
+
+    mount -t bcachefs $devs /mnt
+
+    # Enough data, spread across buckets, for reconcile to build a stripe:
+    dd if=/dev/zero of=/mnt/foo bs=1M count=128 oflag=direct
+    sync
+
+    # Erasure coding is a background operation: kick reconcile and retry the
+    # injector until a stripe pointer exists to corrupt. The injector fails
+    # cleanly (nonzero) when there is none, so the loop self-synchronizes on
+    # stripe formation; fail loudly if none ever forms.
+    ln -sf /sys/fs/bcachefs/*/perf_test p
+    injected=0
+    for i in $(seq 1 60); do
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_wakeup
+	if echo test_inject_stripe_ptr_mismatch 1 1 > p 2>/dev/null; then
+	    injected=1
+	    break
+	fi
+	sleep 1
+    done
+
+    if [[ $injected != 1 ]]; then
+	echo "ERROR: no erasure-coded extent formed to corrupt"
+	return 1
+    fi
+
+    umount /mnt
+
+    # Repair: fsck must detect and fix the stripe-pointer mismatch.
+    mount -t bcachefs -o fsck,fix_errors $devs /mnt
+    umount /mnt
+
+    # A second fsck must find nothing left to repair:
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    check_bcachefs_leaks
+    check_bcachefs_counters ${ktest_scratch_dev[0]}
+}
+
 main "$@"
