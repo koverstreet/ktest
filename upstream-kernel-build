@@ -326,12 +326,17 @@ build_one() {
 	[[ -f $candidate ]] && { rootfs=$candidate; break; }
     done
     if [[ -z $rootfs ]]; then
-	log "no Debian root image (root.$debian_arch) found; falling back to host build"
-	$FORCE && rm -rf "$destdir"
-	# -P: fresh .config from kconfig.sh each build (see note above)
-	"$ktest_dir/build-test-kernel" build -P \
-	    -V "$variant" -a "$ARCH" -k "$build_repo" -o "$workdir" -D "$destdir"
-	return
+	# Reached only when the host isn't a matching Debian/Ubuntu (that case
+	# built on the host above). Building here would link the kernel's host
+	# tools (fixdep, modpost, ...) against this host's libc + ld.so —
+	# /nix/store-anchored on NixOS — and a Debian worker that later reuses
+	# them fails with a baffling "file not found" (the missing file is the
+	# ELF interpreter, not the tool). Fail loudly rather than ship a devel
+	# tree that only breaks downstream.
+	log "ERROR: no Debian root image root.$debian_arch (looked in ~/.ktest/ and /var/lib/ktest/)"
+	log "  host is $host_distro/$host_debian_arch — a host build would produce toolchain-"
+	log "  incompatible host tools (e.g. nix-linked fixdep). Create the root image first."
+	return 1
     fi
 
     local pre_cmd=""
