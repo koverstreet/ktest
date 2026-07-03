@@ -103,6 +103,12 @@ if [[ $DEBIAN_ARCH != i386 ]]; then
     PACKAGES+=(bpftrace bpfcc-tools)
 fi
 
+if [[ $DEBIAN_ARCH = amd64 ]]; then
+    # 32-bit userspace compatibility tests exercise Steam-style i386
+    # processes on an x86_64 kernel.
+    PACKAGES+=(gcc-multilib libc6-dev-i386)
+fi
+
 # build tools:
 PACKAGES+=(build-essential make gcc g++ clang lld)
 PACKAGES+=(autoconf automake autopoint bison flex pahole)
