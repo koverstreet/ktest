@@ -52,14 +52,28 @@ pub struct ExecutorHost {
     pub slots: u32,
 }
 
-/// One entry in the `repos` config: where the repo lives on the
-/// jobserver (the daemon maintains its refs there) and the public URL
-/// workers fetch it from — git://… and never ssh, so a fleet of
-/// concurrent fetches can't storm the jobserver's sshd.
+/// One entry in the `repos` config, keyed by repo short name.
+///
+/// The daemon fetches every user's branch into the single shared local
+/// repo at `path` (as `<user>/<branch>` refs), so an external
+/// contributor's commits live there even though they were never pushed
+/// to the public upstream `url`. Workers therefore check out from
+/// `path_url` — a git:// serving of `path` — and not from `url`, which
+/// only carries the maintainer's own commits.
+///
+/// git:// and never ssh, so a fleet of concurrent fetches can't storm
+/// the jobserver's sshd.
 #[derive(Deserialize, Clone, Debug)]
 pub struct RepoConfig {
+    /// Local shared repo the daemon fetches all users' branches into.
     pub path: PathBuf,
+    /// Public upstream the daemon fetches this repo's branches *from*.
     pub url: String,
+    /// git:// serving of `path` that workers check out *from*. Empty
+    /// falls back to `url` (for repos whose upstream already carries
+    /// every branch's commits).
+    #[serde(default)]
+    pub path_url: String,
 }
 
 #[derive(Deserialize)]
@@ -112,11 +126,21 @@ impl Ktestrc {
         }
     }
 
-    /// Public fetch URL (git://…) workers clone the repo from. None for
-    /// the "linux" fallback — workers get kernels from the store, not a
-    /// fetch — and for names that aren't configured.
+    /// Public upstream URL (git://…) the daemon fetches the repo's
+    /// branches from. None for the "linux" fallback — workers get
+    /// kernels from the store, not a fetch — and for unconfigured names.
     pub fn repo_url(&self, name: &str) -> Option<&str> {
         self.repos.get(name).map(|r| r.url.as_str())
+    }
+
+    /// git:// URL workers check the repo out from — a serving of the
+    /// daemon's local `path`, which carries every user's fetched
+    /// branches. Falls back to `url` when `path_url` is unset. None for
+    /// the "linux" fallback and unconfigured names.
+    pub fn repo_path_url(&self, name: &str) -> Option<&str> {
+        self.repos.get(name).map(|r| {
+            if r.path_url.is_empty() { r.url.as_str() } else { r.path_url.as_str() }
+        })
     }
 }
 

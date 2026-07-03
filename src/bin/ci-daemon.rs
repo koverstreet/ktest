@@ -627,7 +627,10 @@ async fn run_executor(
 fn make_job_spec(rc: &CiConfig, job: &Job) -> JobSpec<JobParams> {
     let k = &job.key;
     let name = format!("{} {} {}", short_commit(&k.commit), k.test, k.subtest);
-    let repo_url = rc.ktest.repo_url(&k.repo).map(String::from).unwrap_or_default();
+    // Workers check out from the daemon's shared local repo (serving of
+    // `path`), not the public upstream — that's where an external
+    // contributor's fetched-but-never-pushed commits actually live.
+    let repo_url = rc.ktest.repo_path_url(&k.repo).map(String::from).unwrap_or_default();
     let params = JobParams {
         repo: k.repo.clone(),
         commit: k.commit.clone(),
