@@ -1,14 +1,134 @@
 #!/usr/bin/env bash
 
-ktest_arch=x86
+ktest_arch=x86_64
 
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
 
 config-timeout 30
+config-scratch-devs 1G
+require-kernel-config IA32_EMULATION
 
 test_boot()
 {
     true
+}
+
+test_readdir_32bit_dirents()
+{
+    set_watchdog 60
+
+    cat > /root/readdir32.c <<-ZZ
+#include <dirent.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+int main(int argc, char **argv)
+{
+    if (argc != 3) {
+	fprintf(stderr, "usage: %s <path> <min_entries>\\n", argv[0]);
+	return 2;
+    }
+
+    DIR *dir = opendir(argv[1]);
+    if (!dir) {
+	perror("opendir");
+	return 1;
+    }
+
+    errno = 0;
+    unsigned entries = 0;
+    int saw_dot = 0;
+    int saw_dotdot = 0;
+    long cookie = -1;
+    struct dirent *de;
+    while ((de = readdir(dir))) {
+	entries++;
+	if (!strcmp(de->d_name, "."))
+	    saw_dot = 1;
+	if (!strcmp(de->d_name, ".."))
+	    saw_dotdot = 1;
+	if (entries == 16)
+	    cookie = telldir(dir);
+    }
+
+    if (errno) {
+	perror("readdir");
+	return 1;
+    }
+
+    if (!saw_dot || !saw_dotdot) {
+	fprintf(stderr, "missing dot entries: .=%d ..=%d\\n", saw_dot, saw_dotdot);
+	return 1;
+    }
+
+    if (entries < strtoul(argv[2], NULL, 10)) {
+	fprintf(stderr, "saw only %u entries\\n", entries);
+	return 1;
+    }
+
+    if (cookie >= 0) {
+	seekdir(dir, cookie);
+	errno = 0;
+	if (!readdir(dir) && errno) {
+	    perror("readdir after seekdir");
+	    return 1;
+	}
+    }
+
+    return 0;
+}
+ZZ
+
+    gcc -m32 -Wall -Wextra -O2 -o /root/readdir32 /root/readdir32.c
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    mkdir -p /mnt/home/someone/gamesdir
+    for i in $(seq 1 512); do
+	touch /mnt/root_$i
+	touch /mnt/home/someone/gamesdir/file_$i
+    done
+
+    /root/readdir32 /mnt 514
+    /root/readdir32 /mnt/home/someone/gamesdir 514
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f --str_hash=crc32c ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    mkdir -p /mnt/crc32c
+    for i in $(seq 1 512); do
+	touch /mnt/crc32c/file_$i
+    done
+
+    /root/readdir32 /mnt/crc32c 514
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f --inodes_32bit ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    mkdir -p /mnt/inodes32
+    for i in $(seq 1 512); do
+	touch /mnt/inodes32/file_$i
+    done
+
+    /root/readdir32 /mnt/inodes32 514
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 main "$@"
