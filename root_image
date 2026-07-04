@@ -85,6 +85,25 @@ PACKAGES=(kexec-tools less psmisc openssh-server curl		\
     bc attr gawk acl rsync git python3-docutils			\
     stress-ng lsof xxd zstd ripgrep bpfcc-tools)
 
+if [[ $DEBIAN_ARCH = i386 ]]; then
+    # bpftrace and bpfcc-tools are not built for Debian i386, and the i386
+    # root image is still useful for 32-bit userspace compatibility tests.
+    FILTERED_PACKAGES=()
+    for package in "${PACKAGES[@]}"; do
+	case "$package" in
+	    bpftrace|bpfcc-tools) ;;
+	    *) FILTERED_PACKAGES+=("$package") ;;
+	esac
+    done
+    PACKAGES=("${FILTERED_PACKAGES[@]}")
+fi
+
+if [[ $DEBIAN_ARCH = amd64 ]]; then
+    # 32-bit userspace compatibility tests exercise Steam-style i386
+    # processes on an x86_64 kernel.
+    PACKAGES+=(gcc-multilib libc6-dev-i386)
+fi
+
 # build tools:
 PACKAGES+=(build-essential make gcc g++ clang lld)
 PACKAGES+=(autoconf automake autopoint bison flex pahole)
