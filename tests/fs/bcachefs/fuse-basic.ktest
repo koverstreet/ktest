@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+#
+# Targeted tests for the userspace FUSE implementation (bcachefs
+# fusemount). These exercise the tools' fuse code paths, not the
+# bcachefs kernel module - the full fstests-over-fuse run lives in
+# fuse.ktest.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config FUSE_FS
+
+config-scratch-devs 4G
+
+fuse_mount()
+{
+    mkdir -p /mnt/fuse
+    bcachefs fusemount "$1" /mnt/fuse
+
+    # fusemount daemonizes; wait for the mount to appear
+    local i
+    for ((i = 0; i < 100; i++)); do
+	mountpoint -q /mnt/fuse && return 0
+	sleep 0.1
+    done
+    echo "FAIL: fuse mount didn't come up"
+    return 1
+}
+
+fuse_unmount()
+{
+    umount /mnt/fuse
+
+    # fsck validates what the fuse write paths put on disk
+    bcachefs fsck -ny "$1"
+}
+
+# Regression test for fuse readdir resume cookies: each fuse dirent's
+# offset field is the cookie to resume the listing after that entry.
+# These were computed one entry behind - pointing one unit past the
+# *previous* entry, into the gap between two dirent hash positions.
+# Listings that fit in one fuse reply buffer never noticed; a listing
+# spanning two or more re-found one entry per resume and crawled the
+# ~2^58-wide hash gaps one integer per readdir call: a 41-entry
+# directory took 1.7M calls of 100% cpu, indistinguishable from a hang.
+#
+# 2000 entries spans many reply buffers. The watchdog catches the
+# hang-shape of the regression; the diff catches duplicates, misses,
+# and misordered resume.
+test_readdir_multibuffer()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    fuse_mount ${ktest_scratch_dev[0]}
+
+    mkdir /mnt/fuse/d
+    local i
+    for ((i = 0; i < 2000; i++)); do
+	: > /mnt/fuse/d/$i
+    done
+
+    ls -f /mnt/fuse/d | grep -v '^\.' | sort -n > /tmp/got
+    seq 0 1999 > /tmp/want
+    diff -u /tmp/want /tmp/got
+
+    fuse_unmount ${ktest_scratch_dev[0]}
+}
+
+main "$@"
