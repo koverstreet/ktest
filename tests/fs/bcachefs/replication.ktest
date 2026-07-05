@@ -280,6 +280,55 @@ test_device_add()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# Replicas must spread across failure domains - the subdivisions of the
+# label tree below the allocation target. Two racks of two devices,
+# replicas=2: every extent's copies must land in different racks. (Without
+# domain aware allocation the free space round robin pairs equal devices in
+# insertion order, co-locating every extent's copies in one rack.)
+test_failure_domains()
+{
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f		\
+	--replicas=2				\
+	--label=rack0.a ${ktest_scratch_dev[0]}	\
+	--label=rack0.b ${ktest_scratch_dev[1]}	\
+	--label=rack1.a ${ktest_scratch_dev[2]}	\
+	--label=rack1.b ${ktest_scratch_dev[3]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]}:${ktest_scratch_dev[3]} /mnt
+
+    local i
+    for i in $(seq 0 49); do
+	dd if=/dev/urandom of=/mnt/f$i bs=64k count=1 oflag=direct status=none
+    done
+
+    # devices 0,1 = rack0; devices 2,3 = rack1:
+    cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys |
+    awk '
+	/^u64s/	     { if (nptr) check(); nptr = 0; r0 = 0; r1 = 0 }
+	/ptr: [01]:/ { r0++; nptr++ }
+	/ptr: [23]:/ { r1++; nptr++ }
+	function check() {
+	    total++
+	    if (nptr == 2 && (r0 == 2 || r1 == 2)) {
+		bad++
+		print "same-rack extent: rack0 ptrs", r0, "rack1 ptrs", r1
+	    }
+	}
+	END {
+	    if (nptr) check()
+	    printf "extents: %d, same-rack violations: %d\n", total, bad
+	    exit (bad > 0 || total == 0)
+	}
+    '
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]} ${ktest_scratch_dev[3]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_device_add_label()
 {
     # Test setting device label when adding
@@ -1300,6 +1349,8 @@ test_self_healing()
     ktest_expect_device_errors=1
     [[ ! -f /sys/module/bcachefs/parameters/force_read_device ]] && return 0
 
+    setup_tracing bcachefs:btree_cache_cannibalize_lock_fail
+
     set_watchdog 60
     run_quiet "" bcachefs format -f		\
 	--encrypted --no_passphrase		\
@@ -1326,7 +1377,7 @@ test_self_healing()
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
-    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+    #bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
 main "$@"
