@@ -11,4 +11,63 @@ test_boot()
     true
 }
 
+# Stateless readdir, NFS-style: reopen the directory and seekdir() to the
+# last telldir() cookie between batches, so the kernel gets no help from
+# saved file state. In a 32-bit VM every getdents is a compat syscall, so
+# this exercises the 32-bit dirent cookie translation: entries must never
+# be skipped across resume points, re-emission of entries sharing a cookie
+# must be bounded, and end of directory must terminate - without the EOF
+# sentinel a stateless reader's final cookie re-reads the directory tail
+# forever.
+test_readdir_stateless()
+{
+    set_watchdog 120
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    mkdir /mnt/dir
+    for ((i = 0; i < 1000; i++)); do
+	touch /mnt/dir/file$i
+    done
+
+    perl -e '
+	my %seen;
+	my $pos;
+	my $iters = 0;
+
+	while (1) {
+	    opendir(my $dh, "/mnt/dir") or die "opendir: $!";
+	    seekdir($dh, $pos) if defined $pos;
+
+	    my $count = 0;
+	    while ($count < 10) {
+		my $e = readdir($dh);
+		last unless defined $e;
+		$seen{$e}++;
+		$count++;
+	    }
+
+	    $pos = telldir($dh);
+	    closedir($dh);
+
+	    last unless $count;
+	    die "readdir not making progress" if ++$iters > 1000;
+	}
+
+	my @entries = grep { !/^\.\.?$/ } keys %seen;
+	die "expected 1000 entries, got " . scalar(@entries)
+	    unless @entries == 1000;
+
+	for (@entries) {
+	    die "$_ emitted $seen{$_} times" if $seen{$_} > 3;
+	}
+    '
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 main "$@"
