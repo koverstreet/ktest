@@ -16,6 +16,7 @@ test_usrquota_twodevices()
     set_watchdog 30
 
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    udevadm settle
 
     mount -t bcachefs -o usrquota,grpquota,prjquota ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
 
@@ -38,6 +39,7 @@ test_usrquota_twodevices()
     repquota -s /mnt
     rm /mnt/foo
 
+    exit
     umount /mnt
 }
 
@@ -130,6 +132,7 @@ test_prjquota_multidevices()
     set_watchdog 30
 
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    udevadm settle
 
     mount -t bcachefs -o usrquota,grpquota,prjquota ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
 
@@ -168,6 +171,7 @@ test_prjquota_after_primary_device_remove()
 	--foreground_target=hdd					\
 	--promote_target=hdd					\
 	--background_target=hdd
+    udevadm settle
 
     mount -t bcachefs -o usrquota,grpquota,prjquota		\
 	${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
