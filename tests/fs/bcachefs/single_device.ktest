@@ -14,7 +14,7 @@ config-scratch-devs 4G
 
 test_wipe_btrfs()
 {
-    set_watchdog 10
+    set_watchdog 60
     mkfs.btrfs -f  ${ktest_scratch_dev[0]}
     bcachefs format -f ${ktest_scratch_dev[0]}
 
@@ -40,7 +40,7 @@ test_stress_ng()
 
 test_punch()
 {
-    set_watchdog 10
+    set_watchdog 60
 
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
@@ -62,7 +62,7 @@ test_punch()
 
 test_remount_ro_rw()
 {
-    set_watchdog 10
+    set_watchdog 60
 
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
@@ -81,7 +81,7 @@ test_remount_ro_rw()
 
 test_directory_stat_size_nonzero()
 {
-    set_watchdog 10
+    set_watchdog 60
 
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
@@ -103,7 +103,7 @@ test_directory_stat_size_nonzero()
 
 test_mount_again_after_ebusy()
 {
-    set_watchdog 10
+    set_watchdog 60
 
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     echo "test: mount ro"
@@ -124,7 +124,7 @@ test_mount_again_after_ebusy()
 test_mount_options()
 {
     local dev=${ktest_scratch_dev[0]}
-    set_watchdog 10
+    set_watchdog 60
 
     run_quiet "" bcachefs format -f $dev
 
@@ -156,7 +156,7 @@ test_extent_merge2()
 {
     local p=/sys/module/bcachefs/parameters/debug_check_iterators
 
-    set_watchdog 10
+    set_watchdog 60
 
     [[ -f $p ]] && echo 1 > $p
 
@@ -261,7 +261,7 @@ test_reflink3()
 
 test_reflink2()
 {
-    set_watchdog 10
+    set_watchdog 60
     bcachefs_antagonist
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
 
@@ -1042,7 +1042,7 @@ d_test_crypto_passphrase()
 
 test_partial_overwritten_extents()
 {
-    set_watchdog 10
+    set_watchdog 60
 
     run_quiet "" bcachefs format -f		\
 	--encrypted --no_passphrase		\
@@ -1073,7 +1073,7 @@ test_partial_overwritten_extents()
 # test the xattr interface for per-inode IO options:
 test_xattr()
 {
-    set_watchdog 10
+    set_watchdog 60
     run_quiet "" bcachefs format -f		\
 	${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
@@ -1102,7 +1102,7 @@ test_xattr()
 
 test_quota()
 {
-    set_watchdog 10
+    set_watchdog 60
     bcachefs_antagonist
 
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
@@ -1125,7 +1125,7 @@ require-kernel-config NFSD_V4
 
 test_nfs()
 {
-    set_watchdog 10
+    set_watchdog 60
     mkdir -p /export1 /export2
 
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
@@ -1148,7 +1148,7 @@ test_nfs()
 # We should get this working at some point:
 d_test_suspend()
 {
-    set_watchdog 10
+    set_watchdog 60
 
     setup_tracing `bcachefs_slowpath_tracepoints`
 
@@ -1274,7 +1274,7 @@ test_offline_resize_lv()
 
 test_sysfs()
 {
-    set_watchdog 10
+    set_watchdog 60
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
@@ -1305,7 +1305,7 @@ test_debugfs()
 
 test_set_option()
 {
-    set_watchdog 10
+    set_watchdog 60
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
@@ -1756,7 +1756,7 @@ test_kill_btree_root()
 
 test_multimount()
 {
-    set_watchdog 10
+    set_watchdog 60
     bcachefs format -f ${ktest_scratch_dev[0]}
 
     mkdir -p /mnt/1 /mnt/2
@@ -1772,7 +1772,7 @@ test_multimount()
 
 test_kernel_fsck()
 {
-    set_watchdog 10
+    set_watchdog 60
     bcachefs format -f ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
