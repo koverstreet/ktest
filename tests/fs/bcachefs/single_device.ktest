@@ -535,6 +535,64 @@ test_split_compressed()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# Regression test for merging compressed extents from different blobs:
+# bch2_extent_merge's address continuity check mixed device sectors with
+# uncompressed sectors for compressed extents, so an extent re-inserted at
+# uncompressed sector offset k could falsely merge with the front split
+# remnant of a compressed extent when k coincided with the compressed
+# sectors between them - reads then returned the overwritten (stale) data,
+# with valid checksums.
+#
+# Per file: write A (64k, compressible), overwrite 8k at sector offset k
+# TWICE - the first overwrite only splits A (no merge is attempted against
+# its own split remnant); the second one's insert abuts A's front piece and
+# attempts the merge. O_DIRECT so each write is one op with sequential
+# allocation. Sweep k to hit the compressed-size coincidence.
+test_compressed_merge_stale_data()
+{
+    set_watchdog 240
+    run_quiet "" bcachefs format -f --compression=lz4 ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # ~50% compressible data, per-sector generation tags:
+    local gen s
+    for gen in 1 2 3; do
+	for ((s = 0; s < 128; s++)); do
+	    printf 'S%04dG%d_________' "$s" "$gen"
+	    printf 'a%.0s' {1..400}
+	    head -c 96 /dev/urandom
+	done > /tmp/cmerge-gen$gen.bin
+    done
+
+    local k
+    for ((k = 8; k <= 120; k++)); do
+	dd if=/tmp/cmerge-gen1.bin of=/mnt/f$k bs=64k count=1 \
+	    oflag=direct status=none
+	dd if=/tmp/cmerge-gen2.bin of=/mnt/f$k bs=8k count=1 \
+	    oflag=direct,seek_bytes seek=$((k * 512)) conv=notrunc status=none
+	dd if=/tmp/cmerge-gen3.bin of=/mnt/f$k bs=8k count=1 \
+	    oflag=direct,seek_bytes seek=$((k * 512)) conv=notrunc status=none
+    done
+
+    echo 3 > /proc/sys/vm/drop_caches
+
+    local ret=0
+    for ((k = 8; k <= 120; k++)); do
+	local stale=$(dd if=/mnt/f$k bs=512 skip=$k count=16 status=none |
+		      grep -ao 'G[12]_' | wc -l)
+	if [[ $stale -gt 0 ]]; then
+	    echo "stale data in f$k at sector $k: $stale sectors"
+	    ret=1
+	fi
+    done
+    [[ $ret = 0 ]]
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_fcollapse()
 {
     set_watchdog 30
