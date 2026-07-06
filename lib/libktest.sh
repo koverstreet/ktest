@@ -96,6 +96,7 @@ parse_args_post()
 {
     parse_arch "$ktest_arch"
 
+    mkdir -p "$ktest_out"
     ktest_out=$(readlink -f "$ktest_out")
     if [[ -n ${ktest_kernel_name:-} ]]; then
 	ktest_kernel_binary=$(resolve_kernel_name "$ktest_kernel_name") || exit 1
