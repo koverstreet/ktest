@@ -81,6 +81,12 @@ pub struct Ktestrc {
     pub linux_repo: PathBuf,
     pub output_dir: PathBuf,
     pub ktest_dir: PathBuf,
+    /// Git URL workers sync their ~/ktest from before each batch (the
+    /// jobserver's checkout, served like a repo path_url). Unset = no
+    /// sync - but the job matrix is enumerated from the jobserver's
+    /// ktest, so a stale worker fails new tests with "not found".
+    #[serde(default)]
+    pub ktest_url: Option<String>,
     /// Per-repo config on the jobserver, keyed by short name (e.g.
     /// "bcachefs-tools"). "linux" falls back to `linux_repo` if absent.
     #[serde(default)]

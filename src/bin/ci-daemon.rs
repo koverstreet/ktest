@@ -95,6 +95,9 @@ struct JobParams {
     /// Public `git fetch` URL the worker pulls the repo from (git://…);
     /// empty if the repo isn't configured.
     repo_url: String,
+    /// URL the worker syncs its ~/ktest from before running the batch;
+    /// empty disables the sync.
+    ktest_url: String,
     /// Daemon-local results dir; pulled results land in `<it>/<commit>/`.
     output_dir: PathBuf,
 }
@@ -400,10 +403,27 @@ async fn run_ktest_job_inner(
     );
     run_step(handle, host, &checkout, "checkout").await?;
 
-    // 2. Build the supervisor (idempotent C helper).
+    // 2. Sync the worker's ~/ktest from the jobserver - the pull
+    //    model's sync_git_repos step, lost in the port to ci-daemon:
+    //    the job matrix is enumerated from the jobserver's ktest, so a
+    //    stale worker fails new/renamed tests with "Test ... not
+    //    found". checkout -f of a shared ~/ktest can race another
+    //    slot's running batch, same as the old model - content only
+    //    actually changes when ktest was updated, and a caught batch
+    //    retries.
+    if !p.ktest_url.is_empty() {
+        let sync = format!(
+            "retry() {{ n=0; until \"$@\"; do n=$((n+1)); [ $n -ge 5 ] && return 1; echo \"sync ktest: retry $n: $*\" >&2; sleep $((n*n)); done; }}; \
+             retry git -C ~/ktest fetch {url} && git -C ~/ktest checkout -f FETCH_HEAD",
+            url = p.ktest_url,
+        );
+        run_step(handle, host, &sync, "sync ktest").await?;
+    }
+
+    // 3. Build the supervisor (idempotent C helper).
     run_step(handle, host, "make -C ~/ktest/lib supervisor", "build supervisor").await?;
 
-    // 3. Clean ktest-out (keep the kernel build cache); mark every
+    // 4. Clean ktest-out (keep the kernel build cache); mark every
     //    subtest in-progress worker-side too so a dead VM still leaves
     //    a status for the supervisor to scan. Once: the resume loop
     //    re-runs only not-completed subtests and must not wipe the
@@ -432,7 +452,7 @@ async fn run_ktest_job_inner(
         // full_log write splices in exactly what we did this iter.
         let iter_offset = handle.log_offset();
 
-        // 4. Run the supervisor over `remaining`, one VM. Its exit
+        // 5. Run the supervisor over `remaining`, one VM. Its exit
         //    status is ignored — verdicts are in the result files; only
         //    a failure to *run* it is an error.
         handle.log_line(format!("=== run: {} ===", remaining.join(" ")));
@@ -485,7 +505,7 @@ async fn run_ktest_job_inner(
             .await
             .map_err(|e| TaskError::Retry(format!("running supervisor: {e}")))?;
 
-        // 5. Pull the remaining subtests' result dirs back to the
+        // 6. Pull the remaining subtests' result dirs back to the
         //    daemon's output_dir.
         handle.log_line("=== pull results ===".to_string());
         let dirs = remaining.iter()
@@ -568,7 +588,7 @@ async fn run_ktest_job_inner(
             }
         }
 
-        // 6. The supervisor wrote a status for every subtest it reached
+        // 7. The supervisor wrote a status for every subtest it reached
         //    (Passed/Failed, or FAILED TO RUN if it couldn't launch one).
         //    A subtest still IN PROGRESS was never reached — the VM died
         //    first — and is retried in a fresh VM. Read each batch
@@ -644,6 +664,7 @@ fn make_job_spec(rc: &CiConfig, job: &Job) -> JobSpec<JobParams> {
         test: k.test.clone(),
         subtest: k.subtest.clone(),
         repo_url,
+        ktest_url: rc.ktest.ktest_url.clone().unwrap_or_default(),
         output_dir: rc.ktest.output_dir.clone(),
     };
     let nice = job.nice + rc.ktest.user_nice.get(&k.user).copied().unwrap_or(0);
