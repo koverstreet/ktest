@@ -170,11 +170,16 @@ fn format_full_log(
         "# host={} slot={} commit={} kernel={} test={} env={} subtests={}\n",
         host, slot, p.commit, p.kernel, p.test, p.env, subtests.join(","),
     );
-    let exec_slice = std::fs::read(exec_log_path)
-        .ok()
-        .map(|b| {
-            let start = (exec_offset_start as usize).min(b.len());
-            b[start..].to_vec()
+    // Seek + read the slice, never the whole file: the executor log
+    // grows without bound (GBs after a day), and reading all of it on
+    // every batch completion was enough IO to saturate the results disk.
+    let exec_slice = std::fs::File::open(exec_log_path)
+        .and_then(|mut f| {
+            use std::io::{Read, Seek, SeekFrom};
+            f.seek(SeekFrom::Start(exec_offset_start))?;
+            let mut buf = Vec::new();
+            f.read_to_end(&mut buf)?;
+            Ok(buf)
         })
         .unwrap_or_default();
     [
