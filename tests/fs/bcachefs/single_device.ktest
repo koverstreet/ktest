@@ -551,7 +551,11 @@ test_split_compressed()
 test_compressed_merge_stale_data()
 {
     set_watchdog 240
-    run_quiet "" bcachefs format -f --compression=lz4 ${ktest_scratch_dev[0]}
+    # Explicit 512 byte blocks: the sweep does O_DIRECT writes at 512 byte
+    # granularity, which EINVALs if format picks a bigger block size from
+    # the device's physical block size (as on the CI workers):
+    run_quiet "" bcachefs format -f --compression=lz4 --block_size=512 \
+	${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     # ~50% compressible data, per-sector generation tags:
