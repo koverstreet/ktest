@@ -264,6 +264,7 @@ test_reflink2()
     set_watchdog 60
     bcachefs_antagonist
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    setup_tracing bcachefs:transaction_commit
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
@@ -582,8 +583,11 @@ test_compressed_merge_stale_data()
 
     local ret=0
     for ((k = 8; k <= 120; k++)); do
+	# grep exits 1 on no match - the expected clean case - which under
+	# pipefail fires the ERR trap inside the substitution and poisons
+	# $stale with the trap's message; hence the || true:
 	local stale=$(dd if=/mnt/f$k bs=512 skip=$k count=16 status=none |
-		      grep -ao 'G[12]_' | wc -l)
+		      { grep -ao 'G[12]_' || true; } | wc -l)
 	if [[ $stale -gt 0 ]]; then
 	    echo "stale data in f$k at sector $k: $stale sectors"
 	    ret=1
