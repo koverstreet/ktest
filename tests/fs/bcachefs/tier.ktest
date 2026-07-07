@@ -6,7 +6,12 @@ config-scratch-devs 1G
 config-scratch-devs 1G
 config-scratch-devs 16G
 config-scratch-devs 16G
-config-scratch-devs 8G
+# NB: many tests in this file mount/fsck "${ktest_scratch_dev[@]}" - all
+# devices - so adding a scratch dev here breaks every one of them unless
+# it's formatted into every filesystem. The commented-out device add in
+# test_reconcile_data_target_overfull needs a 5th dev (8G) when it's
+# re-enabled: re-add it together with converting the scratch_dev[@] users
+# to explicit device lists.
 
 run_basic_tiering_test()
 {
