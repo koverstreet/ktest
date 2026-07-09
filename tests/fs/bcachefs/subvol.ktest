@@ -350,6 +350,9 @@ test_subvol_snapshot_create()
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
 
+    # snapshots are read only by default:
+    ! touch /mnt/snapshot_1/foo
+
     umount /mnt
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
@@ -365,6 +368,22 @@ test_subvol_snapshot_create_ro()
     bcachefs subvolume snapshot -r /mnt/subvolume_1 /mnt/snapshot_1
 
     ! touch /mnt/snapshot_1/foo
+
+    umount /mnt
+
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_subvol_snapshot_create_rw()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    bcachefs subvolume create /mnt/subvolume_1
+    bcachefs subvolume snapshot --rw /mnt/subvolume_1 /mnt/snapshot_1
+
+    touch /mnt/snapshot_1/foo
 
     umount /mnt
 
@@ -409,7 +428,8 @@ d_test_subvol_snapshot_rm()
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume create /mnt/subvolume_1
-    bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
+    # rm needs a writable snapshot - read only is the default:
+    bcachefs subvolume snapshot --rw /mnt/subvolume_1 /mnt/snapshot_1
     rm -r /mnt/snapshot_1
 
     umount /mnt
