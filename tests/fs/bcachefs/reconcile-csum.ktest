@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+#
+# Changing data_checksum on a filesystem whose extents are already
+# compressed to the background_compression target: reconcile flags every
+# extent need_rb=data_checksum and issues full rewrites, but the write
+# path's "write the entire extent as is" fast path
+# (bch2_write_prep_encoded_data()) only rechecksums uncompressed data —
+# a compressed extent is rewritten to a new location still carrying its
+# old checksum type. The index-update set_needs_reconcile hook then
+# re-flags the new extent and reconcile re-queues it: an infinite loop
+# that rewrites the same data forever with zero progress.
+#
+# On a buggy kernel this test fails two ways:
+#  - reconcile checksum work never settles, while the data_update
+#    counter keeps climbing (the loop, visible in the settle log)
+#  - extents still carry the old checksum type afterward
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+
+config-mem 4G
+
+reconcile_work_remaining()
+{
+    bcachefs fs usage -f rebalance_work /mnt | awk '
+	$1 ~ /^(replicas|checksum|erasure_code|compression|target|high_priority|stripes):$/ { sum += $2 + $3 }
+	END { print sum + 0 }'
+}
+
+data_update_sectors()
+{
+    awk '/since mount/ { print $3 }' /sys/fs/bcachefs/*/counters/data_update
+}
+
+test_csum_change_compressed()
+{
+    set_watchdog 600
+
+    run_quiet "" bcachefs format -f		\
+	--block_size=4k				\
+	--data_checksum=crc32c			\
+	--compression=zstd			\
+	--background_compression=zstd		\
+	${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # Compressible data, so extents land compressed (zstd) + crc32c:
+    dd if=/dev/zero of=/mnt/data bs=1M count=64 conv=fsync
+
+    umount /mnt
+
+    # Precondition: extents must be compressed and crc32c, or we're not
+    # exercising the encoded-data fast path at all
+    local keys=$(bcachefs list -b extents ${ktest_scratch_dev[0]})
+    if ! echo "$keys" | grep -q "csum crc32c.*compress zstd"; then
+	echo "FAIL: precondition — expected zstd-compressed crc32c extents, got:"
+	echo "$keys" | head -20
+	return 1
+    fi
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    bcachefs set-fs-option --data_checksum=xxhash ${ktest_scratch_dev[0]}
+
+    # Wait for the checksum reconcile to settle (tier.ktest
+    # reconcile_settle pattern), sampling data_update alongside: on the
+    # bug, work remaining stays pinned while data_update climbs forever
+    local i zeros=0 settled=0
+    local wrote_first=$(data_update_sectors)
+    for ((i = 0; i < 45; i++)); do
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_wakeup
+	sleep 2
+	local work=$(reconcile_work_remaining)
+	local wrote=$(data_update_sectors)
+	echo "t=$((i * 2))s	reconcile work remaining: $work	data_update: $wrote"
+	if (( work )); then
+	    zeros=0
+	elif (( ++zeros >= 3 )); then
+	    settled=1
+	    break
+	fi
+    done
+
+    if (( ! settled )); then
+	echo "reconcile checksum work did not settle"
+	echo "data_update at start of wait: $wrote_first, now: $(data_update_sectors)"
+	bcachefs reconcile status /mnt || true
+	bcachefs fs usage -f rebalance_work /mnt || true
+    fi
+
+    umount /mnt
+
+    # Postcondition: no extent may still carry the old checksum type
+    keys=$(bcachefs list -b extents ${ktest_scratch_dev[0]})
+    local stale=$(echo "$keys" | grep -c "csum crc32c" || true)
+    local converted=$(echo "$keys" | grep -c "csum xxhash" || true)
+    echo "extents still crc32c: $stale, converted to xxhash: $converted"
+
+    if (( ! settled )) || (( stale > 0 )); then
+	echo "FAIL: data_checksum change on compressed extents did not complete"
+	echo "$keys" | grep "csum crc32c" | head -5
+	return 1
+    fi
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+main "$@"
