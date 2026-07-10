@@ -108,4 +108,94 @@ test_csum_change_compressed()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+reconcile_row_bytes()
+{
+    bcachefs fs usage -f rebalance_work /mnt | awk -v r="$1:" '
+	$1 == r { print $2 + $3; exit }'
+}
+
+# Poll until the given rebalance_work row drains to 0 (3 consecutive zero
+# samples), kicking reconcile each iteration; print data_update alongside
+# so a livelock (row pinned, data_update climbing) is visible in the log.
+# Dumps reconcile state and returns 1 on timeout.
+reconcile_row_settle()
+{
+    local row=$1 iters=${2:-45} zeros=0 i
+
+    for ((i = 0; i < iters; i++)); do
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_wakeup
+	sleep 2
+	local work=$(reconcile_row_bytes $row)
+	echo "t=$((i * 2))s	$row work remaining: $work	data_update: $(data_update_sectors)"
+	if (( work )); then
+	    zeros=0
+	elif (( ++zeros >= 3 )); then
+	    return 0
+	fi
+    done
+
+    echo "reconcile $row work did not settle"
+    bcachefs reconcile status /mnt || true
+    bcachefs fs usage -f rebalance_work /mnt || true
+    return 1
+}
+
+# Changing wide_macs on an encrypted filesystem: the producer's target
+# checksum type (bch2_data_checksum_type_rb()) follows wide_macs, so
+# extents carrying the other MAC width get need_rb=data_checksum — but
+# bch2_data_update_init() forces op.csum_type back to the extent's exact
+# existing type for any encrypted extent ("encrypted must stay
+# encrypted", which over-copies the width). The rewrite lands with the
+# old MAC width, gets re-flagged, and reconcile re-queues it forever —
+# same shape as the compressed-extent checksum livelock, different
+# override.
+test_csum_change_encrypted()
+{
+    set_watchdog 600
+
+    run_quiet "" bcachefs format -f		\
+	--block_size=4k				\
+	--encrypted --no_passphrase		\
+	${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    dd if=/dev/zero of=/mnt/data bs=1M count=64 conv=fsync
+    umount /mnt
+
+    local keys=$(bcachefs list -b extents ${ktest_scratch_dev[0]})
+    if ! grep -q "chacha20_poly1305_80" <<<"$keys"; then
+	echo "FAIL: precondition — expected chacha20_poly1305_80 extents, got:"
+	head -20 <<<"$keys"
+	return 1
+    fi
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # wide_macs itself doesn't bracket a reconcile scan (see
+    # test_wide_macs_scan); force one with a data_checksum change, which
+    # on an encrypted fs doesn't affect the target csum type but does
+    # trigger a fs-wide scan that re-derives need_rb — picking up the
+    # MAC width mismatch:
+    bcachefs set-fs-option --wide_macs=1 ${ktest_scratch_dev[0]}
+    bcachefs set-fs-option --data_checksum=xxhash ${ktest_scratch_dev[0]}
+
+    local settled=0
+    reconcile_row_settle checksum && settled=1
+
+    umount /mnt
+
+    keys=$(bcachefs list -b extents ${ktest_scratch_dev[0]})
+    local stale=$(echo "$keys" | grep -c "chacha20_poly1305_80" || true)
+    local converted=$(echo "$keys" | grep -c "chacha20_poly1305_128" || true)
+    echo "extents still poly1305_80: $stale, converted to poly1305_128: $converted"
+
+    if (( ! settled )) || (( stale > 0 )); then
+	echo "FAIL: wide_macs change on encrypted extents did not complete"
+	return 1
+    fi
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 main "$@"
