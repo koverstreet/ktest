@@ -25,7 +25,7 @@ dump_reconcile_debug()
 check_hipri_reconcile_ioprio()
 {
     for _ in $(seq 1 100); do
-	if trace_has_data_update_ioprio reconcile best-effort:7; then
+	if trace_data_update_has_ioprio reconcile best-effort:7; then
 	    return 0
 	fi
 	sleep .1
@@ -34,33 +34,6 @@ check_hipri_reconcile_ioprio()
     echo "did not observe high-priority reconcile data_update at best-effort:7"
     dump_reconcile_debug
     return 1
-}
-
-trace_has_data_update_ioprio()
-{
-    local operation=$1
-    local priority=$2
-
-    awk -v operation="$operation" -v priority="$priority" '
-	function finish_event() {
-	    if (in_event && saw_operation && saw_priority)
-		found = 1
-	}
-	/bcachefs:[[:alnum:]_]+:/ {
-	    finish_event()
-	    in_event = $0 ~ /bcachefs:data_update:/
-	    saw_operation = in_event && index($0, ": " operation)
-	    saw_priority = in_event && index($0, "ioprio: " priority)
-	    next
-	}
-	in_event && index($0, "ioprio:") && index($0, priority) {
-	    saw_priority = 1
-	}
-	END {
-	    finish_event()
-	    exit !found
-	}
-    ' /sys/kernel/tracing/trace
 }
 
 src_has_user_data()
