@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+require-kernel-config BCACHEFS_FS=y
+
+config-mem 4G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+
+devs()
+{
+    join_by : "${ktest_scratch_dev[@]}"
+}
+
+dump_move_fua_debug()
+{
+    bcachefs fs usage -h --all /mnt || true
+    cat /sys/fs/bcachefs/*/reconcile_status || true
+    cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
+    tail -n 800 /sys/kernel/tracing/trace || true
+}
+
+wait_for_src_user_data_evacuated()
+{
+    for _ in $(seq 1 1200); do
+	if ! src_has_user_data; then
+	    return 0
+	fi
+	sleep .1
+    done
+
+    echo "source device still has user data after evacuation"
+    dump_move_fua_debug
+    return 1
+}
+
+src_has_user_data()
+{
+    awk '$1 == "user" { found = $2 > 0 } END { exit !found }' \
+	/sys/fs/bcachefs/*/dev-0/alloc_debug
+}
+
+check_move_write_fua_state()
+{
+    local expected=$1
+    local dst1 dst2
+
+    dst1=$(lsblk -dnro MAJ:MIN "${ktest_scratch_dev[1]}" | tr : ,)
+    dst2=$(lsblk -dnro MAJ:MIN "${ktest_scratch_dev[2]}" | tr : ,)
+
+    awk -v expected="$expected" -v dst1="$dst1" -v dst2="$dst2" '
+	/tracing_mark_write: move-writes-fua-start/ { in_window = 1; next }
+	/tracing_mark_write: move-writes-fua-end/   { in_window = 0 }
+	!in_window || !/block_bio_queue:/           { next }
+	{
+	    line = $0
+	    sub(/^.*block_bio_queue: /, "", line)
+	    split(line, fields, / +/)
+	    dev = fields[1]
+	    flags = fields[2]
+	    sectors = fields[5] + 0
+
+	    if ((dev == dst1 || dev == dst2) && flags ~ /^W/ && sectors >= 512) {
+		if (index(flags, "F"))
+		    saw_fua = 1
+		else
+		    saw_nonfua = 1
+	    }
+	}
+	END {
+	    if (expected == 1)
+		exit !saw_fua
+	    exit !saw_nonfua || saw_fua
+	}
+    ' /sys/kernel/tracing/trace
+}
+
+run_move_writes_fua_case()
+{
+    local expected=$1
+
+    set_watchdog 240
+
+    run_quiet "" bcachefs format -f			\
+	--block_size=4k					\
+	--bucket_size=256k				\
+	--replicas=1					\
+	--foreground_target=src			\
+	--background_target=src			\
+	--rotational=1 --label=src "${ktest_scratch_dev[0]}" \
+	--rotational=1 --label=dst "${ktest_scratch_dev[1]}" \
+	--rotational=1 --label=dst "${ktest_scratch_dev[2]}"
+
+    mount -t bcachefs "$(devs)" /mnt
+
+    dd if=/dev/zero of=/mnt/src-only-data bs=4M count=64 oflag=direct status=none
+    sync
+
+    if ! src_has_user_data; then
+	echo "test setup failed: source device has no user data"
+	dump_move_fua_debug
+	return 1
+    fi
+
+    echo none > /sys/fs/bcachefs/*/options/foreground_target
+    echo none > /sys/fs/bcachefs/*/options/background_target
+    echo "$expected" > /sys/fs/bcachefs/*/options/move_writes_fua
+
+    setup_tracing 'block:block_bio_queue'
+    echo move-writes-fua-start > /sys/kernel/tracing/trace_marker
+    echo evacuating > /sys/fs/bcachefs/*/dev-0/state
+    wait_for_src_user_data_evacuated
+    echo move-writes-fua-end > /sys/kernel/tracing/trace_marker
+
+    if ! check_move_write_fua_state "$expected"; then
+	echo "did not observe destination move writes with move_writes_fua=$expected"
+	dump_move_fua_debug
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+test_move_writes_default_without_fua()
+{
+    run_move_writes_fua_case 0
+}
+
+test_move_writes_fua_option_sets_fua()
+{
+    run_move_writes_fua_case 1
+}
+
+main "$@"
