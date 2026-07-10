@@ -1,0 +1,1394 @@
+#!/usr/bin/env bash
+#
+# Snapshot corruption injection tests.
+#
+# Each test builds a real snapshot tree with known data in every snapshot,
+# injects one precise corruption with `bcachefs kvdb` (field-level btree
+# surgery on the unmounted image), then asserts the fsck contract:
+#
+#   - fsck -y must DETECT it (exit != 0; a silent pass is a test failure)
+#   - a second fsck -n is the oracle for whether repair converged (the
+#     first run's exit code can't distinguish "fixed" from "pass errored
+#     out and the fs never opened")
+#   - data in snapshots the injection didn't deliberately destroy must
+#     survive - corruption of one node must never cost other snapshots'
+#     data. That's the property whose violation eats filesystems.
+#
+# Cases were derived by walking every error site in
+# fs/snapshots/check_snapshots.c and subvolume.c plus the snapshot ids in
+# fs/sb/errors_format.h; the invariant/repair numbering (I*/R*/H*/D*)
+# refers to fs/snapshots/format.h and
+# bcachefs-tools/.claude/2026-07-10-snapshot-deletion-audit.md.
+#
+# Expected modes (the harness supports both; every test below is
+# repair-oracle now - failing until its repair lands):
+#
+#   repair - fsck -y fixes it, second run clean, fs mounts, data verified
+#   detect - fsck notices but repair is missing/designed-fail-stop today;
+#            second run may still error, an unmountable fs only warns
+#
+# All tests assert the full repair and FAIL until their corresponding
+# repair lands - that's the point. The still-open repairs:
+#   R1-R6  - the check_snapshot topology/backref repairs (format.h R-table)
+#   no_keys_two_children - the snapshot.h:192 EBUG_ON coherence check
+#   D1     - cross-btree condemnation in the runtime delete collector
+#            (runtime_will_delete_backref_cleared; the node-local guard
+#            catches a retained v.subvol backref, only the subvolumes-btree
+#            scan catches flag AND field both cleared)
+#
+# Injections are per-key-valid: keys failing bch2_bkey_validate are simply
+# dropped by the read path, so there is nothing to inject there (and the
+# write path would refuse them anyway). Snapshot flag bits are written by
+# name (will_delete/deleted/no_keys; the SUBVOL bit as flags.subvol, since
+# the subvol *field* owns the bare name) and get decodes them.
+#
+# No bcachefs_test_end_checks: these tests intentionally stamp error
+# counters.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 16G
+
+NR_SNAPS=3      # snap-0..2; subvol ids 2,3,4 (main is 1), all under root(1)
+
+kvdb()
+{
+    bcachefs kvdb ${ktest_scratch_dev[0]} "$@"
+}
+
+MANIFEST=/tmp/snapshot-inject-manifest
+
+# Full observable state of the mounted fs: tree structure (type + path) and
+# content hashes.
+#
+# find is unusable here: a snapshot of the root directory has the root's
+# own st_dev/st_ino (inums are shared across snapshots, there's no
+# per-subvol st_dev), and fts-based tools flag a directory whose dev/ino
+# matches an ancestor's as a filesystem loop when the entry is first
+# returned - BEFORE any predicate runs, so no -prune/-maxdepth expression
+# can suppress the warning or the nonzero exit. Same story for ls -R and
+# du. Hence a plain bash walker.
+#
+# Each subvolume is walked once, at its canonical top-level path.
+# Subvolume boundaries are pruned by name (snap-*, other - this file only
+# ever creates subvolumes with those names): an interior subvolume dirent
+# inside a snapshot points at the *live* subvolume, not a frozen copy, so
+# descending would duplicate live state under snapshot paths. lost+found
+# is pruned too, but anything a repair moves there still shows up as
+# missing from its real path.
+
+# "type path" for everything under $1 (excluding $1 itself), in find
+# -printf '%y %p' format
+walk_tree()
+{
+    local ent
+    for ent in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+	[[ -e $ent || -L $ent ]] || continue
+	case ${ent##*/} in
+	    snap-*|other|lost+found) continue ;;
+	esac
+
+	if   [[ -L $ent ]]; then echo "l $ent"
+	elif [[ -d $ent ]]; then echo "d $ent"; walk_tree "$ent"
+	elif [[ -f $ent ]]; then echo "f $ent"
+	else                     echo "? $ent"
+	fi
+    done
+}
+
+walk_subvols()
+{
+    local d
+    for d in . $(ls -d snap-* other 2>/dev/null | sed 's|^|./|'); do
+	[[ -d $d ]] || continue
+	echo "d $d"
+	walk_tree $d
+    done
+}
+
+capture_state()      # capture_state <prefix>
+{
+    (cd /mnt && walk_subvols | sort) > $1.tree
+    (cd /mnt && sed -n 's/^f //p' $1.tree |
+	tr '\n' '\0' | xargs -0 -r md5sum) > $1.data
+}
+
+# Build a filesystem in a fully-known state:
+#
+#   - main subvol + $NR_SNAPS writable snapshots (snap-$i = subvol $((2+i)),
+#     all under the root subvol)
+#   - additive files (data-$i), so each snapshot has unique contents
+#   - a file rewritten every generation (versioned), so the same inode has
+#     extents at several snapshot ids - real visibility filtering
+#   - files created then deleted the next generation (transient-$i), so
+#     snapshots differ by whiteouts too
+#   - nested directories (dir-$i/file)
+#   - an independent subvolume (other) - a second snapshot tree, so
+#     tree-level repairs have more than one tree to reason about
+#
+# Captures the reference manifest: what the filesystem must still look
+# like after repair. Resets skip_snaps/skip_paths.
+setup_snapshot_tree()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    pushd /mnt
+    for i in $(seq 0 $((NR_SNAPS - 1))); do
+	echo "data-snap-$i" > data-$i
+	echo "version-$i" > versioned
+	mkdir -p dir-$i
+	echo "nested-$i" > dir-$i/file
+	echo "transient-$i" > transient-$i
+	if (( i > 0 )); then
+	    rm transient-$((i - 1))
+	fi
+	dd if=/dev/zero of=fill bs=1M count=1 oflag=direct
+	bcachefs subvolume snapshot snap-$i
+    done
+    popd
+
+    bcachefs subvolume create /mnt/other
+    echo "other-tree" > /mnt/other/file
+
+    capture_state $MANIFEST
+
+    umount /mnt
+
+    skip_snaps=""
+    skip_paths=""
+}
+
+# ── kvdb parsing helpers ─────────────────────────────────────────────────
+
+# Scalar field of a snapshots-btree key: snap_field <id> <name>
+snap_field()
+{
+    kvdb -c "get snapshots 0:$1:0" | sed -n "s/^ *$2: //p" | head -1
+}
+
+# Array field ("children: [a, b]") as space-separated: snap_array <id> <name>
+snap_array()
+{
+    kvdb -c "get snapshots 0:$1:0" |
+	sed -n "s/^ *$2: \[\(.*\)\]/\1/p" | head -1 | tr -d ','
+}
+
+subvol_field()
+{
+    kvdb -c "get subvolumes 0:$1:0" | sed -n "s/^ *$2: //p" | head -1
+}
+
+# The snapshot node a subvolume points at
+subvol_snapshot()
+{
+    subvol_field $1 snapshot
+}
+
+all_snap_ids()
+{
+    kvdb -c 'list snapshots' | sed -n 's/.*type snapshot 0:\([0-9]*\):0.*/\1/p'
+}
+
+# Root of the MAIN snapshot tree, resolved through the tree key: 'other'
+# is an independent tree whose root also has parent == 0 - and, created
+# last, the lowest id, so a naive parent==0 scan found other's root and
+# quietly mis-targeted every test that used it (caught when stricter key
+# validation started bouncing the malformed injections it produced).
+snap_root()
+{
+    local tree=$(snap_field $(subvol_snapshot 1) tree)
+    kvdb -c "get snapshot_trees 0:$tree:0" |
+	sed -n 's/^ *root_snapshot: //p' | head -1
+}
+
+# ── assertions ───────────────────────────────────────────────────────────
+
+# Verify the filesystem's entire observable state against the reference
+# manifest: structure and contents must be exactly what they were before
+# the injection - nothing lost, nothing corrupted, nothing new (a file
+# reattached to lost+found shows as missing from its real path).
+#
+# $skip_snaps: snapshots the injection deliberately destroyed or whose
+# view is legitimately broken until repair lands ("ALL" = the injection
+# breaks the whole tree's ancestry; only verify mountability).
+# $skip_paths: individual injected-away paths (fixed strings).
+#
+# $1 = "must-mount" or "may-fail" (after a fail-stop the fs may be
+# unmountable - the known automated-recovery wedge, audit S2 - warn only).
+verify_fs_state()
+{
+    local mode=$1
+
+    if ! mount -t bcachefs ${ktest_scratch_dev[0]} /mnt; then
+	if [[ $mode == must-mount ]]; then
+	    echo "TEST FAILED: filesystem unmountable after repair"
+	    exit 1
+	fi
+	echo "WARNING: filesystem unmountable after fail-stop (known wedge, audit S2)"
+	return 0
+    fi
+
+    if [[ $skip_snaps == ALL ]]; then
+	umount /mnt
+	return 0
+    fi
+
+    capture_state $MANIFEST.now
+    umount /mnt
+
+    local f s p
+    for f in tree data; do
+	cp $MANIFEST.$f     $MANIFEST.want
+	cp $MANIFEST.now.$f $MANIFEST.got
+
+	for s in $skip_snaps; do
+	    grep -vE " \./$s(/|\$)" $MANIFEST.want > $MANIFEST.want.f && mv $MANIFEST.want.f $MANIFEST.want || true
+	    grep -vE " \./$s(/|\$)" $MANIFEST.got  > $MANIFEST.got.f  && mv $MANIFEST.got.f  $MANIFEST.got  || true
+	done
+	for p in $skip_paths; do
+	    grep -vF " $p" $MANIFEST.want > $MANIFEST.want.f && mv $MANIFEST.want.f $MANIFEST.want || true
+	    grep -vF " $p" $MANIFEST.got  > $MANIFEST.got.f  && mv $MANIFEST.got.f  $MANIFEST.got  || true
+	done
+
+	if ! diff -u $MANIFEST.want $MANIFEST.got; then
+	    echo "TEST FAILED: filesystem $f diverged from expected state (see diff above)"
+	    exit 1
+	fi
+    done
+}
+
+# fsck the injected corruption and enforce the case's contract.
+# $1: detect|repair (see header).
+check_fsck()
+{
+    local expect=$1
+    local rc1=0 rc2=0
+
+    bcachefs fsck -y ${ktest_scratch_dev[0]} || rc1=$?
+    echo "first fsck -y exited $rc1"
+
+    if (( rc1 == 0 )); then
+	echo "TEST FAILED: fsck missed injected corruption"
+	exit 1
+    fi
+
+    # Second run is the oracle: clean means the first run truly repaired
+    # and converged (rc1 alone can't tell "fixed" from "open failed").
+    bcachefs fsck -n ${ktest_scratch_dev[0]} || rc2=$?
+    echo "second fsck -n exited $rc2"
+
+    if (( rc2 == 0 )); then
+	verify_fs_state must-mount
+    else
+	if [[ $expect == repair ]]; then
+	    echo "TEST FAILED: expected full repair but errors remain after fsck -y"
+	    exit 1
+	fi
+	echo "unrepaired errors remain - expected while repair code is pending"
+	verify_fs_state may-fail
+    fi
+}
+
+# ── tool sanity ──────────────────────────────────────────────────────────
+
+# kvdb round-trip on a healthy fs: field update, key create, key delete;
+# fsck must then run clean. Catches tool regressions before they show up
+# as confusing injection-test failures. The scratch node is grafted and
+# torn down fully linked, each half within a single kvdb invocation:
+# check_snapshots runs at every fs open, and a half-linked node
+# fail-stops every open after it (as it should). The old version also
+# picked scratch = root-5, which *collided with a live node id* - ids
+# allocate downward, so root-5 is mid-tree; pick below the lowest id.
+test_kvdb_sanity()
+{
+    setup_snapshot_tree
+
+    local root=$(snap_root)
+    [[ -n $root ]]
+
+    kvdb -c "update snapshots 0:$root:0 btime.lo=42"
+    [[ $(kvdb -c "get snapshots 0:$root:0" | sed -n 's/^ *lo: //p' | head -1) == 42 ]]
+
+    # graft a scratch leaf under snap-2's node (a leaf: children[] free)
+    local leaf=$(subvol_snapshot 4)
+    local depth=$(snap_field $leaf depth)
+    local tree=$(snap_field $leaf tree)
+    local scratch=$(( $(all_snap_ids | head -1) - 5 ))
+
+    kvdb -c "set snapshots 0:$scratch:0 snapshot parent=$leaf tree=$tree depth=$((depth + 1))" \
+	 -c "update snapshots 0:$leaf:0 children[0]=$scratch"
+    [[ $(snap_field $scratch parent) == $leaf ]]
+    kvdb -c "update snapshots 0:$leaf:0 children[0]=0" \
+	 -c "set snapshots 0:$scratch:0 deleted"
+
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
+
+    skip_snaps=""
+    verify_fs_state must-mount
+}
+
+# ── cases with working repair (expect: repair) ───────────────────────────
+
+# I4: depth inconsistent with parent (snapshot_bad_depth, autofix)
+test_bad_depth()
+{
+    setup_snapshot_tree
+
+    local victim=$(subvol_snapshot 4)
+    local depth=$(snap_field $victim depth)
+
+    kvdb -c "update snapshots 0:$victim:0 depth=$((depth + 5))"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# I5: skiplist entry that isn't an ancestor (snapshot_bad_skiplist,
+# autofix). The replacement triple must stay sorted or the write itself
+# would be refused by key validation.
+test_bad_skiplist()
+{
+    setup_snapshot_tree
+
+    local victim=$(subvol_snapshot 4)
+    local other=$(subvol_snapshot 2)    # different branch: not an ancestor
+    local skip=($(snap_array $victim skip))
+
+    local triple=($(printf '%s\n' $other ${skip[1]} ${skip[2]} | sort -n))
+    kvdb -c "update snapshots 0:$victim:0 skip[0]=${triple[0]} skip[1]=${triple[1]} skip[2]=${triple[2]}"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# Node's tree pointer names a nonexistent snapshot_tree
+# (snapshot_to_bad_snapshot_tree, autofix via snapshot_tree_ptr_repair).
+test_bad_tree_ptr()
+{
+    setup_snapshot_tree
+
+    local victim=$(subvol_snapshot 4)
+
+    kvdb -c "update snapshots 0:$victim:0 tree=987654"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# snapshot_tree key whose root_snapshot isn't a tree root
+# (snapshot_tree_to_missing_snapshot: tree key deleted, then recreated
+# through the nodes' tree-pointer repair).
+test_tree_wrong_root()
+{
+    setup_snapshot_tree
+
+    local leaf=$(subvol_snapshot 4)
+    local tree=$(snap_field $(snap_root) tree)
+
+    kvdb -c "update snapshot_trees 0:$tree:0 root_snapshot=$leaf"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# snapshot_tree.master_subvol names a nonexistent subvolume
+# (snapshot_tree_to_missing_subvol: repaired to the oldest subvol in tree).
+test_tree_master_subvol_missing()
+{
+    setup_snapshot_tree
+
+    local tree=$(snap_field $(snap_root) tree)
+
+    kvdb -c "update snapshot_trees 0:$tree:0 master_subvol=31337"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# A spurious second snapshot_tree key claiming an existing root: the root
+# node's own tree pointer doesn't point back, so check_snapshot_tree
+# deletes the impostor (snapshot_tree_to_missing_snapshot path).
+test_duplicate_tree()
+{
+    setup_snapshot_tree
+
+    kvdb -c "set snapshot_trees 0:99:0 snapshot_tree root_snapshot=$(snap_root) master_subvol=1"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# Node's tree pointer names a real but WRONG tree (the independent 'other'
+# subvol's) - snapshot_tree_ptr_good's is-ancestor check fails, repaired
+# from the root's pointer (snapshot_to_bad_snapshot_tree, autofix).
+test_wrong_tree_ptr()
+{
+    setup_snapshot_tree
+
+    local victim=$(subvol_snapshot 4)
+    local other_tree=$(snap_field $(subvol_snapshot 5) tree)
+    [[ -n $other_tree && $other_tree != $(snap_field $victim tree) ]]
+
+    kvdb -c "update snapshots 0:$victim:0 tree=$other_tree"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# Root subvolume with nonzero fs_path_parent
+# (subvol_root_fs_path_parent_nonzero, repaired by zeroing).
+test_root_subvol_fs_path_parent()
+{
+    setup_snapshot_tree
+
+    kvdb -c "update subvolumes 0:1:0 fs_path_parent=2"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# subvolume_children missing the bit for a subvolume
+# (subvol_children_not_set, repaired by re-setting it).
+test_subvol_child_bit_missing()
+{
+    setup_snapshot_tree
+
+    local parent=$(subvol_field 4 fs_path_parent)
+
+    kvdb -c "set subvolume_children $parent:4:0 deleted"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# Keys stranded under a *clean* tombstone - node fully DELETED and spliced
+# out of its parent, subvolume record gone, but its keys never swept: the
+# gondezee stage-2 shape. bkey_in_deleted_snapshot (autofix) deletes them
+# and delete_dead_snapshots reaps the tombstone. The assertion that
+# matters: every OTHER snapshot's data survives the sweep.
+test_stranded_keys()
+{
+    setup_snapshot_tree
+
+    local last_subvol=$((2 + NR_SNAPS - 1))
+    local victim=$(subvol_snapshot $last_subvol)
+    local parent=$(snap_field $victim parent)
+    local children=($(snap_array $parent children))
+
+    # splice: parent keeps only the surviving child, [nonzero, 0]
+    local other
+    for c in ${children[@]}; do
+	[[ $c != $victim ]] && other=$c
+    done
+
+    kvdb -c "update snapshots 0:$victim:0 deleted=1 flags.subvol=0 subvol=0" \
+	 -c "update snapshots 0:$parent:0 children[0]=$other children[1]=0" \
+	 -c "set subvolumes 0:$last_subvol:0 deleted"
+
+    skip_snaps="snap-$((NR_SNAPS - 1))"
+    check_fsck repair
+}
+
+# H6 shape: keys at a snapshot with no inode at that snapshot
+# (snapshot_key_missing_inode_snapshot, autofix) - the invariant the v2
+# deletion sweep depends on. Create a file inside a snapshot (its own
+# inode at that snapshot id), then delete just the inode key.
+test_key_missing_inode()
+{
+    setup_snapshot_tree
+
+    # the scratch file postdates the reference manifest, and the repair may
+    # legitimately remove or reattach it - exclude it from verification
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    echo scratch > /mnt/snap-2/scratch
+    local inum=$(stat -c %i /mnt/snap-2/scratch)
+    umount /mnt
+
+    local snapid=$(subvol_snapshot 4)
+
+    kvdb -c "set inodes 0:$inum:$snapid deleted"
+
+    skip_snaps=""
+    skip_paths="./snap-2/scratch"
+    check_fsck repair
+}
+
+# Subvolume whose snapshot node is gone entirely (spliced out of the
+# parent too, so only the subvolume side remembers it): check_subvol
+# schedules reconstruct_snapshots - which then correctly REFUSES:
+# reconstruction of a mid-tree node means fabricating topology (its
+# position is unrecoverable once the parent forgot it), and the pass only
+# implements the trivial single-node-tree case. fail-stops with
+# fsck_repair_unimplemented. Flip to repair if a deliberate lossy
+# reattach (recreate as root child, ancestry explicitly lost - the
+# subvol_to_missing_root philosophy) ever lands; that design is an
+# R-table entry, not a bug.
+test_subvol_to_missing_node()
+{
+    setup_snapshot_tree
+
+    local last_subvol=$((2 + NR_SNAPS - 1))
+    local victim=$(subvol_snapshot $last_subvol)
+    local parent=$(snap_field $victim parent)
+    local children=($(snap_array $parent children))
+
+    local other
+    for c in ${children[@]}; do
+	[[ $c != $victim ]] && other=$c
+    done
+
+    kvdb -c "update snapshots 0:$parent:0 children[0]=$other children[1]=0" \
+	 -c "set snapshots 0:$victim:0 deleted"
+
+    # expect=repair (FAILING until the lossy reattach lands): recreate the
+    # node as a root child - ancestry explicitly lost (the
+    # subvol_to_missing_root philosophy). The victim's view of older files
+    # is gone, so it stays skipped; the oracle is converge-clean + every
+    # other snap intact.
+    skip_snaps="snap-$((NR_SNAPS - 1))"
+    check_fsck repair
+}
+
+# ── cases expected to repair (FAILING until the R-table repairs land) ────────────────────
+# Each injects a check_snapshot fail-stop shape and asserts the full
+# repair-oracle: fsck -y repairs, fsck -n converges clean, mount ok, and
+# the tree+data manifest matches the pre-corruption reference (skip_snaps
+# shrunk to only entities the repair legitimately removes). Failing is
+# the point - each test drives and accepts its corresponding R-table repair.
+
+# S2/I1/R4: live parent points at a DELETED tombstone - an interrupted
+# parent-splice. Fail-stop: EINVAL_snapshot_child_deleted.
+test_tombstoned_child()
+{
+    setup_snapshot_tree
+
+    local last_subvol=$((2 + NR_SNAPS - 1))
+    local victim=$(subvol_snapshot $last_subvol)
+
+    kvdb -c "update snapshots 0:$victim:0 deleted=1 flags.subvol=0 subvol=0" \
+	 -c "set subvolumes 0:$last_subvol:0 deleted"
+
+    # expect=repair (FAILING until R4 lands): splice the tombstone out of
+    # the parent - redirect the child pointer to the tombstone's live
+    # descendant, migrate its keys to where they're visible. The tombstoned
+    # snap is genuinely gone, so it stays skipped; every other snap's
+    # tree+data must match, and the migrated keys must land in the live
+    # descendant, not be dropped.
+    skip_snaps="snap-$((NR_SNAPS - 1))"
+    check_fsck repair
+}
+
+# R5/I2: parent's child pointer names a nonexistent node. Fail-stop:
+# ENOENT from bch2_check_snapshot_child. (Also strands the node's keys ->
+# bkey_in_missing_snapshot, but the topology fail-stop fires first.)
+test_missing_child()
+{
+    setup_snapshot_tree
+
+    local last_subvol=$((2 + NR_SNAPS - 1))
+    local victim=$(subvol_snapshot $last_subvol)
+
+    kvdb -c "set snapshots 0:$victim:0 deleted" \
+	 -c "set subvolumes 0:$last_subvol:0 deleted"
+
+    # expect=repair (FAILING until R5 lands): resurrect the missing child
+    # as a leaf (parent=us, derived depth/tree, no subvol) so its keys stay
+    # reachable; if empty, the next deletion run condemns it through the
+    # front door. The resurrected leaf carries no subvol, so it isn't
+    # walked; it stays skipped, and the oracle is converge-clean + every
+    # other snap intact.
+    skip_snaps="snap-$((NR_SNAPS - 1))"
+    check_fsck repair
+}
+
+# R2/I2: parent lost its pointer to a live child (child's parent pointer
+# intact). Fail-stop: EINVAL_snapshot_parent_missing_child_ptr. Ancestry
+# is parent-pointer-driven, so no view breaks and no data is lost.
+test_parent_missing_child_ptr()
+{
+    setup_snapshot_tree
+
+    local victim=$(subvol_snapshot 4)
+    local parent=$(snap_field $victim parent)
+    local children=($(snap_array $parent children))
+
+    local other
+    for c in ${children[@]}; do
+	[[ $c != $victim ]] && other=$c
+    done
+
+    kvdb -c "update snapshots 0:$parent:0 children[0]=$other children[1]=0"
+
+    # expect=repair (FAILING until R2 lands): install the child in the
+    # parent's free children[] slot (three-children conflict -> stay
+    # fail-stop). No view broke and no data moved, so the full manifest
+    # must match.
+    skip_snaps=""
+    check_fsck repair
+}
+
+# R3/I2: child's parent pointer is wrong (points at the root, which
+# doesn't list it; its real parent still does). Fail-stop:
+# EINVAL_snapshot_child_bad_parent today. The victim's ancestor chain is
+# broken until R3 repairs it; once repaired, the full manifest (snap-1
+# included) must match.
+#
+# The key must stay per-key-valid: parent/depth/skiplist coherence is
+# checked at the key level, so a bare parent=$root bounces off
+# validation (bad skiplist node - old ancestors < new parent). Reparent
+# coherently; the topology corruption is what remains under test.
+test_wrong_parent()
+{
+    setup_snapshot_tree
+
+    local victim=$(subvol_snapshot 3)   # snap-1: non-root real parent
+    local root=$(snap_root)
+    [[ $(snap_field $victim parent) != $root ]]
+
+    kvdb -c "update snapshots 0:$victim:0 parent=$root depth=1 skip[0]=0 skip[1]=0 skip[2]=0"
+
+    # expect=repair (FAILING until R3 lands): corroborate - if the claimed
+    # parent also claims the child, our pointer is stale -> replace with
+    # the real parent; if no corroboration, we're the only claimant ->
+    # set child.parent = us. The victim's ancestry is restored, so the
+    # full manifest (snap-1 included) must match.
+    skip_snaps=""
+    check_fsck repair
+}
+
+# R1: interior node orphaned - parent pointer zeroed while the real parent
+# still lists it. Fail-stop: EINVAL_snapshot_child_bad_parent (from the
+# real parent's child check) today. Every snapshot under the orphan loses
+# its view of older files until R1/R3 repairs it; once repaired, the full
+# manifest (snap-0/1/2 included) must match.
+test_orphan_node()
+{
+    setup_snapshot_tree
+
+    local leaf=$(subvol_snapshot 3)
+    local victim=$(snap_field $leaf parent)
+    (( victim != 0 ))
+
+    kvdb -c "update snapshots 0:$victim:0 parent=0"
+
+    # expect=repair (FAILING until R1/R3 lands): corroborate - the real
+    # parent still lists this node as a child, so restore parent = real
+    # parent (R3 path). R1's "become tree root" only fires when nobody
+    # claims it. The orphan's whole subtree regains ancestry, so the full
+    # manifest (snap-0/1/2 included) must match.
+    skip_snaps=""
+    check_fsck repair
+}
+
+# R6/I6: snapshot's subvol backref names a nonexistent subvolume (only the
+# subvolume key is gone; topology untouched). Fail-stop: ENOENT in
+# check_snapshot's subvol lookup.
+test_snapshot_to_missing_subvol()
+{
+    setup_snapshot_tree
+
+    kvdb -c "set subvolumes 0:4:0 deleted"
+
+    # expect=repair (FAILING until R6 lands): scan subvolumes for
+    # ->snapshot == us; the snapshot node's v.subvol backref is the most
+    # authoritative surviving record (H4), so reconstruct the subvol from
+    # it rather than clear toward condemnation - snap-2 carries unique
+    # data (data-2). Full manifest must match.
+    skip_snaps=""
+    check_fsck repair
+}
+
+# H3/H4 shape: snapshot's subvol backref stolen - points at a real
+# subvolume that belongs to a different node. Fail-stop:
+# EINVAL_snapshot_bad_subvol_flag (round-trip check).
+test_subvol_backref_stolen()
+{
+    setup_snapshot_tree
+
+    local victim=$(subvol_snapshot 4)
+
+    kvdb -c "update snapshots 0:$victim:0 subvol=2"
+
+    # expect=repair (FAILING until R6/H3-H4 lands): the stolen backref is
+    # the lie - scan for the real owner, restore its v.subvol; clear or fix
+    # the thief's. Both nodes' subvols must resolve correctly, so the full
+    # manifest must match.
+    skip_snaps=""
+    check_fsck repair
+}
+
+# I6 (other direction): subvolume points at a node that doesn't point
+# back. Fail-stop via the same round-trip check on the node that still
+# holds the real backref.
+test_dangling_subvol()
+{
+    setup_snapshot_tree
+
+    kvdb -c "update subvolumes 0:4:0 snapshot=$(snap_root)"
+
+    # expect=repair (FAILING until R6/I6 lands): the subvol's snapshot
+    # pointer is the lie - fix it to the node that actually holds the
+    # backref, or clear the stale holder's backref. The subvol must
+    # resolve to the correct snapshot, so the full manifest must match.
+    skip_snaps=""
+    check_fsck repair
+}
+
+# The tree root node itself gone: check_snapshot_trees deletes the
+# now-dangling tree key, every child of the root fail-stops on the missing
+# parent, and every key written before the first snapshot is stranded.
+# Ancestry is broken for the whole tree today; reconstruction must restore it.
+test_missing_root_node()
+{
+    setup_snapshot_tree
+
+    kvdb -c "set snapshots 0:$(snap_root):0 deleted"
+
+    # expect=repair (FAILING - hardest case): reconstruct the tree-root
+    # snapshot node from its surviving children. Pass-ordering trap:
+    # check_snapshot_trees deletes the now-dangling tree key first, then
+    # every child fail-stops on the missing parent in check_snapshot
+    # (pass 19) before reconstruction can run. The repair must precede
+    # that fail-stop, or the tree-key deletion must be withheld. Full
+    # manifest must match once the whole tree's ancestry is restored.
+    skip_snaps=""
+    check_fsck repair
+}
+
+# Main subvolume key gone (the fs root - what mounting resolves through).
+# Its snapshot node still carries the backref: check_snapshot fail-stops
+# on the missing subvolume; check_root would recreate it if we got there.
+test_missing_main_subvol()
+{
+    setup_snapshot_tree
+
+    kvdb -c "set subvolumes 0:1:0 deleted"
+
+    # expect=repair (FAILING - pass-ordering trap): check_root (pass 29)
+    # recreates the main subvol - the repair exists, it's downstream. But
+    # check_snapshot (pass 19) fail-stops on the missing subvol first.
+    # Flipping this needs check_snapshot to recreate the subvol inline or
+    # tolerate the missing backref until check_root runs. Full manifest
+    # must match once mount resolves through the recreated main subvol.
+    skip_snaps=""
+    check_fsck repair
+}
+
+# ── documented holes: enable as the hardening lands ──────────────────────
+
+# H2/R7: SUBVOL flag cleared, v.subvol still set. check_snapshot's
+# snapshot_should_not_have_subvol repair trusts the flag and clears
+# v.subvol - laundering the corruption into a dangling subvolume and,
+# eventually, condemnation of a live snapshot. The corroboration-based
+# repair (ask the subvolumes btree before clearing) is R7; enable then.
+test_subvol_flag_cleared()
+{
+    setup_snapshot_tree
+
+    local victim=$(subvol_snapshot 4)
+
+    kvdb -c "update snapshots 0:$victim:0 flags.subvol=0"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# H1/D1: deletion candidacy is single-entry bookkeeping. WILL_DELETE set
+# (SUBVOL cleared) on a snapshot whose subvolume is alive and well: today
+# fsck launders v.subvol away and delete_dead_snapshots condemns the
+# snapshot through the front door - data loss on the strength of one
+# corrupt flags field. D1 (cross-btree agreement before condemnation) is
+# the fix; this is its acceptance test.
+test_will_delete_live_subvol()
+{
+    setup_snapshot_tree
+
+    local victim=$(subvol_snapshot 4)
+
+    kvdb -c "update snapshots 0:$victim:0 will_delete=1 flags.subvol=0"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# I7/D3: NO_KEYS on a node that has keys. The startup finish path
+# tree-surgeries the node away, stranding its keys (the gondezee shape).
+# Enforcement is the sweep-completion proof (D3); enable then.
+test_no_keys_with_keys()
+{
+    setup_snapshot_tree
+
+    local victim=$(subvol_snapshot 4)
+
+    kvdb -c "update snapshots 0:$victim:0 no_keys=1"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# creation_parent: genealogy metadata, but live - deletion reparents
+# through it and the query ioctl exposes it. A dangling reference is
+# cleared to 0 by check_subvol (subvol_creation_parent_bad, autofix).
+test_creation_parent_dangling()
+{
+    setup_snapshot_tree
+
+    kvdb -c "update subvolumes 0:4:0 creation_parent=31337"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# ── second sweep (2026-07-10 evening): subvolume-flag repairs, deletion
+# guards, and the new hardening's fail-stops ─────────────────────────────
+
+# BCH_SUBVOLUME_UNLINKED set on a live subvolume: check_subvol deletes it
+# through the front door - the real subvolume-deletion pipeline runs from
+# fsck. The property under test is blast radius: exactly snap-2 dies,
+# everything else survives.
+test_unlinked_subvol()
+{
+    setup_snapshot_tree
+
+    kvdb -c "update subvolumes 0:4:0 unlinked=1"
+
+    skip_snaps="snap-2"
+    check_fsck repair
+}
+
+# SNAP flag cleared on a snapshot subvolume that isn't the tree's master:
+# subvol_not_master_and_not_snapshot sets it back. Pure flag repair, no
+# data movement.
+test_subvol_snap_flag_cleared()
+{
+    setup_snapshot_tree
+
+    kvdb -c "update subvolumes 0:4:0 snap=0"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# snapshot_tree.master_subvol pointing at a snapshot subvolume
+# (snapshot_tree_to_snapshot_subvol: repaired to the oldest non-snap
+# subvolume in the tree).
+test_tree_master_is_snapshot_subvol()
+{
+    setup_snapshot_tree
+
+    local tree=$(snap_field $(snap_root) tree)
+
+    kvdb -c "update snapshot_trees 0:$tree:0 master_subvol=4"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# Subvolume's fs_path_parent pointing at the wrong parent
+# (subvol_fs_path_parent_wrong in check_dirent_to_subvol, repaired from
+# the dirent that actually references it; subvolume_children entries
+# follow).
+test_subvol_fs_path_parent_wrong()
+{
+    setup_snapshot_tree
+
+    kvdb -c "update subvolumes 0:4:0 fs_path_parent=5"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# Stray subvolume_children entry claiming a parent the subvolume doesn't
+# have (subvol_children_bad: deleted). Complements
+# test_subvol_child_bit_missing, which tests the missing direction.
+test_subvol_children_stray()
+{
+    setup_snapshot_tree
+
+    kvdb -c "set subvolume_children 7:4:0 set"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# Interior-tombstone key migration: a DELETED node that retained a child
+# pointer (the repair-metadata contract from Kent's I1 commit) with keys
+# still at its id - bkey_in_deleted_interior_snapshot (autofix) migrates
+# them to the live descendant instead of dropping them. The migrated
+# exact-key here is snap-2's root inode (bi_subvol=4), landing in the
+# main branch; check_subvol's bi_subvol repair must then clean up the
+# cascade. The most data-motion of any repair under test.
+test_tombstone_key_migration()
+{
+    setup_snapshot_tree
+
+    local last_subvol=$((2 + NR_SNAPS - 1))
+    local victim=$(subvol_snapshot $last_subvol)
+    local parent=$(snap_field $victim parent)
+    local children=($(snap_array $parent children))
+
+    local other
+    for c in ${children[@]}; do
+	[[ $c != $victim ]] && other=$c
+    done
+
+    kvdb -c "update snapshots 0:$victim:0 deleted=1 flags.subvol=0 subvol=0 children[0]=$other" \
+	 -c "update snapshots 0:$parent:0 children[0]=$other children[1]=0" \
+	 -c "set subvolumes 0:$last_subvol:0 deleted"
+
+    skip_snaps="snap-$((NR_SNAPS - 1))"
+    check_fsck repair
+}
+
+# The gondezee-class guard, exercised directly: a NO_KEYS node that still
+# has data sectors accounted to it. The deletion finish must REFUSE
+# (bch2_snapshot_node_check_no_data -> EINVAL_snapshot_delete_with_data),
+# schedule check_allocations/check_inodes, and converge once the sweep
+# autofixes catch up - the data was condemned (we deleted the
+# subvolume), so it legitimately goes; the guard's job is making the
+# machine prove that before the node vanishes.
+test_no_keys_with_data()
+{
+    setup_snapshot_tree
+
+    # post-snapshot write, so sectors are accounted to snap-2's id exactly
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    dd if=/dev/zero of=/mnt/snap-2/big bs=1M count=2 oflag=direct
+    capture_state $MANIFEST
+    umount /mnt
+
+    local victim=$(subvol_snapshot 4)
+
+    kvdb -c "update snapshots 0:$victim:0 no_keys=1 flags.subvol=0 subvol=0" \
+	 -c "set subvolumes 0:4:0 deleted"
+
+    skip_snaps="snap-2"
+    check_fsck repair
+}
+
+# NO_KEYS on an interior node with two children: bch2_mark_snapshot demotes
+# NO_KEYS to the `deleted` table state but the node keeps BOTH children, so
+# bch2_snapshot_live_descendent() (snapshot.h:192) hits EBUG_ON(children[1])
+# - the gondezee migrate-keys repair's "deleted nodes are single-child"
+# invariant - two passes before the finish path is even reached. Debug build:
+# fsck crash. Production: silent mis-migration down one arbitrary branch.
+# expect=repair (FAILING - the documented unfixed crash): the coherence check
+# belongs in check_snapshot before the DELETED early-out, trigger
+# (DELETED|NO_KEYS) && children[1]; two live children -> revive (clear
+# NO_KEYS/WILL_DELETE), one live + one tombstone -> S2 normalize the child
+# pointer. Revive is full restoration, so the manifest must match.
+test_no_keys_two_children()
+{
+    setup_snapshot_tree
+
+    local leaf=$(subvol_snapshot 4)
+    local victim=$(snap_field $leaf parent)
+    local children=($(snap_array $victim children))
+    [[ -n ${children[1]} && ${children[1]} != 0 ]]
+
+    kvdb -c "update snapshots 0:$victim:0 no_keys=1"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# expect=repair (FAILING until the R6 scan + revive lands): the subvol
+# key (subvol 4) still points at the victim - it IS the corroborating
+# record the node's own cleared backref can't provide. Scan subvolumes
+# for ->snapshot == victim, find subvol 4, restore v.subvol + the SUBVOL
+# flag, and clear NO_KEYS (revive). The node is snap-2's, fully restored,
+# so the full manifest (snap-2 included) must match.
+test_subvol_to_dead_node_no_backref()
+{
+    setup_snapshot_tree
+
+    local victim=$(subvol_snapshot 4)
+
+    kvdb -c "update snapshots 0:$victim:0 no_keys=1 flags.subvol=0 subvol=0"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# ── additional repair-oracle tests (coverage gaps from the I/R/error walk) ─
+
+# I6 duplicate: one snapshot referenced by two subvolumes. fsck round-trips
+# the snapshot's stored v.subvol backref (snap -> subvol 4) but never scans
+# for a SECOND subvol pointing at the same snapshot, so a cloned subvol 5
+# sails through - and deleting either subvol would condemn the other's data.
+# This is format.h I6's documented undetected hole.
+test_two_subvols_one_snapshot()
+{
+    setup_snapshot_tree
+
+    # clone subvol 4 (snap-2) as a second subvol -> same snapshot node
+    local snap=$(subvol_snapshot 4)
+    local inode=$(subvol_field 4 inode)
+    local fparent=$(subvol_field 4 fs_path_parent)
+
+    kvdb -c "set subvolumes 0:5:0 subvolume snapshot=$snap inode=$inode fs_path_parent=$fparent snap=1"
+
+    # expect=repair (FAILING): the subvolumes-btree scan (R6's helper) must
+    # find the duplicate and clear the one the snapshot doesn't backref
+    # (subvol 5). Full manifest must match (subvol 4 / snap-2 intact).
+    skip_snaps=""
+    check_fsck repair
+}
+
+# R2 three-children conflict: a node claims a parent whose children[] is
+# already full (binary tree, 2-children max) - R2's "install in free slot"
+# has no slot. Orphan snap-2 from its real parent, reparent it to a full
+# interior so the install is attempted and overflows.
+test_three_children_conflict()
+{
+    setup_snapshot_tree
+
+    local N=$(subvol_snapshot 4)			# snap-2's node
+    local nreal=$(snap_field $N parent)
+    local nreal_c=($(snap_array $nreal children))
+    local other
+    for c in ${nreal_c[@]}; do [[ $c != $N ]] && other=$c; done
+
+    # a 2-child interior that isn't snap-2's real parent
+    local P
+    for id in $(all_snap_ids); do
+	local c=($(snap_array $id children))
+	if [[ ${c[1]:-0} != 0 && $id != $nreal ]]; then P=$id; break; fi
+    done
+    [[ -n $P ]]
+
+    kvdb -c "update snapshots 0:$nreal:0 children[0]=$other children[1]=0" \
+	 -c "update snapshots 0:$N:0 parent=$P depth=$(( $(snap_field $P depth) + 1 )) skip[0]=0 skip[1]=0 skip[2]=0"
+
+    # expect=repair (FAILING): N can't be installed (parent full) - safe
+    # re-home is R1 become-tree-root for snap-2 (ancestry lost). snap-2
+    # stays skipped; everything else intact.
+    skip_snaps="snap-2"
+    check_fsck repair
+}
+
+# R1 become-tree-root: parent points at a nonexistent id AND no node claims
+# this child (vs test_orphan_node, where the real parent still claims it ->
+# R3 restore). Orphan snap-2 and reparent it to garbage.
+test_orphan_become_tree_root()
+{
+    setup_snapshot_tree
+
+    local N=$(subvol_snapshot 4)			# snap-2's node
+    local nreal=$(snap_field $N parent)
+    local nreal_c=($(snap_array $nreal children))
+    local other
+    for c in ${nreal_c[@]}; do [[ $c != $N ]] && other=$c; done
+
+    kvdb -c "update snapshots 0:$nreal:0 children[0]=$other children[1]=0" \
+	 -c "update snapshots 0:$N:0 parent=31337 depth=0 skip[0]=0 skip[1]=0 skip[2]=0"
+
+    # expect=repair (FAILING until R1's become-root lands): nobody claims N,
+    # its parent is garbage -> become tree root (parent=0, depth=0, skip=0,
+    # snapshot_tree_ptr_repair). snap-2's ancestry is lost, so it stays
+    # skipped; everything else intact.
+    skip_snaps="snap-2"
+    check_fsck repair
+}
+
+# subvol_loop: a cycle in the fs_path_parent chain (A->B, B->A).
+# check_subvolume_structure (pass 36) follows fs_path_parent chains and
+# must detect the cycle. walk_subvols uses directory names, not
+# fs_path_parent, so the data manifest is unaffected by the reattach.
+test_subvol_fs_path_parent_cycle()
+{
+    setup_snapshot_tree
+
+    kvdb -c "update subvolumes 0:3:0 fs_path_parent=4" \
+	 -c "update subvolumes 0:4:0 fs_path_parent=3"
+
+    # expect=repair (FAILING until cycle detection lands): break the cycle
+    # (reattach one to root). Full manifest must match.
+    skip_snaps=""
+    check_fsck repair
+}
+
+# snapshot_tree_to_missing_snapshot: the tree key's root_snapshot names a
+# nonexistent id (vs tree_wrong_root, which points at an existing wrong
+# node).
+test_tree_to_missing_snapshot()
+{
+    setup_snapshot_tree
+
+    local tree=$(snap_field $(subvol_snapshot 1) tree)
+    kvdb -c "update snapshot_trees 0:$tree:0 root_snapshot=31337"
+
+    # expect=repair (FAILING): the tree key is dangling - re-point it at the
+    # real root or drop it and fix the root's tree ptr. Full manifest must
+    # match (the real root node is still there).
+    skip_snaps=""
+    check_fsck repair
+}
+
+# (test_child_duplicate removed: the snapshot tree is built by
+# bch2_snapshot_node_create_children, which only ever makes 2-child
+# interiors - it refuses to add to a parent that already has children
+# (snapshot.c:727) - so there's no 1-child interior to give a free slot,
+# and the finder came up empty. The semantic duplicate - two parents
+# listing the same child - is also the same R3 repair as test_wrong_parent
+# (child_bad_parent from the non-owning parent), so it's covered.)
+
+# ebc9b05 DELETED variant: SUBVOL + DELETED with the subvol retained (vs
+# no_keys_with_keys, which is SUBVOL + NO_KEYS). The subvol corroborates ->
+# clear DELETED (revive). Inject deleted=1 WITHOUT clearing flags.subvol.
+test_subvol_deleted_flag_conflict()
+{
+    setup_snapshot_tree
+
+    local victim=$(subvol_snapshot 4)
+
+    kvdb -c "update snapshots 0:$victim:0 deleted=1"
+
+    # expect=repair: subvol 4 corroborates -> clear DELETED/WILL_DELETE
+    # (revive). Full manifest must match.
+    skip_snaps=""
+    check_fsck repair
+}
+
+# ebc9b05 branch (b): SUBVOL + NO_KEYS but the subvol is GONE -> clear SUBVOL
+# (vs no_keys_with_keys, where the subvol corroborates -> revive). Inject
+# no_keys=1 retaining flags.subvol, and delete the subvol key.
+test_subvol_no_keys_subvol_gone()
+{
+    setup_snapshot_tree
+
+    local victim=$(subvol_snapshot 4)
+
+    kvdb -c "update snapshots 0:$victim:0 no_keys=1" \
+	 -c "set subvolumes 0:4:0 deleted"
+
+    # expect=repair: SUBVOL + NO_KEYS + subvol gone -> the SUBVOL flag is the
+    # lie -> clear it; the node is then condemned. snap-2's subvol is gone,
+    # so snap-2 stays skipped.
+    skip_snaps="snap-2"
+    check_fsck repair
+}
+
+# snapshot_should_not_have_subvol, subvol-gone variant: SUBVOL flag clear +
+# v.subvol still set + the subvol GONE -> clear v.subvol (vs
+# subvol_flag_cleared, where the subvol is live -> restore SUBVOL).
+test_subvol_backref_gone()
+{
+    setup_snapshot_tree
+
+    local victim=$(subvol_snapshot 4)
+
+    kvdb -c "update snapshots 0:$victim:0 flags.subvol=0" \
+	 -c "set subvolumes 0:4:0 deleted"
+
+    # expect=repair: flags say no subvol, v.subvol says yes, subvol gone ->
+    # v.subvol is the lie -> clear it; the node is then condemned. snap-2
+    # stays skipped.
+    skip_snaps="snap-2"
+    check_fsck repair
+}
+
+# ── live-mount deletion tests: what the RUNTIME path actually does ───────
+# check_snapshots is recovery pass 19, PASS_ALWAYS - it runs on EVERY
+# mount, before the deletion worker (pass 21 declares it a dependency). So
+# an offline injection meets pass 19 first on the runtime mount, and the
+# worker is only reached for corruption pass 19 can't see. Two outcomes:
+#   - pass 19 REPAIRS it (corroboration or R4 splice) -> mount ok, data safe
+#     (will_delete_live_subvol, tombstone_child_repair)
+#   - pass 19 can't see it (backref cleared) -> worker runs, D1's job
+#     (will_delete_backref_cleared)
+
+# expect=repair at mount (FAILING until R4 makes tombstone-child an
+# autofix-at-mount): a live interior node with a DELETED tombstone child
+# is an interrupted splice; pass 19 (check_snapshots, PASS_ALWAYS) runs at
+# every mount and should splice the tombstone out (R4) before bringing the
+# fs online RW, not refuse. Safe runtime repair is the goal - data is
+# protected by fixing the topology, not by refusing to mount. The mount
+# must succeed and the surviving snaps' data must be there (snap-2 is the
+# tombstoned victim, spliced out). See
+# bcachefs-tools/.claude/2026-07-10-snapshot-deletion-audit.md.
+test_runtime_tombstone_child_repair()
+{
+    setup_snapshot_tree
+
+    local last_subvol=$((2 + NR_SNAPS - 1))
+    local victim=$(subvol_snapshot $last_subvol)
+
+    # tombstone the leaf, parent pointer left in place (no splice)
+    kvdb -c "update snapshots 0:$victim:0 deleted=1 flags.subvol=0 subvol=0" \
+	 -c "set subvolumes 0:$last_subvol:0 deleted"
+
+    # the mount must succeed: pass 19 autofixes the tombstone child (R4)
+    # before bringing the fs online RW.
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt || {
+	echo "TEST FAILED: mount refused on tombstone-child corruption (expected R4 autofix-at-mount)"
+	exit 1
+    }
+    [[ -f /mnt/snap-0/data-0 && -f /mnt/snap-1/data-1 ]] || {
+	echo "TEST FAILED: surviving snaps lost data after tombstone-child repair"
+	umount /mnt
+	exit 1
+    }
+    umount /mnt
+
+    # the repaired state: the rest of the tree matches the reference
+    # (snap-2, the tombstoned victim, is spliced out)
+    skip_snaps="snap-$((NR_SNAPS - 1))"
+    verify_fs_state must-mount
+}
+
+# H1 in its true runtime form - THE D1 ACCEPTANCE TEST (expected to FAIL
+# until cross-btree condemnation lands in the delete collector): a
+# corrupt WILL_DELETE with SUBVOL cleared on a live subvolume's node,
+# followed by a plain mount. No fsck in the path: the deletion worker is
+# the only line of defense, and today it trusts the flags and sweeps a
+# live subvolume's keys. With D1, the collector's subvolumes-btree scan
+# refuses the condemnation.
+test_runtime_will_delete_live_subvol()
+{
+    setup_snapshot_tree
+
+    local victim=$(subvol_snapshot 4)
+
+    kvdb -c "update snapshots 0:$victim:0 will_delete=1 flags.subvol=0"
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # kick a real deletion so the worker definitely runs and examines the
+    # corrupt candidate in the same pass
+    bcachefs subvolume delete /mnt/snap-0
+    sleep 10
+
+    # snap-2 is a live subvolume: its data must still be there
+    [[ -f /mnt/snap-2/data-2 ]] || {
+	echo "TEST FAILED: runtime deletion condemned a live subvolume's snapshot (H1/D1)"
+	umount /mnt
+	exit 1
+    }
+    umount /mnt
+
+    skip_snaps="snap-0"
+    verify_fs_state must-mount
+}
+
+# THE D1 ACCEPTANCE TEST (expected to FAIL until cross-btree condemnation
+# lands): like runtime_will_delete_live_subvol, but the v.subvol backref
+# is also cleared - the node's own record carries no trace of the live
+# subvolume, so the node-local transition guards can't see it. Only
+# asking the subvolumes btree ("does anything point here?") catches it.
+test_runtime_will_delete_backref_cleared()
+{
+    setup_snapshot_tree
+
+    local victim=$(subvol_snapshot 4)
+
+    kvdb -c "update snapshots 0:$victim:0 will_delete=1 flags.subvol=0 subvol=0"
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    bcachefs subvolume delete /mnt/snap-0
+    sleep 10
+
+    [[ -f /mnt/snap-2/data-2 ]] || {
+	echo "TEST FAILED: runtime deletion condemned a live subvolume with cleared backref (D1)"
+	umount /mnt
+	exit 1
+    }
+    umount /mnt
+
+    skip_snaps="snap-0"
+    verify_fs_state must-mount
+}
+
+# ── bch_snapshot.state codeword cases ────────────────────────────────────
+#
+# The state field replaces the legacy flag bits as the license for
+# destructive transitions. Every legal state is a random codeword
+# (weight and pairwise Hamming distance >= 14, enforced by static_asserts
+# in fs/snapshots/format.h), and new code dual-writes: the legacy bits are
+# kept mirrored, cumulatively (deleted implies will_delete and no_keys),
+# so old kernels keep working and - the property these tests exist for -
+# the two encodings corroborate each other. A stomped state field is
+# repairable from the bits, stomped bits from the state.
+#
+# These cases require tools + kernel with the state field (the
+# snapshot-hardening format change); until its validate/repair side lands
+# they fail per the suite's assert-the-full-repair convention. The legacy
+# bit names below use the post-rename kvdb spellings (*_obsolete).
+
+STATE_live=$((0x757c47a2))
+STATE_deleted=$((0x7cd4a225))
+
+# state stomped with a non-codeword value on a live subvol leaf. The
+# codeword property guarantees corruption lands here, not on a legal
+# state - so this is the case fsck must see (validate or check_snapshots,
+# either way before the key-level passes run) and repair from the intact
+# legacy bits. Nothing may be lost.
+test_state_garbage()
+{
+    setup_snapshot_tree
+
+    local victim=$(subvol_snapshot 4)
+
+    kvdb -c "update snapshots 0:$victim:0 state=$((0xdeadbeef))"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# state wiped to zero on a new-version fs. Zero is deliberately not a
+# codeword: on a pre-upgrade key it means "decode the legacy bits", but
+# once the fs version says every key was written with a state, a zero is
+# a detectable wipe. Repair source: the mirrored legacy bits (here:
+# subvol bit only -> live).
+test_state_zeroed()
+{
+    setup_snapshot_tree
+
+    local victim=$(subvol_snapshot 4)
+
+    kvdb -c "update snapshots 0:$victim:0 state=0"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# The mirror image: legacy bits stomped to the cumulative 'deleted'
+# encoding while state still says live and the subvolumes btree still
+# points at the node. Two corroborating witnesses against one lying
+# encoding - fsck must side with live and rewrite the bits. Under
+# bits-only trust (the old world) this injection swept a live
+# subvolume's keys.
+test_state_bits_disagree()
+{
+    setup_snapshot_tree
+
+    local victim=$(subvol_snapshot 4)
+
+    kvdb -c "update snapshots 0:$victim:0 will_delete_obsolete=1 deleted_obsolete=1 no_keys_obsolete=1 flags.subvol_obsolete=0"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# The nightmare shape: state is a LEGAL codeword - deleted - on a node
+# the legacy bits and the subvolumes btree both call live. The Hamming
+# properties can't help (this is a targeted lie, not bit rot); only
+# corroboration can: bits disagree AND a live subvolume points here, so
+# the deletion license is refused and state repaired to live. The data
+# assertion is the entire point - a table-dead node's keys must not be
+# swept before check_snapshots gets to rule on the disagreement.
+test_state_wrong_codeword()
+{
+    setup_snapshot_tree
+
+    local victim=$(subvol_snapshot 4)
+
+    kvdb -c "update snapshots 0:$victim:0 state=$STATE_deleted"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+main "$@"
