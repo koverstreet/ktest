@@ -17,7 +17,7 @@ dump_copygc_debug()
 
 pressure_run_count()
 {
-    awk -F '\t' '$1 == "pressure run count:" { print $2; exit }' \
+    awk '$1 == "pressure" && $2 == "run" && $3 == "count:" { print $4; exit }' \
 	/sys/fs/bcachefs/*/internal/copy_gc_wait
 }
 
