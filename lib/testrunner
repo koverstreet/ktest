@@ -16,6 +16,23 @@ export PATH=$PATH:/root/.cargo/bin
 ktest_dir="/host/$ktest_dir"
 ktest_tmp="/host/$ktest_tmp"
 ktest_out="/host/$ktest_out"
+. "$ktest_dir/lib/test-result.sh"
+
+ktest_finish()
+{
+    local ret=$?
+
+    trap - EXIT
+    pkill -P $$ >/dev/null || true
+    ktest_finish_guest "$ret"
+    exit "$ret"
+}
+
+# Every regular runner exit is terminal: the status is written before the
+# marker and noninteractive guests then power off. Intentional sysrq reboots
+# never execute this trap; their next boot keeps the same default failure
+# status until it reaches a real terminal verdict.
+trap ktest_finish EXIT
 # ktest_deps_dir comes through as a host-side path. CI workers set it
 # explicitly; interactive runs fall back to the host user's deps cache
 # so repo clones are shared with the host and persist across runs
@@ -105,6 +122,9 @@ if [[ -s /proc/vmcore ]]; then
     echo "Collecting crash dump..."
     cp --sparse=always /proc/vmcore "$ktest_out/vmcore" || true
     sync
+    # Crashdump collection is an intentional shutdown path, not a completed
+    # test. Leave start_vm's default failure status in place.
+    trap - EXIT
     poweroff
 fi
 
@@ -121,7 +141,6 @@ EXPECTED_REBOOT=0
 
 if [[ $NR_REBOOTS != $EXPECTED_REBOOT ]]; then
     echo "UNEXPECTED REBOOT: got $NR_REBOOTS expected $EXPECTED_REBOOT"
-    echo "TEST FAILED"
     exit 1
 fi
 
@@ -187,8 +206,7 @@ check_taint()
 
     if [[ $taint != 0 && ! $ktest_allow_taint ]]; then
 	echo "Failure because kernel tainted - check log for warnings"
-	echo "TEST FAILED"
-	exit 0
+	return 1
     fi
 }
 
@@ -206,7 +224,6 @@ uname -r
 
 if [[ -z $ktest_tests ]] && ! $ktest_tests_unknown; then
     echo "No tests found"
-    echo "TEST FAILED"
     exit 1
 fi
 
@@ -214,11 +231,9 @@ ktest_tests=$(echo $ktest_tests)
 
 if [[ $ktest_tests = "none" ]]; then
     echo "No tests to run"
-    echo "TEST FAILED"
-    exit 0
+    exit 1
 fi
 
-trap 'pkill -P $$ >/dev/null' EXIT
 cd /root
 
 # ktest_tmp here is testrunner's /host/-rewritten *host* tmpdir; the
@@ -257,8 +272,4 @@ check_taint
 echo -n "Kernel version: "
 uname -r
 
-if [[ $ret = 0 ]]; then
-    echo "TEST SUCCESS"
-else
-    echo "TEST FAILED"
-fi
+exit "$ret"
