@@ -73,18 +73,51 @@ static void child_handler(int sig)
 	exit(EXIT_FAILURE);
 }
 
+/*
+ * Timeout handling escalates: the first alarm injects the FAILED TIMEOUT
+ * marker into the guest console — a live guest echoes it back through the
+ * output stream, landing it in the logs in order, where the -S/-F exit
+ * logic sees it.  But a wedged guest (e.g. a reclaim-deadlocked kernel:
+ * console spewing workqueue lockups, nothing reading stdin) echoes
+ * nothing, and the supervisor would previously wait on it forever.  So
+ * give the echo a grace period, then SIGTERM the child (the preemptively
+ * written "TEST FAILED" status stands and SIGCHLD ends the supervisor),
+ * then SIGKILL if even that doesn't stick.
+ */
+static volatile sig_atomic_t timeout_stage;
+
 static void alarm_handler(int sig)
 {
 	char *msg = mprintf("========= FAILED TIMEOUT %s in %lus\n",
 			    current_test ?: "(no test)", timeout);
 
-	if (write(childfd, msg, strlen(msg)) != strlen(msg))
-		die("write error in alarm handler");
+	switch (timeout_stage++) {
+	case 0:
+		if (write(childfd, msg, strlen(msg)) == (ssize_t) strlen(msg)) {
+			alarm(30);
+			break;
+		}
+		/* Console not even accepting input: skip straight to kill. */
+		timeout_stage++;
+		/* fallthrough */
+	case 1:
+		fputs(msg, stderr);
+		fputs("guest did not echo timeout marker, killing it\n", stderr);
+		kill(child, SIGTERM);
+		alarm(10);
+		break;
+	default:
+		fputs("child ignored SIGTERM, sending SIGKILL\n", stderr);
+		kill(child, SIGKILL);
+		alarm(10);
+		break;
+	}
 	free(msg);
 }
 
 static void set_timeout(unsigned long new_timeout)
 {
+	timeout_stage = 0;
 	timeout = new_timeout;
 	alarm(new_timeout);
 }
@@ -185,6 +218,11 @@ static FILE *popen_with_pid(char *argv[], pid_t *child)
 	}
 
 	childfd = pipefd[1];
+	/* The alarm handler writes to this from signal context; a wedged
+	 * guest can leave the console pipe full, and a blocking write would
+	 * hang the handler before it can escalate to killing the child. */
+	if (fcntl(childfd, F_SETFL, O_NONBLOCK))
+		die("fcntl error: %m");
 
 	FILE *childf = fdopen(pipefd[0], "r");
 	if (!childf)
