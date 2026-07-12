@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+#
+# Journal reclaim under memory exhaustion.  In the swap-deadlock
+# reproductions, bch-reclaim/<dev> (journal reclaim) showed up blocked
+# in the six_lock convoy alongside the write-path kworkers — this test
+# makes journal reclaim the protagonist: a storm of tiny fsync'd
+# transactions forces continuous journal writes and journal reclaim
+# (btree node writeback to free journal space), while the unkillable
+# eater denies all of it memory.
+#
+# A journal-reclaim path that allocates carelessly under pressure, or a
+# flush-ordering scheme that lets reclaim depend on a stalled flush,
+# wedges here: hung_task panics within ~30s, OOM "System is deadlocked
+# on memory", or livelock (run through lib/supervisor).  Particularly
+# relevant to ordered-flush/journal changes (desktop mode): this is the
+# profile where journal-pin dependencies meet memory starvation.
+#
+#   FSYNC_TEST_MEM=512M       VM memory
+#   FSYNC_TEST_CPUS=2         vCPUs
+#   FSYNC_TEST_ROUNDS=3       pressure rounds per boot
+#   FSYNC_TEST_DURATION=120   seconds per round
+#   FSYNC_TEST_WORKERS=4      parallel fsync loops
+#   FSYNC_TEST_NO_KBUILD=1    reuse a prebuilt kernel
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/memory-pressure-libs.sh
+
+require-kernel-config DETECT_HUNG_TASK
+
+config-mem ${FSYNC_TEST_MEM:-512M}
+config-cpus ${FSYNC_TEST_CPUS:-2}
+config-scratch-devs 2G
+config-timeout 900
+
+[[ -n ${FSYNC_TEST_NO_KBUILD:-} ]] && config-no-kbuild
+
+test_fsync_reclaim_pressure()
+{
+    set_watchdog 700
+
+    local dev=${ktest_scratch_dev[0]}
+    echo "=== $(grep MemTotal /proc/meminfo), $(nproc) cpus ==="
+
+    run_quiet "" bcachefs format -f "$dev"
+    mount -t bcachefs "$dev" /mnt
+
+    build_eater
+
+    # No swap: the default overcommit heuristic would refuse an mmap
+    # bigger than RAM outright.  The eater must be allowed to overcommit
+    # so the pressure comes from page touches, not the commit limit.
+    echo 1 > /proc/sys/vm/overcommit_memory
+
+    hung_task_panic_on
+
+    # The fsync storm: parallel workers doing create → 4K write → fsync
+    # → rename → unlink, each cycle a couple of journalled transactions
+    # plus a journal flush.  Directory churn keeps the interior btree
+    # nodes hot so journal reclaim has real btree writeback to do.
+    local workers=${FSYNC_TEST_WORKERS:-4}
+    local pids=() w
+    for (( w = 0; w < workers; w++ )); do
+	mkdir -p /mnt/fsync$w
+	(
+	    trap - ERR
+	    set +e
+	    i=0
+	    while true; do
+		dd if=/dev/zero of=/mnt/fsync$w/tmp bs=4K count=1 \
+		   conv=fsync 2>/dev/null
+		mv /mnt/fsync$w/tmp /mnt/fsync$w/f$((i % 50))
+		i=$((i + 1))
+	    done
+	) &
+	pids+=($!)
+    done
+
+    start_mem_telemetry
+
+    local eat_mb=${FSYNC_TEST_EAT_MB:-$(eater_squeeze_mb)}
+    local duration=${FSYNC_TEST_DURATION:-120}
+    local rounds=${FSYNC_TEST_ROUNDS:-3}
+    local round
+    for (( round = 1; round <= rounds; round++ )); do
+	echo "=== round $round/$rounds: eater ${eat_mb}M for ${duration}s ==="
+	/tmp/eater "$eat_mb" "$duration" || {
+	    stop_mem_telemetry
+	    echo "eater failed"
+	    return 1
+	}
+	sleep 5
+    done
+
+    stop_mem_telemetry
+    local p
+    for p in "${pids[@]}"; do
+	kill $p 2>/dev/null || true
+	wait $p 2>/dev/null || true
+    done
+
+    hung_task_panic_off
+
+    sync
+    rm -rf /mnt/fsync*
+    umount /mnt
+
+    mount -t bcachefs -o fsck,ro "$dev" /mnt
+    umount /mnt
+
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+main "$@"
