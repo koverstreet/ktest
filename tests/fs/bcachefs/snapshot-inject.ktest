@@ -856,6 +856,77 @@ test_unlinked_subvol()
     check_fsck repair
 }
 
+# fsck across an in-flight deletion. Deleting a subvolume with
+# auto_snapshot_deletion off runs the real front half of the pipeline -
+# unlink, tombstone, will_delete with the backref retained as testimony -
+# and stops before delete_dead_snapshots, leaving on disk exactly what a
+# crash mid-deletion leaves. This is a legitimate state, not corruption:
+# fsck must not strip the backref (should_not_have_subvol once did, and
+# the collector then went fs_inconsistent -> emergency-RO on the state
+# fsck itself created, wedging the pair forever), and since
+# delete_dead_snapshots runs in fsck, the deletion must simply complete:
+# tombstone and node reaped, second fsck clean.
+#
+# check_fsck doesn't fit here: it requires fsck to detect corruption, and
+# this state isn't corruption. fsck may exit 0 or 1 (the field-only
+# obsolete-flag sync counts a fix against the real set_deleted state,
+# which writes SUBVOL_OBSOLETE=0 with the backref retained); anything
+# else is the trap.
+test_fsck_inflight_deletion()
+{
+    setup_snapshot_tree
+
+    mount -t bcachefs -o noauto_snapshot_deletion ${ktest_scratch_dev[0]} /mnt
+    bcachefs subvolume delete /mnt/snap-2
+    umount /mnt
+
+    # kvdb get prints raw state values (name rendering not yet wired);
+    # codewords from snapshots/format.h:
+    local STATE_S_WILL_DELETE=$((0x3316a8d2))
+    local STATE_V_DELETED=$((0x3c6b2d4c))
+
+    # Confirm the real pipeline left the in-flight state (the deletion work
+    # is async - umount must have flushed it, or we're testing nothing):
+    if [[ $(subvol_field 4 state) != $STATE_V_DELETED ]]; then
+	echo "TEST FAILED: expected a deleted-state tombstone for subvol 4, got '$(subvol_field 4 state)'"
+	exit 1
+    fi
+    local snapid=$(subvol_snapshot 4)
+    if [[ $(snap_field $snapid state) != $STATE_S_WILL_DELETE ]]; then
+	echo "TEST FAILED: expected snapshot $snapid in will_delete, got '$(snap_field $snapid state)'"
+	exit 1
+    fi
+
+    local rc1=0
+    bcachefs fsck -y ${ktest_scratch_dev[0]} || rc1=$?
+    echo "fsck -y exited $rc1"
+    if (( rc1 > 1 )); then
+	echo "TEST FAILED: fsck errored on a legitimate in-flight deletion"
+	exit 1
+    fi
+
+    # Deletion must have completed, not wedged:
+    if [[ -n $(subvol_field 4 state) ]]; then
+	echo "TEST FAILED: tombstone subvolume survived fsck - deletion did not complete"
+	exit 1
+    fi
+    if [[ $(snap_field $snapid state) == will_delete ]]; then
+	echo "TEST FAILED: snapshot node still will_delete after fsck"
+	exit 1
+    fi
+
+    local rc2=0
+    bcachefs fsck -n ${ktest_scratch_dev[0]} || rc2=$?
+    echo "second fsck -n exited $rc2"
+    if (( rc2 != 0 )); then
+	echo "TEST FAILED: errors remain after in-flight deletion completed"
+	exit 1
+    fi
+
+    skip_snaps="snap-2"
+    verify_fs_state must-mount
+}
+
 # SNAP flag cleared on a snapshot subvolume that isn't the tree's master:
 # subvol_not_master_and_not_snapshot sets it back. Pure flag repair, no
 # data movement.
