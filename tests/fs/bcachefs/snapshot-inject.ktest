@@ -1385,6 +1385,38 @@ test_state_garbage()
     check_fsck repair
 }
 
+# Single-bit flip of a snapshot state codeword. The codewords are >= 14
+# bits apart, so a 1-bit corruption is uniquely decodable back to its
+# origin (here: live) - fsck corrects it via nearest-codeword decode,
+# autofix, and nothing is lost. snap_field returns the raw value, so
+# flipping bit 0 corrupts whatever the live codeword actually is.
+test_state_single_bitflip()
+{
+    setup_snapshot_tree
+
+    local victim=$(subvol_snapshot 4)
+    local flipped=$(( $(snap_field $victim state) ^ 1 ))
+
+    kvdb -c "update snapshots 0:$victim:0 state=$flipped"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# Single-bit flip of a subvolume state codeword; same nearest-codeword
+# correction on the subvolumes btree.
+test_subvol_state_single_bitflip()
+{
+    setup_snapshot_tree
+
+    local flipped=$(( $(subvol_field 4 state) ^ 1 ))
+
+    kvdb -c "update subvolumes 0:4:0 state=$flipped"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
 # state wiped to zero on a new-version fs. Zero is deliberately not a
 # codeword: on a pre-upgrade key it means "decode the legacy bits", but
 # once the fs version says every key was written with a state, a zero is
