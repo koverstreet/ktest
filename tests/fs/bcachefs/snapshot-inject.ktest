@@ -38,9 +38,10 @@
 #
 # Injections are per-key-valid: keys failing bch2_bkey_validate are simply
 # dropped by the read path, so there is nothing to inject there (and the
-# write path would refuse them anyway). Snapshot flag bits are written by
-# name (will_delete/deleted/no_keys; the SUBVOL bit as flags.subvol, since
-# the subvol *field* owns the bare name) and get decodes them.
+# write path would refuse them anyway). Snapshot/subvolume states are
+# injected through the state field by value name (state=will_delete; raw
+# codewords also parse, for garbage injection); the legacy flag bits are
+# obsolete and never touched.
 #
 # No bcachefs_test_end_checks: these tests intentionally stamp error
 # counters.
@@ -294,12 +295,14 @@ check_fsck()
 
 # kvdb round-trip on a healthy fs: field update, key create, key delete;
 # fsck must then run clean. Catches tool regressions before they show up
-# as confusing injection-test failures. The scratch node is grafted and
-# torn down fully linked, each half within a single kvdb invocation:
-# check_snapshots runs at every fs open, and a half-linked node
-# fail-stops every open after it (as it should). The old version also
-# picked scratch = root-5, which *collided with a live node id* - ids
-# allocate downward, so root-5 is mid-tree; pick below the lowest id.
+# as confusing injection-test failures.
+#
+# The create/read/delete round-trip happens within a single kvdb
+# invocation: validation is per-key, but recovery passes run at every fs
+# open, so a scratch node that never survives to an open needs no
+# cross-key consistency (no linking, no subvol migration). The scratch id
+# is picked below the lowest live id - ids allocate downward, so root-5
+# is mid-tree and collides.
 test_kvdb_sanity()
 {
     setup_snapshot_tree
@@ -310,17 +313,15 @@ test_kvdb_sanity()
     kvdb -c "update snapshots 0:$root:0 btime.lo=42"
     [[ $(kvdb -c "get snapshots 0:$root:0" | sed -n 's/^ *lo: //p' | head -1) == 42 ]]
 
-    # graft a scratch leaf under snap-2's node (a leaf: children[] free)
     local leaf=$(subvol_snapshot 4)
     local depth=$(snap_field $leaf depth)
     local tree=$(snap_field $leaf tree)
     local scratch=$(( $(all_snap_ids | head -1) - 5 ))
 
-    kvdb -c "set snapshots 0:$scratch:0 snapshot parent=$leaf tree=$tree depth=$((depth + 1))" \
-	 -c "update snapshots 0:$leaf:0 children[0]=$scratch"
-    [[ $(snap_field $scratch parent) == $leaf ]]
-    kvdb -c "update snapshots 0:$leaf:0 children[0]=0" \
-	 -c "set snapshots 0:$scratch:0 deleted"
+    local out=$(kvdb -c "set snapshots 0:$scratch:0 snapshot parent=$leaf tree=$tree depth=$((depth + 1)) state=live" \
+		     -c "get snapshots 0:$scratch:0" \
+		     -c "set snapshots 0:$scratch:0 deleted")
+    [[ $(sed -n 's/^ *parent: //p' <<< "$out" | head -1) == $leaf ]]
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
 
@@ -482,7 +483,7 @@ test_stranded_keys()
 	[[ $c != $victim ]] && other=$c
     done
 
-    kvdb -c "update snapshots 0:$victim:0 deleted=1 flags.subvol=0 subvol=0" \
+    kvdb -c "update snapshots 0:$victim:0 state=deleted subvol=0" \
 	 -c "update snapshots 0:$parent:0 children[0]=$other children[1]=0" \
 	 -c "set subvolumes 0:$last_subvol:0 deleted"
 
@@ -566,7 +567,7 @@ test_tombstoned_child()
     local last_subvol=$((2 + NR_SNAPS - 1))
     local victim=$(subvol_snapshot $last_subvol)
 
-    kvdb -c "update snapshots 0:$victim:0 deleted=1 flags.subvol=0 subvol=0" \
+    kvdb -c "update snapshots 0:$victim:0 state=deleted subvol=0" \
 	 -c "set subvolumes 0:$last_subvol:0 deleted"
 
     # expect=repair (FAILING until R4 lands): splice the tombstone out of
@@ -777,18 +778,16 @@ test_missing_main_subvol()
 
 # ── documented holes: enable as the hardening lands ──────────────────────
 
-# H2/R7: SUBVOL flag cleared, v.subvol still set. check_snapshot's
-# snapshot_should_not_have_subvol repair trusts the flag and clears
-# v.subvol - laundering the corruption into a dangling subvolume and,
-# eventually, condemnation of a live snapshot. The corroboration-based
-# repair (ask the subvolumes btree before clearing) is R7; enable then.
-test_subvol_flag_cleared()
+# H2/R7: v.subvol cleared on a live leaf whose subvolume is alive and
+# still points at it. The subvolumes-btree scan finds the claimant and
+# restores the backref (snapshot_subvol_backref_wrong).
+test_subvol_backref_cleared()
 {
     setup_snapshot_tree
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 flags.subvol=0"
+    kvdb -c "update snapshots 0:$victim:0 subvol=0"
 
     skip_snaps=""
     check_fsck repair
@@ -806,7 +805,7 @@ test_will_delete_live_subvol()
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 will_delete=1 flags.subvol=0"
+    kvdb -c "update snapshots 0:$victim:0 state=will_delete"
 
     skip_snaps=""
     check_fsck repair
@@ -821,7 +820,7 @@ test_no_keys_with_keys()
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 no_keys=1"
+    kvdb -c "update snapshots 0:$victim:0 state=no_keys"
 
     skip_snaps=""
     check_fsck repair
@@ -851,7 +850,7 @@ test_unlinked_subvol()
 {
     setup_snapshot_tree
 
-    kvdb -c "update subvolumes 0:4:0 unlinked=1"
+    kvdb -c "update subvolumes 0:4:0 state=unlinked fs_path_parent=0"
 
     skip_snaps="snap-2"
     check_fsck repair
@@ -933,7 +932,7 @@ test_tombstone_key_migration()
 	[[ $c != $victim ]] && other=$c
     done
 
-    kvdb -c "update snapshots 0:$victim:0 deleted=1 flags.subvol=0 subvol=0 children[0]=$other" \
+    kvdb -c "update snapshots 0:$victim:0 state=deleted subvol=0 children[0]=$other" \
 	 -c "update snapshots 0:$parent:0 children[0]=$other children[1]=0" \
 	 -c "set subvolumes 0:$last_subvol:0 deleted"
 
@@ -960,7 +959,7 @@ test_no_keys_with_data()
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 no_keys=1 flags.subvol=0 subvol=0" \
+    kvdb -c "update snapshots 0:$victim:0 state=no_keys subvol=0" \
 	 -c "set subvolumes 0:4:0 deleted"
 
     skip_snaps="snap-2"
@@ -987,7 +986,7 @@ test_no_keys_two_children()
     local children=($(snap_array $victim children))
     [[ -n ${children[1]} && ${children[1]} != 0 ]]
 
-    kvdb -c "update snapshots 0:$victim:0 no_keys=1"
+    kvdb -c "update snapshots 0:$victim:0 state=no_keys"
 
     skip_snaps=""
     check_fsck repair
@@ -1005,7 +1004,7 @@ test_subvol_to_dead_node_no_backref()
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 no_keys=1 flags.subvol=0 subvol=0"
+    kvdb -c "update snapshots 0:$victim:0 state=no_keys subvol=0"
 
     skip_snaps=""
     check_fsck repair
@@ -1136,14 +1135,14 @@ test_tree_to_missing_snapshot()
 
 # ebc9b05 DELETED variant: SUBVOL + DELETED with the subvol retained (vs
 # no_keys_with_keys, which is SUBVOL + NO_KEYS). The subvol corroborates ->
-# clear DELETED (revive). Inject deleted=1 WITHOUT clearing flags.subvol.
+# clear DELETED (revive). Inject the deleted state WITHOUT clearing v.subvol.
 test_subvol_deleted_flag_conflict()
 {
     setup_snapshot_tree
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 deleted=1"
+    kvdb -c "update snapshots 0:$victim:0 state=deleted"
 
     # expect=repair: subvol 4 corroborates -> clear DELETED/WILL_DELETE
     # (revive). Full manifest must match.
@@ -1153,14 +1152,14 @@ test_subvol_deleted_flag_conflict()
 
 # ebc9b05 branch (b): SUBVOL + NO_KEYS but the subvol is GONE -> clear SUBVOL
 # (vs no_keys_with_keys, where the subvol corroborates -> revive). Inject
-# no_keys=1 retaining flags.subvol, and delete the subvol key.
+# the no_keys state retaining v.subvol, and delete the subvol key.
 test_subvol_no_keys_subvol_gone()
 {
     setup_snapshot_tree
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 no_keys=1" \
+    kvdb -c "update snapshots 0:$victim:0 state=no_keys" \
 	 -c "set subvolumes 0:4:0 deleted"
 
     # expect=repair: SUBVOL + NO_KEYS + subvol gone -> the SUBVOL flag is the
@@ -1170,21 +1169,19 @@ test_subvol_no_keys_subvol_gone()
     check_fsck repair
 }
 
-# snapshot_should_not_have_subvol, subvol-gone variant: SUBVOL flag clear +
-# v.subvol still set + the subvol GONE -> clear v.subvol (vs
-# subvol_flag_cleared, where the subvol is live -> restore SUBVOL).
+# Dangling backref: v.subvol names a subvolume that no longer exists (vs
+# subvol_backref_cleared, where the subvol is live -> restore the backref).
 test_subvol_backref_gone()
 {
     setup_snapshot_tree
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 flags.subvol=0" \
-	 -c "set subvolumes 0:4:0 deleted"
+    kvdb -c "set subvolumes 0:4:0 deleted"
 
-    # expect=repair: flags say no subvol, v.subvol says yes, subvol gone ->
-    # v.subvol is the lie -> clear it; the node is then condemned. snap-2
-    # stays skipped.
+    # expect=repair: live leaf, backref dangling, no subvolume claims it -
+    # reattached via lost+found. snap-2's canonical path is gone (its data
+    # survives under lost+found, which the walker prunes).
     skip_snaps="snap-2"
     check_fsck repair
 }
@@ -1216,7 +1213,7 @@ test_runtime_tombstone_child_repair()
     local victim=$(subvol_snapshot $last_subvol)
 
     # tombstone the leaf, parent pointer left in place (no splice)
-    kvdb -c "update snapshots 0:$victim:0 deleted=1 flags.subvol=0 subvol=0" \
+    kvdb -c "update snapshots 0:$victim:0 state=deleted subvol=0" \
 	 -c "set subvolumes 0:$last_subvol:0 deleted"
 
     # the mount must succeed: pass 19 autofixes the tombstone child (R4)
@@ -1251,7 +1248,7 @@ test_runtime_will_delete_live_subvol()
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 will_delete=1 flags.subvol=0"
+    kvdb -c "update snapshots 0:$victim:0 state=will_delete"
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
@@ -1283,7 +1280,7 @@ test_runtime_will_delete_backref_cleared()
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 will_delete=1 flags.subvol=0 subvol=0"
+    kvdb -c "update snapshots 0:$victim:0 state=will_delete subvol=0"
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
@@ -1316,9 +1313,6 @@ test_runtime_will_delete_backref_cleared()
 # snapshot-hardening format change); until its validate/repair side lands
 # they fail per the suite's assert-the-full-repair convention. The legacy
 # bit names below use the post-rename kvdb spellings (*_obsolete).
-
-STATE_live=$((0x757c47a2))
-STATE_deleted=$((0x7cd4a225))
 
 # state stomped with a non-codeword value on a live subvol leaf. The
 # codeword property guarantees corruption lands here, not on a legal
@@ -1385,7 +1379,7 @@ test_state_wrong_codeword()
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 state=$STATE_deleted"
+    kvdb -c "update snapshots 0:$victim:0 state=deleted"
 
     skip_snaps=""
     check_fsck repair
