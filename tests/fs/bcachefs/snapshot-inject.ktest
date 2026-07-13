@@ -691,11 +691,11 @@ test_snapshot_to_missing_subvol()
 
     kvdb -c "set subvolumes 0:4:0 deleted"
 
-    # expect=repair (FAILING until R6 lands): scan subvolumes for
-    # ->snapshot == us; the snapshot node's v.subvol backref is the most
-    # authoritative surviving record (H4), so reconstruct the subvol from
-    # it rather than clear toward condemnation - snap-2 carries unique
-    # data (data-2). Full manifest must match.
+    # expect=repair: the leaf's backref names the dead subvolume's id, so
+    # check_snapshot reconstructs the subvolume AT that id, dangling,
+    # around the surviving root inode - the surviving snap-2 dirent then
+    # reconnects it at its canonical path, no lost+found involved. Full
+    # manifest must match.
     skip_snaps=""
     check_fsck repair
 }
@@ -1165,23 +1165,6 @@ test_subvol_no_keys_subvol_gone()
     # expect=repair: SUBVOL + NO_KEYS + subvol gone -> the SUBVOL flag is the
     # lie -> clear it; the node is then condemned. snap-2's subvol is gone,
     # so snap-2 stays skipped.
-    skip_snaps="snap-2"
-    check_fsck repair
-}
-
-# Dangling backref: v.subvol names a subvolume that no longer exists (vs
-# subvol_backref_cleared, where the subvol is live -> restore the backref).
-test_subvol_backref_gone()
-{
-    setup_snapshot_tree
-
-    local victim=$(subvol_snapshot 4)
-
-    kvdb -c "set subvolumes 0:4:0 deleted"
-
-    # expect=repair: live leaf, backref dangling, no subvolume claims it -
-    # reattached via lost+found. snap-2's canonical path is gone (its data
-    # survives under lost+found, which the walker prunes).
     skip_snaps="snap-2"
     check_fsck repair
 }
