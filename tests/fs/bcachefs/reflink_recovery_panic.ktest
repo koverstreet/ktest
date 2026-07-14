@@ -38,10 +38,17 @@
 #   PANIC         = the target crash reproduced (RED), or a regression.
 
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/memory-pressure-libs.sh
 
-config-mem 4G           # debug-kernel mount + in-VM tools build need headroom
+# 4G default suits the reflink setup + debug mount; the swap-pressure flavour
+# overrides lower (REFLINK_MEM=2G) so the eater actually drives swap writeout.
+config-mem ${REFLINK_MEM:-4G}
 config-scratch-devs 4G
 config-scratch-devs 4G
+
+# Swap-pressure flavour needs these; soft so the other flavours don't gate on them.
+require-kernel-config-soft SWAP
+require-kernel-config-soft DETECT_HUNG_TASK
 
 # More CPUs widens the trans-restart-state race the panic implicates (the
 # stomped trans->restarted).  Unlike the swap livelock tests (which need 2
@@ -409,6 +416,105 @@ test_reflink_dedup_recovery_panic()
     dedup_quiesce
     robust_umount || true
     bcachefs fsck -ny "$dev0" "$dev1" || true
+    bcachefs_test_end_checks "$dev0" "$dev1" || echo "(expected end-check residue after kill_btree_node)"
+    return 0
+}
+
+# --- flavour 4: copygc-vs-dangling-reflink race UNDER swap-on-bcachefs pressure
+#
+# The one production element flavours 1-3 lack: swap-on-bcachefs actively
+# written by reclaim (reclaim -> swap_writeout -> bch2_swap_rw) while copygc's
+# nested __bch2_write trans moves buckets over the dangling reflink_p.  The
+# swap machinery (unkillable eater, sacrificial balloon, dd-fragmented swapfile,
+# swappiness=100) is the calibrated profile from swapfile_deadlock.ktest +
+# memory-pressure-libs.sh.
+#
+# MUST run on a kernel WITH the NOIO reclaim fixes (HEAD 08660722 / prod
+# FCD0854).  On an ancestor lacking them, swap pressure trips the *already-
+# fixed* wb-darray/journal_buf_prealloc deadlock (a hung_task panic) and
+# confounds the copygc-panic signal.  Run with REFLINK_MEM=2G REFLINK_CPUS=2.
+#
+#   REFLINK_SWAP_MB=768    dd-written swapfile size
+#   REFLINK_SWAP_ROUNDS=3  eater touch-storm rounds (race amplifier)
+#   REFLINK_SWAP_DUR=90    seconds of pressure per round
+
+test_reflink_swap_pressure_panic()
+{
+    set_watchdog $(stress_timeout)
+    local dev0=${ktest_scratch_dev[0]}
+    local dev1=${ktest_scratch_dev[1]}
+
+    setup_dangling_reflink "$dev0" "$dev1"
+
+    mount -t bcachefs -o $RECOVERY_OPTS "$dev0":"$dev1" /mnt
+
+    # Swapfile ON the fs under test — dd-written so it fragments into many
+    # extents (more btree traffic per swap I/O), the production shape.  Sized
+    # 1.5x RAM (the proven swapfile_deadlock ratio) so the eater drives
+    # continuous swap WRITEBACK without EXHAUSTING swap — swap exhaustion drops
+    # into the mm OOM-cascade regime (which kills the test harness), not a
+    # filesystem signal.
+    local swap_mb=${REFLINK_SWAP_MB:-$(awk '/MemTotal/ {print int($2 * 3 / 2 / 1024)}' /proc/meminfo)}
+    dd if=/dev/zero of=/mnt/swapfile bs=1M count=$swap_mb conv=fsync status=none
+    chmod 600 /mnt/swapfile
+    mkswap /mnt/swapfile
+    swapon /mnt/swapfile
+    grep -q /mnt/swapfile /proc/swaps || { echo "swapon failed"; return 1; }
+    echo 100 > /proc/sys/vm/swappiness
+
+    build_eater
+    build_balloon
+    start_mem_telemetry
+    start_balloon 150
+    hung_task_panic_on
+
+    # Protect the test harness (and its children — readers, evacuate driver)
+    # from the OOM killer so a transient spike can't kill the test itself; the
+    # balloon (+1000) stays the designated victim.  Proper swap sizing above
+    # already prevents exhaustion, but this is cheap insurance.
+    echo -1000 > /proc/self/oom_score_adj 2>/dev/null || true
+
+    trap - ERR
+    local pids=() w
+    for w in $(seq 1 $READERS); do
+	( while true; do cat /mnt/link.* > /dev/null 2>&1 || true; done ) &
+	pids+=($!)
+    done
+
+    local eat_mb=$(eater_default_mb)
+    local rounds=${REFLINK_SWAP_ROUNDS:-3}
+    local dur=${REFLINK_SWAP_DUR:-90}
+    local round eater_pid
+    for round in $(seq 1 $rounds); do
+	echo "=== round $round/$rounds: eater ${eat_mb}M ${dur}s + evacuate/gc ==="
+	/tmp/eater "$eat_mb" "$dur" &
+	eater_pid=$!
+	# Hammer copygc/evacuate + gc for the whole touch storm: copygc's
+	# nested trans now races reclaim's swap writeback through the fs.
+	while kill -0 $eater_pid 2>/dev/null; do
+	    bcachefs device evacuate "$dev0" > /tmp/evac.log 2>&1 || true
+	    echo 1 > /sys/fs/bcachefs/*/internal/trigger_gc 2>/dev/null || true
+	    sleep 1
+	done
+	wait $eater_pid 2>/dev/null || true
+	sleep 3
+    done
+
+    hung_task_panic_off
+    kill "${pids[@]}" 2>/dev/null || true
+    pkill -f 'cat /mnt/' 2>/dev/null || true
+    wait "${pids[@]}" 2>/dev/null || true
+    stop_mem_telemetry
+    stop_balloon
+
+    grep -E "SwapFree|MemFree" /proc/meminfo
+    echo "SURVIVED: no panic through copygc + swap-reclaim pressure race"
+
+    swapoff /mnt/swapfile 2>/dev/null || true
+    rm -f /mnt/swapfile
+    robust_umount || true
+    # in-kernel fsck (userspace fsck OOMs in a small VM)
+    if mount -t bcachefs -o fsck,ro "$dev0":"$dev1" /mnt; then umount /mnt; fi
     bcachefs_test_end_checks "$dev0" "$dev1" || echo "(expected end-check residue after kill_btree_node)"
     return 0
 }
