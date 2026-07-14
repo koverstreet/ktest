@@ -26,17 +26,28 @@ parse_test_deps()
 	exit 1
     fi
 
-    local t
+    local t found
 
-    # Ensure specified tests exist:
+    # Ensure specified tests exist. A requested test missing from the file
+    # is a stale job matrix - a renamed/removed test still queued from an
+    # enumeration against a different revision. Skip it and run the rest,
+    # rather than failing the whole batch of unrelated subtests; only bail
+    # if none of the requested tests exist.
     if [[ -n $ktest_testargs ]]; then
 	if ! $ktest_tests_unknown; then
+	    found=""
 	    for t in $ktest_testargs; do
-		if ! echo "$ktest_tests"|grep -wq "$t"; then
-		    echo "Test $t not found"
-		    exit 1
+		if echo "$ktest_tests"|grep -wq "$t"; then
+		    found="$found $t"
+		else
+		    echo "Test $t not found - skipping (stale job matrix?)"
 		fi
 	    done
+	    if [[ -z $found ]]; then
+		echo "none of the requested tests exist in $(basename "$ktest_test")"
+		exit 1
+	    fi
+	    ktest_testargs="$found"
 	fi
 
 	ktest_tests="$ktest_testargs"
