@@ -19,6 +19,7 @@ use memmap::MmapOptions;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
+use std::time::SystemTime;
 
 /// Identity of a test job — the tuple that uniquely names a unit of
 /// test work. The daemon's job map diffs the desired set on this key.
@@ -54,12 +55,23 @@ pub struct Job {
 /// spawn error or a non-zero exit) must not stick a whole test out of
 /// the job matrix for the daemon's entire lifetime — the next call
 /// retries instead.
+///
+/// The cache is keyed on the file's mtime, not just its path: a test
+/// renamed or removed bumps it (any commit/rebase/pull that rewrites the
+/// file does), so the matrix re-enumerates instead of requesting a stale
+/// name until the daemon restarts. One stat per lookup buys that.
 fn get_subtests(test_path: PathBuf) -> Vec<String> {
-    static CACHE: LazyLock<Mutex<HashMap<PathBuf, Vec<String>>>> =
+    static CACHE: LazyLock<Mutex<HashMap<PathBuf, (SystemTime, Vec<String>)>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
 
-    if let Some(hit) = CACHE.lock().unwrap().get(&test_path) {
-        return hit.clone();
+    let mtime = std::fs::metadata(&test_path).and_then(|m| m.modified()).ok();
+
+    if let Some(mt) = mtime {
+        if let Some((cached_mt, subtests)) = CACHE.lock().unwrap().get(&test_path) {
+            if *cached_mt == mt {
+                return subtests.clone();
+            }
+        }
     }
 
     let subtests = match std::process::Command::new(&test_path)
@@ -81,10 +93,13 @@ fn get_subtests(test_path: PathBuf) -> Vec<String> {
         }
     };
 
-    // Cache successes only; an empty result — a failure, or a genuinely
-    // subtest-less test — re-lists on the next call rather than sticking.
+    // Cache successes only, tagged with the mtime we listed at; an empty
+    // result — a failure, or a genuinely subtest-less test — re-lists on
+    // the next call rather than sticking. Skip caching if the stat failed.
     if !subtests.is_empty() {
-        CACHE.lock().unwrap().insert(test_path, subtests.clone());
+        if let Some(mt) = mtime {
+            CACHE.lock().unwrap().insert(test_path, (mt, subtests.clone()));
+        }
     }
     subtests
 }
