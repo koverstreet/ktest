@@ -1108,6 +1108,67 @@ test_rereplicate_file()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# fsck given a member *device* (not just the mountpoint) of a mounted fs must
+# select online fsck: bcachefs holds its devices exclusively, so the offline
+# path fails reading the superblock with EBUSY. The device has to be recognized
+# as belonging to a mounted filesystem and routed to BCH_IOCTL_FSCK_ONLINE.
+#
+# Covers the ways a member can be named, including the one github #1186 tripped:
+#   - a bare whole-device member
+#   - a partition member (different major:minor and sysfs path than the disk)
+#   - an auto-discovered member of a multi-device fs mounted by a *different*
+#     device, so the member isn't in /proc/mounts (the old /proc/mounts-based
+#     detection missed it; the per-device sysfs bcachefs link covers it)
+test_fsck_online_by_device()
+{
+    set_watchdog 120
+
+    # fsck of a mounted fs via $1 must take the online path and succeed; the
+    # offline path would instead fail reading the superblock with EBUSY.
+    expect_online_fsck()
+    {
+	local out rc
+	out=$(bcachefs fsck -fy "$1" 2>&1); rc=$?
+	echo "$out"
+	if ! grep -q "Running fsck online" <<<"$out"; then
+	    echo "FAIL: fsck '$1' did not take the online path"
+	    return 1
+	fi
+	if (( rc != 0 )); then
+	    echo "FAIL: online fsck of '$1' returned $rc"
+	    return 1
+	fi
+    }
+
+    # bare whole-device member (and the mountpoint, which must still work):
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    expect_online_fsck ${ktest_scratch_dev[0]}
+    expect_online_fsck /mnt
+    umount /mnt
+
+    # partition member:
+    printf 'label: gpt\n,,L\n' | sfdisk ${ktest_scratch_dev[1]}
+    local part=${ktest_scratch_dev[1]}1
+    local i
+    for ((i = 0; i < 25; i++)); do [[ -b $part ]] && break; sleep 0.2; done
+    [[ -b $part ]] || { echo "FAIL: partition $part never appeared"; return 1; }
+    run_quiet "" bcachefs format -f $part
+    mount -t bcachefs $part /mnt
+    expect_online_fsck $part
+    umount /mnt
+
+    # auto-discovered member of a multi-device fs mounted by a *different*
+    # device, so it isn't in /proc/mounts:
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[2]} ${ktest_scratch_dev[3]}
+    mount -t bcachefs ${ktest_scratch_dev[2]} /mnt
+    expect_online_fsck ${ktest_scratch_dev[3]}
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[2]} ${ktest_scratch_dev[3]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 disabled_test_device_add_faults()
 {
     setup_tracing `bcachefs_slowpath_tracepoints`
