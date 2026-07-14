@@ -1047,6 +1047,67 @@ test_rereplicate2()
     umount /mnt
 }
 
+# Bumping data_replicas on a single file (set-file-option, not the fs-wide
+# sysfs knob) must re-replicate that file's existing extents: it queues an
+# inum reconcile scan that re-derives need_rb=data_replicas per extent and
+# writes the second copy. test_rereplicate covers the fs-wide path; this is
+# the per-file path.
+#
+# Regression coverage for github #1186, where changing data_replicas on a
+# file did nothing: the scan completed but queued no work, so durability=1
+# data stayed single-replica.
+test_rereplicate_file()
+{
+    set_watchdog 120
+
+    # metadata_replicas=2 so the fs itself survives the degraded mount below;
+    # the file's data is then the only single-replica thing, which is the
+    # variable under test.
+    run_quiet "" bcachefs format -f		\
+	--block_size=4k				\
+	--metadata_replicas=2			\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+
+    # default data_replicas=1, so extents land durability 1:
+    dd if=/dev/urandom of=/mnt/foo bs=1M count=64 conv=fsync
+    md5sum /mnt/foo > /root/foo.md5
+
+    user_durability_1()
+    {
+	bcachefs fs usage -h --all /mnt |
+	    grep -E '^user:' | awk '$3 == "1" { n = 1 } END { print n + 0 }'
+    }
+
+    if [[ $(user_durability_1) != 1 ]]; then
+	echo "FAIL: precondition - no durability=1 user data after a replicas=1 write"
+	bcachefs fs usage -h --all /mnt
+	return 1
+    fi
+
+    # per-file bump - queues an inum reconcile scan for /mnt/foo:
+    bcachefs set-file-option --data_replicas=2 /mnt/foo
+    bcachefs reconcile wait -t replicas /mnt
+
+    bcachefs fs usage -h --all /mnt
+
+    if [[ $(user_durability_1) != 0 ]]; then
+	echo "FAIL: durability=1 data remains after per-file data_replicas=2 + reconcile"
+	return 1
+    fi
+
+    # the second copy must be real: lose a device, the data must still read back
+    umount /mnt
+    mount -t bcachefs -o degraded ${ktest_scratch_dev[0]} /mnt
+    md5sum -c /root/foo.md5
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 disabled_test_device_add_faults()
 {
     setup_tracing `bcachefs_slowpath_tracepoints`
