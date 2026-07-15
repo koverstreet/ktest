@@ -917,21 +917,21 @@ test_online_three_device_replicas_metadata_under_randrw_shrink()
     finish verify_replicas_metadata "${devs[@]}"
 }
 
-test_offline_empty_shrink()
+_test_offline_empty_shrink()
 {
     set_watchdog 60
     bcachefs_antagonist
     _do_empty_shrink offline
 }
 
-test_offline_two_device_data_shrink()
+_test_offline_two_device_data_shrink()
 {
     set_watchdog 120
     bcachefs_antagonist
     _do_two_device_data_shrink offline
 }
 
-test_offline_impossible_shrink()
+_test_offline_impossible_shrink()
 {
     set_watchdog 120
     bcachefs_antagonist
