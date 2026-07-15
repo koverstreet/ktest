@@ -917,6 +917,57 @@ test_online_three_device_replicas_metadata_under_randrw_shrink()
     finish verify_replicas_metadata "${devs[@]}"
 }
 
+test_online_shrink_cancel()
+{
+    set_watchdog 120
+    bcachefs_antagonist
+    local devs=("${ktest_scratch_dev[0]}" "${ktest_scratch_dev[1]}")
+    local resizeout="$ktest_out/shrink-cancel.out"
+    local initial_size_bytes
+
+    run_quiet "" bcachefs format -f		\
+	--fs_size=1G				\
+	"${devs[0]}"
+
+    mount_mnt "${devs[0]}"
+    initial_size_bytes=$(show_super_size_bytes "${devs[0]}")
+
+    dd if=/dev/urandom of=/mnt/payload bs=1M count=750 oflag=direct
+    bcachefs device add -f /mnt "${devs[1]}"
+
+    bcachefs device resize "${devs[0]}" 200M >"$resizeout" 2>&1 &
+    local resizepid=$!
+
+    wait_for_resize_to_start "$resizepid" "$resizeout"
+    bcachefs device resize "${devs[0]}" cancel
+    wait_for_canceled_resize "$resizepid" "$resizeout"
+
+    assert_member_size_bytes "${devs[0]}" $initial_size_bytes
+    assert_resize_target_inactive "${devs[0]}"
+    finish "" "${devs[@]}"
+}
+
+test_online_shrink_then_cancel()
+{
+    set_watchdog 60
+    bcachefs_antagonist
+    local devs=("${ktest_scratch_dev[0]}")
+
+    run_quiet "" bcachefs format -f		\
+	--fs_size=1G				\
+	"${devs[0]}"
+
+    mount_mnt "${devs[0]}"
+
+    bcachefs device resize "${devs[0]}" 500M
+
+    bcachefs device resize "${devs[0]}" cancel
+
+    assert_member_size_bytes "${devs[0]}" $((500 * 1024 * 1024))
+    assert_resize_target_inactive "${devs[0]}"
+    finish "" "${devs[@]}"
+}
+
 _test_offline_empty_shrink()
 {
     set_watchdog 60
