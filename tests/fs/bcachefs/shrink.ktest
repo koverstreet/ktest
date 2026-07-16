@@ -472,7 +472,7 @@ test_online_two_device_replicas_impossible_shrink()
     _do_impossible_shrink online
 }
 
-test_online_three_device_ec_shrink()
+test_online_four_device_ec_shrink()
 {
     set_watchdog 60
     bcachefs_antagonist
@@ -498,12 +498,55 @@ test_online_three_device_ec_shrink()
 
     bcachefs reconcile wait -t erasure_code /mnt
 
+    # at this points all three devs should have ~365M
+
     bcachefs device add -f /mnt --bucket_size=512k "${devs[3]}"
 
-    # resize dev1 to minimum size -> should evacuate most data to dev4 to ensure replicas are met
-    df -h /mnt
-    bcachefs device resize "${devs[0]}" 256M
-    df -h /mnt
+    bcachefs device resize "${devs[0]}" 256M # (should) shrink only ~5M away
+
+    # unmount & remount to trigger scheduled recovery passes. TODO: remove once no longer neccessary
+    umount /mnt
+    mount_mnt "${devs[0]}"
+
+    finish "" "${devs[@]}"
+}
+
+
+test_online_minimal_ec_shrink()
+{
+    set_watchdog 60
+    bcachefs_antagonist
+    local devs=("${ktest_scratch_dev[0]}" "${ktest_scratch_dev[1]}" "${ktest_scratch_dev[2]}" "${ktest_scratch_dev[3]}")
+
+    # format dev1 and dev2 to 1G, with replicas=2
+    run_quiet "" bcachefs format -f		\
+	--replicas=2                        \
+	--erasure_code                      \
+	--fs_size=1G        				\
+	--bucket_size=512k                  \
+	"${devs[0]}"                        \
+	--fs_size=1G        				\
+	--bucket_size=512k                  \
+	"${devs[1]}"                        \
+	--fs_size=1G        				\
+	--bucket_size=512k                  \
+	"${devs[2]}"
+
+    mount_mnt "${devs[0]}"
+
+    dd if=/dev/urandom of=/mnt/foo bs=1M count=700 oflag=direct
+
+    bcachefs reconcile wait -t erasure_code /mnt
+
+    # at this points all three devs should have ~365M
+
+    bcachefs device add -f /mnt --bucket_size=512k "${devs[3]}"
+
+    bcachefs device resize "${devs[0]}" 362M # (should) shrink only ~2M away
+
+    # unmount & remount to trigger scheduled recovery passes. TODO: remove once no longer neccessary
+    umount /mnt
+    mount_mnt "${devs[0]}"
 
     finish "" "${devs[@]}"
 }
