@@ -191,6 +191,11 @@ all_snap_ids()
     kvdb -c 'list snapshots' | sed -n 's/.*type snapshot 0:\([0-9]*\):0.*/\1/p'
 }
 
+all_subvol_ids()
+{
+    kvdb -c 'list subvolumes' | sed -n 's/.*type subvolume 0:\([0-9]*\):0.*/\1/p'
+}
+
 # Root of the MAIN snapshot tree, resolved through the tree key: 'other'
 # is an independent tree whose root also has parent == 0 - and, created
 # last, the lowest id, so a naive parent==0 scan found other's root and
@@ -1434,6 +1439,84 @@ test_state_zeroed()
     check_fsck repair
 }
 
+# The zorba shape: EVERY snapshot and subvolume state field zeroed at once - a
+# fs written before the state field existed (only the legacy flag bits set),
+# then carried onto a version that already believes the migration ran, so no
+# upgrade transition ever derives the states. Distinct from test_state_zeroed
+# (one key, recovered by the referenced->live fallback): with the whole fs
+# zeroed the subvolume side has no such fallback and fail-stops
+# (fsck_repair_unimplemented, subvolume.c) - which is why zorba's fs wouldn't
+# come up. Every state=0 must recover from its mirrored legacy flags; nothing
+# is a real deletion, so the entire tree comes back and nothing is lost.
+test_state_zeroed_whole_fs()
+{
+    setup_snapshot_tree
+
+    local args=() id
+    for id in $(all_snap_ids);   do args+=(-c "update snapshots 0:$id:0 state=0");   done
+    for id in $(all_subvol_ids); do args+=(-c "update subvolumes 0:$id:0 state=0"); done
+    kvdb "${args[@]}"
+
+    skip_snaps=""
+    check_fsck repair
+}
+
+# Like state_zeroed_whole_fs, but with a snapshot deletion in flight when the
+# states are wiped. This is where deriving from the legacy flags and the lossy
+# "referenced -> live" fallback diverge: snap-2's node is will_delete (a state
+# the snapshot flags encode), but its subvolume still references it, so the
+# fallback would revive it. The deletion must COMPLETE, not resurrect - so this
+# checks the tombstone is reaped, which skip_snaps alone can't (it masks a
+# revived snap-2).
+#
+# The hard half: the subvolume flags encode only unlinked/live (there is no
+# legacy 'deleted' bit - bch2_subvolume_state_set only sets UNLINKED for the
+# unlinked state), so a wiped 'deleted' subvol tombstone derives to 'live'.
+# Recovering the pending deletion therefore needs more than the subvol's own
+# flags - it has to corroborate against the will_delete snapshot node.
+test_state_zeroed_pending_deletion()
+{
+    setup_snapshot_tree
+
+    # front half of the deletion pipeline only (auto off stops before the reap):
+    # subvol 4 -> deleted tombstone, snap-2's node -> will_delete, backref kept.
+    mount -t bcachefs -o noauto_snapshot_deletion ${ktest_scratch_dev[0]} /mnt
+    bcachefs subvolume delete /mnt/snap-2
+    umount /mnt
+
+    # wipe every state field, over the in-flight-deletion state included:
+    local args=() id
+    for id in $(all_snap_ids);   do args+=(-c "update snapshots 0:$id:0 state=0");   done
+    for id in $(all_subvol_ids); do args+=(-c "update subvolumes 0:$id:0 state=0"); done
+    kvdb "${args[@]}"
+
+    local rc1=0
+    bcachefs fsck -y ${ktest_scratch_dev[0]} || rc1=$?
+    echo "fsck -y exited $rc1"
+    if (( rc1 == 0 )); then
+	echo "TEST FAILED: fsck missed the zeroed states"
+	exit 1
+    fi
+
+    # The pending deletion must complete - subvol 4's tombstone reaped, not
+    # revived. A surviving subvol 4 means the deletion was reverted.
+    if [[ -n $(subvol_field 4 state) ]]; then
+	echo "TEST FAILED: subvol 4 survived fsck (state '$(subvol_field 4 state)') - pending deletion reverted"
+	exit 1
+    fi
+
+    local rc2=0
+    bcachefs fsck -n ${ktest_scratch_dev[0]} || rc2=$?
+    echo "second fsck -n exited $rc2"
+    if (( rc2 != 0 )); then
+	echo "TEST FAILED: errors remain after repair + deletion"
+	exit 1
+    fi
+
+    skip_snaps="snap-2"
+    verify_fs_state must-mount
+}
+
 # The mirror image: legacy bits stomped to the cumulative 'deleted'
 # encoding while state still says live and the subvolumes btree still
 # points at the node. Two corroborating witnesses against one lying
@@ -1469,6 +1552,66 @@ test_state_wrong_codeword()
 
     skip_snaps=""
     check_fsck repair
+}
+
+# ── check_key_has_snapshot defers to the check passes on a damaged table ──
+#
+# The btrees_clean guard, exercised at RUNTIME (not fsck): when
+# check_key_has_snapshot finds a key in a missing/deleted snapshot it must not
+# act on the in-memory table unless check_snapshots and check_subvols have
+# validated it and nothing has mutated it since (the btrees_clean sb bits) -
+# otherwise a stale/damaged table could make it drop a key a live snapshot
+# should still see.
+#
+# Mark an interior node deleted: a lie, it has two live children, so it can't be
+# gone. The keys written to that generation before the snapshot (versioned's
+# older extents live at the interior id) now sit in a "deleted" snapshot. Then
+# run a data-update workload (background compression -> reconcile rewrites the
+# uncompressed extents) so check_key_has_snapshot meets those keys on the data
+# path (update.c), online. The table is inconsistent, so it schedules
+# check_snapshots/check_subvols and fails the move (data_update_fail_no_snapshot)
+# rather than dropping the key. The scheduled check_snapshots then corroborates
+# from the two live children and revives (undeletes) the node.
+test_runtime_deleted_interior_defers()
+{
+    set_watchdog 120
+
+    setup_snapshot_tree
+
+    # an interior node with two live children - deletion is a lie
+    local leaf=$(subvol_snapshot 4)
+    local victim=$(snap_field $leaf parent)
+    local children=($(snap_array $victim children))
+    [[ -n ${children[1]} && ${children[1]} != 0 ]]
+
+    kvdb -c "update snapshots 0:$victim:0 state=deleted"
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # background compression makes reconcile rewrite every (uncompressed)
+    # extent through the data-update path, where check_key_has_snapshot meets
+    # the stranded keys.
+    echo zstd > /sys/fs/bcachefs/*/options/background_compression
+    local i
+    for ((i = 0; i < 20; i++)); do
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_wakeup 2>/dev/null || true
+	sleep 2
+    done
+
+    umount /mnt
+
+    # the online check_snapshots the workload scheduled corroborated from the
+    # two live children and revived the node (deleted -> live) - proof the
+    # passes ran, on the damaged table, before anything destructive
+    local SNAPSHOT_STATE_live=$((0x757c47a2))
+    if [[ $(snap_field $victim state) != $SNAPSHOT_STATE_live ]]; then
+	echo "TEST FAILED: interior node not revived (state $(snap_field $victim state)) - online check_snapshots didn't run"
+	exit 1
+    fi
+
+    # and no key was dropped on the way
+    skip_snaps=""
+    verify_fs_state must-mount
 }
 
 main "$@"
