@@ -989,4 +989,28 @@ _test_offline_impossible_shrink()
     _do_impossible_shrink offline
 }
 
+test_online_resize_to_zero_buckets_rejected()
+{
+	set_watchdog 60
+	bcachefs_antagonist
+	local devs=("${ktest_scratch_dev[0]}")
+	local resizeout="$ktest_out/resize-to-zero-buckets.out"
+
+	run_quiet "" bcachefs format -f		\
+		--fs_size=1G			\
+		"${devs[0]}"
+
+	mount_mnt "${devs[0]}"
+
+	if bcachefs device resize "${devs[0]}" 0 >"$resizeout" 2>&1; then
+		echo "Resize to 0 buckets unexpectedly succeeded"
+		cat "$resizeout"
+		return 1
+	fi
+
+	assert_resize_target_inactive "${devs[0]}"
+
+	finish "" "${devs[@]}"
+}
+
 main "$@"
