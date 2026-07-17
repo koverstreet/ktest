@@ -547,6 +547,62 @@ test_subvol_snapshot_delete_repeat()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# Regression test: whiteouts must survive interior snapshot node collapse.
+#
+# A snapshot whiteout is load-bearing negative information for descendant
+# snapshots: it shadows an ancestor's key. If snapshot deletion collapses
+# the node holding the whiteout without migrating it to the surviving
+# child, the ancestor's key resurrects - a deleted file reappears in the
+# live view, its dirent pointing at a freed inode. Seen in the wild on
+# zorba's fs (git branch deletion + hourly snapshot pruning; see
+# bcachefs-tools .claude/2026-07-17-zorba-fs-forensics.md).
+test_snapshot_whiteout_resurrection()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    mkdir /mnt/dir
+    echo old > /mnt/dir/foo
+
+    # snap.a preserves dir/foo; its interior parent holds the dirent
+    bcachefs subvolume snapshot /mnt/snap.a
+
+    # deleting foo in the live leaf writes a whiteout shadowing snap.a's
+    # dirent
+    rm /mnt/dir/foo
+
+    # snap.b turns the whiteout-holding leaf into an interior node
+    bcachefs subvolume snapshot /mnt/snap.b
+
+    echo live > /mnt/dir/bar
+
+    # deleting snap.b makes that interior redundant; collapsing it must
+    # migrate the whiteout to the surviving child
+    bcachefs subvolume delete /mnt/snap.b
+
+    echo 1 | tee /sys/fs/bcachefs/*/internal/trigger_delete_dead_snapshots >& /dev/null || true
+    sleep 5
+
+    # drop dentries: the rm left a negative dentry that would mask a
+    # resurrected dirent from the lookup path (exactly as in the field)
+    echo 2 > /proc/sys/vm/drop_caches
+
+    # readdir hits the dirents btree directly:
+    if ls /mnt/dir | grep -q '^foo$'; then
+	echo "deleted file resurrected after snapshot collapse"
+	ls -la /mnt/dir
+	false
+    fi
+
+    [[ $(cat /mnt/snap.a/dir/foo) = "old" ]]
+
+    umount /mnt
+
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_subvol_snapshot_delete_fio()
 {
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
