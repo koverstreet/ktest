@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+
+# shellcheck source=tests/fs/bcachefs/bcachefs-test-libs.sh
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+require-kernel-config BCACHEFS_FS=y
+
+config-mem 4G
+config-timeout 900
+config-scratch-devs 2G
+config-scratch-devs 2G
+config-scratch-devs 2G
+
+devs()
+{
+    join_by : "${ktest_scratch_dev[@]}"
+}
+
+journal_srcu_trace_events()
+{
+    local t=/sys/kernel/tracing/events
+    local events=(
+	bcachefs:data_update_write
+	bcachefs:data_update_fail
+	bcachefs:journal_flush
+	bcachefs:journal_write
+	bcachefs:journal_reclaim_start
+	bcachefs:journal_reclaim_finish
+	bcachefs:journal_res_get_blocked
+	block:block_bio_queue
+	block:block_bio_complete
+    )
+
+    for event in "${events[@]}"; do
+	local path="${event%%:*}/${event#*:}"
+	if [[ -e $t/$path/enable ]]; then
+	    echo "$event"
+	fi
+    done
+}
+
+dump_journal_srcu_debug()
+{
+    findmnt /mnt || true
+    fuser -vm /mnt || true
+    bcachefs fs usage -h --all /mnt || true
+    cat /sys/fs/bcachefs/*/reconcile_status || true
+    cat /sys/fs/bcachefs/*/internal/copy_gc_wait || true
+    cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
+    cat /sys/fs/bcachefs/*/journal_reclaim || true
+    cat /sys/fs/bcachefs/*/time_stats/journal_flush_write || true
+    cat /sys/fs/bcachefs/*/time_stats/journal_flush_seq || true
+    cat /sys/fs/bcachefs/*/time_stats/blocked_journal_low_on_space || true
+    cat /sys/fs/bcachefs/*/time_stats/blocked_journal_low_on_pin || true
+    cat /sys/fs/bcachefs/*/time_stats/blocked_journal_max_in_flight || true
+    cat /sys/kernel/debug/bcachefs/*/write_points || true
+    tail -n 1200 /sys/kernel/tracing/trace || true
+    dmesg | tail -n 300 || true
+}
+
+format_journal_srcu_fs()
+{
+    run_quiet "" bcachefs format -f			\
+	--block_size=4k					\
+	--bucket_size=256k				\
+	--replicas=1					\
+	--foreground_target=src				\
+	--background_target=src				\
+	--metadata_target=dst				\
+	--rotational=1 --label=src "${ktest_scratch_dev[0]}" \
+	--rotational=1 --label=dst "${ktest_scratch_dev[1]}" \
+	--rotational=1 --label=dst "${ktest_scratch_dev[2]}"
+}
+
+stress_journal_flush_srcu_path()
+{
+    echo 1000 > /sys/fs/bcachefs/*/options/journal_flush_delay
+    echo 256k > /sys/fs/bcachefs/*/options/move_bytes_in_flight
+    echo 4 > /sys/fs/bcachefs/*/options/move_ios_in_flight
+}
+
+seed_source_data()
+{
+    local size=${1:-$((384 * 1024 * 1024))}
+
+    dd if=/dev/zero of=/mnt/src-only-data bs=4M	\
+	count=$((size / (4 * 1024 * 1024)))	\
+	oflag=direct status=none
+    sync
+}
+
+start_dst_pressure()
+{
+    local log=$1
+
+    mkdir -p /mnt/dst-pressure
+    bcachefs set-file-option --foreground_target=dst /mnt/dst-pressure
+    dd if=/dev/zero of=/mnt/dst-pressure/hotfile bs=4M count=64 \
+	oflag=direct status=none
+    sync
+
+    setsid fio --eta=always			\
+	--exitall_on_error=1			\
+	--ioengine=libaio			\
+	--iodepth=64				\
+	--iodepth_batch=16			\
+	--direct=1				\
+	--numjobs=1				\
+	--time_based				\
+	--runtime=420				\
+	--name=dst-pressure			\
+	--rw=randwrite				\
+	--fsync=1				\
+	--bs=256k				\
+	--filesize=256M				\
+	--filename=/mnt/dst-pressure/hotfile	\
+	>"$log" 2>&1 &
+    echo $!
+}
+
+stop_dst_pressure()
+{
+    local pid=${1:-}
+
+    [[ -n $pid ]] || return 0
+
+    kill -- "-$pid" 2>/dev/null || true
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+}
+
+assert_no_srcu_journal_warnings()
+{
+    if dmesg | grep -E 'btree trans held srcu lock|bch2_journal_flush_seq stuck\?'; then
+	echo "journal/move pressure emitted SRCU or journal flush liveness warning" >&2
+	dump_journal_srcu_debug >&2
+	return 1
+    fi
+}
+
+teardown_journal_srcu_fs()
+{
+    if ! timeout 90 mount -o remount,ro /mnt; then
+	echo "remount,ro did not complete after journal/SRCU pressure" >&2
+	dump_journal_srcu_debug >&2
+	return 1
+    fi
+
+    if ! timeout 90 umount /mnt; then
+	echo "umount did not complete after journal/SRCU pressure" >&2
+	dump_journal_srcu_debug >&2
+	return 1
+    fi
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+
+    # This test deliberately creates journal/move pressure, so the generic
+    # slowpath counter ratio check can trip on expected transaction restarts
+    # before the SRCU/journal liveness oracle fires. Keep the hard health
+    # checks, but leave broad slowpath-counter tuning to throughput tests.
+    check_bcachefs_leaks
+    check_bcachefs_errors "${ktest_scratch_dev[0]}"
+    check_bcachefs_device_errors "${ktest_scratch_dev[0]}"
+}
+
+test_journal_flush_srcu_liveness()
+{
+    set_watchdog 900
+
+    local fioout="$ktest_out/journal-srcu-dst-pressure-fio-out"
+    local evacuate_log="$ktest_out/journal-srcu-evacuate-out"
+    local fiopid
+    local events
+    local ret=0
+
+    format_journal_srcu_fs
+    mount -t bcachefs "$(devs)" /mnt
+    seed_source_data
+    stress_journal_flush_srcu_path
+
+    events=$(journal_srcu_trace_events | xargs)
+    if [[ -n $events ]]; then
+	setup_tracing "$events"
+    fi
+
+    dmesg -C || true
+    : > /sys/kernel/tracing/trace || true
+
+    fiopid=$(start_dst_pressure "$fioout")
+    sleep 3
+
+    if ! timeout 360 bcachefs device evacuate "${ktest_scratch_dev[0]}" \
+	>"$evacuate_log" 2>&1; then
+	cat "$evacuate_log" || true
+	cat "$fioout" || true
+	echo "device evacuate did not complete under journal/SRCU pressure" >&2
+	ret=1
+    fi
+
+    stop_dst_pressure "$fiopid"
+
+    if ((ret)); then
+	dump_journal_srcu_debug >&2
+	timeout 30 umount /mnt || true
+	return 1
+    fi
+
+    sync
+    if ! assert_no_srcu_journal_warnings; then
+	ret=1
+    fi
+
+    if ! teardown_journal_srcu_fs; then
+	ret=1
+    fi
+
+    return "$ret"
+}
+
+main "$@"
