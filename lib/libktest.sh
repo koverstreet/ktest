@@ -468,6 +468,8 @@ start_vm()
 
     qemu_cmd+=(								\
 	-m		"$ktest_mem,slots=8,maxmem=$maxmem"		\
+	-device pcie-root-port,id=pci.1,bus=pcie.0,slot=1,chassis=1	\
+	-device pcie-pci-bridge,id=pci.2,bus=pci.1			\
 	-smp		"$ktest_cpus"					\
 	-kernel		"$ktest_kernel_binary/vmlinuz"			\
 	-append		"$(join_by " " ${kernelargs[@]})"		\
@@ -545,7 +547,11 @@ start_vm()
 		qemu_cmd+=(-device ide-hd,bus=hba.$disknr,drive=disk$disknr)
 		;;
 	    virtio-blk)
-		qemu_cmd+=(-device virtio-blk-pci,drive=disk$disknr)
+		if [[ $disknr < 20 ]]; then
+		    qemu_cmd+=(-device virtio-blk-pci,drive=disk$disknr)
+		else
+		    qemu_cmd+=(-device virtio-blk-pci,drive=disk$disknr,bus=pci.2)
+		fi
 		;;
 	    *)
 		qemu_cmd+=(-device scsi-hd,bus=hba.0,drive=disk$disknr)
