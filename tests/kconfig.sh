@@ -106,6 +106,7 @@ require-kernel-config KEYS
 # directly (olddefconfig strips them). Require user-facing options that
 # fire the right selects instead:
 require-kernel-config CRYPTO		# parent menuconfig — required for CRYPTO_LZ4/LZ4HC
+require-kernel-config BLK_DEV
 require-kernel-config MD		# parent menuconfig — required for BCACHE
 require-kernel-config BCACHE		# → CRC64
 require-kernel-config BTRFS_FS		# → CRC32, CRYPTO_LIB_SHA256, ZLIB_*, ZSTD_*, RAID6_PQ, XOR_BLOCKS, XXHASH
@@ -146,6 +147,8 @@ if [[ $have_virtio = 1 ]]; then
     require-kernel-config VIRTIO_NET
     require-kernel-config NET_9P_VIRTIO
     require-kernel-config CONFIG_CRYPTO_DEV_VIRTIO
+    require-kernel-config SCSI_VIRTIO
+    require-kernel-config VIRTIO_BLK
 fi
 
 if [[ $have_suspend = 1 ]]; then
@@ -158,11 +161,8 @@ fi
 
 case $ktest_storage_bus in
     virtio-scsi-pci)
-	require-kernel-config SCSI_VIRTIO
 	;;
     virtio-blk)
-	require-kernel-config BLK_DEV
-	require-kernel-config VIRTIO_BLK
 	;;
     ahci)
 	require-kernel-config ATA
