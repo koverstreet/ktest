@@ -1997,4 +1997,80 @@ test_dirent_overwritten_inode()
     verify_fs_state must-mount
 }
 
+# The end-of-fsck damage report (bch2_fsck_damaged_paths_to_text): the
+# summary naming which paths fsck damaged, printed from recovery. Three
+# behaviors in one image:
+#
+#   - listing: somedir loses entries to dirent_to_missing_inode (two
+#     victims' inodes deleted) -> "<path to somedir>: had dangling
+#     entries removed", resolved at report time
+#   - dedup: both victims are entries of the SAME directory, recorded by
+#     (inum, snapshot) -> exactly 1 listed path, not 2
+#   - the reattach counter: an orphaned inode (dirent deleted, inode
+#     intact) is reattached and counted - "1 inodes reattached in
+#     lost+found" - not listed by path
+test_fsck_damage_report()
+{
+    set_watchdog 120
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    mkdir /mnt/somedir
+    touch /mnt/somedir/victim1 /mnt/somedir/victim2 /mnt/orphan
+    local v1=$(stat -c %i /mnt/somedir/victim1)
+    local v2=$(stat -c %i /mnt/somedir/victim2)
+
+    capture_state $MANIFEST
+    umount /mnt
+
+    local snap=$(subvol_snapshot 1)
+    local posO=$(kvdb -c 'list dirents' |
+	sed -n 's/.*type dirent \([0-9]*:[0-9]*\):[0-9]*.*orphan.*/\1/p' | head -1)
+    [[ -n $posO ]] || {
+	echo "TEST FAILED: can't find orphan's dirent - setup broken"
+	exit 1
+    }
+
+    kvdb -c "set inodes 0:$v1:$snap deleted" \
+	 -c "set inodes 0:$v2:$snap deleted" \
+	 -c "set dirents $posO:$snap deleted"
+
+    local out=/tmp/fsck-damage.log
+    local rc1=0
+    bcachefs fsck -y ${ktest_scratch_dev[0]} > $out 2>&1 || rc1=$?
+    cat $out
+    echo "fsck -y exited $rc1"
+
+    if (( rc1 == 0 )); then
+	echo "TEST FAILED: fsck missed the injected damage"
+	exit 1
+    fi
+
+    grep -q "1 paths damaged by fsck" $out || {
+	echo "TEST FAILED: no damage summary (or somedir's two victims weren't deduped to one path)"
+	exit 1
+    }
+    grep -q "somedir.*had dangling entries removed" $out || {
+	echo "TEST FAILED: somedir not listed with 'had dangling entries removed'"
+	exit 1
+    }
+    grep -q "1 inodes reattached in lost+found" $out || {
+	echo "TEST FAILED: reattach counter missing from the damage report"
+	exit 1
+    }
+
+    local rc2=0
+    bcachefs fsck -n ${ktest_scratch_dev[0]} || rc2=$?
+    echo "second fsck -n exited $rc2"
+    if (( rc2 != 0 )); then
+	echo "TEST FAILED: errors remain after repair"
+	exit 1
+    fi
+
+    skip_snaps=""
+    skip_paths="./somedir/victim1 ./somedir/victim2 ./orphan"
+    verify_fs_state must-mount
+}
+
 main "$@"
