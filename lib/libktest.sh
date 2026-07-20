@@ -577,9 +577,16 @@ start_vm()
 	qemu_disk file="$file",cache.no-flush=on,cache.direct=$ktest_dio
     done
 
+    # Scratch files are reused across runs and truncate -s preserves
+    # existing content: stale signatures from a previous test (mdraid,
+    # LVM) get auto-assembled by the guest's udev at boot, which takes an
+    # exclusive claim on the device - the next test's O_EXCL open then
+    # fails with EBUSY. Truncate to zero first so every run gets an
+    # empty sparse file.
     for size in "${ktest_scratch_dev_sizes[@]}"; do
 	local file="$ktest_out/vm/dev-$disknr"
 
+	truncate -s 0 "$file"
 	truncate -s "$size" "$file"
 
 	qemu_disk file="$file",cache=unsafe
@@ -588,6 +595,7 @@ start_vm()
     for size in "${ktest_scratch_slowdevs[@]}"; do
 	local file="$ktest_out/vm/dev-$disknr"
 
+	truncate -s 0 "$file"
 	truncate -s "$size" "$file"
 
 	# slow device, 300 kiops and 100MB/s
@@ -597,6 +605,7 @@ start_vm()
     for size in "${ktest_pmem_devs[@]}"; do
 	local file="$ktest_out/vm/dev-$disknr"
 
+	truncate -s 0 "$file"
 	fallocate -l "$size" "$file"
 	qemu_pmem mem-path="$file",size=$size
     done
