@@ -821,7 +821,7 @@ test_lz4_buffered()
     echo starting copy
     cp -rx /usr /mnt/foo || true
 
-    echo starting sync 
+    echo starting sync
     sync
 
     echo starting rm
@@ -1206,7 +1206,7 @@ test_journal_torture()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
-test_online_resize()
+test_online_grow()
 {
     set_watchdog 60
     bcachefs_antagonist
@@ -1227,7 +1227,7 @@ test_online_resize()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
-test_offline_resize()
+test_offline_grow()
 {
     set_watchdog 60
     bcachefs_antagonist
@@ -1246,6 +1246,31 @@ test_offline_resize()
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     df -h /mnt
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_offline_grow_to_size()
+{
+    set_watchdog 60
+    bcachefs_antagonist
+
+    run_quiet "" bcachefs format -f		\
+	--fs_size=1G				\
+	${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    dd if=/dev/urandom of=/mnt/grow.bin bs=1M count=256 oflag=direct
+    umount /mnt
+
+    bcachefs device resize ${ktest_scratch_dev[0]} $((2 * 1024 * 1024 * 1024))
+    bcachefs show-super ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    df -h /mnt
+    dd if=/mnt/grow.bin of=/dev/null bs=1M count=256 iflag=direct
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}

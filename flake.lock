@@ -3,15 +3,14 @@
     "buildRoot": {
       "flake": false,
       "locked": {
-        "lastModified": 1,
-        "narHash": "sha256-yRWqg3j6K5NcRHcioFRRrFovfHlh3rIPiN2tdq/9TUs=",
         "path": "dummy-kernel-build",
         "type": "path"
       },
       "original": {
         "path": "dummy-kernel-build",
         "type": "path"
-      }
+      },
+      "parent": []
     },
     "nixpkgs": {
       "locked": {
