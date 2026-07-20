@@ -272,13 +272,20 @@ verify_fs_state()
 	cp $MANIFEST.$f     $MANIFEST.want
 	cp $MANIFEST.now.$f $MANIFEST.got
 
+	# grep -v exits 1 when the filter empties the file - that's success
+	# here, so the mv must happen unconditionally or the unfiltered
+	# manifest survives:
 	for s in $skip_snaps; do
-	    grep -vE " \./$s(/|\$)" $MANIFEST.want > $MANIFEST.want.f && mv $MANIFEST.want.f $MANIFEST.want || true
-	    grep -vE " \./$s(/|\$)" $MANIFEST.got  > $MANIFEST.got.f  && mv $MANIFEST.got.f  $MANIFEST.got  || true
+	    grep -vE " \./$s(/|\$)" $MANIFEST.want > $MANIFEST.want.f || true
+	    mv $MANIFEST.want.f $MANIFEST.want
+	    grep -vE " \./$s(/|\$)" $MANIFEST.got  > $MANIFEST.got.f  || true
+	    mv $MANIFEST.got.f  $MANIFEST.got
 	done
 	for p in $skip_paths; do
-	    grep -vF " $p" $MANIFEST.want > $MANIFEST.want.f && mv $MANIFEST.want.f $MANIFEST.want || true
-	    grep -vF " $p" $MANIFEST.got  > $MANIFEST.got.f  && mv $MANIFEST.got.f  $MANIFEST.got  || true
+	    grep -vF " $p" $MANIFEST.want > $MANIFEST.want.f || true
+	    mv $MANIFEST.want.f $MANIFEST.want
+	    grep -vF " $p" $MANIFEST.got  > $MANIFEST.got.f  || true
+	    mv $MANIFEST.got.f  $MANIFEST.got
 	done
 
 	if ! diff -u $MANIFEST.want $MANIFEST.got; then
