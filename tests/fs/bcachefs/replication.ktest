@@ -303,12 +303,20 @@ test_failure_domains()
 	dd if=/dev/urandom of=/mnt/f$i bs=64k count=1 oflag=direct status=none
     done
 
-    # devices 0,1 = rack0; devices 2,3 = rack1:
+    # devices 0,1 = rack0; devices 2,3 = rack1. Ptr lines carry the device
+    # name before the numbers ("ptr:    vdb 0:38:0 gen 0"), so find the
+    # dev:bucket:offset token and take the device index from it rather
+    # than anchoring on position after "ptr:":
     cat /sys/kernel/debug/bcachefs/*/btrees/extents/keys |
     awk '
 	/^u64s/	     { if (nptr) check(); nptr = 0; r0 = 0; r1 = 0 }
-	/ptr: [01]:/ { r0++; nptr++ }
-	/ptr: [23]:/ { r1++; nptr++ }
+	/ptr:/	     { for (f = 1; f <= NF; f++)
+			   if (split($f, a, ":") == 3 && a[1] ~ /^[0-9]+$/) {
+			       if (a[1] + 0 <= 1) r0++; else r1++;
+			       nptr++
+			       break
+			   }
+		     }
 	function check() {
 	    total++
 	    if (nptr == 2 && (r0 == 2 || r1 == 2)) {
