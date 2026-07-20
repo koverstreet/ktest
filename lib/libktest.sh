@@ -547,7 +547,7 @@ start_vm()
 		qemu_cmd+=(-device ide-hd,bus=hba.$disknr,drive=disk$disknr)
 		;;
 	    virtio-blk)
-		if [[ $disknr < 20 ]]; then
+		if (( disknr < 20 )); then
 		    qemu_cmd+=(-device virtio-blk-pci,drive=disk$disknr)
 		else
 		    qemu_cmd+=(-device virtio-blk-pci,drive=disk$disknr,bus=pci.2)
