@@ -35,6 +35,8 @@
 #            (runtime_will_delete_backref_cleared; the node-local guard
 #            catches a retained v.subvol backref, only the subvolumes-btree
 #            scan catches flag AND field both cleared)
+#   stale_state_tombstone - legacy flags-only tombstone with a stale
+#            no_keys state field (field report, 2026-07-20)
 #
 # Injections are per-key-valid: keys failing bch2_bkey_validate are simply
 # dropped by the read path, so there is nothing to inject there (and the
@@ -1277,7 +1279,7 @@ test_runtime_tombstone_child_repair()
 
     # the mount must succeed: pass 19 autofixes the tombstone child (R4)
     # before bringing the fs online RW.
-    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt || {
+    mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt || {
 	echo "TEST FAILED: mount refused on tombstone-child corruption (expected R4 autofix-at-mount)"
 	exit 1
     }
@@ -1354,6 +1356,81 @@ test_runtime_will_delete_backref_cleared()
     umount /mnt
 
     skip_snaps="snap-0"
+    verify_fs_state must-mount
+}
+
+# The rewind-to-check_subvols acceptance test (expected to FAIL until the
+# recovery-pass rewind machinery works outside mount). A GENUINELY dead
+# legacy leaf: will_delete, backref cleared, AND its subvolume gone - the
+# shape an old fs carries when a snapshot was condemned before check_subvols
+# existed to corroborate it (Zorba's fs). Nothing live points at the node,
+# so it is safe to reap - but delete_dead_snapshots' guard first REQUIRES
+# check_subvols to prove that (check_should_delete_leaf, the !v.subvol arm).
+#
+# On a plain (non-fsck) mount check_subvols isn't in the pass set, so the
+# require has to schedule-and-rewind to it. It can't: the rewind is gated on
+# BCH_FS_in_recovery (recovery_pass_needs_rewind + bch2_require_recovery_pass),
+# which is already CLEAR once the async pass runner - not the mount path - is
+# doing the work. So the require returns recovery_pass_will_run, the reap
+# never happens, and a second fsck still finds the dead leaf. (On the startup
+# path the same gate mis-fires the other way: restart_recovery is returned
+# with rewound_to never set, and recovery goes emergency read-only.)
+#
+# Contract: the leaf is reaped on the plain mount, every surviving snapshot's
+# data is intact, and the oracle fsck -n converges clean.
+test_will_delete_dead_leaf_rewind()
+{
+    setup_snapshot_tree
+
+    local last_subvol=$((2 + NR_SNAPS - 1))
+    local victim=$(subvol_snapshot $last_subvol)	# capture before the delete
+
+    # Real deletion front-half (auto off stops before the reap): removes the
+    # dirent, tombstones subvol 4, and sets the leaf will_delete with the
+    # backref retained - exactly what a crash mid-deletion leaves (cf.
+    # test_fsck_inflight_deletion). Doing it through the pipeline, not by hand,
+    # is what keeps the dirent from dangling (a plain mount won't run
+    # check_dirents to clean an orphaned one).
+    mount -t bcachefs -o noauto_snapshot_deletion ${ktest_scratch_dev[0]} /mnt
+    bcachefs subvolume delete /mnt/snap-2
+    umount /mnt
+
+    # Age it into the LEGACY shape: strip the retained backref so the leaf is
+    # will_delete / subvol 0 - what an old fs carries when a snapshot was
+    # condemned before check_subvols existed to corroborate it (Zorba). The
+    # subvolumes-btree tombstone is already there, so nothing live references
+    # this node: check_should_delete_leaf takes the !v.subvol arm and requires
+    # check_subvols to prove it's safe to reap.
+    kvdb -c "update snapshots 0:$victim:0 subvol=0"
+
+    # plain mount - non-fsck. delete_dead_snapshots (scheduled off the snapshot
+    # read) hits the leaf, requires check_subvols, and must rewind to run it -
+    # the exact path that threw restart_recovery on Zorba. (check_snapshots
+    # normalizing the now-mismatched legacy subvol flag escalates this to the
+    # in-recovery fsck set; the rewind fires either way.)
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt || {
+	echo "TEST FAILED: plain mount failed on a legacy dead-snapshot leaf (check_subvols rewind wedged recovery)"
+	exit 1
+    }
+    sleep 10    # let the async runner reap
+    [[ -f /mnt/snap-0/data-0 && -f /mnt/snap-1/data-1 ]] || {
+	echo "TEST FAILED: surviving snaps lost data during the dead-leaf reap"
+	umount /mnt
+	exit 1
+    }
+    umount /mnt
+
+    # oracle: the dead leaf must actually be gone. If the rewind never
+    # happened, delete_dead_snapshots silently no-op'd and it's still here.
+    local rc=0
+    bcachefs fsck -n ${ktest_scratch_dev[0]} || rc=$?
+    echo "oracle fsck -n exited $rc"
+    if (( rc != 0 )); then
+	echo "TEST FAILED: dead snapshot leaf not reaped - check_subvols rewind never ran"
+	exit 1
+    fi
+
+    skip_snaps="snap-$((NR_SNAPS - 1))"
     verify_fs_state must-mount
 }
 
@@ -1551,6 +1628,94 @@ test_state_wrong_codeword()
     kvdb -c "update snapshots 0:$victim:0 state=deleted"
 
     skip_snaps=""
+    check_fsck repair
+}
+
+# The third leg of the state-vs-bits triangle: the legacy bits say
+# deleted and are telling the truth. A node tombstoned by a legacy
+# flags-only bch2_snapshot_node_delete() after the state field had
+# already been synced: the splice wrote the tombstone wipe (parent,
+# tree, depth, skiplist zeroed; child retained as the live-descendant
+# breadcrumb) and set the DELETED bit, but never touched the state
+# field - still no_keys from before the splice. state_compat trusts the
+# nonzero state field, so the interior-deletion collector queues the
+# tombstone as a one-child no_keys node, and the check_snapshots it
+# forces edge-validates the breadcrumb as a live edge: the child was
+# reparented at splice time and doesn't point back ->
+# EINVAL_snapshot_child_bad_parent, emergency RO, and the same wedge on
+# every open thereafter.
+#
+# Seen in the field (IRC, 2026-07-20): 1.38->1.40 upgrade with 178
+# deferred no_keys husks; a first 1.40 mount spliced some of them with
+# a pre-state-field node_delete and died mid-upgrade; every mount since
+# fail-stops on the first stale-state tombstone.
+#
+# The corroboration that licenses the repair: no live, will_delete or
+# no_keys node ever has tree == 0 - the tombstone wipe is unmistakable,
+# so bits + shape outvote the stale codeword. (Contrast
+# test_state_wrong_codeword: bits + a live-shaped node outvote a
+# deleted codeword; a bare DELETED bit against a live-shaped node stays
+# with state.)
+#
+# The real pipeline builds the topology - subvol delete makes the
+# interior node no_keys, the next open splices it into a genuine
+# tombstone - then the injection stomps only the state field back to
+# the legacy writer's residue.
+test_stale_state_tombstone()
+{
+    setup_snapshot_tree
+
+    local STATE_S_NO_KEYS=$((0x372b5a01))
+    local STATE_S_DELETED=$((0x7cd4a225))
+
+    # front half of the deletion pipeline, deterministically:
+    mount -t bcachefs -o noauto_snapshot_deletion ${ktest_scratch_dev[0]} /mnt
+    bcachefs subvolume delete /mnt/snap-1
+    umount /mnt
+
+    # delete_dead_snapshots (in fsck): reap the leaf, migrate the
+    # interior node's keys to its surviving child, mark it no_keys -
+    # the splice itself is deferred to the next open:
+    local rc=0
+    bcachefs fsck -y ${ktest_scratch_dev[0]} || rc=$?
+    if (( rc > 1 )); then
+	echo "TEST FAILED: fsck errored ($rc) completing the deletion front half"
+	exit 1
+    fi
+
+    local husk="" id
+    for id in $(all_snap_ids); do
+	if [[ $(snap_field $id state) == $STATE_S_NO_KEYS ]]; then
+	    husk=$id
+	    break
+	fi
+    done
+    if [[ -z $husk ]]; then
+	echo "TEST FAILED: no no_keys interior node after deletion - setup broken"
+	exit 1
+    fi
+
+    # next open: delete_dead_interior_snapshots splices the node into a
+    # real deleted tombstone:
+    rc=0
+    bcachefs fsck -y ${ktest_scratch_dev[0]} || rc=$?
+    if (( rc > 1 )); then
+	echo "TEST FAILED: fsck errored ($rc) splicing the interior node"
+	exit 1
+    fi
+
+    if [[ $(snap_field $husk state) != $STATE_S_DELETED ||
+	  $(snap_field $husk tree)  != 0 ]]; then
+	echo "TEST FAILED: node $husk not spliced into a tombstone (state $(snap_field $husk state) tree $(snap_field $husk tree))"
+	exit 1
+    fi
+
+    # the legacy writer's residue: the DELETED bit is already set (and
+    # truthful); rewind the state field to the stale pre-splice value
+    # and restore the NO_KEYS bit the legacy writer never cleared:
+    kvdb -c "update snapshots 0:$husk:0 state=no_keys no_keys_obsolete=1"
+
+    skip_snaps="snap-1"
     check_fsck repair
 }
 
