@@ -280,21 +280,23 @@ test_device_add()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
-# Replicas must spread across failure domains - the subdivisions of the
-# label tree below the allocation target. Two racks of two devices,
+# Replicas must spread across failure domains - the flat per-device
+# failure_domain strings (NOT labels: labels are naming and target
+# vocabulary, they feed nothing into placement). Two racks of two devices,
 # replicas=2: every extent's copies must land in different racks. (Without
-# domain aware allocation the free space round robin pairs equal devices in
-# insertion order, co-locating every extent's copies in one rack.)
+# domain-aware allocation this reliably co-locates: one dd per file means
+# cold, hashed write points, all stripe clock hands tie at zero, and the
+# stable sort pairs the two lowest-index devices for every extent.)
 test_failure_domains()
 {
     set_watchdog 60
 
-    run_quiet "" bcachefs format -f		\
-	--replicas=2				\
-	--label=rack0.a ${ktest_scratch_dev[0]}	\
-	--label=rack0.b ${ktest_scratch_dev[1]}	\
-	--label=rack1.a ${ktest_scratch_dev[2]}	\
-	--label=rack1.b ${ktest_scratch_dev[3]}
+    run_quiet "" bcachefs format -f			\
+	--replicas=2					\
+	--failure_domain=rack0 ${ktest_scratch_dev[0]}	\
+	--failure_domain=rack0 ${ktest_scratch_dev[1]}	\
+	--failure_domain=rack1 ${ktest_scratch_dev[2]}	\
+	--failure_domain=rack1 ${ktest_scratch_dev[3]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]}:${ktest_scratch_dev[3]} /mnt
 
