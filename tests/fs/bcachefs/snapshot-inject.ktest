@@ -1828,26 +1828,26 @@ test_runtime_deleted_interior_defers()
 # the deleted root-id version was the only inode it could see - every
 # other snapshot has a version (and gets a dirent copy) at an ancestor
 # generation, and must keep the file.
-test_dirent_repair_trans_mem()
-{
-    set_watchdog 600
 
+# Build the image both trans-mem tests repair. Sets $TM_NAME.
+build_dirent_repair_image()
+{
     local NR_VERSIONS=300
-    local NAME=$(printf 'r%.0s' {1..250})
+    TM_NAME=$(printf 'r%.0s' {1..250})
 
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     pushd /mnt
-    touch $NAME
+    touch $TM_NAME
     local i
     for ((i = 1; i <= NR_VERSIONS; i++)); do
 	bcachefs subvolume snapshot snap-$i
-	touch $NAME
+	touch $TM_NAME
     done
     popd
 
-    local inum=$(stat -c %i /mnt/$NAME)
+    local inum=$(stat -c %i /mnt/$TM_NAME)
 
     capture_state $MANIFEST
     umount /mnt
@@ -1861,10 +1861,140 @@ test_dirent_repair_trans_mem()
     }
 
     kvdb -c "set inodes 0:$inum:$root deleted"
+}
+
+test_dirent_repair_trans_mem()
+{
+    set_watchdog 600
+
+    build_dirent_repair_image
 
     skip_snaps=""
-    skip_paths="./snap-1/$NAME"
+    skip_paths="./snap-1/$TM_NAME"
     check_fsck repair
+}
+
+# The field report's exact shape: the repair runs in KERNEL recovery at
+# mount time, not offline fsck. Pre-fix, that's where the ENOMEM failed
+# the pass, went emergency-RO and failed the mount - the repair wedging
+# the filesystem was the report's whole severity. The mount must succeed
+# and leave the fs clean.
+test_dirent_repair_trans_mem_mount()
+{
+    set_watchdog 600
+
+    build_dirent_repair_image
+
+    mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt || {
+	echo "TEST FAILED: mount -o fsck failed on the repairable image (the field-report wedge)"
+	exit 1
+    }
+    umount /mnt
+
+    local rc=0
+    bcachefs fsck -n ${ktest_scratch_dev[0]} || rc=$?
+    echo "post-mount fsck -n exited $rc"
+    if (( rc != 0 )); then
+	echo "TEST FAILED: errors remain after mount-time repair"
+	exit 1
+    fi
+
+    skip_snaps=""
+    skip_paths="./snap-1/$TM_NAME"
+    verify_fs_state must-mount
+}
+
+# The dirent_to_overwritten_inode repair and its visibility probe, both
+# directions. Setup: two files created before snap-1, rm'd before snap-2,
+# so each has a dirent + inode at the tree root's id and whiteouts for
+# both at the rm generation (snap-1's successor, $mid below).
+#
+#   fileA - dirent RESURRECTED over the overwritten inode: delete the
+#     dirent's whiteout at $mid. The dirent is visible again in a
+#     generation whose inode is overwritten; the repair must report it
+#     and re-whiteout it.
+#
+#   fileB - dirent already INVISIBLE at the overwritten generation: move
+#     the inode whiteout one generation down (delete at $mid, recreate at
+#     $live), leaving the dirent whiteout at $mid to shadow the dirent.
+#     The reworked check peeks visibility before reporting: no report, no
+#     redundant whiteout. The pre-rework code reported and re-whiteouted
+#     here - snapshots_seen (the old predicate) can't see that the dirent
+#     is already shadowed.
+#
+# Asserted through the fsck error reports themselves: "overwritten in
+# snapshot $mid" (fileA) must appear, "overwritten in snapshot $live"
+# (fileB) must not.
+test_dirent_overwritten_inode()
+{
+    set_watchdog 240
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    pushd /mnt
+    touch fileA fileB
+    local inumA=$(stat -c %i fileA)
+    local inumB=$(stat -c %i fileB)
+    bcachefs subvolume snapshot snap-1
+    rm fileA fileB
+    bcachefs subvolume snapshot snap-2
+    popd
+
+    capture_state $MANIFEST
+    umount /mnt
+
+    local live=$(subvol_snapshot 1)
+    local mid=$(snap_field $live parent)		# the rm generation
+    [[ -n $mid && $mid != 0 ]]
+
+    # fileA's dirent pos, from the surviving root-generation key
+    local posA=$(kvdb -c 'list dirents' |
+	sed -n 's/.*type dirent \([0-9]*:[0-9]*\):[0-9]*.*fileA.*/\1/p' | head -1)
+    [[ -n $posA ]] || {
+	echo "TEST FAILED: can't find fileA's dirent - setup broken"
+	exit 1
+    }
+
+    # Explicit inode whiteouts rather than relying on rm's deferred inode
+    # deletion having completed by umount (an unlinked-but-present inode
+    # at $mid would land in ->inodes instead of ->deletes and the repair
+    # would never fire): overwrite whatever the rm left at $mid.
+    kvdb -c "set dirents $posA:$mid deleted" \
+	 -c "set inodes 0:$inumA:$mid whiteout" \
+	 -c "set inodes 0:$inumB:$mid deleted" \
+	 -c "set inodes 0:$inumB:$live whiteout"
+
+    local out=/tmp/fsck-overwritten.log
+    local rc1=0
+    bcachefs fsck -y ${ktest_scratch_dev[0]} > $out 2>&1 || rc1=$?
+    cat $out
+    echo "fsck -y exited $rc1"
+
+    if (( rc1 == 0 )); then
+	echo "TEST FAILED: fsck missed the resurrected dirent"
+	exit 1
+    fi
+    grep -q "overwritten in snapshot $mid" $out || {
+	echo "TEST FAILED: no dirent_to_overwritten_inode report for fileA (snapshot $mid)"
+	exit 1
+    }
+    if grep -q "overwritten in snapshot $live" $out; then
+	echo "TEST FAILED: reported fileB's already-shadowed dirent (snapshot $live) - visibility probe not working"
+	exit 1
+    fi
+
+    local rc2=0
+    bcachefs fsck -n ${ktest_scratch_dev[0]} || rc2=$?
+    echo "second fsck -n exited $rc2"
+    if (( rc2 != 0 )); then
+	echo "TEST FAILED: errors remain after repair"
+	exit 1
+    fi
+
+    skip_snaps=""
+    skip_paths=""
+    verify_fs_state must-mount
 }
 
 main "$@"
