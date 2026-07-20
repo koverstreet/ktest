@@ -1801,4 +1801,70 @@ test_runtime_deleted_interior_defers()
     verify_fs_state must-mount
 }
 
+# ── trans-mem bounding in check_dirent's per-snapshot repair loops ───────
+#
+# Field report (2026-07-20): check_dirents() during unclean-shutdown
+# recovery died with ENOMEM_trans_kmalloc + the WARN_ON_ONCE in
+# __bch2_trans_kmalloc, failing the pass and wedging the mount. The
+# repair loops in check_dirent iterate over every snapshot version of the
+# target inode and batched everything into one transaction: ~120+
+# versions needing repair blew BTREE_TRANS_MEM_MAX (64k). Now
+# bch2_trans_commit_lazy_if_full() commits and restarts mid-loop, and the
+# re-drive must skip already-committed repairs or it livelocks.
+#
+# Drive the dirent_to_inode_in_descendant_snapshot copy loop over enough
+# versions to cross the old cap several times: create a file, then
+# snapshot+touch NR_VERSIONS times (touch after each snapshot = a
+# distinct inode version per generation; the file stays empty so no
+# extent keys tag along at ids the injection orphans), then delete the
+# single ancestor inode key. The dirent - never modified, one key at the
+# tree root's id, ~250-char name to fatten each copy - now resolves only
+# to inodes in descendant snapshots, so one check_dirent call wants one
+# dirent copy per version (~90k of trans mem pre-fix: ENOMEM + WARN;
+# post-fix: several commit-and-restart rounds, and the skip-probe is what
+# keeps them converging).
+#
+# Blast radius is exactly snap-1: its leaf hangs off the tree root, so
+# the deleted root-id version was the only inode it could see - every
+# other snapshot has a version (and gets a dirent copy) at an ancestor
+# generation, and must keep the file.
+test_dirent_repair_trans_mem()
+{
+    set_watchdog 600
+
+    local NR_VERSIONS=300
+    local NAME=$(printf 'r%.0s' {1..250})
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    pushd /mnt
+    touch $NAME
+    local i
+    for ((i = 1; i <= NR_VERSIONS; i++)); do
+	bcachefs subvolume snapshot snap-$i
+	touch $NAME
+    done
+    popd
+
+    local inum=$(stat -c %i /mnt/$NAME)
+
+    capture_state $MANIFEST
+    umount /mnt
+
+    # the ancestor version: the file was created before the first
+    # snapshot, at what is now the tree root's id
+    local root=$(snap_root)
+    kvdb -c "get inodes 0:$inum:$root" | grep -q . || {
+	echo "TEST FAILED: no inode $inum at tree root $root - setup broken"
+	exit 1
+    }
+
+    kvdb -c "set inodes 0:$inum:$root deleted"
+
+    skip_snaps=""
+    skip_paths="./snap-1/$NAME"
+    check_fsck repair
+}
+
 main "$@"
