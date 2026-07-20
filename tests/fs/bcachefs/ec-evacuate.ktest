@@ -51,8 +51,7 @@ test_ec_evacuate_after_degraded_io()
 	--fdatasync=16
 
     bcachefs fs usage -h /mnt
-    bcachefs device offline --force "${ktest_scratch_dev[1]}" ||
-	bcachefs device offline "${ktest_scratch_dev[1]}"
+    bcachefs device offline --force "${ktest_scratch_dev[1]}"
 
     fio --output-format=json				\
 	--output="$ktest_out/fio-degraded-write.json"	\
@@ -82,7 +81,7 @@ test_ec_evacuate_after_degraded_io()
     bcachefs fs usage -h /mnt
     bcachefs scrub /mnt
     umount /mnt
-    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs fsck -n "${ktest_scratch_dev[@]}"
     bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
 }
 
