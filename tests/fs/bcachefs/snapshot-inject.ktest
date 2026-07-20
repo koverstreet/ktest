@@ -28,15 +28,37 @@
 #            second run may still error, an unmountable fs only warns
 #
 # All tests assert the full repair and FAIL until their corresponding
-# repair lands - that's the point. The still-open repairs:
-#   R1-R6  - the check_snapshot topology/backref repairs (format.h R-table)
-#   no_keys_two_children - the snapshot.h:192 EBUG_ON coherence check
+# repair lands - that's the point. The still-open repairs (full-suite
+# sweep 2026-07-20; R1/R2/R4/R5 have landed and their tests now pass):
+#   R3     - wrong_parent: child's parent pointer re-aim
+#   R6/backref family - the subvolume<->snapshot backref/condemnation
+#            repairs: snapshot_to_missing_subvol, state_wrong_codeword,
+#            subvol_backref_cleared/stolen, subvol_child_bit_missing,
+#            subvol_deleted_flag_conflict, subvol_no_keys_subvol_gone,
+#            subvol_to_dead_node_no_backref, subvol_to_missing_node,
+#            two_subvols_one_snapshot, unlinked_subvol,
+#            creation_parent_dangling, dangling_subvol,
+#            missing_root_node, orphan_become_tree_root,
+#            no_keys_with_keys, runtime_tombstone_child_repair,
+#            missing_main_subvol
 #   D1     - cross-btree condemnation in the runtime delete collector
 #            (runtime_will_delete_backref_cleared; the node-local guard
 #            catches a retained v.subvol backref, only the subvolumes-btree
-#            scan catches flag AND field both cleared)
+#            scan catches flag AND field both cleared). CAUTION: currently
+#            spins recovery in an unbounded check_subvols <->
+#            delete_dead_snapshots rewind loop - kill the test promptly.
 #   stale_state_tombstone - legacy flags-only tombstone with a stale
 #            no_keys state field (field report, 2026-07-20)
+#
+# Known splats (pre-existing, surfaced by the 2026-07-20 sweep), which
+# fail otherwise-repairing tests via check_dmesg - and can bleed into the
+# NEXT test's dmesg window through async fsck/unmount tail output:
+#   - WARN btree/iter.c:3774 (trans_begin with queued updates dropped) in
+#     the childless-no_keys deletion path: no_keys_with_data,
+#     state_zeroed_pending_deletion directly; state_zeroed_whole_fs and
+#     stranded_keys fail by bleed only and pass standalone
+#   - flaky BUG at btree/commit.c:388 (btree_insert_entry_checks) in
+#     missing_main_subvol's check_dirent repair cascade
 #
 # Injections are per-key-valid: keys failing bch2_bkey_validate are simply
 # dropped by the read path, so there is nothing to inject there (and the
