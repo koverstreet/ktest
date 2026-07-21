@@ -53,12 +53,12 @@
 # Known splats (pre-existing, surfaced by the 2026-07-20 sweep), which
 # fail otherwise-repairing tests via check_dmesg - and can bleed into the
 # NEXT test's dmesg window through async fsck/unmount tail output:
-#   - WARN btree/iter.c:3774 (trans_begin with queued updates dropped) in
-#     the childless-no_keys deletion path: no_keys_with_data,
-#     state_zeroed_pending_deletion directly; state_zeroed_whole_fs and
-#     stranded_keys fail by bleed only and pass standalone
 #   - flaky BUG at btree/commit.c:388 (btree_insert_entry_checks) in
 #     missing_main_subvol's check_dirent repair cascade
+# (The iter.c dropped-updates WARN in the childless-no_keys deletion
+# path - no_keys_with_data, state_zeroed_pending_deletion + two bleed
+# victims - was fixed by committing the deletion collection loop per-key;
+# all four confirmed green in CI 2026-07-21.)
 #
 # Injections are per-key-valid: keys failing bch2_bkey_validate are simply
 # dropped by the read path, so there is nothing to inject there (and the
