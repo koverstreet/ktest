@@ -1005,6 +1005,62 @@ test_subvol_fs_path_parent_wrong()
     check_fsck repair
 }
 
+# Field report (2026-07-20, the ENOMEM reporter's fs, further into
+# repair): a reconstructed subvol root inode has bi_parent_subvol unset,
+# check_dirent_to_subvol hits inode_bi_parent_wrong ("got 0, should be
+# N") at MOUNT-TIME recovery - and with the repair not marked AUTOFIX,
+# recovery aborted fsck_errors_not_fixed, the initrd mount failed, and
+# their boot dropped to the emergency shell.
+#
+# Field-faithful construction: delete the 'other' subvol's root inode
+# key. Recovery must reconstruct it (bi_parent_subvol comes back 0 -
+# reconstruction can't know it) and then repair the backpointer from the
+# referencing dirent - all at mount time, no offline fsck. This is the
+# acceptance test for inode_bi_parent_wrong (+ fs_path_parent_wrong)
+# being FSCK_AUTOFIX, and it also settles a pass-ordering question:
+# check_dirent_to_subvol fail-stops (fsck_repair_unimplemented) if the
+# root inode is still missing when it looks, so reconstruction must win
+# the race or this fails for that reason instead - also worth knowing.
+test_subvol_root_inode_reconstruct_at_mount()
+{
+    set_watchdog 180
+
+    setup_snapshot_tree
+
+    local inum=$(subvol_field 5 inode)
+    local snap=$(subvol_snapshot 5)
+    [[ -n $inum && -n $snap ]]
+
+    kvdb -c "get inodes 0:$inum:$snap" | grep -q . || {
+	echo "TEST FAILED: no root inode $inum:$snap for subvol 5 - setup broken"
+	exit 1
+    }
+    kvdb -c "set inodes 0:$inum:$snap deleted"
+
+    # The field shape is mount-time recovery, not offline fsck:
+    mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt || {
+	echo "TEST FAILED: mount -o fsck refused - the field-report boot wedge"
+	exit 1
+    }
+    grep -q other-tree /mnt/other/file || {
+	echo "TEST FAILED: other/file lost in subvol root reconstruction"
+	umount /mnt
+	exit 1
+    }
+    umount /mnt
+
+    local rc=0
+    bcachefs fsck -n ${ktest_scratch_dev[0]} || rc=$?
+    echo "post-mount fsck -n exited $rc"
+    if (( rc != 0 )); then
+	echo "TEST FAILED: errors remain after mount-time repair"
+	exit 1
+    fi
+
+    skip_snaps=""
+    verify_fs_state must-mount
+}
+
 # Stray subvolume_children entry claiming a parent the subvolume doesn't
 # have (subvol_children_bad: deleted). Complements
 # test_subvol_child_bit_missing, which tests the missing direction.
