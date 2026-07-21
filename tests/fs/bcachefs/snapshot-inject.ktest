@@ -210,6 +210,13 @@ subvol_snapshot()
     subvol_field $1 snapshot
 }
 
+# Position of the dirent with the given name: dirent_pos <name>
+dirent_pos()
+{
+    kvdb -c 'list dirents' |
+	sed -n "s/.*type dirent \([0-9:]*\).*: $1 ->.*/\1/p" | head -1
+}
+
 all_snap_ids()
 {
     kvdb -c 'list snapshots' | sed -n 's/.*type snapshot 0:\([0-9]*\):0.*/\1/p'
@@ -525,6 +532,58 @@ test_stranded_keys()
 
     skip_snaps="snap-$((NR_SNAPS - 1))"
     check_fsck repair
+}
+
+# Legacy flag-less pending subvolume deletion: filesystems that deleted a
+# subvolume before the delete path set BCH_INODE_unlinked left the root
+# inode with no backpointer and no flag - subvolume key gone, snapshot
+# will_delete, sweep pending (the field-report state, 2026-07-21).
+# check_inode must corroborate via the deletion chain and converge the
+# root by setting the flag (subvol_root_unlinked_flag_missing, autofix);
+# the sweep then finishes the job.
+#
+# kvdb can't edit varint inode fields, so the root's backpointer can't be
+# zeroed directly; instead the dirent is deleted and check_inode's own
+# inode_points_to_missing_dirent repair zeroes bi_dir in place earlier in
+# the same pass - by the time the bi_subvol checks run, the inode matches
+# the legacy state.
+test_subvol_root_missing_unlinked_flag()
+{
+    setup_snapshot_tree
+
+    local last_subvol=$((2 + NR_SNAPS - 1))
+    local victim=$(subvol_snapshot $last_subvol)
+    local dirent=$(dirent_pos snap-$((NR_SNAPS - 1)))
+
+    if [[ -z $dirent ]]; then
+	echo "TEST FAILED: couldn't find snap-$((NR_SNAPS - 1)) dirent"
+	exit 1
+    fi
+
+    kvdb -c "update snapshots 0:$victim:0 state=will_delete subvol=0" \
+	 -c "set dirents $dirent deleted" \
+	 -c "set subvolumes 0:$last_subvol:0 deleted"
+
+    local out=/tmp/fsck-unlinked-flag.out
+    local rc1=0 rc2=0
+    bcachefs fsck -y ${ktest_scratch_dev[0]} 2>&1 | tee $out || rc1=$?
+    echo "first fsck -y exited $rc1"
+
+    if ! grep -q "missing BCH_INODE_unlinked" $out; then
+	echo "TEST FAILED: subvol_root_unlinked_flag_missing repair did not fire"
+	exit 1
+    fi
+
+    bcachefs fsck -n ${ktest_scratch_dev[0]} || rc2=$?
+    echo "second fsck -n exited $rc2"
+
+    if (( rc2 != 0 )); then
+	echo "TEST FAILED: errors remain after fsck -y"
+	exit 1
+    fi
+
+    skip_snaps="snap-$((NR_SNAPS - 1))"
+    verify_fs_state must-mount
 }
 
 # H6 shape: keys at a snapshot with no inode at that snapshot
