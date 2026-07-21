@@ -553,6 +553,7 @@ test_subvol_root_missing_unlinked_flag()
 
     local last_subvol=$((2 + NR_SNAPS - 1))
     local victim=$(subvol_snapshot $last_subvol)
+    local root_inum=$(subvol_field $last_subvol inode)
     local dirent=$(dirent_pos snap-$((NR_SNAPS - 1)))
 
     if [[ -z $dirent ]]; then
@@ -560,9 +561,18 @@ test_subvol_root_missing_unlinked_flag()
 	exit 1
     fi
 
-    kvdb -c "update snapshots 0:$victim:0 state=will_delete subvol=0" \
+    # subvol_obsolete: keep the legacy flag bits in sync with the state
+    # field, as the orderly deletion path would - else check_snapshots
+    # spends its repair on snapshot_subvol_flag_wrong instead:
+    kvdb -c "update snapshots 0:$victim:0 state=will_delete subvol=0 subvol_obsolete=0" \
 	 -c "set dirents $dirent deleted" \
 	 -c "set subvolumes 0:$last_subvol:0 deleted"
+
+    echo "=== post-surgery state (victim subvol $last_subvol, snapshot $victim, root inum $root_inum):"
+    kvdb -c "get snapshots 0:$victim:0" || true
+    kvdb -c "get subvolumes 0:$last_subvol:0" || true
+    kvdb -c "get inodes 0:$root_inum:$victim" || true
+    kvdb -c 'list dirents' || true
 
     local out=/tmp/fsck-unlinked-flag.out
     local rc1=0 rc2=0
