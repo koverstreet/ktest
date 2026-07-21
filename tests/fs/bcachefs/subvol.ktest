@@ -5,18 +5,35 @@
 config-scratch-devs 16G
 config-scratch-devs 4G
 
+# Snapshots pin the data they were taken over; deleting them has to give it
+# back.
+#
+# Each generation overwrites the same file and snapshots the root subvolume,
+# so every snapshot pins its own version of foo. Repeated snapshotting builds
+# a chain of interior nodes, and deleting newest-first walks it back down:
+# each deletion leaves the node above with one live child - the redundant
+# case that bch2_delete_dead_snapshot_key() collapses.
+#
+# The pre-teardown check that the snapshots really were pinning their
+# generations matters as much as the reclaim check: without it the test passes
+# vacuously if they never held anything.
 test_snapshots_simple()
 {
-    NR_SNAPS=1
+    NR_SNAPS=8
+    GEN_MB=32
+    SLOP_MB=32		# btree/journal noise between measurements
 
     bcachefs_antagonist
 
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+
+    local baseline=$(bcachefs_used_sectors ${ktest_scratch_dev[0]})
+
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     pushd /mnt
     for i in `seq 0 $NR_SNAPS`; do
-	dd if=/dev/zero of=/mnt/foo bs=1M count=1 oflag=direct
+	dd if=/dev/urandom of=/mnt/foo bs=1M count=$GEN_MB oflag=direct
 	bcachefs subvolume snapshot snap-$i
     done
     popd
@@ -24,21 +41,43 @@ test_snapshots_simple()
     umount /mnt
     sleep 0.2
     bcachefs fsck -n ${ktest_scratch_dev[0]}
-    exit
 
-    for i in `seq 0 $NR_SNAPS|sort -r`; do
-	umount /mnt
-	sleep 0.2
-	bcachefs fsck -n ${ktest_scratch_dev[0]}
+    local full=$(bcachefs_used_sectors ${ktest_scratch_dev[0]})
+    local pinned=$(( full - baseline ))
+    echo "with $((NR_SNAPS + 1)) snapshots: $(bcachefs_sectors_to_mb $pinned) MiB pinned"
+
+    if (( pinned < NR_SNAPS * GEN_MB * 2048 )); then
+	echo "TEST FAILED: expected at least $((NR_SNAPS * GEN_MB)) MiB pinned by $((NR_SNAPS + 1)) snapshots, got $(bcachefs_sectors_to_mb $pinned) MiB"
+	echo "             (snapshots aren't pinning their data - the reclaim check below would pass vacuously)"
+	exit 1
+    fi
+
+    for i in `seq 0 $NR_SNAPS|sort -rn`; do
 	mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
 	echo "deleting snap-$i"
 	bcachefs subvolume delete /mnt/snap-$i
-	df -h /mnt
+	bcachefs_settle_snapshot_deletion /mnt
+
+	umount /mnt
+	sleep 0.2
+	bcachefs fsck -n ${ktest_scratch_dev[0]}
+
+	local now=$(bcachefs_used_sectors ${ktest_scratch_dev[0]})
+	echo "  after deleting snap-$i: $(bcachefs_sectors_to_mb $((now - baseline))) MiB still in use"
     done
 
-    umount /mnt
-    sleep 0.2
+    # All snapshots gone: only the live copy of foo should be left.
+    local left=$(( $(bcachefs_used_sectors ${ktest_scratch_dev[0]}) - baseline ))
+
+    if (( left > (GEN_MB + SLOP_MB) * 2048 )); then
+	echo "TEST FAILED: $(bcachefs_sectors_to_mb $left) MiB still allocated after deleting every snapshot"
+	echo "             (only the live copy of foo should remain: ~$GEN_MB MiB)"
+	exit 1
+    fi
+
+    echo "reclaimed: $(bcachefs_sectors_to_mb $left) MiB left, live foo is $GEN_MB MiB"
+
     mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
     umount /mnt
 

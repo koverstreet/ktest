@@ -266,6 +266,66 @@ export BCACHEFS_KERNEL_ONLY=1
 #Expensive:
 #require-kernel-config CLOSURE_DEBUG
 
+# ── disk space accounting ────────────────────────────────────────────────
+
+# Total user data on disk, in 512b sectors: bcachefs_used_sectors <dev>
+#
+# The accounting btree's `replicas` counters, which gc recomputes and fsck
+# verifies - ground truth, not a statfs estimate. Device must be unmounted.
+bcachefs_used_sectors()
+{
+    bcachefs list -b accounting $1 2>/dev/null |
+	sed -n 's/.*: replicas user: [^]]*\] //p' |
+	awk '{ s += $1 } END { print s + 0 }'
+}
+
+bcachefs_sectors_to_mb()
+{
+    echo $(( $1 / 2048 ))
+}
+
+# sysfs directory of the fs mounted at $1.
+#
+# Not always the UUID: fs/init/fs.c names the kobject "%pU" only when
+# c->sb.multi_device; a single-device fs is named after its block device
+# (prt_bdevname -> /sys/fs/bcachefs/vdb), so the UUID dir doesn't exist for it.
+# Resolve rather than glob /sys/fs/bcachefs/*/ - as a redirect target that
+# becomes an "ambiguous redirect" once a second bcachefs is mounted.
+bcachefs_sysfs_dir()
+{
+    local mnt=$1
+    local src=$(findmnt -no SOURCE "$mnt")
+    local uuid=$(findmnt -no UUID "$mnt")
+    local d
+
+    for d in "/sys/fs/bcachefs/${src##*/}" "/sys/fs/bcachefs/$uuid"; do
+	if [[ -d $d ]]; then
+	    echo "$d"
+	    return 0
+	fi
+    done
+
+    echo "bcachefs_sysfs_dir: no sysfs dir for $mnt (src='$src' uuid='$uuid')" >&2
+    return 1
+}
+
+# Run snapshot deletion to completion: bcachefs subvolume delete only queues it
+# (bch2_delete_dead_snapshots_async), so measuring space right after would race
+# the worker. Fails loudly - a settle that quietly doesn't happen just moves the
+# race somewhere harder to see.
+bcachefs_settle_snapshot_deletion()
+{
+    local mnt=$1
+
+    sync
+
+    local dir
+    dir=$(bcachefs_sysfs_dir "$mnt") || return 1
+
+    echo 1 > "$dir/internal/trigger_delete_dead_snapshots"
+    sync
+}
+
 bcachefs_mem_in_use()
 {
     echo 1 > /sys/module/rcutree/parameters/do_rcu_barrier
