@@ -928,6 +928,42 @@ test_snapshot_file_delete_2()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+test_subvol_delete_by_rename()
+{
+    set_watchdog 60
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # POSIX rename(2) may overwrite an empty directory, and an empty
+    # subvolume root is a legal victim - same precondition as rmdir of a
+    # subvolume. mv -T forces rename() rather than moving into the dir.
+    # The overwrite must engage the subvolume deletion path, not ordinary
+    # unlink accounting.
+    bcachefs subvolume create /mnt/victim
+    touch /mnt/victim/keep
+    bcachefs subvolume snapshot /mnt/victim /mnt/snap
+    rm /mnt/victim/keep
+
+    mkdir /mnt/src
+    touch /mnt/src/file
+    mv -T /mnt/src /mnt/victim
+
+    # now a plain directory, not a subvolume:
+    [[ -f /mnt/victim/file ]]
+    ! bcachefs subvolume delete /mnt/victim
+
+    # the snapshot and its contents survive the source's deletion:
+    [[ -f /mnt/snap/keep ]]
+
+    umount /mnt
+
+    mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
+    umount /mnt
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_subvol_list()
 {
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
