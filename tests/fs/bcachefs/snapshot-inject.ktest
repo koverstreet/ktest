@@ -2028,6 +2028,17 @@ test_dirent_overwritten_inode()
 	 -c "set inodes 0:$inumB:$mid deleted" \
 	 -c "set inodes 0:$inumB:$live whiteout"
 
+    # Post-surgery state dump: the first CI run found nothing to repair,
+    # and the check-side semantics (ref_visible/key_visible_in_snapshot)
+    # say this construction should fire - so one of the surgery outcomes
+    # isn't what it claims. Make the state visible:
+    echo "post-surgery dirents at fileA pos (expect only the root-generation key):"
+    kvdb -c "list dirents" | grep -F "$posA" || true
+    echo "post-surgery fileA inode at mid (expect whiteout):"
+    kvdb -c "get inodes 0:$inumA:$mid" || true
+    echo "post-surgery fileB inode at live (expect whiteout):"
+    kvdb -c "get inodes 0:$inumB:$live" || true
+
     local out=/tmp/fsck-overwritten.log
     local rc1=0
     bcachefs fsck -y ${ktest_scratch_dev[0]} > $out 2>&1 || rc1=$?
