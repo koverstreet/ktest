@@ -675,7 +675,9 @@ test_root_inode_not_dir()
 {
     fresh_fs_with_files
 
-    kvdb -c "update inodes 0:4096:4294967295 bi_mode=33188"
+    # v3 inodes pack the mode into bi_flags (INODEv3_MODE); the bitmask
+    # accessor name falls back to the full constant lowercased:
+    kvdb -c "update inodes 0:4096:4294967295 inodev3_mode=33188"
 
     check_fsck_fresh_converges
 }
