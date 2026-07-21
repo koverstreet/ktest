@@ -97,5 +97,19 @@ EOF
     export MKFS_OPTIONS
 
     cd "$ktest_dir/tests/fs/xfstests"
-    ./check "$@"
+    local rc=0
+    ./check "$@" || rc=$?
+
+    # _check_dmesg failures only name the .dmesg file; the artifact isn't
+    # otherwise preserved, so a sub-console-loglevel splat is invisible in
+    # CI. Dump it into the log:
+    if (( rc )); then
+	local f
+	for f in /ktest-out/xfstests/*/*.dmesg; do
+	    [[ -e $f ]] || continue
+	    echo "$f:"
+	    cat "$f"
+	done
+    fi
+    return $rc
 }
