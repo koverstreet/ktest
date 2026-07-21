@@ -586,6 +586,100 @@ test_subvol_root_missing_unlinked_flag()
     verify_fs_state must-mount
 }
 
+# ── check_root repair trio (FSCK_AUTOFIX) ────────────────────────────────
+#
+# The root objects are recreatable: contents are keyed by inum, so a
+# recreated root subvolume or root inode picks up the existing tree.
+# These tests gate the trio's autofix promotion - each must fully
+# converge and preserve contents.
+
+# Scaffold for the fresh-filesystem variants: known content, no
+# snapshots, no manifest machinery.
+fresh_fs_with_files()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    echo "hello" > /mnt/file
+    mkdir /mnt/dir
+    echo "nested" > /mnt/dir/file2
+    umount /mnt
+}
+
+check_fsck_fresh_converges()
+{
+    local rc1=0 rc2=0
+
+    bcachefs fsck -y ${ktest_scratch_dev[0]} || rc1=$?
+    echo "first fsck -y exited $rc1"
+    if (( rc1 == 0 )); then
+	echo "TEST FAILED: fsck missed injected corruption"
+	exit 1
+    fi
+
+    bcachefs fsck -n ${ktest_scratch_dev[0]} || rc2=$?
+    echo "second fsck -n exited $rc2"
+    if (( rc2 != 0 )); then
+	echo "TEST FAILED: errors remain after fsck -y"
+	exit 1
+    fi
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    [[ $(cat /mnt/file) == hello ]]
+    [[ $(cat /mnt/dir/file2) == nested ]]
+    umount /mnt
+}
+
+# Root subvolume deleted on a snapshotted filesystem: the recreation
+# must resolve root's real active snapshot via the snapshot subvol
+# backref. The old U32_MAX placeholder pointed at what is an interior
+# node here - subvol_snapshot_not_leaf, no repair, and invisible until
+# the NEXT fsck since check_subvols runs before check_root; the second
+# fsck in check_fsck is exactly the run that catches it.
+test_root_subvol_missing()
+{
+    setup_snapshot_tree
+
+    kvdb -c "set subvolumes 0:1:0 deleted"
+
+    check_fsck repair
+}
+
+# Same, on a filesystem that has never had snapshots: no snapshot node
+# claims the root subvolume, so the recreation falls back to U32_MAX -
+# which is correct there (still the initial leaf).
+test_root_subvol_missing_fresh()
+{
+    fresh_fs_with_files
+
+    kvdb -c "set subvolumes 0:1:0 deleted"
+
+    check_fsck_fresh_converges
+}
+
+# Root directory inode deleted: recreation picks up the surviving
+# dirents (keyed by inum), so the tree comes back whole.
+test_root_dir_missing()
+{
+    fresh_fs_with_files
+
+    kvdb -c "set inodes 0:4096:4294967295 deleted"
+
+    check_fsck_fresh_converges
+}
+
+# Root inode mode corrupted to a regular file (0100644). Content
+# preservation is the interesting assertion: check_dirents runs before
+# check_root, so this probes whether dirents hanging off a
+# not-currently-a-directory root survive until the mode repair.
+test_root_inode_not_dir()
+{
+    fresh_fs_with_files
+
+    kvdb -c "update inodes 0:4096:4294967295 bi_mode=33188"
+
+    check_fsck_fresh_converges
+}
+
 # H6 shape: keys at a snapshot with no inode at that snapshot
 # (snapshot_key_missing_inode_snapshot, autofix) - the invariant the v2
 # deletion sweep depends on. Create a file inside a snapshot (its own
