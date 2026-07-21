@@ -39,7 +39,6 @@ test_usrquota_twodevices()
     repquota -s /mnt
     rm /mnt/foo
 
-    exit
     umount /mnt
 }
 
