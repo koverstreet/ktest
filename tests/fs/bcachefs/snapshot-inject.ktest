@@ -1529,16 +1529,16 @@ test_subvol_no_keys_subvol_gone()
 #     (will_delete_backref_cleared)
 
 # A deleted node its parent still links: unconstructible (deletion
-# marks and splices in one transaction), so the witnesses disagree -
-# state and subvolume say deleted, the linkage says live. The
-# accounting arbitrates (snapshot_deleted_but_linked): no keys
-# accounted means the deletion is real and the linkage stale, and
-# check_snapshots (pass 19, PASS_ALWAYS) completes the splice at mount
-# before the fs comes online RW; keys accounted would mean the state
-# field lies - it undeletes (snapshot_deleted_but_has_data). Data is protected
-# by fixing the topology, not by refusing to mount: the mount must
-# succeed and the surviving snaps' data must be there (snap-2, the
-# tombstoned victim, is spliced out).
+# marks and splices in one transaction), so the witnesses disagree and
+# we don't know how we got here - and then we don't delete. The repair
+# (snapshot_deleted_but_linked, at mount, pass 19) undeletes the node:
+# a snapshot's data lives at ancestor ids, so even an accounting-empty
+# leaf may be someone's snapshot. Here nothing claims it (the subvolume
+# was removed too), so it stays as an unclaimed live leaf, and
+# check_dirents removes the dangling snap-2 dirent
+# (dirent_to_missing_subvol) - the namespace converges minus snap-2
+# while the node remains recoverable. The mount must succeed with the
+# surviving snaps' data intact.
 test_runtime_tombstone_child_repair()
 {
     setup_snapshot_tree
@@ -1564,9 +1564,16 @@ test_runtime_tombstone_child_repair()
     umount /mnt
 
     # the repaired state: the rest of the tree matches the reference
-    # (snap-2, the tombstoned victim, is spliced out)
+    # (snap-2 is gone from the namespace, its node undeleted in place)
     skip_snaps="snap-$((NR_SNAPS - 1))"
     verify_fs_state must-mount
+
+    # undeleted, not destroyed
+    local SNAPSHOT_STATE_live=$((0x757c47a2))
+    if [[ $(snap_field $victim state) != $SNAPSHOT_STATE_live ]]; then
+	echo "TEST FAILED: node not undeleted (state $(snap_field $victim state))"
+	exit 1
+    fi
 }
 
 # H1 in its true runtime form - THE D1 ACCEPTANCE TEST (expected to FAIL
