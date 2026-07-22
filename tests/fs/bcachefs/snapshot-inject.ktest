@@ -1012,19 +1012,38 @@ test_will_delete_live_subvol()
     check_fsck repair
 }
 
-# I7/D3: NO_KEYS on a node that has keys. The startup finish path
-# tree-surgeries the node away, stranding its keys (the gondezee shape).
-# Enforcement is the sweep-completion proof (D3); enable then.
+# I7/D3: no_keys on a node that still has keys (the gondezee shape).
+# no_keys is a parking state for emptied interior nodes - an interior
+# can't be removed from the tree at runtime, and parking requires the
+# splice precondition: <= 1 live child. So an interior with two live
+# branches was never legitimately parked - the state field is the lie,
+# and check_snapshots corroborates from the children and revives the
+# node (snapshot_deleted_has_live_children) rather than stranding its
+# keys. (A no_keys *leaf* is unconstructible - dead leaves are deleted
+# outright, never parked - and a leaf's subvol backref now makes that
+# combination invalid at commit, snapshot_should_not_have_subvol.)
 test_no_keys_with_keys()
 {
     setup_snapshot_tree
 
-    local victim=$(subvol_snapshot 4)
+    # an interior node with two live children, and that era's keys at its id
+    local leaf=$(subvol_snapshot 4)
+    local victim=$(snap_field $leaf parent)
+    local children=($(snap_array $victim children))
+    [[ -n ${children[1]} && ${children[1]} != 0 ]]
 
     kvdb -c "update snapshots 0:$victim:0 state=no_keys"
 
     skip_snaps=""
     check_fsck repair
+
+    # the manifest proves no keys were lost; this proves the mechanism -
+    # the node was revived, not swept
+    local SNAPSHOT_STATE_live=$((0x757c47a2))
+    if [[ $(snap_field $victim state) != $SNAPSHOT_STATE_live ]]; then
+	echo "TEST FAILED: interior node not revived (state $(snap_field $victim state))"
+	exit 1
+    fi
 }
 
 # creation_parent: genealogy metadata, but live - deletion reparents
