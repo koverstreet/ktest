@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+require-kernel-config BCACHEFS_FS=y
+
+config-scratch-devs 256M
+config-scratch-devs 2G
+
+dump_allocator_state()
+{
+    local uuid=$1
+    local d
+
+    bcachefs fs usage -h /mnt || true
+
+    for d in /sys/fs/bcachefs/"$uuid"/dev-*; do
+        echo "dev=${d##*/} label=$(cat "$d/label") state=$(cat "$d/state") data_allowed=$(cat "$d/data_allowed")"
+        sed -n '1,80p' "$d/alloc_debug"
+    done
+
+    cat "/sys/fs/bcachefs/$uuid/recovery_status" || true
+    cat "/sys/fs/bcachefs/$uuid/internal/moving_ctxts" || true
+}
+
+dev_sysfs_by_label()
+{
+    local uuid=$1
+    local label=$2
+    local d
+
+    for d in /sys/fs/bcachefs/"$uuid"/dev-*; do
+        if [[ $(cat "$d/label") = "$label" ]]; then
+            echo "$d"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+alloc_buckets_by_label()
+{
+    local uuid=$1
+    local label=$2
+    local type=$3
+
+    awk -v type="$type" '$1 == type { print $2 }' \
+        "$(dev_sysfs_by_label "$uuid" "$label")/alloc_debug"
+}
+
+wait_for_reconcile_idle()
+{
+    local uuid=$1
+    local deadline=$((SECONDS + 120))
+    local prev_moving=""
+    local prev_pending=""
+    local stable=0
+    local moving pending
+
+    while (( SECONDS < deadline )); do
+        moving=$(cat "/sys/fs/bcachefs/$uuid/internal/moving_ctxts" 2>/dev/null || true)
+        pending=$(cat "/sys/fs/bcachefs/$uuid/reconcile_scan_pending" 2>/dev/null || true)
+
+        if [[ $moving = "$prev_moving" ]] &&
+           [[ $pending = "$prev_pending" ]] &&
+           [[ $pending = 0 ]]; then
+            (( ++stable >= 3 )) && return 0
+        else
+            stable=0
+        fi
+
+        prev_moving=$moving
+        prev_pending=$pending
+        sleep 1
+    done
+
+    echo "reconcile did not go idle"
+    dump_allocator_state "$uuid"
+    return 1
+}
+
+wait_for_background_target_migration()
+{
+    local uuid=$1
+    local ssd_label=$2
+    local hdd_label=$3
+    local ssd_before=$4
+    local hdd_before=$5
+    local deadline=$((SECONDS + 120))
+    local ssd_after hdd_after
+
+    while (( SECONDS < deadline )); do
+        ssd_after=$(alloc_buckets_by_label "$uuid" "$ssd_label" user)
+        hdd_after=$(alloc_buckets_by_label "$uuid" "$hdd_label" user)
+
+        if (( ssd_after * 2 <= ssd_before && hdd_after > hdd_before )); then
+            return 0
+        fi
+
+        sleep 1
+    done
+
+    return 1
+}
+
+assert_ssd_write_precondition()
+{
+    local uuid=$1
+    local ssd_label=$2
+    local ssd_before=$3
+
+    if (( ssd_before == 0 )); then
+        echo "write did not allocate user buckets on SSD"
+        dump_allocator_state "$uuid"
+        return 1
+    fi
+}
+
+assert_background_target_migration()
+{
+    local uuid=$1
+    local ssd_label=$2
+    local hdd_label=$3
+    local ssd_before=$4
+    local hdd_before=$5
+    local ssd_after hdd_after
+
+    if ! wait_for_background_target_migration "$uuid" "$ssd_label" "$hdd_label" "$ssd_before" "$hdd_before"; then
+        ssd_after=$(alloc_buckets_by_label "$uuid" "$ssd_label" user)
+        hdd_after=$(alloc_buckets_by_label "$uuid" "$hdd_label" user)
+
+        echo "background_target=hdd did not move at least half of SSD user buckets"
+        echo "ssd_before=$ssd_before ssd_after=$ssd_after hdd_before=$hdd_before hdd_after=$hdd_after"
+        dump_allocator_state "$uuid"
+        return 1
+    fi
+}
+
+finish_test()
+{
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+# Changing background_target while the filesystem is offline creates work for
+# existing extents. Mount must schedule and run that reconcile scan by itself;
+# this test intentionally never writes trigger_reconcile_wakeup.
+test_background_target_changed_offline_reconcile_progress()
+{
+    local uuid ssd_before hdd_before
+
+    set_watchdog 180
+
+    run_quiet "" bcachefs format -f                 \
+        --block_size=4k                              \
+        --bucket_size=256k                           \
+        --label=ssd.cache "${ktest_scratch_dev[0]}" \
+        --label=hdd.backing "${ktest_scratch_dev[1]}" \
+        --foreground_target=ssd                      \
+        --background_target=ssd
+
+    mount -t bcachefs "${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}" /mnt
+    uuid=$(basename /sys/fs/bcachefs/*)
+
+    dd if=/dev/zero of=/mnt/writeback-data bs=4M count=32 oflag=direct status=none
+    sync
+
+    ssd_before=$(alloc_buckets_by_label "$uuid" ssd.cache user)
+    hdd_before=$(alloc_buckets_by_label "$uuid" hdd.backing user)
+    assert_ssd_write_precondition "$uuid" ssd.cache "$ssd_before" || return 1
+
+    umount /mnt
+    bcachefs set-fs-option --background_target=hdd \
+        "${ktest_scratch_dev[0]}" "${ktest_scratch_dev[1]}"
+
+    mount -t bcachefs "${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}" /mnt
+    uuid=$(basename /sys/fs/bcachefs/*)
+
+    if [[ $(cat "/sys/fs/bcachefs/$uuid/options/background_target") != hdd ]]; then
+        echo "background_target was not set to hdd"
+        dump_allocator_state "$uuid"
+        return 1
+    fi
+
+    assert_background_target_migration "$uuid" ssd.cache hdd.backing "$ssd_before" "$hdd_before" || return 1
+    wait_for_reconcile_idle "$uuid" || return 1
+    finish_test
+}
+
+main "$@"
