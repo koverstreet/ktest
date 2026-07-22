@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+require-kernel-config BCACHEFS_FS=y
+
+config-mem 4G
+config-scratch-devs 512M
+config-scratch-devs 512M
+config-scratch-devs 512M
+config-scratch-devs 512M
+config-scratch-devs 512M
+config-scratch-devs 512M
+config-scratch-devs 512M
+config-scratch-devs 512M
+
+devs()
+{
+    join_by : "${ktest_scratch_dev[@]}"
+}
+
+dump_reconcile_debug()
+{
+    bcachefs fs usage -h --all /mnt || true
+    cat /sys/fs/bcachefs/*/dev-0/state || true
+    cat /sys/fs/bcachefs/*/dev-0/alloc_debug || true
+    cat /sys/fs/bcachefs/*/reconcile_status || true
+    cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
+}
+
+src_has_user_data()
+{
+    awk '$1 == "user" { found = $2 > 0 } END { exit !found }' \
+	/sys/fs/bcachefs/*/dev-0/alloc_debug
+}
+
+reconcile_phys_considered()
+{
+    awk '/phys workers last phase:/ { print $6 }' /sys/fs/bcachefs/*/reconcile_status
+}
+
+reconcile_phys_started()
+{
+    awk '/phys workers last phase:/ { print $8 }' /sys/fs/bcachefs/*/reconcile_status
+}
+
+reconcile_phys_skipped_empty()
+{
+    awk '/phys workers last phase:/ { print $11 }' /sys/fs/bcachefs/*/reconcile_status
+}
+
+assert_reconcile_phys_skipped_empty_devices()
+{
+    local considered started skipped
+
+    # The normal-priority physical phase runs after the high-priority
+    # evacuation phase and legitimately overwrites the "last phase" counters.
+    # Sample while evacuation is active instead of accepting the final all-zero
+    # phase as proof.
+    for _ in $(seq 1 200); do
+	considered=$(reconcile_phys_considered)
+	started=$(reconcile_phys_started)
+	skipped=$(reconcile_phys_skipped_empty)
+
+	if [[ -n $considered && -n $started && -n $skipped ]] &&
+	   (( considered >= 6 && started > 0 && skipped >= 4 &&
+	      started + skipped == considered )); then
+	    return 0
+	fi
+
+	sleep .05
+    done
+
+    echo "phys reconcile did not expose a nonempty worker plus skipped devices"
+    echo "considered=${considered:-missing} started=${started:-missing} skipped_empty=${skipped:-missing}"
+    dump_reconcile_debug
+    return 1
+}
+
+test_reconcile_phys_skips_empty_rotational_devices()
+{
+    set_watchdog 180
+
+    run_quiet "" bcachefs format -f		    \
+	--block_size=4k				    \
+	--bucket_size=256k			    \
+	--replicas=1				    \
+	--foreground_target=src		    \
+	--background_target=src		    \
+	--rotational=1 --label=src ${ktest_scratch_dev[0]}    \
+	--rotational=1 --label=dst ${ktest_scratch_dev[1]}    \
+	--rotational=1 --label=empty ${ktest_scratch_dev[2]}  \
+	--rotational=1 --label=empty ${ktest_scratch_dev[3]}  \
+	--rotational=1 --label=empty ${ktest_scratch_dev[4]}  \
+	--rotational=1 --label=empty ${ktest_scratch_dev[5]}  \
+	--rotational=1 --label=empty ${ktest_scratch_dev[6]}  \
+	--rotational=1 --label=empty ${ktest_scratch_dev[7]}
+
+    mount -t bcachefs "$(devs)" /mnt
+
+    dd if=/dev/zero of=/mnt/src-only-data bs=4M count=64 oflag=direct status=none
+    sync
+
+    if ! src_has_user_data; then
+	echo "test setup failed: source device has no user data"
+	dump_reconcile_debug
+	return 1
+    fi
+
+    # The source-only target is only a placement precondition. Clear it before
+    # evacuation so the other devices are valid destinations. Evacuation
+    # creates real high-priority physical work for dev 0; the remaining seven
+    # devices must be skipped rather than receiving empty worker threads.
+    echo none > /sys/fs/bcachefs/*/options/foreground_target
+    echo none > /sys/fs/bcachefs/*/options/background_target
+    echo evacuating > /sys/fs/bcachefs/*/dev-0/state
+
+    assert_reconcile_phys_skipped_empty_devices
+    bcachefs reconcile wait -t high_priority /mnt
+
+    if src_has_user_data; then
+	echo "source device still has user data after evacuation"
+	dump_reconcile_debug
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+main "$@"
