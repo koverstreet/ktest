@@ -32,15 +32,17 @@
 # sweep 2026-07-20; R1/R2/R4/R5 have landed and their tests now pass):
 #   R3     - wrong_parent: child's parent pointer re-aim
 #   R6/backref family - the subvolume<->snapshot backref/condemnation
-#            repairs: snapshot_to_missing_subvol, state_wrong_codeword,
-#            subvol_backref_cleared/stolen, subvol_child_bit_missing,
-#            subvol_deleted_flag_conflict, subvol_no_keys_subvol_gone,
-#            subvol_to_dead_node_no_backref, subvol_to_missing_node,
-#            two_subvols_one_snapshot, unlinked_subvol,
+#            repairs (missing_main_subvol, unlinked_subvol and
+#            no_keys_with_keys have since landed and pass):
+#            snapshot_to_missing_subvol, deleted_live_subvol (ne
+#            state_wrong_codeword; repair landed 2026-07-21, awaiting
+#            verification), subvol_backref_cleared/stolen,
+#            subvol_child_bit_missing, subvol_deleted_flag_conflict,
+#            subvol_no_keys_subvol_gone, subvol_to_dead_node_no_backref,
+#            subvol_to_missing_node, two_subvols_one_snapshot,
 #            creation_parent_dangling, dangling_subvol,
 #            missing_root_node, orphan_become_tree_root,
-#            no_keys_with_keys, runtime_tombstone_child_repair,
-#            missing_main_subvol
+#            runtime_tombstone_child_repair
 #   D1     - cross-btree condemnation in the runtime delete collector
 #            (runtime_will_delete_backref_cleared; the node-local guard
 #            catches a retained v.subvol backref, only the subvolumes-btree
@@ -1881,14 +1883,13 @@ test_state_bits_disagree()
     check_fsck repair
 }
 
-# The nightmare shape: state is a LEGAL codeword - deleted - on a node
-# the legacy bits and the subvolumes btree both call live. The Hamming
-# properties can't help (this is a targeted lie, not bit rot); only
-# corroboration can: bits disagree AND a live subvolume points here, so
-# the deletion license is refused and state repaired to live. The data
-# assertion is the entire point - a table-dead node's keys must not be
-# swept before check_snapshots gets to rule on the disagreement.
-test_state_wrong_codeword()
+# The deleted twin of will_delete_live_subvol: state says deleted (a
+# legal codeword - Hamming can't help) on a leaf everything else calls
+# live. Real origin: the zero-state migration stamps a corrupt legacy
+# DELETED bit into the state field on upgrade. check_snapshot sees the
+# live subvolume pointing back and revives the node
+# (snapshot_deleted_but_subvol_live); its keys must not be swept.
+test_deleted_live_subvol()
 {
     setup_snapshot_tree
 
@@ -1898,6 +1899,13 @@ test_state_wrong_codeword()
 
     skip_snaps=""
     check_fsck repair
+
+    # revived, not swept
+    local SNAPSHOT_STATE_live=$((0x757c47a2))
+    if [[ $(snap_field $victim state) != $SNAPSHOT_STATE_live ]]; then
+	echo "TEST FAILED: leaf not revived (state $(snap_field $victim state))"
+	exit 1
+    fi
 }
 
 # The third leg of the state-vs-bits triangle: the legacy bits say
@@ -1922,7 +1930,7 @@ test_state_wrong_codeword()
 # The corroboration that licenses the repair: no live, will_delete or
 # no_keys node ever has tree == 0 - the tombstone wipe is unmistakable,
 # so bits + shape outvote the stale codeword. (Contrast
-# test_state_wrong_codeword: bits + a live-shaped node outvote a
+# test_deleted_live_subvol: subvolume + a live-shaped node outvote a
 # deleted codeword; a bare DELETED bit against a live-shaped node stays
 # with state.)
 #
