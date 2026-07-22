@@ -547,6 +547,49 @@ test_subvol_snapshot_delete_repeat()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# Distilled from snapshot_sums' flaky failure: `subvolume delete` kicks
+# the deletion worker, and an immediate unmount races it - the worker
+# aborts on erofs mid-sweep (delete_dead_snapshots(): erofs_trans_commit),
+# leaving a half-deleted subvolume: a will_delete snapshot with a dangling
+# subvol backref, unswept keys, the root inode missing BCH_INODE_unlinked.
+# In the flaky failure fsck then failed to converge on that residue - the
+# dead subvol's root was reattached to lost+found on the second run and
+# fsck -n failed.
+#
+# Loop the race so the die-roll is near-deterministic; after every racy
+# unmount, fsck must converge: fsck -n clean.
+test_subvol_delete_unmount_race()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+
+    local i j
+    for i in $(seq 1 12); do
+	mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+	bcachefs subvolume create /mnt/vol
+	# enough keys that the sweep is still running at unmount:
+	for j in $(seq 0 127); do
+	    dd if=/dev/zero of=/mnt/vol/file-$j bs=128k count=1 2>/dev/null
+	done
+	bcachefs subvolume snapshot /mnt/vol /mnt/vol-snap
+	echo "post-snap" > /mnt/vol/post-snap
+
+	bcachefs subvolume delete /mnt/vol-snap
+	bcachefs subvolume delete /mnt/vol
+	umount /mnt		# the deleter is mid-sweep
+
+	mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
+	umount /mnt
+
+	bcachefs fsck -n ${ktest_scratch_dev[0]} || {
+	    echo "TEST FAILED: fsck not clean after racy unmount, iteration $i"
+	    exit 1
+	}
+    done
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 # Regression test: whiteouts must survive interior snapshot node collapse.
 #
 # A snapshot whiteout is load-bearing negative information for descendant
