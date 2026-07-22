@@ -152,6 +152,40 @@ test_mount_options()
     bcachefs_test_end_checks $dev
 }
 
+test_filesystem_label_commands()
+{
+    local dev=${ktest_scratch_dev[0]}
+    set_watchdog 10
+
+    if ! bcachefs get-label --help >/dev/null 2>&1 ||
+       ! bcachefs set-label --help >/dev/null 2>&1; then
+	echo "bcachefs label commands not available, skipping"
+	return 0
+    fi
+
+    run_quiet "" bcachefs format -f "$dev"
+    mount -t bcachefs "$dev" /mnt
+
+    bcachefs set-label /mnt ktest_label_one
+    test "$(bcachefs get-label /mnt)" = ktest_label_one
+    test "$(bcachefs label /mnt)" = ktest_label_one
+
+    mkdir /mnt/subdir
+    bcachefs set-label /mnt/subdir ktest_label_two
+    test "$(bcachefs get-label /mnt/subdir)" = ktest_label_two
+
+    ! bcachefs set-label /mnt 12345678901234567890123456789012
+    test "$(bcachefs get-label /mnt)" = ktest_label_two
+
+    umount /mnt
+    mount -t bcachefs "$dev" /mnt
+    test "$(bcachefs get-label /mnt)" = ktest_label_two
+    umount /mnt
+
+    bcachefs fsck -ny "$dev"
+    bcachefs_test_end_checks "$dev"
+}
+
 test_extent_merge2()
 {
     local p=/sys/module/bcachefs/parameters/debug_check_iterators
