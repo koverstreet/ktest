@@ -711,7 +711,7 @@ test_key_missing_inode()
 
     local snapid=$(subvol_snapshot 4)
 
-    kvdb -c "set inodes 0:$inum:$snapid deleted"
+    kvdb -c "set -s inodes 0:$inum:$snapid deleted"
 
     skip_snaps=""
     skip_paths="./snap-2/scratch"
@@ -1221,7 +1221,7 @@ test_subvol_root_inode_reconstruct_at_mount()
 	echo "TEST FAILED: no root inode $inum:$snap for subvol 5 - setup broken"
 	exit 1
     }
-    kvdb -c "set inodes 0:$inum:$snap deleted"
+    kvdb -c "set -s inodes 0:$inum:$snap deleted"
 
     # The field shape is mount-time recovery, not offline fsck:
     mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt || {
@@ -2220,16 +2220,13 @@ test_dirent_overwritten_inode()
 	 -c "set inodes 0:$inumB:$mid deleted" \
 	 -c "set inodes 0:$inumB:$live whiteout"
 
-    # Post-surgery state dump: the first CI run found nothing to repair,
-    # and the check-side semantics (ref_visible/key_visible_in_snapshot)
-    # say this construction should fire - so one of the surgery outcomes
-    # isn't what it claims. Make the state visible:
-    echo "post-surgery dirents at fileA pos (expect only the root-generation key):"
-    kvdb -c "list dirents" | grep -F "$posA" || true
-    echo "post-surgery fileA inode at mid (expect whiteout):"
-    kvdb -c "get inodes 0:$inumA:$mid" || true
-    echo "post-surgery fileB inode at live (expect whiteout):"
-    kvdb -c "get inodes 0:$inumB:$live" || true
+    # The fileA whiteout deletion is the op that silently no-oped when
+    # kvdb deletions converted to whiteouts (the raw-deletion fix is what
+    # makes this construction land) - assert it landed:
+    if kvdb -c "list dirents" | grep -qF "type whiteout $posA:$mid "; then
+	echo "TEST FAILED: fileA dirent whiteout survived surgery - kvdb deletion no-oped"
+	exit 1
+    fi
 
     local out=/tmp/fsck-overwritten.log
     local rc1=0
@@ -2298,9 +2295,9 @@ test_fsck_damage_report()
 	exit 1
     }
 
-    kvdb -c "set inodes 0:$v1:$snap deleted" \
-	 -c "set inodes 0:$v2:$snap deleted" \
-	 -c "set dirents $posO:$snap deleted"
+    kvdb -c "set -s inodes 0:$v1:$snap deleted" \
+	 -c "set -s inodes 0:$v2:$snap deleted" \
+	 -c "set -s dirents $posO:$snap deleted"
 
     local out=/tmp/fsck-damage.log
     local rc1=0
