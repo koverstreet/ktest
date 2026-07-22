@@ -323,6 +323,32 @@ test_subvol_delete()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+test_subvol_delete_loop_holder()
+{
+    local loopdev=
+
+    trap '[[ -n "$loopdev" ]] && losetup -d "$loopdev" || true' RETURN
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    bcachefs subvolume create /mnt/subvolume_1
+    truncate -s 64M /mnt/subvolume_1/loop.img
+    loopdev=$(losetup --find --show /mnt/subvolume_1/loop.img)
+
+    bcachefs subvolume delete /mnt/subvolume_1
+
+    losetup -d "$loopdev"
+    loopdev=
+    trap - RETURN
+
+    umount /mnt
+
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_subvol_create_delete()
 {
     bcachefs_antagonist
