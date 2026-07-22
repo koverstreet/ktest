@@ -1108,6 +1108,24 @@ test_xattr()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+test_security_selinux_xattr()
+{
+    set_watchdog 10
+    run_quiet "" bcachefs format -f		\
+	${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    touch /mnt/selinux-test
+    setfattr -n security.selinux -v system_u:object_r:unlabeled_t:s0 /mnt/selinux-test
+    getfattr -n security.selinux --only-values /mnt/selinux-test |
+	grep -qx system_u:object_r:unlabeled_t:s0
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_quota()
 {
     set_watchdog 60
