@@ -1528,15 +1528,17 @@ test_subvol_no_keys_subvol_gone()
 #   - pass 19 can't see it (backref cleared) -> worker runs, D1's job
 #     (will_delete_backref_cleared)
 
-# expect=repair at mount (FAILING until R4 makes tombstone-child an
-# autofix-at-mount): a live interior node with a DELETED tombstone child
-# is an interrupted splice; pass 19 (check_snapshots, PASS_ALWAYS) runs at
-# every mount and should splice the tombstone out (R4) before bringing the
-# fs online RW, not refuse. Safe runtime repair is the goal - data is
-# protected by fixing the topology, not by refusing to mount. The mount
-# must succeed and the surviving snaps' data must be there (snap-2 is the
-# tombstoned victim, spliced out). See
-# bcachefs-tools/.claude/2026-07-10-snapshot-deletion-audit.md.
+# A deleted node its parent still links: unconstructible (deletion
+# marks and splices in one transaction), so the witnesses disagree -
+# state and subvolume say deleted, the linkage says live. The
+# accounting arbitrates (snapshot_deleted_but_linked): no keys
+# accounted means the deletion is real and the linkage stale, and
+# check_snapshots (pass 19, PASS_ALWAYS) completes the splice at mount
+# before the fs comes online RW; keys accounted would mean the state
+# field lies - it undeletes (snapshot_deleted_but_has_data). Data is protected
+# by fixing the topology, not by refusing to mount: the mount must
+# succeed and the surviving snaps' data must be there (snap-2, the
+# tombstoned victim, is spliced out).
 test_runtime_tombstone_child_repair()
 {
     setup_snapshot_tree
