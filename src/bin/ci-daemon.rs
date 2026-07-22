@@ -27,7 +27,7 @@ use jobkit::{
     ClaimedJob, Choir, Command, ExecutorConfig, ExecutorHandle, JobId, JobOutcome, JobSpec,
     TaskError,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -447,6 +447,7 @@ async fn run_ktest_job_inner(
 
     // Resume loop: run the not-yet-completed subtests in one VM; retry
     // any the VM died before reaching.
+    let mut did_clean = false;
     while !remaining.is_empty() {
         // Mark this iter's window in the executor log so the post-pull
         // full_log write splices in exactly what we did this iter.
@@ -491,14 +492,14 @@ async fn run_ktest_job_inner(
         } else {
             inner
         };
-        // Stopgap: a build interrupted mid-write leaves a corrupt cached
-        // object the incremental rebuild then trusts — git-clean and try
-        // once more. Each {run} does its own cd, so subshell it.
-        let run = format!(
-            "( {run} ) || {{ echo '=== run failed -- git clean + retry ==='; \
-             git -C ~/{ws}/{repo} clean -fdqx; ( {run} ); }}",
-            run = run, ws = ws, repo = p.repo,
-        );
+        // No in-ssh retry: the supervisor exits nonzero for ordinary test
+        // failures too (-F), and blindly re-running the batch overwrites
+        // real verdicts - a timeout or failure re-rolled into a pass is
+        // hidden flakiness. The first verdict stands; only subtests the
+        // VM never reached are retried (the resume loop), and the
+        // corrupt-incremental-build case is handled below via git-clean
+        // on a zero-progress iteration.
+        let run = format!("( {run} )", run = run);
         // -tt: force a pty so a dropped ssh hangs up and SIGHUP reaps
         // the supervisor, the kernel build, and the VM together.
         handle.run_command(ssh_cmd(host, &run, true))
@@ -613,8 +614,23 @@ async fn run_ktest_job_inner(
         results.update(&p.commit, verdicts);
 
         // A run that completed none of the subtests is an infrastructure
-        // failure — re-running the same VM the same way won't help.
+        // failure — re-running the same VM the same way won't help. Once
+        // per batch, git-clean the workspace and retry: a build
+        // interrupted mid-write leaves a corrupt cached object the
+        // incremental rebuild then trusts. (This used to be a blind
+        // in-ssh `|| retry` on any nonzero supervisor exit — which also
+        // re-ran subtests that had real verdicts, re-rolling flaky
+        // failures into passes.)
         if next.len() == remaining.len() {
+            if !did_clean {
+                did_clean = true;
+                handle.log_line("=== run completed no subtests -- git clean + retry ===".to_string());
+                let clean = format!("git -C ~/{ws}/{repo} clean -fdqx", ws = ws, repo = p.repo);
+                handle.run_command(ssh_cmd(host, &clean, false))
+                    .await
+                    .map_err(|e| TaskError::Retry(format!("git clean: {e}")))?;
+                continue;
+            }
             return Err(TaskError::Retry(format!(
                 "run completed no subtests: {}", remaining.join(" "))));
         }
@@ -699,8 +715,16 @@ fn refill(
     window: usize,
 ) {
     choir.remove(|_| true);
-    let live: HashSet<JobId> = choir.status().jobs.iter().map(|j| j.id).collect();
-    job_map.retain(|_, id| live.contains(id));
+    // Dedup against job EXISTENCE, not status(): the status snapshot
+    // deliberately omits pending jobs (the backlog can be huge), so
+    // retaining against it dropped every pending job's entry and
+    // resubmitted the whole desired window as duplicates each pass -
+    // "refill: 2000 desired, 2000 submitted" on every line, duplicate
+    // pending jobs claimed into overlapping batches on multiple
+    // executors, and stale duplicates re-running already-verdicted
+    // subtests.
+    let existing = choir.job_ids();
+    job_map.retain(|_, id| existing.contains(id));
 
     let desired = desired_jobs(rc, results, window);
     let mut submitted = 0;
