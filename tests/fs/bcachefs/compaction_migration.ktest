@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config MIGRATION
+require-kernel-config COMPACTION
+
+config-mem 4G
+config-cpus 8
+config-scratch-devs 5G
+config-timeout $(stress_timeout)
+
+test_compaction_after_bcachefs_pressure()
+{
+    local dev=${ktest_scratch_dev[0]}
+    local ready=/tmp/bcachefs-compaction-hog-ready
+    local hog_pid
+
+    set_watchdog 600
+
+    run_quiet "" bcachefs format -f "$dev"
+    mount -t bcachefs "$dev" /mnt
+
+    dd if=/dev/zero of=/mnt/seed bs=4M count=128 oflag=direct status=none
+    for i in $(seq 1 1000); do
+        printf '%s\n' "$i" > "/mnt/file-$i"
+    done
+    sync
+
+    rm -f "$ready"
+    python3 - "$ready" <<'PY' &
+import sys
+import time
+
+ready = sys.argv[1]
+mem_available_kb = 0
+
+with open("/proc/meminfo") as f:
+    for line in f:
+        if line.startswith("MemAvailable:"):
+            mem_available_kb = int(line.split()[1])
+            break
+
+target = int(mem_available_kb * 1024 * 0.70)
+chunk_size = 64 * 1024 * 1024
+chunks = []
+
+try:
+    while sum(len(c) for c in chunks) + chunk_size <= target:
+        chunk = bytearray(chunk_size)
+        for offset in range(0, len(chunk), 4096):
+            chunk[offset] = 1
+        chunks.append(chunk)
+except MemoryError:
+    pass
+
+with open(ready, "w") as f:
+    f.write(str(sum(len(c) for c in chunks)))
+
+time.sleep(300)
+PY
+    hog_pid=$!
+
+    for i in $(seq 1 60); do
+        [[ -s $ready ]] && break
+        sleep 1
+    done
+    [[ -s $ready ]]
+
+    echo 1 > /proc/sys/vm/compact_memory
+    kill "$hog_pid" 2>/dev/null || true
+    wait "$hog_pid" || true
+    rm -f "$ready"
+
+    for i in $(seq 1 8); do
+        sync
+        echo 1 > /proc/sys/vm/compact_memory
+        sleep 1
+    done
+
+    umount /mnt
+    bcachefs fsck -ny "$dev"
+    bcachefs_test_end_checks "$dev"
+}
+
+main "$@"
