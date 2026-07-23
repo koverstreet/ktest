@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+#
+# kvdb tool regression tests.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 1G
+config-mem 2G
+
+# 'kvdb --nostart -c "sb set ..."' must actually write the superblock. It
+# didn't: every kvdb open short of --rw runs with nochanges (norecovery
+# implies it), which turns bch2_write_super() into a silent no-op - sb set
+# claimed success while persisting nothing. And on a never-started image
+# (fresh format, INITIALIZED unset) write_super skips silently too; sb set
+# must refuse loudly there instead.
+# (Found via BCH_SB_DIRENTS_SANITIZED, which show-super now displays.)
+test_sb_set()
+{
+    set_watchdog 60
+
+    bcachefs format -f ${ktest_scratch_dev[0]}
+
+    # Uninitialized image: sb set must refuse, not claim success
+    if bcachefs kvdb --nostart ${ktest_scratch_dev[0]} \
+	    -c "sb set dirents_sanitized=1" 2>/dev/null; then
+	echo "FAIL: sb set on a never-started image should refuse"
+	return 1
+    fi
+
+    # Start the fs once, like any real image
+    mkdir -p /mnt/kvdb-test
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt/kvdb-test
+    umount /mnt/kvdb-test
+
+    bcachefs kvdb --nostart ${ktest_scratch_dev[0]} -c "sb set dirents_sanitized=1"
+
+    echo ":: superblock after sb set:"
+    bcachefs show-super ${ktest_scratch_dev[0]} | grep -i "sanitized" || true
+
+    if ! bcachefs show-super ${ktest_scratch_dev[0]} | grep -q "Dirents sanitized"; then
+	echo "FAIL: sb set dirents_sanitized=1 didn't persist to the superblock"
+	return 1
+    fi
+}
+
+main "$@"
