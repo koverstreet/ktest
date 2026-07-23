@@ -1816,7 +1816,7 @@ test_state_zeroed_whole_fs()
     local args=() id
     for id in $(all_snap_ids);   do args+=(-c "update snapshots 0:$id:0 state=0");   done
     for id in $(all_subvol_ids); do args+=(-c "update subvolumes 0:$id:0 state=0"); done
-    kvdb "${args[@]}"
+    kvdb_rw "${args[@]}"
 
     skip_snaps=""
     check_fsck repair
@@ -1849,7 +1849,7 @@ test_state_zeroed_pending_deletion()
     local args=() id
     for id in $(all_snap_ids);   do args+=(-c "update snapshots 0:$id:0 state=0");   done
     for id in $(all_subvol_ids); do args+=(-c "update subvolumes 0:$id:0 state=0"); done
-    kvdb "${args[@]}"
+    kvdb_rw "${args[@]}"
 
     local rc1=0
     bcachefs fsck -y ${ktest_scratch_dev[0]} || rc1=$?
