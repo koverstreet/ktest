@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+#
+# Reproducer for the swapfile-under-reclaim deadlock
+# (koverstreet/bcachefs-tools#646): with swap on bcachefs and sustained
+# reclaim pressure, bcachefs kworkers convoy on btree locks —
+# write-path index updates saturate their workqueue (rescuer included)
+# while the allocator's discard worker blocks in six_lock_contended() —
+# and the box hung-tasks or livelocks.
+#
+# Faithful port of the qemu ablation harness profile that reproduced
+# this at every memory size from 768M down to 128M on a swap-files
+# implementation without the reclaim-path armor (PF_MEMALLOC propagation
+# to the write path, btree node pinning, btree cache pre-reserve,
+# mempool sizing), and never with it.  The load-bearing details:
+#   - low-memory VM, few vCPUs (small worker pools starve fast)
+#   - the swapfile is WRITTEN OUT with buffered zero-writes, not
+#     fallocated: that fragments it into many small extents, so every
+#     swap I/O carries more btree traffic
+#   - the eater holds ~RAM+300M of touched-hot anonymous memory,
+#     re-touches it continuously, and is exempted from the OOM killer
+#     (oom_score_adj -1000).  A killable eater gets OOM-killed, the
+#     pressure collapses and the system recovers — that alone flips the
+#     result from deadlock to pass.
+#   - a sacrificial balloon keeps the OOM killer supplied with victims,
+#     removing the mm-level "System is deadlocked on memory" panic that
+#     can otherwise race ahead and kill even a correct kernel
+#   - vm.swappiness=100
+#
+# hung_task_panic is enabled during the pressure phase so a deadlock
+# fails the test loudly with console backtraces within ~30s of forming.
+# Some wedges starve userspace without leaving D-state tasks (workqueue
+# lockup dumps, console-dead livelock); those are caught by the
+# supervisor timeout, so run this THROUGH lib/supervisor — bare
+# build-test-kernel run has no host-side timeout enforcement.
+#
+#   SWAPFILE_TEST_MEM=512M      VM memory (the matrix repro point)
+#   SWAPFILE_TEST_CPUS=2        vCPUs
+#   SWAPFILE_TEST_ROUNDS=3      pressure rounds per boot (race amplifier)
+#   SWAPFILE_TEST_DURATION=120  seconds of pressure per round
+#   SWAPFILE_TEST_SWAP_MB=768   swapfile size (dd-written).  Sized so
+#                               total anon commit (eater + balloon +
+#                               daemons) is ~80% of RAM+swap: the burst
+#                               that triggers the deadlock is unchanged,
+#                               but a correct kernel can never reach
+#                               OOM-victim exhaustion, so the mm-level
+#                               "deadlocked on memory" panic disappears
+#                               from both sides of the comparison
+#   SWAPFILE_TEST_EAT_MB        eater size; default MemTotal+150M — well
+#                               past RAM (crushes the file LRU, denying
+#                               reclaim its non-swap escape valve) but
+#                               comfortably under RAM+swap: total anon
+#                               commit ~85% of capacity, so a correct
+#                               kernel never reaches OOM-victim
+#                               exhaustion, while a broken one still
+#                               deadlocks in the swap-out burst
+#   SWAPFILE_TEST_FILEIO=0      disable the 64K-file write/delete churn
+#   SWAPFILE_TEST_DELAY_MS      optional: dm-delay fake spinning rust
+#
+# Note for dkms runs: the in-VM bcachefs-tools/dkms build needs ~4G; run
+# once with SWAPFILE_TEST_MEM=4G to warm the tools/dkms caches for a new
+# deps HEAD before using the low-memory config.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/memory-pressure-libs.sh
+
+# Ablation variant: PF_MEMALLOC propagation OFF (bcachefs.swap_noreclaim),
+# rest of the armour ON.  Generated from swapfile_deadlock.ktest.
+require-kernel-append "bcachefs.swap_noreclaim"
+
+require-kernel-config SWAP
+require-kernel-config DETECT_HUNG_TASK
+require-kernel-config BLK_DEV_DM
+require-kernel-config DM_DELAY
+
+config-mem ${SWAPFILE_TEST_MEM:-512M}
+config-cpus ${SWAPFILE_TEST_CPUS:-2}
+config-scratch-devs 2G
+config-timeout 900
+
+# Parallel matrix runs reuse a prebuilt kernel — skip the kernel build.
+# (Debug assertions matter for the reproduction; bcachefs-test-libs
+# already requires BCACHEFS_DEBUG in-tree and exports it for dkms builds.)
+[[ -n ${SWAPFILE_TEST_NO_KBUILD:-} ]] && config-no-kbuild
+
+test_swapfile_reclaim_deadlock()
+{
+    set_watchdog 700
+
+    local dev=${ktest_scratch_dev[0]}
+
+    # Optional fake spinning rust: adds per-I/O latency under the fs so
+    # swap-out stalls while reclaim pressure keeps building.
+    if [[ -n ${SWAPFILE_TEST_DELAY_MS:-} ]]; then
+	local sectors=$(blockdev --getsz "$dev")
+	dmsetup create swapdelay --table \
+	    "0 $sectors delay $dev 0 ${SWAPFILE_TEST_DELAY_MS}"
+	dev=/dev/mapper/swapdelay
+	echo "=== swap fs on dm-delay ${SWAPFILE_TEST_DELAY_MS}ms ==="
+    fi
+    echo "=== $(grep MemTotal /proc/meminfo), $(nproc) cpus ==="
+
+    run_quiet "" bcachefs format -f "$dev"
+    mount -t bcachefs "$dev" /mnt
+
+    # dd, not fallocate: buffered zero-writes fragment the swapfile into
+    # many small extents, multiplying the btree traffic per swap I/O.
+    # This is one of the details the deadlock needs.
+    dd if=/dev/zero of=/mnt/swapfile bs=1M count=${SWAPFILE_TEST_SWAP_MB:-768} \
+       conv=fsync status=none
+    chmod 600 /mnt/swapfile
+    mkswap /mnt/swapfile
+    swapon /mnt/swapfile
+    grep -q /mnt/swapfile /proc/swaps
+
+    echo 100 > /proc/sys/vm/swappiness
+
+    # Fail fast and loudly: a task uninterruptible for 30s panics the box
+    # with backtraces.  Enabled only for the pressure phase — swapoff
+    # legitimately sits in D state for a long time under load.
+    echo 30 > /proc/sys/kernel/hung_task_timeout_secs
+    echo 1  > /proc/sys/kernel/hung_task_panic
+
+    # 64K-file write/sync/delete churn on the same fs, adding foreground
+    # btree lock traffic to the mix (disable with SWAPFILE_TEST_FILEIO=0).
+    local fileio_pid=
+    if [[ ${SWAPFILE_TEST_FILEIO:-1} != 0 ]]; then
+	mkdir -p /mnt/fileio
+	(
+	    trap - ERR
+	    set +e
+	    i=0
+	    while true; do
+		dd if=/dev/zero of=/mnt/fileio/f$i bs=64K count=1 2>/dev/null
+		i=$((i + 1))
+		if (( i % 100 == 0 )); then
+		    sync
+		    for (( j = i - 100; j < i; j++ )); do
+			rm -f /mnt/fileio/f$j
+		    done
+		fi
+	    done
+	) &
+	fileio_pid=$!
+    fi
+
+    # The eater and the sacrificial balloon (see memory-pressure-libs.sh
+    # for why both are load-bearing).
+    build_eater
+    build_balloon
+
+    local eat_mb=${SWAPFILE_TEST_EAT_MB:-$(awk '/MemTotal/ {print int($2 / 1024) + 300}' /proc/meminfo)}
+    local duration=${SWAPFILE_TEST_DURATION:-120}
+    local rounds=${SWAPFILE_TEST_ROUNDS:-3}
+
+    start_mem_telemetry
+    start_balloon 150
+
+    # The reproduction is a race; each fresh touch storm is another roll
+    # of the dice, so run several rounds per boot.
+    local round
+    for (( round = 1; round <= rounds; round++ )); do
+	echo "=== round $round/$rounds: eater ${eat_mb}M for ${duration}s ==="
+	/tmp/eater "$eat_mb" "$duration" || {
+	    stop_mem_telemetry
+	    echo "eater failed"
+	    return 1
+	}
+	sleep 5
+    done
+    stop_mem_telemetry
+
+    if [[ -n $fileio_pid ]]; then
+	kill $fileio_pid 2>/dev/null || true
+	wait $fileio_pid 2>/dev/null || true
+    fi
+
+    echo 0 > /proc/sys/kernel/hung_task_panic
+
+    cat /proc/swaps
+    grep -E "MemFree|SwapFree" /proc/meminfo
+
+    # Optional: swapoff while a MODEST eater keeps the system under
+    # pressure.  The eater must stay below RAM: with committed anon over
+    # RAM, try_to_unuse() has nowhere to put the pages and livelocks by
+    # design — an mm property, not a filesystem verdict.  Sized so the
+    # swapped pages fit back, swapoff MUST succeed; wedging or erroring
+    # is a filesystem swap_activate/readback bug.  (hung_task_panic is
+    # already off: swapoff sits in D state legitimately here.)
+    if [[ -n ${SWAPFILE_TEST_SWAPOFF:-} ]]; then
+	echo "=== swapoff under pressure ==="
+	local squeeze_mb=$(awk '/MemTotal/ {print int($2 * 60 / 100 / 1024)}' /proc/meminfo)
+	/tmp/eater "$squeeze_mb" 300 &
+	local swapoff_eater=$!
+	sleep 20
+	grep -E "SwapFree" /proc/meminfo
+	swapoff /mnt/swapfile
+	echo "swapoff under pressure: succeeded"
+	kill $swapoff_eater 2>/dev/null || true
+	wait $swapoff_eater 2>/dev/null || true
+	swapon /mnt/swapfile
+    fi
+
+    stop_balloon
+
+    swapoff /mnt/swapfile
+    rm -f /mnt/swapfile
+    rm -rf /mnt/fileio
+    umount /mnt
+
+    # In-kernel fsck: the userspace fsck wants a large fraction of RAM up
+    # front and OOMs in a VM this small; the kernel's runs in the same
+    # footprint as a normal mount.
+    mount -t bcachefs -o fsck,ro "$dev" /mnt
+    umount /mnt
+
+    if [[ $dev = /dev/mapper/swapdelay ]]; then
+	dmsetup remove swapdelay
+    fi
+
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+main "$@"
