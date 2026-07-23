@@ -83,6 +83,12 @@ kvdb()
     bcachefs kvdb ${ktest_scratch_dev[0]} "$@"
 }
 
+# Injections edit the filesystem; kvdb's default open is read-only.
+kvdb_rw()
+{
+    bcachefs kvdb --rw ${ktest_scratch_dev[0]} "$@"
+}
+
 MANIFEST=/tmp/snapshot-inject-manifest
 
 # Full observable state of the mounted fs: tree structure (type + path) and
@@ -186,24 +192,21 @@ setup_snapshot_tree()
     skip_paths=""
 }
 
-# ── kvdb parsing helpers ─────────────────────────────────────────────────
+# ── kvdb field-read helpers ──────────────────────────────────────────────
+#
+# Trailing field paths on kvdb get print bare values - the same paths
+# update takes - so nothing here parses display output. Arrays print
+# their elements space-separated.
 
-# Scalar field of a snapshots-btree key: snap_field <id> <name>
+# Field of a snapshots-btree key: snap_field <id> <name>
 snap_field()
 {
-    kvdb -c "get snapshots 0:$1:0" | sed -n "s/^ *$2: //p" | head -1
-}
-
-# Array field ("children: [a, b]") as space-separated: snap_array <id> <name>
-snap_array()
-{
-    kvdb -c "get snapshots 0:$1:0" |
-	sed -n "s/^ *$2: \[\(.*\)\]/\1/p" | head -1 | tr -d ','
+    kvdb -c "get snapshots 0:$1:0 $2"
 }
 
 subvol_field()
 {
-    kvdb -c "get subvolumes 0:$1:0" | sed -n "s/^ *$2: //p" | head -1
+    kvdb -c "get subvolumes 0:$1:0 $2"
 }
 
 # The snapshot node a subvolume points at
@@ -237,8 +240,7 @@ all_subvol_ids()
 snap_root()
 {
     local tree=$(snap_field $(subvol_snapshot 1) tree)
-    kvdb -c "get snapshot_trees 0:$tree:0" |
-	sed -n 's/^ *root_snapshot: //p' | head -1
+    kvdb -c "get snapshot_trees 0:$tree:0 root_snapshot"
 }
 
 # ── assertions ───────────────────────────────────────────────────────────
@@ -355,18 +357,18 @@ test_kvdb_sanity()
     local root=$(snap_root)
     [[ -n $root ]]
 
-    kvdb -c "update snapshots 0:$root:0 btime.lo=42"
-    [[ $(kvdb -c "get snapshots 0:$root:0" | sed -n 's/^ *lo: //p' | head -1) == 42 ]]
+    kvdb_rw -c "update snapshots 0:$root:0 btime.lo=42"
+    [[ $(kvdb -c "get snapshots 0:$root:0 btime.lo") == 42 ]]
 
     local leaf=$(subvol_snapshot 4)
     local depth=$(snap_field $leaf depth)
     local tree=$(snap_field $leaf tree)
     local scratch=$(( $(all_snap_ids | head -1) - 5 ))
 
-    local out=$(kvdb -c "set snapshots 0:$scratch:0 snapshot parent=$leaf tree=$tree depth=$((depth + 1)) state=live" \
-		     -c "get snapshots 0:$scratch:0" \
+    local out=$(kvdb_rw -c "set snapshots 0:$scratch:0 snapshot parent=$leaf tree=$tree depth=$((depth + 1)) state=live" \
+		     -c "get snapshots 0:$scratch:0 parent" \
 		     -c "set snapshots 0:$scratch:0 deleted")
-    [[ $(sed -n 's/^ *parent: //p' <<< "$out" | head -1) == $leaf ]]
+    [[ $out == $leaf ]]
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
 
@@ -384,7 +386,7 @@ test_bad_depth()
     local victim=$(subvol_snapshot 4)
     local depth=$(snap_field $victim depth)
 
-    kvdb -c "update snapshots 0:$victim:0 depth=$((depth + 5))"
+    kvdb_rw -c "update snapshots 0:$victim:0 depth=$((depth + 5))"
 
     skip_snaps=""
     check_fsck repair
@@ -399,10 +401,10 @@ test_bad_skiplist()
 
     local victim=$(subvol_snapshot 4)
     local other=$(subvol_snapshot 2)    # different branch: not an ancestor
-    local skip=($(snap_array $victim skip))
+    local skip=($(snap_field $victim skip))
 
     local triple=($(printf '%s\n' $other ${skip[1]} ${skip[2]} | sort -n))
-    kvdb -c "update snapshots 0:$victim:0 skip[0]=${triple[0]} skip[1]=${triple[1]} skip[2]=${triple[2]}"
+    kvdb_rw -c "update snapshots 0:$victim:0 skip[0]=${triple[0]} skip[1]=${triple[1]} skip[2]=${triple[2]}"
 
     skip_snaps=""
     check_fsck repair
@@ -416,7 +418,7 @@ test_bad_tree_ptr()
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 tree=987654"
+    kvdb_rw -c "update snapshots 0:$victim:0 tree=987654"
 
     skip_snaps=""
     check_fsck repair
@@ -432,7 +434,7 @@ test_tree_wrong_root()
     local leaf=$(subvol_snapshot 4)
     local tree=$(snap_field $(snap_root) tree)
 
-    kvdb -c "update snapshot_trees 0:$tree:0 root_snapshot=$leaf"
+    kvdb_rw -c "update snapshot_trees 0:$tree:0 root_snapshot=$leaf"
 
     skip_snaps=""
     check_fsck repair
@@ -446,7 +448,7 @@ test_tree_master_subvol_missing()
 
     local tree=$(snap_field $(snap_root) tree)
 
-    kvdb -c "update snapshot_trees 0:$tree:0 master_subvol=31337"
+    kvdb_rw -c "update snapshot_trees 0:$tree:0 master_subvol=31337"
 
     skip_snaps=""
     check_fsck repair
@@ -459,7 +461,7 @@ test_duplicate_tree()
 {
     setup_snapshot_tree
 
-    kvdb -c "set snapshot_trees 0:99:0 snapshot_tree root_snapshot=$(snap_root) master_subvol=1"
+    kvdb_rw -c "set snapshot_trees 0:99:0 snapshot_tree root_snapshot=$(snap_root) master_subvol=1"
 
     skip_snaps=""
     check_fsck repair
@@ -476,7 +478,7 @@ test_wrong_tree_ptr()
     local other_tree=$(snap_field $(subvol_snapshot 5) tree)
     [[ -n $other_tree && $other_tree != $(snap_field $victim tree) ]]
 
-    kvdb -c "update snapshots 0:$victim:0 tree=$other_tree"
+    kvdb_rw -c "update snapshots 0:$victim:0 tree=$other_tree"
 
     skip_snaps=""
     check_fsck repair
@@ -488,7 +490,7 @@ test_root_subvol_fs_path_parent()
 {
     setup_snapshot_tree
 
-    kvdb -c "update subvolumes 0:1:0 fs_path_parent=2"
+    kvdb_rw -c "update subvolumes 0:1:0 fs_path_parent=2"
 
     skip_snaps=""
     check_fsck repair
@@ -502,7 +504,7 @@ test_subvol_child_bit_missing()
 
     local parent=$(subvol_field 4 fs_path_parent)
 
-    kvdb -c "set subvolume_children $parent:4:0 deleted"
+    kvdb_rw -c "set subvolume_children $parent:4:0 deleted"
 
     skip_snaps=""
     check_fsck repair
@@ -520,7 +522,7 @@ test_stranded_keys()
     local last_subvol=$((2 + NR_SNAPS - 1))
     local victim=$(subvol_snapshot $last_subvol)
     local parent=$(snap_field $victim parent)
-    local children=($(snap_array $parent children))
+    local children=($(snap_field $parent children))
 
     # splice: parent keeps only the surviving child, [nonzero, 0]
     local other
@@ -528,7 +530,7 @@ test_stranded_keys()
 	[[ $c != $victim ]] && other=$c
     done
 
-    kvdb -c "update snapshots 0:$victim:0 state=deleted subvol=0" \
+    kvdb_rw -c "update snapshots 0:$victim:0 state=deleted subvol=0" \
 	 -c "update snapshots 0:$parent:0 children[0]=$other children[1]=0" \
 	 -c "set subvolumes 0:$last_subvol:0 deleted"
 
@@ -566,7 +568,7 @@ test_subvol_root_missing_unlinked_flag()
     # subvol_obsolete: keep the legacy flag bits in sync with the state
     # field, as the orderly deletion path would - else check_snapshots
     # spends its repair on snapshot_subvol_flag_wrong instead:
-    kvdb -c "update snapshots 0:$victim:0 state=will_delete subvol=0 subvol_obsolete=0" \
+    kvdb_rw -c "update snapshots 0:$victim:0 state=will_delete subvol=0 subvol_obsolete=0" \
 	 -c "set dirents $dirent deleted" \
 	 -c "set subvolumes 0:$last_subvol:0 deleted"
 
@@ -651,7 +653,7 @@ test_root_subvol_missing()
 {
     setup_snapshot_tree
 
-    kvdb -c "set subvolumes 0:1:0 deleted"
+    kvdb_rw -c "set subvolumes 0:1:0 deleted"
 
     check_fsck repair
 }
@@ -663,7 +665,7 @@ test_root_subvol_missing_fresh()
 {
     fresh_fs_with_files
 
-    kvdb -c "set subvolumes 0:1:0 deleted"
+    kvdb_rw -c "set subvolumes 0:1:0 deleted"
 
     check_fsck_fresh_converges
 }
@@ -674,7 +676,7 @@ test_root_dir_missing()
 {
     fresh_fs_with_files
 
-    kvdb -c "set inodes 0:4096:4294967295 deleted"
+    kvdb_rw -c "set inodes 0:4096:4294967295 deleted"
 
     check_fsck_fresh_converges
 }
@@ -689,7 +691,7 @@ test_root_inode_not_dir()
 
     # v3 inodes pack the mode into bi_flags (INODEv3_MODE); the bitmask
     # accessor name falls back to the full constant lowercased:
-    kvdb -c "update inodes 0:4096:4294967295 inodev3_mode=33188"
+    kvdb_rw -c "update inodes 0:4096:4294967295 inodev3_mode=33188"
 
     check_fsck_fresh_converges
 }
@@ -711,7 +713,7 @@ test_key_missing_inode()
 
     local snapid=$(subvol_snapshot 4)
 
-    kvdb -c "set -s inodes 0:$inum:$snapid deleted"
+    kvdb_rw -c "set -s inodes 0:$inum:$snapid deleted"
 
     skip_snaps=""
     skip_paths="./snap-2/scratch"
@@ -735,14 +737,14 @@ test_subvol_to_missing_node()
     local last_subvol=$((2 + NR_SNAPS - 1))
     local victim=$(subvol_snapshot $last_subvol)
     local parent=$(snap_field $victim parent)
-    local children=($(snap_array $parent children))
+    local children=($(snap_field $parent children))
 
     local other
     for c in ${children[@]}; do
 	[[ $c != $victim ]] && other=$c
     done
 
-    kvdb -c "update snapshots 0:$parent:0 children[0]=$other children[1]=0" \
+    kvdb_rw -c "update snapshots 0:$parent:0 children[0]=$other children[1]=0" \
 	 -c "set snapshots 0:$victim:0 deleted"
 
     # expect=repair (FAILING until the lossy reattach lands): recreate the
@@ -770,7 +772,7 @@ test_tombstoned_child()
     local last_subvol=$((2 + NR_SNAPS - 1))
     local victim=$(subvol_snapshot $last_subvol)
 
-    kvdb -c "update snapshots 0:$victim:0 state=deleted subvol=0" \
+    kvdb_rw -c "update snapshots 0:$victim:0 state=deleted subvol=0" \
 	 -c "set subvolumes 0:$last_subvol:0 deleted"
 
     # expect=repair (FAILING until R4 lands): splice the tombstone out of
@@ -793,7 +795,7 @@ test_missing_child()
     local last_subvol=$((2 + NR_SNAPS - 1))
     local victim=$(subvol_snapshot $last_subvol)
 
-    kvdb -c "set snapshots 0:$victim:0 deleted" \
+    kvdb_rw -c "set snapshots 0:$victim:0 deleted" \
 	 -c "set subvolumes 0:$last_subvol:0 deleted"
 
     # expect=repair (FAILING until R5 lands): resurrect the missing child
@@ -815,14 +817,14 @@ test_parent_missing_child_ptr()
 
     local victim=$(subvol_snapshot 4)
     local parent=$(snap_field $victim parent)
-    local children=($(snap_array $parent children))
+    local children=($(snap_field $parent children))
 
     local other
     for c in ${children[@]}; do
 	[[ $c != $victim ]] && other=$c
     done
 
-    kvdb -c "update snapshots 0:$parent:0 children[0]=$other children[1]=0"
+    kvdb_rw -c "update snapshots 0:$parent:0 children[0]=$other children[1]=0"
 
     # expect=repair (FAILING until R2 lands): install the child in the
     # parent's free children[] slot (three-children conflict -> stay
@@ -850,7 +852,7 @@ test_wrong_parent()
     local root=$(snap_root)
     [[ $(snap_field $victim parent) != $root ]]
 
-    kvdb -c "update snapshots 0:$victim:0 parent=$root depth=1 skip[0]=0 skip[1]=0 skip[2]=0"
+    kvdb_rw -c "update snapshots 0:$victim:0 parent=$root depth=1 skip[0]=0 skip[1]=0 skip[2]=0"
 
     # expect=repair (FAILING until R3 lands): corroborate - if the claimed
     # parent also claims the child, our pointer is stale -> replace with
@@ -874,7 +876,7 @@ test_orphan_node()
     local victim=$(snap_field $leaf parent)
     (( victim != 0 ))
 
-    kvdb -c "update snapshots 0:$victim:0 parent=0"
+    kvdb_rw -c "update snapshots 0:$victim:0 parent=0"
 
     # expect=repair (FAILING until R1/R3 lands): corroborate - the real
     # parent still lists this node as a child, so restore parent = real
@@ -892,7 +894,7 @@ test_snapshot_to_missing_subvol()
 {
     setup_snapshot_tree
 
-    kvdb -c "set subvolumes 0:4:0 deleted"
+    kvdb_rw -c "set subvolumes 0:4:0 deleted"
 
     # expect=repair: the leaf's backref names the dead subvolume's id, so
     # check_snapshot reconstructs the subvolume AT that id, dangling,
@@ -912,7 +914,7 @@ test_subvol_backref_stolen()
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 subvol=2"
+    kvdb_rw -c "update snapshots 0:$victim:0 subvol=2"
 
     # expect=repair (FAILING until R6/H3-H4 lands): the stolen backref is
     # the lie - scan for the real owner, restore its v.subvol; clear or fix
@@ -929,7 +931,7 @@ test_dangling_subvol()
 {
     setup_snapshot_tree
 
-    kvdb -c "update subvolumes 0:4:0 snapshot=$(snap_root)"
+    kvdb_rw -c "update subvolumes 0:4:0 snapshot=$(snap_root)"
 
     # expect=repair (FAILING until R6/I6 lands): the subvol's snapshot
     # pointer is the lie - fix it to the node that actually holds the
@@ -947,7 +949,7 @@ test_missing_root_node()
 {
     setup_snapshot_tree
 
-    kvdb -c "set snapshots 0:$(snap_root):0 deleted"
+    kvdb_rw -c "set snapshots 0:$(snap_root):0 deleted"
 
     # expect=repair (FAILING - hardest case): reconstruct the tree-root
     # snapshot node from its surviving children. Pass-ordering trap:
@@ -967,7 +969,7 @@ test_missing_main_subvol()
 {
     setup_snapshot_tree
 
-    kvdb -c "set subvolumes 0:1:0 deleted"
+    kvdb_rw -c "set subvolumes 0:1:0 deleted"
 
     # expect=repair (FAILING - pass-ordering trap): check_root (pass 29)
     # recreates the main subvol - the repair exists, it's downstream. But
@@ -990,7 +992,7 @@ test_subvol_backref_cleared()
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 subvol=0"
+    kvdb_rw -c "update snapshots 0:$victim:0 subvol=0"
 
     skip_snaps=""
     check_fsck repair
@@ -1008,7 +1010,7 @@ test_will_delete_live_subvol()
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 state=will_delete"
+    kvdb_rw -c "update snapshots 0:$victim:0 state=will_delete"
 
     skip_snaps=""
     check_fsck repair
@@ -1031,10 +1033,10 @@ test_no_keys_with_keys()
     # an interior node with two live children, and that era's keys at its id
     local leaf=$(subvol_snapshot 4)
     local victim=$(snap_field $leaf parent)
-    local children=($(snap_array $victim children))
+    local children=($(snap_field $victim children))
     [[ -n ${children[1]} && ${children[1]} != 0 ]]
 
-    kvdb -c "update snapshots 0:$victim:0 state=no_keys"
+    kvdb_rw -c "update snapshots 0:$victim:0 state=no_keys"
 
     skip_snaps=""
     check_fsck repair
@@ -1055,7 +1057,7 @@ test_creation_parent_dangling()
 {
     setup_snapshot_tree
 
-    kvdb -c "update subvolumes 0:4:0 creation_parent=31337"
+    kvdb_rw -c "update subvolumes 0:4:0 creation_parent=31337"
 
     skip_snaps=""
     check_fsck repair
@@ -1072,7 +1074,7 @@ test_unlinked_subvol()
 {
     setup_snapshot_tree
 
-    kvdb -c "update subvolumes 0:4:0 state=unlinked fs_path_parent=0"
+    kvdb_rw -c "update subvolumes 0:4:0 state=unlinked fs_path_parent=0"
 
     skip_snaps="snap-2"
     check_fsck repair
@@ -1156,7 +1158,7 @@ test_subvol_snap_flag_cleared()
 {
     setup_snapshot_tree
 
-    kvdb -c "update subvolumes 0:4:0 snap=0"
+    kvdb_rw -c "update subvolumes 0:4:0 snap=0"
 
     skip_snaps=""
     check_fsck repair
@@ -1171,7 +1173,7 @@ test_tree_master_is_snapshot_subvol()
 
     local tree=$(snap_field $(snap_root) tree)
 
-    kvdb -c "update snapshot_trees 0:$tree:0 master_subvol=4"
+    kvdb_rw -c "update snapshot_trees 0:$tree:0 master_subvol=4"
 
     skip_snaps=""
     check_fsck repair
@@ -1185,7 +1187,7 @@ test_subvol_fs_path_parent_wrong()
 {
     setup_snapshot_tree
 
-    kvdb -c "update subvolumes 0:4:0 fs_path_parent=5"
+    kvdb_rw -c "update subvolumes 0:4:0 fs_path_parent=5"
 
     skip_snaps=""
     check_fsck repair
@@ -1221,7 +1223,7 @@ test_subvol_root_inode_reconstruct_at_mount()
 	echo "TEST FAILED: no root inode $inum:$snap for subvol 5 - setup broken"
 	exit 1
     }
-    kvdb -c "set -s inodes 0:$inum:$snap deleted"
+    kvdb_rw -c "set -s inodes 0:$inum:$snap deleted"
 
     # The field shape is mount-time recovery, not offline fsck:
     mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt || {
@@ -1254,7 +1256,7 @@ test_subvol_children_stray()
 {
     setup_snapshot_tree
 
-    kvdb -c "set subvolume_children 7:4:0 set"
+    kvdb_rw -c "set subvolume_children 7:4:0 set"
 
     skip_snaps=""
     check_fsck repair
@@ -1274,14 +1276,14 @@ test_tombstone_key_migration()
     local last_subvol=$((2 + NR_SNAPS - 1))
     local victim=$(subvol_snapshot $last_subvol)
     local parent=$(snap_field $victim parent)
-    local children=($(snap_array $parent children))
+    local children=($(snap_field $parent children))
 
     local other
     for c in ${children[@]}; do
 	[[ $c != $victim ]] && other=$c
     done
 
-    kvdb -c "update snapshots 0:$victim:0 state=deleted subvol=0 children[0]=$other" \
+    kvdb_rw -c "update snapshots 0:$victim:0 state=deleted subvol=0 children[0]=$other" \
 	 -c "update snapshots 0:$parent:0 children[0]=$other children[1]=0" \
 	 -c "set subvolumes 0:$last_subvol:0 deleted"
 
@@ -1308,7 +1310,7 @@ test_no_keys_with_data()
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 state=no_keys subvol=0" \
+    kvdb_rw -c "update snapshots 0:$victim:0 state=no_keys subvol=0" \
 	 -c "set subvolumes 0:4:0 deleted"
 
     skip_snaps="snap-2"
@@ -1332,10 +1334,10 @@ test_no_keys_two_children()
 
     local leaf=$(subvol_snapshot 4)
     local victim=$(snap_field $leaf parent)
-    local children=($(snap_array $victim children))
+    local children=($(snap_field $victim children))
     [[ -n ${children[1]} && ${children[1]} != 0 ]]
 
-    kvdb -c "update snapshots 0:$victim:0 state=no_keys"
+    kvdb_rw -c "update snapshots 0:$victim:0 state=no_keys"
 
     skip_snaps=""
     check_fsck repair
@@ -1353,7 +1355,7 @@ test_subvol_to_dead_node_no_backref()
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 state=no_keys subvol=0"
+    kvdb_rw -c "update snapshots 0:$victim:0 state=no_keys subvol=0"
 
     skip_snaps=""
     check_fsck repair
@@ -1375,7 +1377,7 @@ test_two_subvols_one_snapshot()
     local inode=$(subvol_field 4 inode)
     local fparent=$(subvol_field 4 fs_path_parent)
 
-    kvdb -c "set subvolumes 0:5:0 subvolume snapshot=$snap inode=$inode fs_path_parent=$fparent snap=1"
+    kvdb_rw -c "set subvolumes 0:5:0 subvolume snapshot=$snap inode=$inode fs_path_parent=$fparent snap=1"
 
     # expect=repair (FAILING): the subvolumes-btree scan (R6's helper) must
     # find the duplicate and clear the one the snapshot doesn't backref
@@ -1394,19 +1396,19 @@ test_three_children_conflict()
 
     local N=$(subvol_snapshot 4)			# snap-2's node
     local nreal=$(snap_field $N parent)
-    local nreal_c=($(snap_array $nreal children))
+    local nreal_c=($(snap_field $nreal children))
     local other
     for c in ${nreal_c[@]}; do [[ $c != $N ]] && other=$c; done
 
     # a 2-child interior that isn't snap-2's real parent
     local P
     for id in $(all_snap_ids); do
-	local c=($(snap_array $id children))
+	local c=($(snap_field $id children))
 	if [[ ${c[1]:-0} != 0 && $id != $nreal ]]; then P=$id; break; fi
     done
     [[ -n $P ]]
 
-    kvdb -c "update snapshots 0:$nreal:0 children[0]=$other children[1]=0" \
+    kvdb_rw -c "update snapshots 0:$nreal:0 children[0]=$other children[1]=0" \
 	 -c "update snapshots 0:$N:0 parent=$P depth=$(( $(snap_field $P depth) + 1 )) skip[0]=0 skip[1]=0 skip[2]=0"
 
     # expect=repair (FAILING): N can't be installed (parent full) - safe
@@ -1425,11 +1427,11 @@ test_orphan_become_tree_root()
 
     local N=$(subvol_snapshot 4)			# snap-2's node
     local nreal=$(snap_field $N parent)
-    local nreal_c=($(snap_array $nreal children))
+    local nreal_c=($(snap_field $nreal children))
     local other
     for c in ${nreal_c[@]}; do [[ $c != $N ]] && other=$c; done
 
-    kvdb -c "update snapshots 0:$nreal:0 children[0]=$other children[1]=0" \
+    kvdb_rw -c "update snapshots 0:$nreal:0 children[0]=$other children[1]=0" \
 	 -c "update snapshots 0:$N:0 parent=31337 depth=0 skip[0]=0 skip[1]=0 skip[2]=0"
 
     # expect=repair (FAILING until R1's become-root lands): nobody claims N,
@@ -1448,7 +1450,7 @@ test_subvol_fs_path_parent_cycle()
 {
     setup_snapshot_tree
 
-    kvdb -c "update subvolumes 0:3:0 fs_path_parent=4" \
+    kvdb_rw -c "update subvolumes 0:3:0 fs_path_parent=4" \
 	 -c "update subvolumes 0:4:0 fs_path_parent=3"
 
     # expect=repair (FAILING until cycle detection lands): break the cycle
@@ -1465,7 +1467,7 @@ test_tree_to_missing_snapshot()
     setup_snapshot_tree
 
     local tree=$(snap_field $(subvol_snapshot 1) tree)
-    kvdb -c "update snapshot_trees 0:$tree:0 root_snapshot=31337"
+    kvdb_rw -c "update snapshot_trees 0:$tree:0 root_snapshot=31337"
 
     # expect=repair (FAILING): the tree key is dangling - re-point it at the
     # real root or drop it and fix the root's tree ptr. Full manifest must
@@ -1491,7 +1493,7 @@ test_subvol_deleted_flag_conflict()
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 state=deleted"
+    kvdb_rw -c "update snapshots 0:$victim:0 state=deleted"
 
     # expect=repair: subvol 4 corroborates -> clear DELETED/WILL_DELETE
     # (revive). Full manifest must match.
@@ -1508,7 +1510,7 @@ test_subvol_no_keys_subvol_gone()
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 state=no_keys" \
+    kvdb_rw -c "update snapshots 0:$victim:0 state=no_keys" \
 	 -c "set subvolumes 0:4:0 deleted"
 
     # expect=repair: SUBVOL + NO_KEYS + subvol gone -> the SUBVOL flag is the
@@ -1547,7 +1549,7 @@ test_runtime_tombstone_child_repair()
     local victim=$(subvol_snapshot $last_subvol)
 
     # tombstone the leaf, parent pointer left in place (no splice)
-    kvdb -c "update snapshots 0:$victim:0 state=deleted subvol=0" \
+    kvdb_rw -c "update snapshots 0:$victim:0 state=deleted subvol=0" \
 	 -c "set subvolumes 0:$last_subvol:0 deleted"
 
     # the mount must succeed: pass 19 autofixes the tombstone child (R4)
@@ -1589,7 +1591,7 @@ test_runtime_will_delete_live_subvol()
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 state=will_delete"
+    kvdb_rw -c "update snapshots 0:$victim:0 state=will_delete"
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
@@ -1621,7 +1623,7 @@ test_runtime_will_delete_backref_cleared()
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 state=will_delete subvol=0"
+    kvdb_rw -c "update snapshots 0:$victim:0 state=will_delete subvol=0"
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
@@ -1681,7 +1683,7 @@ test_will_delete_dead_leaf_rewind()
     # subvolumes-btree tombstone is already there, so nothing live references
     # this node: check_should_delete_leaf takes the !v.subvol arm and requires
     # check_subvols to prove it's safe to reap.
-    kvdb -c "update snapshots 0:$victim:0 subvol=0"
+    kvdb_rw -c "update snapshots 0:$victim:0 subvol=0"
 
     # plain mount - non-fsck. delete_dead_snapshots (scheduled off the snapshot
     # read) hits the leaf, requires check_subvols, and must rewind to run it -
@@ -1741,7 +1743,7 @@ test_state_garbage()
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 state=$((0xdeadbeef))"
+    kvdb_rw -c "update snapshots 0:$victim:0 state=$((0xdeadbeef))"
 
     skip_snaps=""
     check_fsck repair
@@ -1759,7 +1761,7 @@ test_state_single_bitflip()
     local victim=$(subvol_snapshot 4)
     local flipped=$(( $(snap_field $victim state) ^ 1 ))
 
-    kvdb -c "update snapshots 0:$victim:0 state=$flipped"
+    kvdb_rw -c "update snapshots 0:$victim:0 state=$flipped"
 
     skip_snaps=""
     check_fsck repair
@@ -1773,7 +1775,7 @@ test_subvol_state_single_bitflip()
 
     local flipped=$(( $(subvol_field 4 state) ^ 1 ))
 
-    kvdb -c "update subvolumes 0:4:0 state=$flipped"
+    kvdb_rw -c "update subvolumes 0:4:0 state=$flipped"
 
     skip_snaps=""
     check_fsck repair
@@ -1790,7 +1792,7 @@ test_state_zeroed()
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 state=0"
+    kvdb_rw -c "update snapshots 0:$victim:0 state=0"
 
     skip_snaps=""
     check_fsck repair
@@ -1886,7 +1888,7 @@ test_state_bits_disagree()
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 will_delete_obsolete=1 deleted_obsolete=1 no_keys_obsolete=1 flags.subvol_obsolete=0"
+    kvdb_rw -c "update snapshots 0:$victim:0 will_delete_obsolete=1 deleted_obsolete=1 no_keys_obsolete=1 flags.subvol_obsolete=0"
 
     skip_snaps=""
     check_fsck repair
@@ -1904,7 +1906,7 @@ test_deleted_live_subvol()
 
     local victim=$(subvol_snapshot 4)
 
-    kvdb -c "update snapshots 0:$victim:0 state=deleted"
+    kvdb_rw -c "update snapshots 0:$victim:0 state=deleted"
 
     skip_snaps=""
     check_fsck repair
@@ -1999,7 +2001,7 @@ test_stale_state_tombstone()
     # the legacy writer's residue: the DELETED bit is already set (and
     # truthful); rewind the state field to the stale pre-splice value
     # and restore the NO_KEYS bit the legacy writer never cleared:
-    kvdb -c "update snapshots 0:$husk:0 state=no_keys no_keys_obsolete=1"
+    kvdb_rw -c "update snapshots 0:$husk:0 state=no_keys no_keys_obsolete=1"
 
     skip_snaps="snap-1"
     check_fsck repair
@@ -2032,10 +2034,10 @@ test_runtime_deleted_interior_defers()
     # an interior node with two live children - deletion is a lie
     local leaf=$(subvol_snapshot 4)
     local victim=$(snap_field $leaf parent)
-    local children=($(snap_array $victim children))
+    local children=($(snap_field $victim children))
     [[ -n ${children[1]} && ${children[1]} != 0 ]]
 
-    kvdb -c "update snapshots 0:$victim:0 state=deleted"
+    kvdb_rw -c "update snapshots 0:$victim:0 state=deleted"
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
@@ -2124,7 +2126,7 @@ build_dirent_repair_image()
 	exit 1
     }
 
-    kvdb -c "set inodes 0:$inum:$root deleted"
+    kvdb_rw -c "set inodes 0:$inum:$root deleted"
 }
 
 test_dirent_repair_trans_mem()
@@ -2224,7 +2226,7 @@ test_dirent_overwritten_inode()
     # deletion having completed by umount (an unlinked-but-present inode
     # at $mid would land in ->inodes instead of ->deletes and the repair
     # would never fire): overwrite whatever the rm left at $mid.
-    kvdb -c "set dirents $posA:$mid deleted" \
+    kvdb_rw -c "set dirents $posA:$mid deleted" \
 	 -c "set inodes 0:$inumA:$mid whiteout" \
 	 -c "set inodes 0:$inumB:$mid deleted" \
 	 -c "set inodes 0:$inumB:$live whiteout"
@@ -2304,7 +2306,7 @@ test_fsck_damage_report()
 	exit 1
     }
 
-    kvdb -c "set -s inodes 0:$v1:$snap deleted" \
+    kvdb_rw -c "set -s inodes 0:$v1:$snap deleted" \
 	 -c "set -s inodes 0:$v2:$snap deleted" \
 	 -c "set -s dirents $posO:$snap deleted"
 
