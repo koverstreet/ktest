@@ -1219,7 +1219,9 @@ test_subvol_root_inode_reconstruct_at_mount()
     local snap=$(subvol_snapshot 5)
     [[ -n $inum && -n $snap ]]
 
-    kvdb -c "get inodes 0:$inum:$snap" | grep -q . || {
+    # A field read fails on a missing or deleted key; plain get prints
+    # something for any slot, so it can't check existence.
+    kvdb -c "get inodes 0:$inum:$snap bi_journal_seq" >/dev/null || {
 	echo "TEST FAILED: no root inode $inum:$snap for subvol 5 - setup broken"
 	exit 1
     }
@@ -2121,7 +2123,7 @@ build_dirent_repair_image()
     # the ancestor version: the file was created before the first
     # snapshot, at what is now the tree root's id
     local root=$(snap_root)
-    kvdb -c "get inodes 0:$inum:$root" | grep -q . || {
+    kvdb -c "get inodes 0:$inum:$root bi_journal_seq" >/dev/null || {
 	echo "TEST FAILED: no inode $inum at tree root $root - setup broken"
 	exit 1
     }
