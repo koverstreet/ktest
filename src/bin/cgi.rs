@@ -135,6 +135,42 @@ fn ci_branch_get_results(ci: &Ci) -> Result<Vec<CommitResults>, String> {
     )
 }
 
+/// Test-name search box: submits back to this view with a `test=` regex,
+/// which branch_get_results already applies as the test filter - the form
+/// is just a way to type it. Hidden fields keep the current view's context.
+fn search_form(out: &mut String, ci: &Ci) {
+    fn attr(s: &str) -> String {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('"', "&quot;")
+    }
+
+    writeln!(out, "<form method=get action={}>", ci.script_name).unwrap();
+    for (name, val) in [
+        ("user", &ci.user),
+        ("branch", &ci.branch),
+        ("commit", &ci.commit),
+    ] {
+        if let Some(val) = val {
+            writeln!(
+                out,
+                "<input type=hidden name={} value=\"{}\">",
+                name,
+                attr(val)
+            )
+            .unwrap();
+        }
+    }
+    writeln!(
+        out,
+        "<input type=text name=test value=\"{}\" placeholder=\"test name (regex)\" size=40> \
+         <input type=submit value=Search>",
+        attr(ci.tests_matching.as_str())
+    )
+    .unwrap();
+    writeln!(out, "</form>").unwrap();
+}
+
 fn ci_log(ci: &Ci) -> cgi::Response {
     let mut out = String::new();
     let branch = ci.branch.as_ref().unwrap();
@@ -168,6 +204,7 @@ fn ci_log(ci: &Ci) -> cgi::Response {
 
     writeln!(&mut out, "<body>").unwrap();
     writeln!(&mut out, "<div class=\"container\">").unwrap();
+    search_form(&mut out, ci);
     writeln!(&mut out, "<table class=\"table\">").unwrap();
 
     if multiple_test_view {
@@ -402,6 +439,7 @@ fn ci_commit(ci: &Ci) -> cgi::Response {
     writeln!(&mut out, "<div class=\"toplevel-container\">").unwrap();
 
     writeln!(&mut out, "<h3><th>{}</th></h3>", &message[..subject_len]).unwrap();
+    search_form(&mut out, ci);
 
     if ci
         .rc
