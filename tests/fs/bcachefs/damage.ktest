@@ -1,0 +1,385 @@
+#!/usr/bin/env bash
+#
+# Damage btree: the persistent record of which inodes errors and repairs
+# damaged, and the user-visible surface over it.
+#
+# Read-side tests inject keys with kvdb; the write side is exercised
+# organically (fsck repairing a real error records in the repair's
+# transaction). Coverage:
+#
+#   - bch2_damage_validate + to_text (kvdb list on the unmounted image),
+#     including unknown-error-id tolerance (downgrade safety)
+#   - organic recording via __bch2_fsck_err(), and the -n property:
+#     nochanges fsck records nothing
+#   - BCHFS_IOC_GET_DAMAGE via `bcachefs damage <path>`, including
+#     accumulation from ancestor snapshot versions
+#   - BCHFS_IOC_READDIR_FLAGS damaged_only via `bcachefs damage ls`:
+#     non-recursive (dirent scan) and recursive (damage btree scan +
+#     is-descendant filter, paths relative to the ioctl'd directory)
+#   - lifecycle: the damage key dies with its inode (bch2_damage_delete),
+#     snapshot deletion merges a dying version's key into the live
+#     child's (bch2_damage_keys_merge), and check_damage deletes keys
+#     orphaned by kernels without the damage btree
+#
+# Error ids are on-disk-stable bch_sb_error_id:
+#   10 = jset_seq_blacklisted, 42 = bset_bad_csum
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+
+kvdb()    { bcachefs kvdb ${ktest_scratch_dev[0]} "$@"; }
+kvdb_rw() { bcachefs kvdb --rw ${ktest_scratch_dev[0]} "$@"; }
+
+# 0:inum:snapshot positions of an inode's versions, numeric, from the
+# unmounted image
+inode_positions()
+{
+    kvdb -c "list inodes" |
+	sed -n "s/^u64s [0-9]* type inode[a-z0-9_]* \(0:$1:[0-9A-Za-z_]*\) .*/\1/p" |
+	sed 's/U32_MAX/4294967295/'
+}
+
+inode_pos()
+{
+    inode_positions $1 | head -n1
+}
+
+# inject_damage_at <0:inum:snapshot> <error id>...
+#
+# v2 entries: v[0] packs the error id (bits 0-15), occurrence count
+# (16-47) and the low bits of last_error_time; v[1] the rest of last and
+# all of first. Inject count 1, both timestamps 0. Assign v[1] too: kvdb
+# sizes the value by the furthest assignment, and validate requires a
+# multiple of the entry size.
+inject_damage_at()
+{
+    local pos=$1; shift
+    local cmd="set damage $pos damage" i=0 e
+    for e in "$@"; do
+	cmd+=" entries[$i].v[0]=$(( e + (1 << 16) )) entries[$i].v[1]=0"
+	i=$((i + 1))
+    done
+    kvdb_rw -c "$cmd"
+}
+
+# inject_damage <inum> <error id>...
+inject_damage()
+{
+    local inum=$1; shift
+    local pos=$(inode_pos $inum)
+    [[ -n $pos ]]
+    inject_damage_at $pos "$@"
+}
+
+damage_key_count()
+{
+    kvdb -c "list damage" | grep -c "type damage" || true
+}
+
+# error names from `bcachefs damage <path>`, which prints
+# "name  nr N  last <time>" per entry - strip everything after the name
+damage_names()
+{
+    bcachefs damage "$1" | sed 's/[[:space:]]*nr [0-9].*//'
+}
+
+test_basic()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    mkdir -p /mnt/dir/sub
+    touch /mnt/a /mnt/clean /mnt/dir/b /mnt/dir/sub/c
+    local inum_a=$(stat -c %i /mnt/a)
+    local inum_b=$(stat -c %i /mnt/dir/b)
+    local inum_c=$(stat -c %i /mnt/dir/sub/c)
+    umount /mnt
+
+    inject_damage $inum_a 10
+    inject_damage $inum_b 42
+    inject_damage $inum_c 10 42
+
+    # validate accepted them; to_text resolves the names
+    kvdb -c "list damage"
+    [[ $(kvdb -c "list damage" | grep -c "type damage") = 3 ]]
+    kvdb -c "list damage" | grep -q "jset_seq_blacklisted"
+    kvdb -c "list damage" | grep -q "bset_bad_csum"
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # GET_DAMAGE per file
+    [[ $(damage_names /mnt/a) = "jset_seq_blacklisted" ]]
+    [[ -z $(bcachefs damage /mnt/clean) ]]
+    diff -u <(damage_names /mnt/dir/sub/c) - <<-EOF
+	jset_seq_blacklisted
+	bset_bad_csum
+	EOF
+
+    # non-recursive ls: this directory's entries only
+    diff -u <(bcachefs damage ls /mnt) - <<-EOF
+	a: jset_seq_blacklisted
+	EOF
+
+    # recursive: everything under it, paths relative to the directory
+    diff -u <(bcachefs damage ls -R /mnt | sort) - <<-EOF
+	a: jset_seq_blacklisted
+	dir/b: bset_bad_csum
+	dir/sub/c: jset_seq_blacklisted bset_bad_csum
+	EOF
+
+    # and rooted at a subdirectory
+    diff -u <(bcachefs damage ls -R /mnt/dir | sort) - <<-EOF
+	b: bset_bad_csum
+	sub/c: jset_seq_blacklisted bset_bad_csum
+	EOF
+
+    umount /mnt
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+# Damage recorded against an ancestor snapshot version happened to the
+# data every descendant sees: after snapshotting, both the live file and
+# the snapshot's copy must still report it.
+test_snapshot_ancestors()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    touch /mnt/file
+    local inum=$(stat -c %i /mnt/file)
+    umount /mnt
+
+    inject_damage $inum 10
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    bcachefs subvolume snapshot /mnt /mnt/snap
+
+    # the live subvolume now views a child of the snapshot the damage
+    # was recorded against
+    [[ $(damage_names /mnt/file) = "jset_seq_blacklisted" ]]
+    [[ $(damage_names /mnt/snap/file) = "jset_seq_blacklisted" ]]
+
+    # one damaged inode, listed once
+    diff -u <(bcachefs damage ls -R /mnt) - <<-EOF
+	file: jset_seq_blacklisted
+	EOF
+
+    umount /mnt
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+# The write side, organically: delete a file's dirent with kvdb, so fsck
+# finds a real inode-scoped error (dangling backpointer, unreachable
+# inode). fsck -n must record nothing - a discarded repair discards the
+# record with it - and the fixing run records in the repair's
+# transaction.
+test_organic_record()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    touch /mnt/file
+    local inum=$(stat -c %i /mnt/file)
+    umount /mnt
+
+    local pos=$(kvdb -c "list dirents" |
+	sed -n "s/^u64s [0-9]* type dirent \([0-9]*:[0-9]*:[0-9A-Za-z_]*\) .*: file ->.*/\1/p" |
+	sed 's/U32_MAX/4294967295/' |
+	head -n1)
+    [[ -n $pos ]]
+    kvdb_rw -c "set dirents $pos deleted"
+
+    # nochanges: errors reported, nothing recorded
+    bcachefs fsck -n ${ktest_scratch_dev[0]} || true
+    [[ $(damage_key_count) = 0 ]]
+
+    # the fix records damage against the inode, stamping both timestamps
+    bcachefs fsck -y ${ktest_scratch_dev[0]} || true
+    kvdb -c "list damage"
+    [[ $(damage_key_count) -ge 1 ]]
+    kvdb -c "list damage" |
+	grep -qE "inode_points_to_missing_dirent|inode_unreachable"
+    kvdb -c "list damage" | grep -q " first "
+
+    # and the ioctl surface sees it: the file was reattached in
+    # lost+found, annotated with what happened to it
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    bcachefs damage ls -R /mnt
+    bcachefs damage ls -R /mnt | grep -q "lost+found/$inum:"
+    umount /mnt
+
+    # repair converged: a second fsck finds nothing
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
+}
+
+# A damage key dies with its inode, in the same transaction
+# (bch2_damage_delete() from the inode removal paths):
+test_delete_on_rm()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    touch /mnt/file
+    local inum=$(stat -c %i /mnt/file)
+    umount /mnt
+
+    inject_damage $inum 10
+    [[ $(damage_key_count) = 1 ]]
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    [[ $(damage_names /mnt/file) = "jset_seq_blacklisted" ]]
+    rm /mnt/file
+    umount /mnt
+
+    [[ $(damage_key_count) = 0 ]]
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+# check_damage: a damage key with no inode at its position - what a
+# kernel without the damage btree leaves behind when it deletes the
+# inode - is deleted by fsck; keys whose inode exists are kept.
+test_check_damage_orphan()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    touch /mnt/keep
+    local inum=$(stat -c %i /mnt/keep)
+    umount /mnt
+
+    inject_damage $inum 10
+    # no inode 99999; the root snapshot is U32_MAX
+    inject_damage_at 0:99999:4294967295 42
+    [[ $(damage_key_count) = 2 ]]
+
+    bcachefs fsck -y ${ktest_scratch_dev[0]} || true
+
+    [[ $(damage_key_count) = 1 ]]
+    kvdb -c "list damage" | grep -q "0:$inum:"
+    ! kvdb -c "list damage" | grep -q "0:99999:"
+
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
+}
+
+# Snapshot deletion: a dying snapshot node's damage key migrating onto a
+# live child that has its own key merges - counts sum - rather than
+# being dropped as overwritten. Damage is covered by the deletion scan's
+# accelerated per-inode phase, like the content btrees.
+test_snapshot_deletion_merge()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    touch /mnt/file
+    local inum=$(stat -c %i /mnt/file)
+
+    bcachefs subvolume snapshot /mnt /mnt/snap
+    # materialize the live subvolume's own inode version
+    touch /mnt/file
+    umount /mnt
+
+    local positions=$(inode_positions $inum)
+    [[ $(wc -l <<< "$positions") = 2 ]]
+
+    local pos
+    for pos in $positions; do
+	inject_damage_at $pos 10
+    done
+    [[ $(damage_key_count) = 2 ]]
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    bcachefs subvolume delete /mnt/snap
+    umount /mnt
+
+    # deletion is async; fsck runs it to completion
+    bcachefs fsck -y ${ktest_scratch_dev[0]} || true
+
+    kvdb -c "list damage"
+    [[ $(damage_key_count) = 1 ]]
+    kvdb -c "list damage" | grep -q "jset_seq_blacklisted nr 2"
+
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
+}
+
+# damage clear removes the record in the calling view. With a snapshot
+# holding an older version the clear is a whiteout - the snapshot keeps
+# its view, and the cleared file drops out of every listing; a sole-view
+# record is really deleted.
+test_clear()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    touch /mnt/file
+    local inum=$(stat -c %i /mnt/file)
+    umount /mnt
+    inject_damage $inum 10
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    bcachefs subvolume snapshot /mnt /mnt/snap
+
+    # created after the snapshot: no other view of its record
+    touch /mnt/plain
+    local inum_plain=$(stat -c %i /mnt/plain)
+    umount /mnt
+    inject_damage $inum_plain 42
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    [[ $(damage_names /mnt/file) = "jset_seq_blacklisted" ]]
+    [[ $(damage_names /mnt/plain) = "bset_bad_csum" ]]
+
+    # clear in the live view: the snapshot keeps its record
+    bcachefs damage clear /mnt/file
+    [[ -z $(bcachefs damage /mnt/file) ]]
+    [[ $(damage_names /mnt/snap/file) = "jset_seq_blacklisted" ]]
+    ! bcachefs damage ls /mnt | grep -q "^file:"
+    bcachefs damage ls -R /mnt | grep -q "^snap/file:"
+
+    # sole view: the key is really deleted
+    bcachefs damage clear /mnt/plain
+    [[ -z $(bcachefs damage /mnt/plain) ]]
+
+    # -R clears everything left, including the snapshot's view
+    bcachefs damage clear -R /mnt
+    [[ -z $(bcachefs damage ls -R /mnt) ]]
+    umount /mnt
+
+    # on disk: file's ancestor record survives, hidden under the views'
+    # whiteouts; plain's is gone outright
+    kvdb -c "list damage"
+    [[ $(damage_key_count) = 1 ]]
+    kvdb -c "list damage" | grep -q "whiteout"
+    ! kvdb -c "list damage" | grep -q "0:$inum_plain:"
+
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
+}
+
+# Unknown error ids ride through - a key written by a newer kernel must
+# survive downgrade: validate accepts it, to_text and the tools print
+# the unknown form, fsck doesn't touch it.
+test_unknown_error_id()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    touch /mnt/file
+    local inum=$(stat -c %i /mnt/file)
+    umount /mnt
+
+    inject_damage $inum 9999
+    kvdb -c "list damage" | grep -q "(unknown error 9999)"
+
+    # not an error: fsck passes clean and keeps the key
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
+    [[ $(damage_key_count) = 1 ]]
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    [[ $(damage_names /mnt/file) = "(unknown error 9999)" ]]
+    umount /mnt
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+main "$@"
