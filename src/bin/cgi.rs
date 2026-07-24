@@ -323,8 +323,9 @@ fn ci_log(ci: &Ci) -> cgi::Response {
                 writeln!(&mut out, "<tr class={}>", t.1.status.table_class()).unwrap();
                 writeln!(
                     &mut out,
-                    "<td> <a href=\"{}?branch={}&commit={}\">{}</a> </td>",
+                    "<td> <a href=\"{}?user={}&branch={}&commit={}\">{}</a> </td>",
                     ci.script_name,
+                    ci.user.as_ref().unwrap(),
                     branch,
                     r.id,
                     &r.id.as_str()[..14]
