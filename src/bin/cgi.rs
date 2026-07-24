@@ -4,8 +4,8 @@ extern crate cgi;
 extern crate querystring;
 
 use ci_cgi::{
-    api, branch_get_results, ciconfig_read, last_good_line, update_lcov, CiConfig,
-    CommitResults, TestResultsMap, TestStatus, Userrc,
+    api, branch_get_results, ciconfig_read, format_duration, last_good_line, update_lcov,
+    CiConfig, CommitResults, TestResultsMap, TestStatus, Userrc,
 };
 
 const STYLESHEET: &str = "bootstrap.min.css";
@@ -171,6 +171,107 @@ fn search_form(out: &mut String, ci: &Ci) {
     writeln!(out, "</form>").unwrap();
 }
 
+#[derive(Debug, PartialEq)]
+struct SingleTestStats {
+    completed: u64,
+    passed: u64,
+    failed: u64,
+    duration: u64,
+}
+
+fn single_test_stats(commits: &[CommitResults]) -> Option<SingleTestStats> {
+    let mut test_name: Option<&str> = None;
+    let mut stats = SingleTestStats {
+        completed: 0,
+        passed: 0,
+        failed: 0,
+        duration: 0,
+    };
+
+    for (name, result) in commits.iter().flat_map(|commit| &commit.tests) {
+        match test_name {
+            Some(test_name) if test_name != name => return None,
+            None => test_name = Some(name),
+            _ => {}
+        }
+
+        match result.status {
+            TestStatus::Passed => stats.passed += 1,
+            TestStatus::Failed => stats.failed += 1,
+            _ => continue,
+        }
+
+        stats.completed += 1;
+        stats.duration += result.duration;
+    }
+
+    (stats.completed != 0).then_some(stats)
+}
+
+#[cfg(test)]
+mod single_test_stats_tests {
+    use super::*;
+    use chrono::Utc;
+    use ci_cgi::TestResult;
+
+    fn commit(tests: &[(&str, TestStatus, u64)]) -> CommitResults {
+        CommitResults {
+            id: String::new(),
+            message: String::new(),
+            tests: tests
+                .iter()
+                .map(|(name, status, duration)| {
+                    (
+                        (*name).to_string(),
+                        TestResult {
+                            status: *status,
+                            starttime: Utc::now(),
+                            duration: *duration,
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn counts_completed_results_for_one_test() {
+        let commits = [
+            commit(&[("test", TestStatus::Passed, 60)]),
+            commit(&[("test", TestStatus::Failed, 120)]),
+            commit(&[("test", TestStatus::Inprogress, 0)]),
+        ];
+
+        assert_eq!(
+            single_test_stats(&commits),
+            Some(SingleTestStats {
+                completed: 2,
+                passed: 1,
+                failed: 1,
+                duration: 180,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_multiple_test_names() {
+        let commits = [
+            commit(&[("first", TestStatus::Passed, 60)]),
+            commit(&[("second", TestStatus::Failed, 120)]),
+        ];
+
+        assert_eq!(single_test_stats(&commits), None);
+    }
+
+    #[test]
+    fn requires_a_completed_result() {
+        let commits = [commit(&[("test", TestStatus::Inprogress, 0)])];
+
+        assert_eq!(single_test_stats(&commits), None);
+        assert_eq!(single_test_stats(&[]), None);
+    }
+}
+
 fn ci_log(ci: &Ci) -> cgi::Response {
     let mut out = String::new();
     let branch = ci.branch.as_ref().unwrap();
@@ -205,6 +306,25 @@ fn ci_log(ci: &Ci) -> cgi::Response {
     writeln!(&mut out, "<body>").unwrap();
     writeln!(&mut out, "<div class=\"container\">").unwrap();
     search_form(&mut out, ci);
+
+    if !ci.tests_matching.as_str().is_empty() {
+        if let Some(stats) = single_test_stats(&commits) {
+            let pass_rate = stats.passed as f64 * 100.0 / stats.completed as f64;
+            let failure_rate = stats.failed as f64 * 100.0 / stats.completed as f64;
+            writeln!(
+                &mut out,
+                "<p><strong>{} completed runs</strong>: {} passed ({:.1}%), {} failed ({:.1}%); average duration {}</p>",
+                stats.completed,
+                stats.passed,
+                pass_rate,
+                stats.failed,
+                failure_rate,
+                format_duration(stats.duration / stats.completed)
+            )
+            .unwrap();
+        }
+    }
+
     writeln!(&mut out, "<table class=\"table\">").unwrap();
 
     if multiple_test_view {
