@@ -2349,4 +2349,439 @@ test_fsck_damage_report()
     verify_fs_state must-mount
 }
 
+# ── the deus chain (2026-07-22): runtime deletion + missing inode strands
+# keys; a pre-snapshot_nr_keys fs has no working guard ────────────────────
+#
+# Field failure this reproduces (deus, ~/deus.log): inodes missing at
+# snapshot X while extents/dirents at X survive (crash damage). The v2
+# deletion sweep is inode-gated - "a key in snapshot X implies an inode in
+# snapshot X" - so those keys are never visited. The no_keys license check
+# (bch2_snapshot_node_check_no_data) exists to catch exactly this, but it
+# reads the per-snapshot counters with bch2_accounting_mem_read() while
+# bch2_accounting_is_mem() excludes BCH_DISK_ACCOUNTING_snapshot from the
+# mem table (1e6176729, 2025-12: "Snapshot accounting is no longer
+# in-mem") - so the guard, added six months later (d197be109), has read
+# zeros since the day it was written and has never refused anything, on
+# any fs at any version. Node goes no_keys with live keys, the next
+# mount's delete_dead_interior_snapshots splices it out (same dead guard),
+# and every key stranded at its id vanishes from all views - then fsck's
+# mass migration of "key in deleted interior snapshot" compounds the
+# damage against the same missing inodes (248 damaged paths, 2315+
+# reconstructed inodes, 768 removed dirents on deus).
+#
+# The fix must read the counters from the accounting btree (after a write
+# buffer flush - the sweep's own decrements are still buffered), not the
+# mem table; the trust_keys version gate is then the only remaining
+# distinction between the two tests below.
+#
+# Tree used by both tests:
+#     mkdir sharedir; write e0          -> keys at node A
+#     snapshot snap-0                   -> A interior {snap0-leaf, B}
+#     write sharedir/e1                 -> dirent e1 + sharedir inode at B
+#     snapshot snap-1                   -> B interior {snap1-leaf, C=main}
+# Deleting snap-1 makes B redundant (single live child C). Deleting
+# sharedir's inode version at B (its A version survives - the deus shape,
+# "have key for inode but have inode in ancestor snapshot") leaves the
+# sweep no dying-id inode for sharedir, so dirent e1 - visible to main by
+# inheritance - is never migrated.
+
+# Last version below the nr_keys trust gate: check_no_data only trusts the
+# per-snapshot key counters when version_upgrade_complete >=
+# per_dev_fragmentation_lru (1.39) - below that it falls back to sectors only
+V_PRE_NR_KEYS=$(( (1 << 10) | 38 ))	# BCH_VERSION(1, 38)
+
+# noatime on every mount in these tests: atime updates through the
+# (writable) snapshot views - capture_state walks every subvolume -
+# materialize an inode version at every leaf id. A version at the dying
+# leaf re-arms the sweep's inode-presence gate for the whole inum, the
+# dirent gets migrated after all, and the stranding under test is hidden.
+setup_deus_tree()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs -o noatime ${ktest_scratch_dev[0]} /mnt
+
+    pushd /mnt
+    mkdir sharedir
+    echo e0 > sharedir/e0
+    DEUS_DIR_INUM=$(stat -c %i sharedir)
+    bcachefs subvolume snapshot snap-0
+    echo e1 > sharedir/e1
+    bcachefs subvolume snapshot snap-1
+    popd
+
+    capture_state $MANIFEST
+    umount /mnt
+
+    skip_snaps=""
+    skip_paths=""
+}
+
+# Interior node B: the main leaf's parent
+deus_victim()
+{
+    snap_field $(subvol_snapshot 1) parent
+}
+
+# Delete snap-1 and run the deletion worker synchronously. The sysfs
+# trigger write returns the worker's error, and refusal
+# (EINVAL_snapshot_delete_with_data) is a PASSING outcome for the guard
+# test - don't let errexit or a failed echo kill the test here.
+deus_run_deletion()		# $1: extra mount opts
+{
+    mount -t bcachefs -o noatime $1 ${ktest_scratch_dev[0]} /mnt
+    bcachefs subvolume delete /mnt/snap-1
+    sync
+    echo 1 | tee /sys/fs/bcachefs/*/internal/trigger_delete_dead_snapshots >& /dev/null || true
+    sync
+    umount /mnt
+}
+
+# Keys still at snapshot id $1, all snapshot btrees ("" if none)
+deus_keys_at()
+{
+    local btree
+    for btree in extents inodes dirents xattrs; do
+	kvdb -c "list $btree" | grep -E "type [a-z_0-9]+ [0-9]+:[0-9]+:$1 " |
+	    grep -v " type deleted " || true
+    done
+}
+
+# The injection's preconditions, asserted so a silently-ineffective
+# injection reads as "TEST BROKEN", not as a pass:
+#   - sharedir's inode version at the victim id is gone
+#   - the e1 dirent (and e1's own keys) are at the victim id
+deus_assert_injection()
+{
+    local victim=$1
+
+    # a raw deletion leaves an empty slot; tolerate a whiteout/deleted
+    # rendering too so the assert doesn't depend on kvdb display details
+    kvdb -c "get inodes 0:$DEUS_DIR_INUM:$victim" |
+	grep -qE "\(no key\)|type deleted|type whiteout" || {
+	echo "TEST BROKEN: sharedir inode version at $victim survived the injection:"
+	kvdb -c "get inodes 0:$DEUS_DIR_INUM:$victim"
+	exit 1
+    }
+
+    local pre=$(deus_keys_at $victim)
+    echo "keys at victim $victim after injection:"
+    echo "${pre:-(none)}"
+
+    echo "$pre" | grep -q " type dirent " || {
+	echo "TEST BROKEN: no dirent at the victim id - tree construction didn't put e1's dirent at the interior node"
+	exit 1
+    }
+
+    echo "sb versions and per-snapshot accounting after injection:"
+    kvdb -c "sb get version_upgrade_complete" || true
+    bcachefs list -b accounting ${ktest_scratch_dev[0]} | grep "snapshot " ||
+	echo "(no per-snapshot accounting rows)"
+}
+
+# The invariant both tests enforce at the bug point: a node that took the
+# no_keys/deleted license (or was spliced out entirely) must actually be
+# empty. Stranded keys at a non-live node are the deus corruption,
+# whatever else happens later. Note the rw opens themselves (kvdb
+# included) run delete_dead_interior_snapshots, so a wrongly-emptied node
+# may already be spliced by the time we look - that's the same bug, one
+# step later.
+deus_assert_no_stranded_keys()
+{
+    local victim=$1
+    echo "victim node $victim after deletion:"
+    kvdb -c "get snapshots 0:$victim:0"
+
+    local stranded=$(deus_keys_at $victim)
+    [[ -z $stranded ]] && return 0
+
+    # keys remain - only acceptable if the node is still fully live
+    # (transition refused, nothing lost):
+    local SNAPSHOT_STATE_live=$((0x757c47a2))
+    local state=$(snap_field $victim state)
+    state=${state%% *}
+    if [[ -n $state ]] && (( state == SNAPSHOT_STATE_live )); then
+	echo "no_keys license refused with keys intact (guard held)"
+	return 0
+    fi
+
+    echo "TEST FAILED: snapshot node $victim (state ${state:-gone}) took the no_keys/deleted license with keys still at its id (the deus stranding):"
+    echo "$stranded"
+    exit 1
+}
+
+# ── characterization: the corruption walks ───────────────────────────────
+#
+# CHARACTERIZATION TEST - asserts the BUGGY behavior, so it PASSES while
+# the born-dead check_no_data bug exists and documents the full pathology;
+# retire or invert it when the fix lands (the guard acceptance test below
+# covers the fixed contract).
+#
+# Three generations under one directory, one injection, two snapshot
+# deletions:
+#
+#   gen0: dir/f0            keys at N0     snap-0
+#   gen1: dir/sub1/x        keys at N1     snap-1
+#   gen2: dir/f2            keys at N2     snap-2
+#   chain: N0 -> {snap0, N1} -> {snap1, N2} -> {snap2, main}
+#
+# The single kvdb change deletes dir's inode version at N1 (N0 and N2
+# versions survive) - invisible to every view via ancestor fallthrough.
+#
+# Act 1: delete snap-1. The sweep has no dying-id inode for dir, so
+#   sub1's DIRENT at N1 is stranded while sub1's contents (gated by
+#   sub1's own inode at N1) migrate fine; N1 splices. dir/sub1 vanishes
+#   from snap-2 AND main - a supposedly-immutable snapshot and the live
+#   subvolume both lose a directory.
+# Act 2: delete snap-0. N0's sweep scans dir's ranges (dir's inode at N0
+#   is dying) and now trips over the stranded dirent at N1's tombstone -
+#   bkey_in_deleted_interior_snapshot migrates it to N1's live descendant
+#   N2, either inline or via the content passes it schedules for the next
+#   mount. dir/sub1 REAPPEARS in snap-2 and main, contents intact:
+#   deleting an unrelated snapshot resurrects the directory.
+test_runtime_delete_corruption_walks()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs -o noatime ${ktest_scratch_dev[0]} /mnt
+
+    pushd /mnt
+    mkdir dir
+    echo f0 > dir/f0
+    local dir_inum=$(stat -c %i dir)
+    bcachefs subvolume snapshot snap-0
+    mkdir dir/sub1
+    echo x > dir/sub1/x
+    bcachefs subvolume snapshot snap-1
+    echo f2 > dir/f2
+    bcachefs subvolume snapshot snap-2
+    popd
+    umount /mnt
+
+    # N1 = parent of snap-1's leaf; N0 = its parent (sanity only)
+    local n1=$(snap_field $(subvol_snapshot 3) parent)
+    local n0=$(snap_field $n1 parent)
+    [[ -n $n1 && -n $n0 ]]
+    echo "chain: N0=$n0 N1=$n1"
+
+    # the one direct database change: raw-delete the inode version, the
+    # truly-absent shape lost btree data leaves (a whiteout - set -s -
+    # would re-arm the sweep's inode-presence gate)
+    kvdb_rw -c "set inodes 0:$dir_inum:$n1 deleted"
+
+    # sub1's dirent location tracks the corruption; assert it starts at N1
+    sub1_dirent_snap() {
+	kvdb -c "list dirents" | sed -n "s/.*type dirent [0-9]*:[0-9]*:\([0-9]*\).*: sub1 ->.*/\1/p" | head -1
+    }
+    [[ $(sub1_dirent_snap) == $n1 ]]
+
+    # the injection is invisible: every view still shows everything
+    mount -t bcachefs -o noatime ${ktest_scratch_dev[0]} /mnt
+    [[ -f /mnt/snap-0/dir/f0 ]]
+    [[ -f /mnt/snap-1/dir/sub1/x ]]
+    [[ -f /mnt/snap-2/dir/sub1/x && -f /mnt/snap-2/dir/f2 ]]
+    [[ -f /mnt/dir/sub1/x && -f /mnt/dir/f2 ]]
+    echo "after injection: all views intact"
+
+    # ── act 1: delete snap-1 ────────────────────────────────────────────
+    bcachefs subvolume delete /mnt/snap-1
+    sync
+    echo 1 | tee /sys/fs/bcachefs/*/internal/trigger_delete_dead_snapshots >& /dev/null || true
+    sync
+    umount /mnt
+
+    # Two mount cycles: the first performs the N1 splice (pass 24) during
+    # its own recovery, which leaves every descendant's is_ancestor bitmap
+    # stale for the rest of that mount (delete_dead_interior_snapshots
+    # never triggers bch2_snapshot_table_rebuild). With keys stranded at
+    # the spliced id, lookups then query ancestry against it: debug builds
+    # PANIC on the fastpath/slowpath mismatch, production builds keep the
+    # stranded keys visible until remount. Verify on the second, clean
+    # mount.
+    mount -t bcachefs -o noatime ${ktest_scratch_dev[0]} /mnt
+    umount /mnt
+    mount -t bcachefs -o noatime ${ktest_scratch_dev[0]} /mnt
+    [[ -f /mnt/snap-0/dir/f0 ]] || { echo "TEST FAILED: snap-0 lost f0"; exit 1; }
+    [[ -f /mnt/dir/f0 && -f /mnt/dir/f2 ]] || { echo "TEST FAILED: main lost f0/f2"; exit 1; }
+    if [[ -e /mnt/snap-2/dir/sub1 || -e /mnt/dir/sub1 ]]; then
+	echo "TEST FAILED (characterization): dir/sub1 survived snap-1 deletion - has the check_no_data fix landed? Retire this test."
+	umount /mnt
+	exit 1
+    fi
+    echo "act 1: dir/sub1 vanished from snap-2 and main (stranded dirent at spliced N1)"
+    umount /mnt
+
+    [[ $(sub1_dirent_snap) == $n1 ]] || {
+	echo "TEST FAILED: stranded dirent not at N1 tombstone: at '$(sub1_dirent_snap)'"
+	exit 1
+    }
+
+    # ── act 2: delete snap-0 ────────────────────────────────────────────
+    mount -t bcachefs -o noatime ${ktest_scratch_dev[0]} /mnt
+    bcachefs subvolume delete /mnt/snap-0
+    sync
+    echo 1 | tee /sys/fs/bcachefs/*/internal/trigger_delete_dead_snapshots >& /dev/null || true
+    sync
+    umount /mnt
+
+    # settle the N0 splice on its own mount (same stale-bitmap hazard as
+    # act 1) before verifying
+    mount -t bcachefs -o noatime ${ktest_scratch_dev[0]} /mnt
+    umount /mnt
+
+    # the migration may happen inline or via content passes scheduled for
+    # the next mount(s) - allow a couple of cycles for the resurrection
+    local i back=0
+    for i in 1 2 3; do
+	mount -t bcachefs -o noatime ${ktest_scratch_dev[0]} /mnt
+	if [[ -f /mnt/snap-2/dir/sub1/x && -f /mnt/dir/sub1/x ]]; then
+	    back=1
+	fi
+	umount /mnt
+	(( back )) && break
+    done
+
+    echo "sub1 dirent now at snapshot: $(sub1_dirent_snap)"
+    if (( ! back )); then
+	echo "TEST FAILED: dir/sub1 did not reappear after deleting snap-0 (corruption did not walk as diagnosed)"
+	exit 1
+    fi
+    echo "act 2: dir/sub1 resurrected in snap-2 and main by deleting the unrelated snap-0"
+}
+
+# Current-version fs: the snapshot_nr_keys guard must REFUSE the no_keys
+# transition (nr_keys sees the stranded dirent), schedule
+# check_allocations/check_inodes, and fsck must then converge with
+# sharedir/e1 intact in the main subvolume. THE ACCEPTANCE TEST for
+# fixing the born-dead check_no_data (see section header): FAILING until
+# check_no_data reads the accounting btree instead of the mem table.
+# Verified failing 2026-07-22: set_no_keys reads v=[0 0 0] with
+# trust_keys=1 and correct nonzero counters on disk; the dirent is
+# stranded and spliced away.
+test_runtime_delete_missing_inode_guard()
+{
+    setup_deus_tree
+
+    local victim=$(deus_victim)
+    [[ -n $victim ]]
+
+    # the deus precondition, injected: no sharedir inode at B (ancestor
+    # version at A survives)
+    kvdb_rw -c "set inodes 0:$DEUS_DIR_INUM:$victim deleted"
+    deus_assert_injection $victim
+
+    deus_run_deletion ""
+
+    # ground truth before any rw open can run recovery passes: list opens
+    # noexcl|nochanges|read_only|norecovery
+    echo "=== post-deletion snapshots/dirents/inodes/accounting (norecovery) ==="
+    bcachefs list -b snapshots ${ktest_scratch_dev[0]} || true
+    bcachefs list -b dirents ${ktest_scratch_dev[0]} || true
+    bcachefs list -b inodes ${ktest_scratch_dev[0]} || true
+    bcachefs list -b accounting ${ktest_scratch_dev[0]} | grep "snapshot " ||
+	echo "(no per-snapshot accounting rows)"
+
+    deus_assert_no_stranded_keys $victim
+
+    # fsck -y: repairs the injected missing-inode shape, then the
+    # delete_dead_snapshots fsck pass finishes the deletion properly
+    local rc=0
+    bcachefs fsck -y ${ktest_scratch_dev[0]} || rc=$?
+    echo "fsck -y exited $rc"
+    (( rc != 0 )) || { echo "TEST FAILED: fsck missed the injected missing inode"; exit 1; }
+
+    # plain mount lets delete_dead_interior_snapshots reap the (now
+    # genuinely empty) no_keys node before the clean-check
+    mount -t bcachefs -o noatime ${ktest_scratch_dev[0]} /mnt
+    [[ -f /mnt/sharedir/e1 ]] || {
+	echo "TEST FAILED: sharedir/e1 lost through guarded deletion + repair"
+	umount /mnt
+	exit 1
+    }
+    umount /mnt
+
+    rc=0
+    bcachefs fsck -n ${ktest_scratch_dev[0]} || rc=$?
+    echo "fsck -n exited $rc"
+    (( rc == 0 )) || { echo "TEST FAILED: errors remain after repair"; exit 1; }
+
+    skip_snaps="snap-1"
+    verify_fs_state must-mount
+}
+
+# The deus reproducer: same injection on a fs pinned below
+# snapshot_nr_keys (version_upgrade_complete and version_incompat_allowed
+# = 1.39, all opens with version_upgrade=none so the pin sticks - deus
+# itself never completed the 1.40 upgrade, so this is the live field
+# configuration). check_no_data falls back to sectors-only, the stranded
+# dirent is invisible to it, and the whole chain runs: no_keys with live
+# keys -> splice on remount -> sharedir/e1 vanishes from the main
+# subvolume. Expected FAIL until the pre-1.40 path gets a real guard
+# (scan-count fallback, forced upgrade, or a missing-inode-tolerant
+# sweep).
+test_runtime_delete_strands_pre_nr_keys()
+{
+    setup_deus_tree
+
+    # version pinning needs kvdb sb get/set, which not all tools have yet
+    # (gate after setup: kvdb needs a valid filesystem on the device to open)
+    kvdb -c "help" | grep -q "^sb " || {
+	echo "SKIP: kvdb has no sb commands - version pinning unavailable with these tools"
+	return 0
+    }
+
+    local victim=$(deus_victim)
+    [[ -n $victim ]]
+
+    # inject first (the --rw open runs full recovery, which would re-upgrade
+    # a pinned superblock), then pin the versions sb-only via --nostart
+    kvdb_rw -c "set inodes 0:$DEUS_DIR_INUM:$victim deleted"
+    # pin and verify sb-only (--nostart): a started open - even norecovery -
+    # performs the compatible version upgrade in memory, so a plain sb get
+    # would read the upgraded value, not the on-disk pin
+    bcachefs kvdb --nostart ${ktest_scratch_dev[0]} \
+	 -c "sb set version_upgrade_complete=$V_PRE_NR_KEYS" \
+	 -c "sb set version_incompat_allowed=$V_PRE_NR_KEYS"
+    [[ $(bcachefs kvdb --nostart ${ktest_scratch_dev[0]} \
+	     -c "sb get version_upgrade_complete") == *"= $V_PRE_NR_KEYS "* ]]
+    deus_assert_injection $victim
+
+    local o="-o version_upgrade=none"
+
+    deus_run_deletion "$o"
+
+    deus_assert_no_stranded_keys $victim
+
+    # remount: snapshots_read counts the no_keys node as an empty interior
+    # node and delete_dead_interior_snapshots splices it out - with the
+    # stranded dirent still at its id, e1 vanishes from every view
+    mount -t bcachefs -o noatime $o ${ktest_scratch_dev[0]} /mnt
+    [[ -f /mnt/sharedir/e1 ]] || {
+	echo "TEST FAILED: sharedir/e1 vanished from the main subvolume - runtime deletion stranded its dirent and the splice orphaned it (the deus chain)"
+	umount /mnt
+	exit 1
+    }
+    umount /mnt
+
+    # repair the injected missing-inode shape and finish the deletion,
+    # then the clean-check + manifest are the convergence oracle (this is
+    # only reached once the pre-1.40 guard exists)
+    local rc=0
+    bcachefs fsck -y -o version_upgrade=none ${ktest_scratch_dev[0]} || rc=$?
+    echo "fsck -y exited $rc"
+    (( rc != 0 )) || { echo "TEST FAILED: fsck missed the injected missing inode"; exit 1; }
+
+    mount -t bcachefs -o noatime $o ${ktest_scratch_dev[0]} /mnt
+    umount /mnt
+
+    rc=0
+    bcachefs fsck -n -o version_upgrade=none ${ktest_scratch_dev[0]} || rc=$?
+    echo "fsck -n exited $rc"
+    (( rc == 0 )) || {
+	echo "TEST FAILED: errors remain after repair"
+	exit 1
+    }
+
+    skip_snaps="snap-1"
+    verify_fs_state must-mount
+}
+
 main "$@"
