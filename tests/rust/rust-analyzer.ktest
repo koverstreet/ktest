@@ -3,34 +3,94 @@
 . "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/../prelude.sh"
 
 config-mem 4G
+config-no-kbuild
 config-no-vm
 config-timeout $((20 * 60))
 
-config-kconfig-base allmodconfig
-config-kbuild-target rust-analyzer
-
-require-kernel-config RUST
-require-kernel-config RANDSTRUCT_NONE
-require-kernel-config RANDSTRUCT_FULL=n
-require-kernel-config RANDSTRUCT_PERFORMANCE=n
-
 test_system()
-{
+(
     local test_file=$(basename -s .ktest "$0")
     local out_dir="$ktest_out/out/${test_file}.system"
-    mkdir -p "$out_dir"
+    local work_dir="$ktest_out/work/${test_file}.system"
+    local source_dir="$work_dir/source"
+    local head_ref=$(git -C "$ktest_kernel_source" rev-parse HEAD)
+    local base_ref=$(git -C "$ktest_kernel_source" rev-parse HEAD^)
 
-    local project="$ktest_kernel_build/rust-project.json"
-    cp "$project" "$out_dir/rust-project.json"
+    rm -rf "$work_dir"
+    git -C "$ktest_kernel_source" worktree prune
+    mkdir -p "$out_dir" "$work_dir"
 
-    local start_ns end_ns
-    start_ns=$(date +%s%N)
-    rust-analyzer analysis-stats "$project" \
-        > "$out_dir/analysis-stats.txt"
-    end_ns=$(date +%s%N)
+    git -C "$ktest_kernel_source" worktree add --detach "$source_dir" HEAD
+    trap 'git -C "$ktest_kernel_source" worktree remove -f "$source_dir" >/dev/null 2>&1 || true' EXIT
 
-    echo "elapsed_ms=$(((end_ns - start_ns) / 1000000))" \
-        >> "$out_dir/analysis-stats.txt"
-}
+    run_one()
+    {
+        local label=$1
+        local ref=$2
+        local build_dir="$work_dir/build.${label}"
+        local raw="$out_dir/diagnostics.${label}.raw"
+        local stderr="$out_dir/diagnostics.${label}.stderr"
+        local normalized="$out_dir/diagnostics.${label}.txt"
+
+        git -C "$source_dir" checkout --detach "$ref"
+
+        make --jobs="$ktest_cpus" -C "$source_dir" O="$build_dir" allmodconfig
+        "$source_dir/scripts/config" --file "$build_dir/.config" \
+            --enable RUST \
+            --enable RANDSTRUCT_NONE \
+            --disable RANDSTRUCT_FULL \
+            --disable RANDSTRUCT_PERFORMANCE \
+            --disable SHADOW_CALL_STACK
+        make --jobs="$ktest_cpus" -C "$source_dir" O="$build_dir" olddefconfig
+
+        if [[ $("$source_dir/scripts/config" --file "$build_dir/.config" -s RUST) != y ]]; then
+            echo "CONFIG_RUST could not be enabled for $ref"
+            return 1
+        fi
+
+        # rust-analyzer expects generated bindings and proc-macro dylibs.
+        make --jobs="$ktest_cpus" -C "$source_dir" O="$build_dir" rust/
+        make --jobs="$ktest_cpus" -C "$source_dir" O="$build_dir" rust-analyzer
+
+        local project="$build_dir/rust-project.json"
+        cp "$project" "$out_dir/rust-project.${label}.json"
+
+        rust-analyzer diagnostics "$project" --severity warning \
+            > "$raw" 2> "$stderr" || true
+
+        # Diagnostics exits nonzero for error-severity findings, including
+        # existing ones. The completion marker distinguishes those from a
+        # failed or interrupted scan.
+        if ! grep -aFq "diagnostic scan complete" "$raw"; then
+            echo "rust-analyzer diagnostics did not complete for $ref"
+            cat "$stderr"
+            return 1
+        fi
+
+        # Drop progress-bar control output and source ranges. Keeping sorted
+        # duplicate fingerprints lets comm detect an increased occurrence
+        # count without treating line movement as a regression.
+        LC_ALL=C sed -n 's/.*\(at crate .*\)/\1/p' "$raw" |
+            sed -E \
+                -e "s#${source_dir}#<SOURCE>#g" \
+                -e "s#${build_dir}#<BUILD>#g" \
+                -e 's/ from LineCol \{[^}]*\} to LineCol \{[^}]*\}: /: /' |
+            LC_ALL=C sort > "$normalized"
+    }
+
+    run_one base "$base_ref"
+    run_one head "$head_ref"
+
+    diff -u "$out_dir/diagnostics.base.txt" "$out_dir/diagnostics.head.txt" \
+        > "$out_dir/diagnostics.diff" || true
+    comm -13 "$out_dir/diagnostics.base.txt" "$out_dir/diagnostics.head.txt" \
+        > "$out_dir/diagnostic-regressions.txt"
+
+    if [[ -s "$out_dir/diagnostic-regressions.txt" ]]; then
+        echo "New rust-analyzer diagnostics:"
+        cat "$out_dir/diagnostic-regressions.txt"
+        return 1
+    fi
+)
 
 main "$@"
