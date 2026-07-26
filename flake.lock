@@ -3,23 +3,22 @@
     "buildRoot": {
       "flake": false,
       "locked": {
-        "lastModified": 1,
-        "narHash": "sha256-yRWqg3j6K5NcRHcioFRRrFovfHlh3rIPiN2tdq/9TUs=",
         "path": "dummy-kernel-build",
         "type": "path"
       },
       "original": {
         "path": "dummy-kernel-build",
         "type": "path"
-      }
+      },
+      "parent": []
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1678241273,
-        "narHash": "sha256-S4JTbik1zDBJYmJCF2o2oli9XYeQym4PgllTe4Z1NcA=",
+        "lastModified": 1785097226,
+        "narHash": "sha256-swMTICNfkbeSMWmivOcoXA0z13bUUwcjZm9gw7wiepM=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "0f118b14add28b924f1aa05010a3252d93135b7d",
+        "rev": "d35a958a23af88d356aba1cbf70f1e7c24bd3ca6",
         "type": "github"
       },
       "original": {
