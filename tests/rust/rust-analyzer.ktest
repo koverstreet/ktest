@@ -76,6 +76,16 @@ test_system()
                 -e "s#${build_dir}#<BUILD>#g" \
                 -e 's/ from LineCol \{[^}]*\} to LineCol \{[^}]*\}: /: /' |
             LC_ALL=C sort > "$normalized"
+
+        # Everything above keys on the "at crate" line format - if
+        # rust-analyzer changes it, both revisions normalize to nothing and
+        # the comparison passes forever: a dead gate that looks green. A
+        # kernel tree with zero warning-severity diagnostics isn't a
+        # plausible steady state (~900 today), so treat empty as format rot:
+        if [[ ! -s "$normalized" ]]; then
+            echo "no diagnostics normalized for $ref - rust-analyzer output format change?"
+            return 1
+        fi
     }
 
     run_one base "$base_ref"
