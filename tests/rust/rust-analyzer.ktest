@@ -40,7 +40,8 @@ test_system()
             --enable RANDSTRUCT_NONE \
             --disable RANDSTRUCT_FULL \
             --disable RANDSTRUCT_PERFORMANCE \
-            --disable SHADOW_CALL_STACK
+            --disable SHADOW_CALL_STACK \
+            --disable KASAN
         make --jobs="$ktest_cpus" -C "$source_dir" O="$build_dir" olddefconfig
 
         if [[ $("$source_dir/scripts/config" --file "$build_dir/.config" -s RUST) != y ]]; then
