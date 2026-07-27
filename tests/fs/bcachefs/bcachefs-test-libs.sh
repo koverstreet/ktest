@@ -6,6 +6,10 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../../test-libs.sh
 
+# Automatic livelock detection for every bcachefs test (defines the
+# ktest_test_setup/teardown hooks that prelude's run_test calls).
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-livelock-detect.sh
+
 # nodebug test variant: the harness passes ktest_bcachefs_no_debug (it
 # rides testrunner's ktest_* passthrough). Translate it once to the
 # internal NO_BCACHEFS_DEBUG that the checks below — and bcachefs_antagonist
