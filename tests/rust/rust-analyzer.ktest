@@ -7,15 +7,19 @@ config-no-kbuild
 config-no-vm
 config-timeout $((20 * 60))
 
-# Host tools: the config-no-kbuild build path runs make directly, and the
-# rust-analyzer target needs python3 for generate_rust_analyzer.py.
-checkdep python3
-checkdep rust-analyzer
-checkdep rustc
-checkdep bindgen
-
 test_system()
 {
+    # Host tools: the config-no-kbuild build path runs make directly, and
+    # the rust-analyzer target needs python3 for generate_rust_analyzer.py.
+    # These must live inside the test function: at file scope they run
+    # during `list-tests` subtest enumeration too, which the CI jobserver
+    # does on a host without these tools - the enumeration exits nonzero
+    # and the test silently generates zero jobs.
+    checkdep python3
+    checkdep rust-analyzer
+    checkdep rustc
+    checkdep bindgen
+
     local test_file=$(basename -s .ktest "$0")
     local out_dir="$ktest_out/out/${test_file}.system"
     local work_dir="$ktest_out/work/${test_file}.system"
