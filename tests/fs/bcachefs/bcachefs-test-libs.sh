@@ -296,12 +296,25 @@ check_bcachefs_leaks()
     done
 }
 
+# Superblock error counters after a test mean something went wrong - except
+# when losing or corrupting data was the point. Tests that deliberately
+# trigger data errors declare the counters they expect as a regex
+# alternation before their end checks, e.g.:
+#     ktest_expect_sb_errors="data_read_csum_err_recovered|data_read_io_err"
+# Anything not declared still fails the test.
 check_bcachefs_errors()
 {
+    # The errors section is being replaced by errors_v2; check whichever
+    # this version of the tools knows about, so the check doesn't turn
+    # into a silent no-op when the section moves.
+    local fields="errors,errors_v2"
+    bcachefs show-super -f $fields $1 >& /dev/null || fields="errors"
+
     for i in $@; do
-	if bcachefs show-super -f errors $i|
-	    sed -n '/^errors /,${/^errors /!p;}'|
-	    grep -E '[a-z]'; then
+	if bcachefs show-super -f $fields $i|
+	    sed -nE '/^errors(_v2)? /,${/^errors(_v2)? /!p;}'|
+	    grep -E '[a-z]'|
+	    grep -vE "^\s*(${ktest_expect_sb_errors:-no_errors_expected})\s"; then
 	    return 1
 	fi
     done

@@ -723,6 +723,7 @@ test_replicas_read_errors()
 test_read_corrupt()
 {
     ktest_expect_device_errors=1
+    ktest_expect_sb_errors="data_read_(io|csum)_err(_recovered)?"
     [[ ! -f /sys/module/bcachefs/parameters/read_corrupt_ratio ]] && return 0
 
     set_watchdog 180
@@ -818,6 +819,7 @@ test_kill_btree_node()
 test_read_corrupt_replicas()
 {
     ktest_expect_device_errors=1
+    ktest_expect_sb_errors="data_read_(io|csum)_err(_recovered)?"
     [[ ! -f /sys/module/bcachefs/parameters/read_corrupt_ratio ]] && return 0
 
     set_watchdog 180
@@ -878,6 +880,7 @@ test_write_corrupt()
 test_evacuate_corrupted()
 {
     ktest_expect_device_errors=1
+    ktest_expect_sb_errors="data_read_(io|csum)_err(_recovered)?"
     [[ ! -f /sys/module/bcachefs/parameters/write_corrupt_ratio ]] && return 0
 
     set_watchdog 180
@@ -1370,6 +1373,7 @@ test_replace_replica()
 
 test_key_type_error()
 {
+    ktest_expect_sb_errors="data_lost_device_removed"
     set_watchdog 20
 
     bcachefs format -f --replicas=2 ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
@@ -1432,6 +1436,7 @@ test_force_remove()
 do_scrub()
 {
     ktest_expect_device_errors=1
+    ktest_expect_sb_errors="data_read_csum_err_recovered"
     local offline=$1
 
     set_watchdog 60

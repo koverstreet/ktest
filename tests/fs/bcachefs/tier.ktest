@@ -455,6 +455,7 @@ test_concurrent_all_device_removal()
 test_read_corrupt()
 {
     ktest_expect_device_errors=1
+    ktest_expect_sb_errors="data_read_(io|csum)_err(_recovered)?"
     [[ ! -f /sys/module/bcachefs/parameters/read_corrupt_ratio ]] && return 0
 
     set_watchdog 300
