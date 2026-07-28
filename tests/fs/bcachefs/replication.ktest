@@ -533,7 +533,7 @@ test_device_set_state_offline()
     bcachefs device set-state --offline	    rw ${ktest_scratch_dev[1]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
-    cat /sys/block/[sv]dc/bcachefs/state
+    grep rw /sys/block/[sv]dc/bcachefs/state
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}

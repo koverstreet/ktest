@@ -1318,14 +1318,19 @@ test_set_option()
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs set-fs-option --compression=zstd ${ktest_scratch_dev[0]}
-    cat /sys/fs/bcachefs/*/options/compression
+    grep zstd /sys/fs/bcachefs/*/options/compression
+    umount /mnt
+
+    # Persists across the remount:
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    grep zstd /sys/fs/bcachefs/*/options/compression
     umount /mnt
 
     echo "Setting option on offline fs"
     bcachefs set-fs-option --compression=lz4 ${ktest_scratch_dev[0]}
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
-    cat /sys/fs/bcachefs/*/options/compression
+    grep lz4 /sys/fs/bcachefs/*/options/compression
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
