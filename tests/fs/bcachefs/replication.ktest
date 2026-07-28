@@ -717,6 +717,7 @@ test_replicas_write_errors()
 
 test_replicas_read_errors()
 {
+    ktest_expect_sb_errors=data_read_io_err_recovered
     do_replicas_errors_test error_reads
 }
 
