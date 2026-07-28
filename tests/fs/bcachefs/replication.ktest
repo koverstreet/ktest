@@ -724,7 +724,8 @@ test_replicas_write_errors()
 
 test_replicas_read_errors()
 {
-    ktest_expect_sb_errors=data_read_io_err_recovered
+    # dm-flakey error_reads fails the bio with BLK_STS_IOERR:
+    ktest_expect_sb_errors="data_read_io_err_recovered|blk_sts_ioerr"
     do_replicas_errors_test error_reads
 }
 
