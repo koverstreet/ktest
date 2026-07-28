@@ -2323,16 +2323,20 @@ test_fsck_damage_report()
 	exit 1
     fi
 
-    grep -q "1 paths damaged by fsck" $out || {
-	echo "TEST FAILED: no damage summary (or somedir's two victims weren't deduped to one path)"
+    grep -q "2 paths damaged by fsck" $out || {
+	echo "TEST FAILED: no damage summary (expected somedir + reattached orphan)"
 	exit 1
     }
-    grep -q "somedir.*had dangling entries removed" $out || {
-	echo "TEST FAILED: somedir not listed with 'had dangling entries removed'"
+    grep -q "/somedir: dirent_to_missing_inode" $out || {
+	echo "TEST FAILED: somedir not listed with dirent_to_missing_inode"
 	exit 1
     }
-    grep -q "1 inodes reattached in lost+found" $out || {
-	echo "TEST FAILED: reattach counter missing from the damage report"
+    [[ $(grep -c "/somedir:" $out) == 1 ]] || {
+	echo "TEST FAILED: somedir's two victims weren't deduped to one path entry"
+	exit 1
+    }
+    grep -q "lost+found/.*inode_unreachable" $out || {
+	echo "TEST FAILED: reattached orphan not listed at its lost+found path"
 	exit 1
     }
 
