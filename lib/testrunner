@@ -40,6 +40,50 @@ ln -s $ktest_deps_dir/.cargo /root/.cargo
 
 ktest_no_cleanup_tmpdir=1
 
+# Take the VM down on the way out, however we get there.
+#
+# Nothing on the host reaps this VM. Since 0b3b971c ("Move logic for
+# retrying subtests to the CI") start_vm runs qemu directly; only the CI
+# wraps it in lib/supervisor, which watches the console for the TEST
+# SUCCESS/TEST FAILED markers and kills the VM when it sees one. A plain
+# `ktest run` / `build-test-kernel run` has no such watcher, so if the
+# guest doesn't take itself down the run never finishes: the test's
+# verdict scrolls past, the guest idles at a login prompt, and qemu (plus
+# the shell blocked in wait(2) on it) sits there until someone notices.
+#
+# An EXIT trap rather than a call at the end of the script: testrunner
+# has several early `exit`s (unexpected reboot, no tests, tainted
+# kernel), and every one of them used to strand a VM too.
+#
+# -I means "don't shut down the VM automatically", so honour it.
+vm_exit()
+{
+    pkill -P $$ >/dev/null || true
+
+    if ${ktest_interactive:-false}; then
+	return
+    fi
+
+    # Give the last console lines time to drain out of the virtio-console
+    # queue - they are the test's verdict, and the host only ever sees
+    # what qemu wrote before it exited.
+    sleep 2
+
+    # sysrq rather than `poweroff`, matching do_reboot(): a clean systemd
+    # shutdown can block on a wedged unit or a busy /host mount, which
+    # would strand the VM again - the exact failure this trap exists to
+    # prevent. Deliberately no sync(1) here either: these tests wedge
+    # filesystems on purpose, and $ktest_out is virtiofs, so the results
+    # are already on the host's fs by the time we get here.
+    #
+    # Enable sysrq here rather than relying on the block further down:
+    # the early exits above are reached before it runs.
+    echo 1 > /proc/sys/kernel/sysrq
+    echo o > /proc/sysrq-trigger
+}
+
+trap vm_exit EXIT
+
 log_verbose "Testrunner starting"
 
 mkdir -p /root/.ssh
@@ -218,7 +262,6 @@ if [[ $ktest_tests = "none" ]]; then
     exit 0
 fi
 
-trap 'pkill -P $$ >/dev/null' EXIT
 cd /root
 
 # ktest_tmp here is testrunner's /host/-rewritten *host* tmpdir; the
@@ -257,8 +300,14 @@ check_taint
 echo -n "Kernel version: "
 uname -r
 
+# $ktest_out/status is the same verdict in a file the host can read
+# without parsing the console; start_vm turns it into its exit status.
+# Absent means failure - every early exit above prints TEST FAILED and
+# never reaches here, and neither does a VM that died mid-run.
 if [[ $ret = 0 ]]; then
     echo "TEST SUCCESS"
+    echo "SUCCESS" > "$ktest_out/status"
 else
     echo "TEST FAILED"
+    echo "FAILED" > "$ktest_out/status"
 fi
