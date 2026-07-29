@@ -2055,9 +2055,9 @@ test_runtime_deleted_interior_defers()
 
     umount /mnt
 
-    # the online check_snapshots the workload scheduled corroborated from the
-    # two live children and revived the node (deleted -> live) - proof the
-    # passes ran, on the damaged table, before anything destructive
+    # the online check_snapshots the workload scheduled saw the two live
+    # children and revived the node (deleted -> live) - proof the passes ran,
+    # on the damaged table, before anything destructive
     local SNAPSHOT_STATE_live=$((0x757c47a2))
     if [[ $(snap_field $victim state) != $SNAPSHOT_STATE_live ]]; then
 	echo "TEST FAILED: interior node not revived (state $(snap_field $victim state)) - online check_snapshots didn't run"
