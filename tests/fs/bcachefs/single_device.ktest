@@ -1695,6 +1695,101 @@ test_kill_btree_node()
     check_bcachefs_counters ${ktest_scratch_dev[0]}
 }
 
+# kill_btree_node zeroes the first block, so nothing about the node parses and
+# the only evidence it existed is the parent's pointer. Real media errors don't
+# look like that: lioka reported (2026-07-28) a node whose header was intact -
+# parent btree_ptr_v2 seq matched, written count and min_key both readable -
+# with one bset failing its checksum, and recovery reading it over and over.
+#
+# -e csum injects that shape. The assertion is that recovery terminates: if it
+# spins the watchdog fires, which is the failure we're testing for.
+test_btree_node_csum_error()
+{
+    set_watchdog 240
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    cp -a /usr /mnt || true
+    umount /mnt
+
+    local btree
+    for btree in extents backpointers; do
+	echo "Corrupting a btree node in $btree"
+	bcachefs kill_btree_node -e csum -n$btree:0:1 ${ktest_scratch_dev[0]}
+
+	echo "Running fsck"
+	mount -t bcachefs -o fsck,fix_errors,verbose ${ktest_scratch_dev[0]} /mnt
+	umount /mnt
+
+	echo
+	echo "Running fsck again; should be clean"
+	bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    done
+
+    check_bcachefs_leaks
+}
+
+# Same injected shape as above, but read without fix_errors - which is what the
+# above never gets to. Mounting with fsck,fix_errors rewrites the node, so by
+# the time it runs fsck -ny there's nothing left to trip over; the dry run has
+# to come first, and that ordering is the whole test.
+#
+# No data needed: presplit_shard_boundaries leaves extents leaves whose first
+# bset is empty, and one of those is enough to reproduce.
+test_btree_node_csum_error_dry_run()
+{
+    set_watchdog 120
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+
+    bcachefs kill_btree_node -e csum -n extents:0:1 ${ktest_scratch_dev[0]}
+
+    # Watch it from outside instead of using timeout: when this spins the fsck
+    # thread can't be signalled out of it - userspace exits into kthread_stop()
+    # and blocks there forever, so SIGTERM leaves an unreapable zombie and tells
+    # us nothing.
+    echo "fsck -n should report the checksum error and exit"
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} > /tmp/fsck-dry-run.log 2>&1 &
+    local pid=$!
+
+    local i
+    for i in $(seq 1 30); do
+	kill -0 $pid 2>/dev/null || break
+	sleep 1
+    done
+
+    if kill -0 $pid 2>/dev/null; then
+	local a=$(wc -l < /tmp/fsck-dry-run.log)
+	sleep 3
+	local b=$(wc -l < /tmp/fsck-dry-run.log)
+
+	echo "ERROR: fsck -n still running after 30s, log $a -> $b lines in 3s"
+	echo "       it is looping re-reading the same node:"
+	grep -m2 "checksum error" /tmp/fsck-dry-run.log
+	exit 1
+    fi
+
+    wait $pid
+    local ret=$?
+    local lines=$(wc -l < /tmp/fsck-dry-run.log)
+    local errs=$(grep -c "checksum error" /tmp/fsck-dry-run.log)
+
+    echo "fsck -n exited $ret after $lines lines, $errs checksum errors"
+
+    # Also guards the injector: -e csum used to flip a byte past the end of the
+    # checksummed region when the target node's first bset was empty, which made
+    # the whole thing a silent no-op.
+    if [[ $errs = 0 ]]; then
+	echo "ERROR: fsck -n reported no checksum error - was anything injected?"
+	exit 1
+    fi
+
+    echo "Repair should still work, and leave it clean"
+    bcachefs fsck -y ${ktest_scratch_dev[0]}
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+
+    check_bcachefs_leaks
+}
+
 test_kill_btree_root_autofix()
 {
     set_watchdog 240
