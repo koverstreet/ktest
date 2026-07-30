@@ -1743,12 +1743,22 @@ test_btree_node_csum_error_dry_run()
 
     bcachefs kill_btree_node -e csum -n extents:0:1 ${ktest_scratch_dev[0]}
 
-    # Watch it from outside instead of using timeout: when this spins the fsck
-    # thread can't be signalled out of it - userspace exits into kthread_stop()
-    # and blocks there forever, so SIGTERM leaves an unreapable zombie and tells
-    # us nothing.
+    # The spin emits without limit - ~10,900 iterations/sec, 124MB of log in 25
+    # seconds when measured on a host - and /tmp here is tmpfs, so keeping all of
+    # it exhausts the VM's memory long before the watchdog fires. Keep the first
+    # chunk, which already holds the repeating pattern, and sink the rest. The
+    # tail has to be *consumed* rather than closed: SIGPIPE would kill the fsck,
+    # and the test would then pass by stopping the very thing it exists to catch.
+    #
+    # Watch from outside rather than using timeout, because it isn't established
+    # that a spinning fsck dies on a signal here. It does on a host, but the
+    # userspace build shims kthreads as pthreads and that hasn't been checked
+    # inside a VM - so don't depend on it.
     echo "fsck -n should report the checksum error and exit"
-    bcachefs fsck -ny ${ktest_scratch_dev[0]} > /tmp/fsck-dry-run.log 2>&1 &
+    rm -f /tmp/fsck-dry-run.log /tmp/fsck-dry-run.status
+    ( bcachefs fsck -ny ${ktest_scratch_dev[0]} 2>&1;			\
+      echo $? > /tmp/fsck-dry-run.status ) |				\
+	{ head -c 262144 > /tmp/fsck-dry-run.log; cat > /dev/null; } &
     local pid=$!
 
     local i
@@ -1758,18 +1768,15 @@ test_btree_node_csum_error_dry_run()
     done
 
     if kill -0 $pid 2>/dev/null; then
-	local a=$(wc -l < /tmp/fsck-dry-run.log)
-	sleep 3
-	local b=$(wc -l < /tmp/fsck-dry-run.log)
-
-	echo "ERROR: fsck -n still running after 30s, log $a -> $b lines in 3s"
-	echo "       it is looping re-reading the same node:"
+	echo "ERROR: fsck -n still running after 30s, looping on the same node"
+	echo "       repetitions in the first 256K of output:" \
+	     $(grep -c "checksum error" /tmp/fsck-dry-run.log)
 	grep -m2 "checksum error" /tmp/fsck-dry-run.log
 	exit 1
     fi
 
     wait $pid
-    local ret=$?
+    local ret=$(cat /tmp/fsck-dry-run.status 2>/dev/null)
     local lines=$(wc -l < /tmp/fsck-dry-run.log)
     local errs=$(grep -c "checksum error" /tmp/fsck-dry-run.log)
 
