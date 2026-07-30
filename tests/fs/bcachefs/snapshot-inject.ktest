@@ -1994,16 +1994,19 @@ test_stale_state_tombstone()
 	exit 1
     fi
 
-    if [[ $(snap_field $husk state) != $STATE_S_DELETED ||
-	  $(snap_field $husk tree)  != 0 ]]; then
-	echo "TEST FAILED: node $husk not spliced into a tombstone (state $(snap_field $husk state) tree $(snap_field $husk tree))"
+    if [[ $(snap_field $husk state) != $STATE_S_DELETED ]]; then
+	echo "TEST FAILED: node $husk not spliced into a tombstone (state $(snap_field $husk state))"
 	exit 1
     fi
 
-    # the legacy writer's residue: the DELETED bit is already set (and
-    # truthful); rewind the state field to the stale pre-splice value
-    # and restore the NO_KEYS bit the legacy writer never cleared:
-    kvdb_rw -c "update snapshots 0:$husk:0 state=no_keys no_keys_obsolete=1"
+    # Forge what a legacy kernel would have left behind. Modern delete keeps
+    # the node's fields - it deliberately doesn't destroy information it may
+    # need to repair with - so the whole legacy shape has to be built here:
+    # rewind the state field to the stale pre-splice value, restore the
+    # NO_KEYS bit the legacy writer never cleared, and zero tree, which
+    # legacy delete cleared and which snapshot_state_stale_tombstone keys its
+    # repair on.
+    kvdb_rw -c "update snapshots 0:$husk:0 state=no_keys no_keys_obsolete=1 tree=0"
 
     skip_snaps="snap-1"
     check_fsck repair
