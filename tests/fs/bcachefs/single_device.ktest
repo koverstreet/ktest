@@ -34,6 +34,13 @@ test_stress_ng()
     cd /root
     umount /mnt
 
+    # stress-ng issues misaligned O_DIRECT reads on purpose, which the block
+    # layer rejects outright as BLK_STS_INVAL - a malformed request, not a
+    # device or filesystem problem. Both names are needed: one such read bumps
+    # the read-outcome counter and the per-block-status counter added by
+    # 225beb110fbf, so whitelisting either alone still leaves this red.
+    ktest_expect_sb_errors="data_read_io_err|blk_sts_inval"
+
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
