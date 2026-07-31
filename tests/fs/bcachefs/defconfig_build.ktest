@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+#
+# Does bcachefs build the way a distro builds it?
+#
+# ktest's normal baseline is allnoconfig followed by an explicit rewrite of
+# every surviving option to "is not set" (libktest.sh new_config, "Really
+# undefine everything"). Required options are added back afterwards. That is
+# the right baseline for fast, minimal test kernels — but it means
+# CONFIG_WERROR is never set, so warnings in bcachefs are never fatal
+# anywhere in the test matrix, while defconfig sets CONFIG_WERROR=y and a
+# distro build fails on them.
+#
+# That gap is not hypothetical: koverstreet/bcachefs-tools#819 is a warning
+# in bindgen-generated extern.c that is fatal under defconfig and invisible
+# under the ktest baseline. It survived because nothing in CI ever built
+# with warnings as errors.
+#
+# So this builds from defconfig, with bcachefs enabled on top, and nothing
+# else. No VM: the assertion is that the compile succeeds, and booting it
+# would tell us nothing more.
+#
+# config-no-kbuild because the test drives its own build — it needs a
+# different .config from the one the harness would produce, and it wants to
+# assert on the build's exit status rather than have the harness fail before
+# the test runs.
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/../../prelude.sh"
+
+config-mem 4G
+config-no-kbuild
+config-no-vm
+config-timeout $((45 * 60))
+
+test_defconfig()
+{
+    # Inside the test function, not at file scope: at file scope these run
+    # during `list-tests` enumeration too, and a host without them makes
+    # enumeration exit nonzero, which silently produces zero jobs rather
+    # than a visible failure. Same reasoning as rust-analyzer.ktest.
+    checkdep bindgen
+    checkdep rustc
+
+    local test_file=$(basename -s .ktest "$0")
+    local work_dir="$ktest_out/work/${test_file}.defconfig"
+    local source_dir="$work_dir/source"
+    local build_dir="$work_dir/build"
+
+    rm -rf "$work_dir"
+    git -C "$ktest_kernel_source" worktree prune
+    mkdir -p "$work_dir" "$build_dir"
+
+    git -C "$ktest_kernel_source" worktree add --detach "$source_dir" HEAD
+    trap 'git -C "$ktest_kernel_source" worktree remove -f "$source_dir" >/dev/null 2>&1 || true' EXIT
+
+    make -C "$source_dir" O="$build_dir" defconfig
+
+    # bcachefs is not in defconfig, so turn it on and let olddefconfig pull
+    # in whatever it needs. Everything else stays as defconfig left it,
+    # which is the entire point — in particular CONFIG_WERROR.
+    "$source_dir/scripts/config" --file "$build_dir/.config" --module BCACHEFS_FS
+    make -C "$source_dir" O="$build_dir" olddefconfig
+
+    # Assert the two things the test depends on, rather than trusting them.
+    # If CONFIG_WERROR came out unset, this test would still compile happily
+    # and report success while checking nothing at all — the exact
+    # degenerate pass it exists to avoid.
+    grep -q '^CONFIG_WERROR=y' "$build_dir/.config" || {
+        echo "CONFIG_WERROR is not set after defconfig+olddefconfig"
+        echo "this test asserts nothing without it - defconfig may have changed"
+        return 1
+    }
+    grep -qE '^CONFIG_BCACHEFS_FS=(y|m)' "$build_dir/.config" || {
+        echo "CONFIG_BCACHEFS_FS did not survive olddefconfig"
+        echo "a dependency is probably unmet - not a bcachefs build failure"
+        return 1
+    }
+
+    echo "building fs/bcachefs from defconfig, CONFIG_WERROR=y"
+    make -C "$source_dir" O="$build_dir" -j"$(nproc)" fs/bcachefs/
+}
