@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+#
+# LRU corruption injection tests: fsck contract for check_lrus and its
+# sibling pass check_alloc_to_lru_refs.
+#
+# The lru btree is a derived index (backing alloc/stripes keys are
+# authoritative), so every repair is deletion or recreation - these tests
+# assert both directions:
+#
+#   - bogus entries (wrong time, wrong per-device lru id, ids in dead
+#     ranges, the obsolete fs-wide fragmentation lru) are deleted by
+#     check_lrus (lru_entry_bad)
+#   - missing entries are recreated from the alloc btree by
+#     check_alloc_to_lru_refs (alloc_key_to_missing_lru_entry)
+#
+# The stray-id cases double as regression tests for check_lrus' scan
+# structure: the pass scans zone-by-zone (one lru id at a time, pinning
+# the backing keyspace), deriving zones from the keys actually present -
+# entries at ids nothing legitimately uses must still be visited and
+# deleted, exactly as the old flat keyspace scan did.
+#
+# Entries are injected with `bcachefs kvdb` on the unmounted image.
+# Injected keys must pass bch2_lru_validate, which only rejects time=0 -
+# every position here uses a nonzero time. lru positions encode
+# (lru_id << 48 | time):dev_bucket; fragmentation lru ids start at 8192
+# (BCH_LRU_BUCKET_FRAGMENTATION_START), dev 0's buckets have dev_bucket ==
+# bucket. A freshly-written fs always has fragmentation entries for dev 0
+# (btree buckets are movable data), so tests key off those rather than
+# constructing cached data.
+#
+# fsck contract per test (mirrors snapshot-inject.ktest):
+#   - fsck -y must detect (exit != 0) and report the expected error name
+#   - a second fsck -n must run clean (repair converged)
+#   - file data must survive repair
+#
+# No bcachefs_test_end_checks: these tests intentionally stamp error
+# counters.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 8G
+
+kvdb()
+{
+    bcachefs kvdb ${ktest_scratch_dev[0]} "$@"
+}
+
+kvdb_rw()
+{
+    bcachefs kvdb --rw ${ktest_scratch_dev[0]} "$@"
+}
+
+MANIFEST=/tmp/lru-inject-manifest
+
+# u64 print of (id << 48) | time: ids >= 32768 overflow bash's signed
+# arithmetic, %u re-reads the wrapped value as unsigned
+lru_inode()
+{
+    printf '%u' $(( ($1 << 48) | $2 ))
+}
+
+setup_lru_fs()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    for i in $(seq 0 9); do
+	dd if=/dev/urandom of=/mnt/data-$i bs=1M count=4 oflag=direct
+    done
+    (cd /mnt && md5sum data-*) > $MANIFEST
+
+    umount /mnt
+}
+
+# First fragmentation-lru entry for dev 0, as "inode offset"
+first_frag_entry()
+{
+    kvdb -c 'list lru' |
+	sed -n 's/.*type set \([0-9]*\):\([0-9]*\):0 .*/\1 \2/p' |
+	while read -r inode offset; do
+	    if (( (inode >> 48) == 8192 )); then
+		echo "$inode $offset"
+		break
+	    fi
+	done
+}
+
+check_fsck_lru()     # check_fsck_lru <expected error name>
+{
+    local errname=$1
+    local rc1=0 rc2=0
+    local out
+
+    out=$(bcachefs fsck -y ${ktest_scratch_dev[0]} 2>&1) || rc1=$?
+    echo "$out"
+    echo "first fsck -y exited $rc1"
+
+    if (( rc1 == 0 )); then
+	echo "TEST FAILED: fsck missed injected corruption"
+	exit 1
+    fi
+
+    if ! grep -q "$errname" <<< "$out"; then
+	echo "TEST FAILED: fsck errored but never reported $errname"
+	exit 1
+    fi
+
+    bcachefs fsck -n ${ktest_scratch_dev[0]} || rc2=$?
+    echo "second fsck -n exited $rc2"
+
+    if (( rc2 == 0 )); then
+	mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+	(cd /mnt && md5sum -c $MANIFEST)
+	umount /mnt
+    else
+	echo "TEST FAILED: errors remain after fsck -y"
+	exit 1
+    fi
+}
+
+# ── tool sanity ──────────────────────────────────────────────────────────
+
+# kvdb round trip on the lru btree: create and delete within one
+# invocation, fsck must then run clean. Catches tool regressions before
+# they show up as confusing injection-test failures.
+test_kvdb_lru_sanity()
+{
+    setup_lru_fs
+
+    local entry=($(first_frag_entry))
+    [[ -n ${entry[*]} ]]
+
+    local pos=$(lru_inode 8192 12345):${entry[1]}:0
+    local out=$(kvdb_rw -c "set lru $pos set" \
+		     -c "get lru $pos" \
+		     -c "set lru $pos deleted")
+    grep -q "type set" <<< "$out"
+
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
+}
+
+# ── check_lrus: bogus entries are deleted (lru_entry_bad) ────────────────
+
+# Entry for a real bucket in the right lru at the wrong time
+test_bogus_time()
+{
+    setup_lru_fs
+
+    local entry=($(first_frag_entry))
+    [[ -n ${entry[*]} ]]
+    local time=$(( entry[0] & ((1 << 48) - 1) ))
+
+    kvdb_rw -c "set lru $(lru_inode 8192 $((time + 1))):${entry[1]}:0 set"
+
+    check_fsck_lru lru_entry_bad
+}
+
+# Entry for a real bucket at its correct time but in another device's
+# fragmentation lru: caught by the per-device lru membership check
+test_wrong_device_id()
+{
+    setup_lru_fs
+
+    local entry=($(first_frag_entry))
+    [[ -n ${entry[*]} ]]
+    local time=$(( entry[0] & ((1 << 48) - 1) ))
+
+    kvdb_rw -c "set lru $(lru_inode 8193 $time):${entry[1]}:0 set"
+
+    check_fsck_lru lru_entry_bad
+}
+
+# Entry in the dead id range between the fragmentation lrus and the
+# stripe lru: no valid lru id maps there, the zone scan must still visit
+# and delete it
+test_stray_id()
+{
+    setup_lru_fs
+
+    kvdb_rw -c "set lru $(lru_inode 60000 5):33:0 set"
+
+    check_fsck_lru lru_entry_bad
+}
+
+# Entry in the obsolete fs-wide fragmentation lru
+# (BCH_LRU_BUCKET_FRAGMENTATION_OLD = 65535), the highest possible id -
+# also exercises the zone scan's end-of-id-space termination
+test_old_fs_wide_id()
+{
+    setup_lru_fs
+
+    kvdb_rw -c "set lru $(lru_inode 65535 7):12:0 set"
+
+    check_fsck_lru lru_entry_bad
+}
+
+# ── check_alloc_to_lru_refs: missing entries are recreated ───────────────
+
+test_missing_entry()
+{
+    setup_lru_fs
+
+    local entry=($(first_frag_entry))
+    [[ -n ${entry[*]} ]]
+
+    kvdb_rw -c "set lru ${entry[0]}:${entry[1]}:0 deleted"
+
+    check_fsck_lru alloc_key_to_missing_lru_entry
+}
+
+main "$@"
