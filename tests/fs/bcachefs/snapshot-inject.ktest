@@ -1304,6 +1304,78 @@ test_refused_interior_delete()
     echo "skiplists checked on $nr_checked node(s), none below their parent"
 }
 
+# Zorba's state, on its own: an interior node in no_keys that still owns its
+# keys, reaching delete_dead_interior_snapshots.
+#
+# no_keys means "this node's keys migrated down to its live child". A node
+# that says so while still owning keys is a deletion that marked the node
+# before the migration finished - not a state anything writes deliberately,
+# but the one his filesystem is in, and the one that has to be survivable:
+# the node holds the only copy of those keys, so unlinking it takes the data
+# with it.
+#
+# The refusal machinery is supposed to make that impossible from two
+# directions. check_snapshot() holds the state field up against the
+# accounting and clears the lie before the deletion ever collects the node;
+# if that misses, bch2_snapshot_node_check_no_data() refuses at the point of
+# unlinking. This asserts the outcome rather than either mechanism, so it
+# still fails if a future rework moves the responsibility between them: the
+# node survives, and its keys survive with it.
+#
+# Separate from refused_interior_delete, which needs a two-node chain to
+# exercise the skiplist damage a partial pass leaves behind. This is one
+# node and one question - was it deleted?
+test_no_keys_interior_owns_keys()
+{
+    setup_snapshot_tree
+
+    # The parent of snap-2's leaf: an interior that owns the keys written in
+    # its own generation, before that snapshot was taken.
+    local victim=$(snap_field $(subvol_snapshot 4) parent)
+    local children=($(snap_field $victim children))
+    local survivor=$(subvol_snapshot 1)
+    local other
+
+    for c in ${children[@]}; do
+	[[ $c != $survivor ]] && other=$c
+    done
+
+    if [[ -z $other || ${children[0]} == 0 ]]; then
+	echo "TEST FAILED: setup assumption - $victim is not a two-child interior" \
+	     "(children ${children[*]})"
+	exit 1
+    fi
+
+    # Two field edits, both on nodes that stay in the tree: splice the other
+    # child out so the node is the single-child interior the deletion pass
+    # collects, and set the state its migration would have set had it
+    # finished. Its keys are left exactly where they are - that is the point.
+    kvdb_rw -c "update snapshots 0:$victim:0 state=no_keys children[0]=$survivor children[1]=0" \
+	    -c "update snapshots 0:$other:0 state=deleted" \
+	    -c "update subvolumes 0:4:0 state=deleted"
+
+    local SNAPSHOT_STATE_no_keys=$((0x372b5a01))
+    if [[ $(snap_field $victim state) != $SNAPSHOT_STATE_no_keys ]]; then
+	echo "TEST FAILED: injection did not take (state $(snap_field $victim state))"
+	exit 1
+    fi
+
+    skip_snaps="snap-2"
+    ktest_expect_sb_errors="snapshot_deleted_but_has_data|dirent_to_missing_subvol|subvol_children_bad|snapshot_subvol_state_mismatch"
+
+    check_fsck repair
+
+    # The assertion this test exists for. A node that owns the only copy of
+    # its keys must not be unlinked, whichever mechanism was supposed to stop
+    # it - and if it survived, the manifest above has already proved its keys
+    # came with it.
+    if ! echo "$(all_snap_ids)" | grep -qw "$victim"; then
+	echo "TEST FAILED: snapshot node $victim was deleted while it still owned keys"
+	exit 1
+    fi
+    echo "no_keys interior $victim survived with its keys"
+}
+
 # What a crash mid-deletion leaves on disk.
 #
 # bch2_snapshot_node_delete() commits the splice and the tombstone;
