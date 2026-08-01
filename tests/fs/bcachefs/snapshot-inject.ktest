@@ -170,7 +170,9 @@ capture_state()      # capture_state <prefix>
 #     tree-level repairs have more than one tree to reason about
 #
 # Captures the reference manifest: what the filesystem must still look
-# like after repair. Resets skip_snaps/skip_paths.
+# like after repair. Resets the three knobs that narrow what a test
+# checks - skip_snaps, skip_paths, ktest_expect_sb_errors - so a
+# declaration never leaks into the next test and quietly widens it.
 setup_snapshot_tree()
 {
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
@@ -200,6 +202,7 @@ setup_snapshot_tree()
 
     skip_snaps=""
     skip_paths=""
+    ktest_expect_sb_errors=""
 }
 
 # ── kvdb field-read helpers ──────────────────────────────────────────────
@@ -330,6 +333,39 @@ verify_fs_state()
     done
 }
 
+# The superblock's error counters are the one oracle an injection can't
+# blind. The manifest compares what the test chose to look at - and
+# $skip_snaps narrows that, by design, in tests whose injection destroys a
+# subvolume. fsck's exit code says only whether anything was wrong, not
+# what. The counters are the filesystem's own record of every error it
+# hit, kept whether or not the error was repaired and whether or not the
+# affected paths are in the manifest.
+#
+# So every test states the errors its injection is supposed to cause, and
+# anything else fails it:
+#
+#     ktest_expect_sb_errors="snapshot_deleted_but_has_data"
+#
+# That declaration is the point, not the ceremony: an injection whose
+# error signature changed is an injection that stopped testing what it was
+# written for, and until now nothing noticed. refused_interior_delete
+# passed while destroying thirteen inodes, because its own setup removed a
+# leaf node, fsck recorded thirteen bkey_in_missing_snapshot and deleted
+# the keys, and $skip_snaps kept that subvolume out of the comparison.
+check_sb_errors()
+{
+    if ! check_bcachefs_errors ${ktest_scratch_dev[0]}; then
+	echo "TEST FAILED: superblock error counters the test didn't declare" \
+	     "(ktest_expect_sb_errors='$ktest_expect_sb_errors')"
+	echo "If these are what the injection is meant to cause, add them;" \
+	     "if not, the test is passing on damage it never checked for."
+	exit 1
+    fi
+
+    echo "sb errors: none beyond declared" \
+	 "(${ktest_expect_sb_errors:-none declared})"
+}
+
 # fsck the injected corruption and enforce the case's contract.
 # $1: detect|repair (see header).
 check_fsck()
@@ -360,6 +396,9 @@ check_fsck()
 	echo "unrepaired errors remain - expected while repair code is pending"
 	verify_fs_state may-fail
     fi
+
+    # Last, so it covers the recovery verify_fs_state's mount runs too:
+    check_sb_errors
 }
 
 # ── tool sanity ──────────────────────────────────────────────────────────
@@ -1200,6 +1239,18 @@ test_refused_interior_delete()
     done
 
     skip_snaps="snap-1 snap-2"
+
+    # The one error this injection is for: a node whose state field claims
+    # no_keys while the accounting says otherwise.
+    #
+    # Deliberately not declaring bkey_in_missing_snapshot, which this test
+    # also produces - thirteen of them - because removing $victim_leaf's key
+    # strands its inodes and fsck deletes them. That is real data loss
+    # manufactured by the setup, hidden from the manifest by the skip_snaps
+    # above, and it should fail until the injection is rebuilt to make the
+    # single-child no_keys shape without destroying a subvolume.
+    ktest_expect_sb_errors="snapshot_deleted_but_has_data"
+
     check_fsck repair
 
     # The manifest proves no data was lost; this proves the mechanism -
