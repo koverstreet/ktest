@@ -24,6 +24,38 @@
 # the part under test and another part still trips fsck. That is not
 # hypothetical: it is how refused_interior_delete first reported green.
 #
+# Inject only states bcachefs can write. `set <btree> <pos> deleted` puts a
+# KEY_TYPE_deleted at that position - the key is gone - and that is rarely
+# what the thing being modelled does:
+#
+#   snapshot nodes  bch2_snapshot_node_delete() tombstones. State goes to
+#                   deleted and the parent/child pointers are kept, on
+#                   purpose, "don't destroy information if we have to
+#                   repair". Only the pre-v2 legacy path removes the key.
+#   subvolumes      bch2_subvolume_set_deleted() tombstones too
+#                   (SUBVOLUME_STATE_deleted); the key is removed later, in
+#                   bch2_snapshot_node_delete(), so subvolume and snapshot
+#                   node always go away together.
+#
+# So `update ... state=deleted` models a deletion; `set ... deleted` models
+# the aftermath of one, and only makes sense when the test is about the key
+# being gone. refused_interior_delete had this wrong: removing a leaf's
+# snapshot node stranded its inodes in an id with no node, fsck deleted them
+# as unreachable, and skip_snaps kept that subvolume out of the manifest, so
+# it passed green while its own setup destroyed a subvolume's data. Every
+# repair path it then exercised was reached by a route the filesystem never
+# takes.
+#
+# Five sites want the key gone and are named for it: root_subvol_missing,
+# root_subvol_missing_fresh, snapshot_to_missing_subvol, missing_main_subvol,
+# subvol_no_keys_subvol_gone. The rest use `set subvolumes ... deleted` as
+# scaffolding to condemn a subvolume, where a tombstone is what happens -
+# stranded_keys, subvol_root_missing_unlinked_flag, tombstoned_child,
+# missing_child, interrupted_deletion, tombstone_key_migration,
+# no_keys_with_data, runtime_tombstone_child_repair. Three of those have
+# "tombstone" in the name and inject a removal. Unaudited; the sb error
+# counters will say which are actually testing something else than they say.
+#
 # Cases were derived by walking every error site in
 # fs/snapshots/check_snapshots.c and subvolume.c plus the snapshot ids in
 # fs/sb/errors_format.h; the invariant/repair numbering (I*/R*/H*/D*)
