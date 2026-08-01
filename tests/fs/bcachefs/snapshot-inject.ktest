@@ -14,6 +14,16 @@
 #     survive - corruption of one node must never cost other snapshots'
 #     data. That's the property whose violation eats filesystems.
 #
+# A test that stages state with a real mount before injecting should check
+# that state is still on disk immediately before the fsck, the way
+# refused_interior_delete does. An injection can be undone between staging
+# and assertion, and then fsck runs against a healthy tree and passes,
+# having exercised nothing. The "fsck -y must exit != 0" rule catches the
+# single-injection case - an inert injection means a clean fsck means a
+# failed test - but not a multi-part one, where the part that went inert is
+# the part under test and another part still trips fsck. That is not
+# hypothetical: it is how refused_interior_delete first reported green.
+#
 # Cases were derived by walking every error site in
 # fs/snapshots/check_snapshots.c and subvolume.c plus the snapshot ids in
 # fs/sb/errors_format.h; the invariant/repair numbering (I*/R*/H*/D*)
