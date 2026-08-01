@@ -919,6 +919,74 @@ test_evacuate_corrupted()
     #bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# evacuate_corrupted with compression - moving data that will never decompress.
+#
+# bch2_data_update_read_done() lets a move proceed over corrupt data: if the
+# read failed with data_read_csum_err and the extent is flagged poisoned, it
+# recomputes the checksum over the corrupt bytes and clears the error, and the
+# poison flag carries "this is bad data" forward for userspace. An evacuate read
+# doesn't decompress - only scrub sets data_update_verify_decompress - so the
+# corrupt lz4 arrives at the write path still compressed, with a checksum that
+# now matches it.
+#
+# The write path is where compression makes the difference. If the extent won't
+# fit the current write point it can't be written as is, and the only other
+# option is to decompress and repack it - which fails, on garbage lz4, forever.
+# So the move fails and whatever queued it comes straight back.
+#
+# Field report (ar2000jp, #bcache 2026-08-01): eight months of bch-reconcile
+# burning IO on a set of poisoned lz4 extents, reconcile status pinned at
+# replicas: 216k / high_priority: 216k, dmesg naming the same extents with
+# "flags: poisoned ... compress lz4" and terminating in decompress_lz4. The
+# existing test could never have caught it: it formats without compression, so
+# every extent it poisons takes the path that works.
+#
+# Fixed by keeping the extent intact instead: the write path decodes onto a
+# private copy, so a decompress failure leaves the bio and op->crc untouched and
+# the extent can still go out byte-for-byte. It just needs buckets with room for
+# the whole thing, which is what data_write_need_fresh_buckets asks for.
+test_evacuate_corrupted_compressed()
+{
+    ktest_expect_device_errors=1
+    ktest_expect_sb_errors="data_read_(io|csum)_err(_recovered)?"
+    [[ ! -f /sys/module/bcachefs/parameters/write_corrupt_ratio ]] && return 0
+
+    set_watchdog 180
+    setup_tracing
+
+    run_quiet "" bcachefs format -f --replicas=2 --compression=lz4	\
+	${ktest_scratch_dev[0]}				\
+	${ktest_scratch_dev[1]}				\
+	${ktest_scratch_dev[2]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # Spelled out rather than inherited: run_fio's default happens to be
+    # compressible (30), but this test is only a test if the data compresses,
+    # so pin it here instead of depending on a default that has no reason to
+    # stay that way.
+    #
+    # Small and one pass, deliberately. The move under test is the explicit
+    # evacuate below, not copygc - so there is no reason to fill the device
+    # first, and the default 3500M x loops is most of this test's runtime for
+    # none of its coverage. A few corrupt compressed extents is the whole
+    # requirement.
+    local fio_opts="--buffer_compress_percentage=75 --filesize=200M --loops=1"
+
+    echo 32 > /sys/module/bcachefs/parameters/write_corrupt_ratio
+    run_fio_randrw --continue_on_error=io $fio_opts
+    echo 0 > /sys/module/bcachefs/parameters/write_corrupt_ratio
+
+    bcachefs device evacuate		${ktest_scratch_dev[1]}
+    bcachefs device remove	--force ${ktest_scratch_dev[1]}
+
+    run_fio_randrw --continue_on_error=io --verify_only=1 $fio_opts
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+}
+
 test_evacuate_errors()
 {
     setup_tracing
