@@ -1158,6 +1158,23 @@ test_refused_interior_delete()
 	    -c "set snapshots 0:$victim_leaf:0 deleted" \
 	    -c "set subvolumes 0:4:0 deleted"
 
+    # Check the shape is actually on disk before fscking it. An injection can
+    # be undone between staging and assertion - by a repair pass the tool ran
+    # at open, or by an earlier injection's own repair - and then fsck runs
+    # against a healthy tree and passes, having tested nothing. That is how
+    # this test passed the first time it was run.
+    local n
+    for n in $refuser $deleter; do
+	local children=($(snap_field $n children))
+	if [[ $(snap_field $n state) != $SNAPSHOT_STATE_no_keys ]] ||
+	   [[ -z ${children[0]} || ${children[0]} == 0 ]] ||
+	   [[ -n ${children[1]} && ${children[1]} != 0 ]]; then
+	    echo "TEST FAILED: $n is not a single-child no_keys node" \
+		 "(state $(snap_field $n state), children ${children[*]})"
+	    exit 1
+	fi
+    done
+
     skip_snaps="snap-1 snap-2"
     check_fsck repair
 
