@@ -1083,15 +1083,27 @@ test_no_keys_with_keys()
 # ascending, so the child is tried first, refuses, and the parent is
 # deleted after it.
 #
-# NOT PASSING YET, and it needs two things that aren't the ordering fix:
-#  - a single-child no_keys node with data has no repair. The refusal
-#    schedules the content passes, but the keys aren't stranded orphans -
-#    they're the live keys of a node whose state field is a lie - so
-#    nothing removes them and nothing revives the node. It refuses
-#    forever. The accounting is available to corroborate here exactly as
-#    it is for the deleted state; that check just doesn't exist yet.
-#  - refusals no longer fail the pass (they mean "repair first, retry"),
-#    so fsck exits 0 on a filesystem stuck in this state.
+# Two things this got wrong first time round, both worth keeping in mind
+# when writing the next one:
+#
+#  - kvdb --rw used to run the repair passes at open, before the first -c
+#    command, so the deletion pass consumed the parked deleter during the
+#    injection itself. The test then ran against a tree that never had the
+#    shape it was written for - and PASSED, exercising the undelete path
+#    instead. A green test covering the wrong thing. --rw now stops at
+#    going read-write.
+#  - the leaf was tombstoned rather than removed, which is a deleted node
+#    with keys still accounted - a different corruption whose repair is to
+#    undelete, which put the leaf back and undid the splice.
+#
+# Still expected to fail, on the one thing that isn't the ordering: a
+# single-child no_keys node with data has no repair. The refusal schedules
+# the content passes, but the keys aren't stranded orphans - they're the
+# live keys of a node whose state field is a lie - so nothing removes them
+# and nothing revives the node, and it refuses on every mount forever. The
+# accounting is right there to corroborate it, exactly as it does for the
+# deleted state (check_snapshot_deleted()); that arm just doesn't exist.
+# And since a refusal no longer fails the pass, fsck exits 0 on it.
 test_refused_interior_delete()
 {
     setup_snapshot_tree
@@ -1136,8 +1148,14 @@ test_refused_interior_delete()
 	exit 1
     fi
 
+    # The leaf goes away entirely rather than being tombstoned: a tombstone
+    # that still has keys accounted is its own corruption
+    # (snapshot_deleted_but_has_data), and the repair for it is to undelete -
+    # which revives the leaf, restores the child pointer, and dissolves the
+    # single-child shape this test needs. Removing the key leaves its keys in
+    # a snapshot that doesn't exist, which is autofix.
     kvdb_rw -c "update snapshots 0:$refuser:0 state=no_keys children[0]=$survivor children[1]=0" \
-	    -c "update snapshots 0:$victim_leaf:0 state=deleted subvol=0" \
+	    -c "set snapshots 0:$victim_leaf:0 deleted" \
 	    -c "set subvolumes 0:4:0 deleted"
 
     skip_snaps="snap-1 snap-2"
