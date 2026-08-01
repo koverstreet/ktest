@@ -309,10 +309,24 @@ verify_fs_state()
 	    mv $MANIFEST.got.f  $MANIFEST.got
 	done
 
+	# Two empty files compare equal, so a skip list broad enough to filter
+	# everything away turns this into a comparison of nothing against
+	# nothing - which passes, silently, having verified no data survived
+	# anything. $skip_snaps=ALL is the deliberate form of that and returns
+	# above; reaching it by accident is a broken test, not a passing one.
+	if [[ ! -s $MANIFEST.want ]]; then
+	    echo "TEST FAILED: nothing left to compare for $f after filtering" \
+		 "(skip_snaps='$skip_snaps' skip_paths='$skip_paths') -" \
+		 "the manifest check proved nothing"
+	    exit 1
+	fi
+
 	if ! diff -u $MANIFEST.want $MANIFEST.got; then
 	    echo "TEST FAILED: filesystem $f diverged from expected state (see diff above)"
 	    exit 1
 	fi
+
+	echo "$f manifest: $(wc -l < $MANIFEST.want) line(s) verified identical"
     done
 }
 
