@@ -86,6 +86,19 @@ test_swapfile_reclaim_deadlock()
 {
     set_watchdog 700
 
+    # This test ablates via a kernel command-line toggle. Those __setup
+    # handlers have been removed from bcachefs -- neither swap_noreclaim nor
+    # swap_nopin matches any source file on current master -- and an
+    # unrecognised parameter is silently ignored. Without this check the run
+    # below builds and exercises the FULLY ARMOURED kernel and reports a pass
+    # while claiming to have tested the ablated one, which is worse than no
+    # test: it certifies what it can no longer see.
+    if dmesg | grep --quiet --extended-regexp \
+	    'Unknown kernel command line parameters.*bcachefs\.'; then
+	dmesg | grep --extended-regexp 'Unknown kernel command line parameters' || true
+	fail "ABLATION INERT: this kernel ignored the bcachefs.* toggle this test ablates with, so the armour is still on and the result below would be meaningless. The __setup handlers were removed; ablate at source and build a second kernel instead."
+    fi
+
     local dev=${ktest_scratch_dev[0]}
 
     # Optional fake spinning rust: adds per-I/O latency under the fs so
