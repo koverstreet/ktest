@@ -1788,8 +1788,16 @@ test_btree_node_csum_error_dry_run()
 	# runs are long finished.
 	pkill -KILL -x bcachefs 2>/dev/null
 	kill -KILL $pid 2>/dev/null
-	wait $pid 2>/dev/null
 
+	# Deliberately not `wait $pid`. $pid is the pipeline tail - the cat
+	# draining the fsck's output - and it cannot see EOF until the fsck's
+	# stdout closes. A livelocked in-kernel fsck does not close it promptly
+	# even under SIGKILL: teardown reaches kthread_stop() and blocks waiting
+	# for the very kthread that is spinning (observed - "task shrinkers
+	# blocked for more than 30 seconds", ..._thread_with_file_exit ->
+	# kthread_stop -> wait_for_completion). Waiting here hands the test to
+	# the outer 120s watchdog and turns a named failure into FAILED TIMEOUT,
+	# which is how this read on the dashboard.
 	local j
 	for j in $(seq 1 10); do
 	    pgrep -x bcachefs >/dev/null || break
@@ -1797,8 +1805,11 @@ test_btree_node_csum_error_dry_run()
 	done
 
 	if pgrep -x bcachefs >/dev/null; then
-	    echo "       AND it survived SIGKILL - the device stays busy and"
-	    echo "       the rest of this run is not trustworthy"
+	    echo "       AND it survived SIGKILL, still present after 10s -"
+	    echo "       expected for this livelock: teardown blocks in"
+	    echo "       kthread_stop() on the kthread that is spinning, so the"
+	    echo "       process cannot be reaped. The device stays busy and"
+	    echo "       nothing after this point in the run is trustworthy."
 	fi
 
 	exit 1
