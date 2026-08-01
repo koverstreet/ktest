@@ -1211,15 +1211,24 @@ test_refused_interior_delete()
 	exit 1
     fi
 
-    # The leaf goes away entirely rather than being tombstoned: a tombstone
-    # that still has keys accounted is its own corruption
-    # (snapshot_deleted_but_has_data), and the repair for it is to undelete -
-    # which revives the leaf, restores the child pointer, and dissolves the
-    # single-child shape this test needs. Removing the key leaves its keys in
-    # a snapshot that doesn't exist, which is autofix.
+    # Every edit here is a field on a node that stays in the tree, because
+    # that is the only kind of damage the filesystem can actually produce.
+    #
+    # An earlier version removed $victim_leaf's key outright - and that is
+    # not a state bcachefs writes. bch2_snapshot_node_delete() tombstones:
+    # state goes to deleted and the parent/child pointers are retained, on
+    # purpose, "don't destroy information if we have to repair". Removing
+    # the key stranded its inodes in a snapshot id with no node, which no
+    # deletion produces, and fsck then deleted those keys as unreachable -
+    # thirteen inodes destroyed by the setup, which skip_snaps hid from the
+    # manifest. Everything that test then exercised was reached by a route
+    # the filesystem never takes.
+    #
+    # So the leaf is tombstoned the way a real deletion tombstones it, and
+    # nothing is stranded.
     kvdb_rw -c "update snapshots 0:$refuser:0 state=no_keys children[0]=$survivor children[1]=0" \
-	    -c "set snapshots 0:$victim_leaf:0 deleted" \
-	    -c "set subvolumes 0:4:0 deleted"
+	    -c "update snapshots 0:$victim_leaf:0 state=deleted" \
+	    -c "update subvolumes 0:4:0 state=deleted"
 
     # Check the shape is actually on disk before fscking it. An injection can
     # be undone between staging and assertion - by a repair pass the tool ran
@@ -1238,18 +1247,33 @@ test_refused_interior_delete()
 	fi
     done
 
+    # snap-1 was deleted through the API above; snap-2's subvolume is
+    # condemned by the injection, the way a deletion in flight condemns one.
+    # Both are gone by design, so neither can be compared against the
+    # manifest - and neither is hiding damage, which is what the sb error
+    # counters below are for: they record what the filesystem hit whether or
+    # not the affected paths are in the comparison.
     skip_snaps="snap-1 snap-2"
 
-    # The one error this injection is for: a node whose state field claims
-    # no_keys while the accounting says otherwise.
+    # Two of these are the injected lies themselves: a node whose state field
+    # says it holds nothing while the accounting says it does. The refuser
+    # claims no_keys, the victim leaf claims deleted, and check_snapshot()
+    # settles each against the accounting - that's snapshot_deleted_but_has_data,
+    # twice.
     #
-    # Deliberately not declaring bkey_in_missing_snapshot, which this test
-    # also produces - thirteen of them - because removing $victim_leaf's key
-    # strands its inodes and fsck deletes them. That is real data loss
-    # manufactured by the setup, hidden from the manifest by the skip_snaps
-    # above, and it should fail until the injection is rebuilt to make the
-    # single-child no_keys shape without destroying a subvolume.
-    ktest_expect_sb_errors="snapshot_deleted_but_has_data"
+    # The other three are what condemning subvol 4 drags with it, and they
+    # are as much a part of this injection as the state fields: the dirent
+    # that names snap-2, its entry in the parent's children list, and - once
+    # the accounting has revived the snapshot - a snapshot that is live under
+    # a subvolume that is still condemned.
+    #
+    # That last one is worth watching rather than accepting: the corroboration
+    # revives the snapshot because it owns data, and nothing carries that
+    # verdict across to the subvolume, so the two disagree until a separate
+    # repair reconciles them. If snapshot_subvol_state_mismatch ever stops
+    # appearing here, the undelete learned to revive both and this line
+    # should go.
+    ktest_expect_sb_errors="snapshot_deleted_but_has_data|dirent_to_missing_subvol|subvol_children_bad|snapshot_subvol_state_mismatch"
 
     check_fsck repair
 
@@ -1278,6 +1302,86 @@ test_refused_interior_delete()
 	exit 1
     fi
     echo "skiplists checked on $nr_checked node(s), none below their parent"
+}
+
+# What a crash mid-deletion leaves on disk.
+#
+# bch2_snapshot_node_delete() commits the splice and the tombstone;
+# delete_dead_snapshot_keys() sweeps the node's keys afterwards. Die in
+# between and you get a leaf spliced out of its parent and marked deleted
+# whose keys are still accounted to it - sitting under a parent interior
+# that the same deletion had parked no_keys, awaiting the next remount.
+#
+# fsck's job: snapshot_deleted_but_has_data fires, because nothing we write
+# tombstones a node with keys still accounted to it, so the state field is
+# the lie and the node gets put back.
+#
+# The parent being no_keys is the part that used to break it.
+# bch2_snapshot_node_undelete() gated relinking on the neighbour being live
+# or will_delete, and no_keys was in neither list - so this shape came out
+# as fsck_repair_unimplemented, which is unrepairable at every level, fsck
+# -y included, and the superblock records the failing pass so every
+# subsequent mount fails identically. Fixed in bcachefs-tools 679915927c07
+# (only `deleted` means spliced out of the tree, so ask that instead); this
+# pins it.
+#
+# Found by accident: an earlier version of refused_interior_delete built
+# this state while aiming at something else entirely, and hit the wedge.
+test_interrupted_deletion()
+{
+    setup_snapshot_tree
+
+    # Put keys at snap-2's own snapshot id. Without this the tombstone below
+    # is a *settled* one - no data, nothing to detect - and whether any keys
+    # incidentally land at that id is not something to leave to chance in
+    # the setup of a corruption test.
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    echo torn > /mnt/snap-2/torn-deletion
+    capture_state $MANIFEST
+    umount /mnt
+
+    local victim=$(subvol_snapshot 4)
+    local parent=$(snap_field $victim parent)
+    local children=($(snap_field $parent children))
+
+    local c survivor
+    for c in ${children[@]}; do
+	[[ $c != $victim ]] && survivor=$c
+    done
+
+    if [[ -z $survivor || $survivor = 0 ]]; then
+	echo "TEST FAILED: setup assumption - $parent has no sibling for $victim" \
+	     "(children: ${children[*]})"
+	exit 1
+    fi
+
+    # Exactly what the deletion had committed when it died: parent spliced
+    # and parked, victim tombstoned, subvolume record gone. The victim's
+    # keys are untouched - that is the part that never happened.
+    kvdb_rw -c "update snapshots 0:$parent:0 state=no_keys children[0]=$survivor children[1]=0" \
+	    -c "update snapshots 0:$victim:0 state=deleted subvol=0" \
+	    -c "set subvolumes 0:4:0 deleted"
+
+    # Confirm the shape is on disk before fscking it - an injection undone
+    # between staging and assertion leaves fsck examining a healthy tree and
+    # passing, having tested nothing.
+    local SNAPSHOT_STATE_no_keys=$((0x372b5a01))
+    local SNAPSHOT_STATE_deleted=$((0x7cd4a225))
+
+    if [[ $(snap_field $parent state) != $SNAPSHOT_STATE_no_keys ]]; then
+	echo "TEST FAILED: parent $parent is not parked" \
+	     "(state $(snap_field $parent state))"
+	exit 1
+    fi
+    if [[ $(snap_field $victim state) != $SNAPSHOT_STATE_deleted ]]; then
+	echo "TEST FAILED: victim $victim is not tombstoned" \
+	     "(state $(snap_field $victim state))"
+	exit 1
+    fi
+    echo "injected: leaf $victim tombstoned with keys, under parked parent $parent"
+
+    skip_snaps="snap-2"
+    check_fsck repair
 }
 
 # creation_parent: genealogy metadata, but live - deletion reparents
