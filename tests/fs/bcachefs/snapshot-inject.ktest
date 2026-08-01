@@ -1050,6 +1050,114 @@ test_no_keys_with_keys()
     fi
 }
 
+# Zorba's 1.39 wedge: an interior deletion that refuses partway through
+# leaves the tree describing a deletion that didn't happen.
+#
+# bch2_fix_child_of_deleted_snapshot() deliberately skips nodes that are
+# on the delete list - they're going away, so there's nothing to fix up.
+# A node that then refuses keeps the skiplist it had. Meanwhile its own
+# parent IS deleted, and bch2_snapshot_node_delete() splices the parent
+# pointer of its child upward - past the node that child's skiplist still
+# names. skip[] < parent, which bch2_snapshot_validate() rejects on the
+# next write: "bad skiplist node <id>", pointing at a node that no longer
+# exists. snapshot_skiplist_bad is unrepairable at any level, so that's
+# fsck_errors_not_fixed on the journal write, emergency read-only, and a
+# filesystem that fails to mount on every attempt.
+#
+# The shape needs two interiors in a parent/child chain, both eligible for
+# interior deletion (no_keys with one live child), where the child refuses
+# and the parent doesn't:
+#
+#  - the deleter is snap-1's parent, emptied for real: deleting snap-1's
+#    subvolume migrates its keys to its remaining child and parks it
+#    no_keys, so its accounting is genuinely zero and it deletes.
+#  - the refuser is that node's own child interior - spliced single-child
+#    by hand and marked no_keys with every one of its keys still in place.
+#    check_snapshots does not corroborate this shape: a single-child
+#    no_keys node is legal (check_snapshot_deleted(), "an emptied interior
+#    kept until the next remount"), and only SNAPSHOT_STATE_deleted is
+#    held up against the accounting. So it survives to the collector, and
+#    bch2_snapshot_node_check_no_data() refuses it for the data.
+#
+# Ordering does the rest: ids descend with age, the delete list is built
+# ascending, so the child is tried first, refuses, and the parent is
+# deleted after it.
+#
+# NOT PASSING YET, and it needs two things that aren't the ordering fix:
+#  - a single-child no_keys node with data has no repair. The refusal
+#    schedules the content passes, but the keys aren't stranded orphans -
+#    they're the live keys of a node whose state field is a lie - so
+#    nothing removes them and nothing revives the node. It refuses
+#    forever. The accounting is available to corroborate here exactly as
+#    it is for the deleted state; that check just doesn't exist yet.
+#  - refusals no longer fail the pass (they mean "repair first, retry"),
+#    so fsck exits 0 on a filesystem stuck in this state.
+test_refused_interior_delete()
+{
+    setup_snapshot_tree
+
+    # Read the spine before deleting anything: snap-1's parent is the
+    # deleter, snap-2's parent is the refuser, and the second is a child
+    # of the first.
+    local deleter=$(snap_field $(subvol_snapshot 3) parent)
+    local refuser=$(snap_field $(subvol_snapshot 4) parent)
+    local victim_leaf=$(subvol_snapshot 4)
+    local main_leaf=$(subvol_snapshot 1)
+
+    if [[ $(snap_field $refuser parent) != $deleter ]]; then
+	echo "TEST FAILED: setup assumption - $refuser is not a child of $deleter"
+	exit 1
+    fi
+
+    # The deleter empties legitimately. The runtime pass only parks
+    # interiors; they're removed at the next mount, which is where the
+    # damage happened.
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    bcachefs subvolume delete /mnt/snap-1
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_delete_dead_snapshots
+    umount /mnt
+
+    local SNAPSHOT_STATE_no_keys=$((0x372b5a01))
+    if [[ $(snap_field $deleter state) != $SNAPSHOT_STATE_no_keys ]]; then
+	echo "TEST FAILED: deleter not parked (state $(snap_field $deleter state))"
+	exit 1
+    fi
+
+    # The refuser: splice out its leaf child so it too is a single-child
+    # interior, and park it - with its keys.
+    local children=($(snap_field $refuser children))
+    local survivor
+    for c in ${children[@]}; do
+	[[ $c != $victim_leaf ]] && survivor=$c
+    done
+
+    if [[ $survivor != $main_leaf ]]; then
+	echo "TEST FAILED: setup assumption - refuser's surviving child is $survivor, not $main_leaf"
+	exit 1
+    fi
+
+    kvdb_rw -c "update snapshots 0:$refuser:0 state=no_keys children[0]=$survivor children[1]=0" \
+	    -c "update snapshots 0:$victim_leaf:0 state=deleted subvol=0" \
+	    -c "set subvolumes 0:4:0 deleted"
+
+    skip_snaps="snap-1 snap-2"
+    check_fsck repair
+
+    # The manifest proves no data was lost; this proves the mechanism -
+    # nothing may name a node below its own parent.
+    local id parent
+    for id in $(all_snap_ids); do
+	parent=$(snap_field $id parent)
+	(( parent == 0 )) && continue
+	for skip in $(snap_field $id skip); do
+	    if (( skip != 0 && skip < parent )); then
+		echo "TEST FAILED: snapshot $id skiplist names $skip, below its parent $parent"
+		exit 1
+	    fi
+	done
+    done
+}
+
 # creation_parent: genealogy metadata, but live - deletion reparents
 # through it and the query ioctl exposes it. A dangling reference is
 # cleared to 0 by check_subvol (subvol_creation_parent_bad, autofix).
