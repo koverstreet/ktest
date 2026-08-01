@@ -499,13 +499,25 @@ _check_bcachefs_counters()
     local ratio=20
     local ret=0
 
-    [[ -z $nr_commits ]] && return 0
+    # Both bail-outs below mean "couldn't read the data", not "the data was
+    # fine" - and to anyone reading the log they are indistinguishable from a
+    # clean pass unless they say so. A field rename or an output format change
+    # in show-super would switch this check off across the whole suite in
+    # silence, and the slowpath counters are what catch excess transaction
+    # restarts and bucket alloc failures.
+    if [[ -z $nr_commits ]]; then
+	echo "$dev: no transaction_commit counter - slowpath counter check SKIPPED"
+	return 0
+    fi
 
     [[ $# -ge 2 ]] && ratio=$2
 
     local counters=$(set +e; set +o pipefail; get_slowpath_counters $dev)
 
-    [[ -z $counters ]] && return 0
+    if [[ -z $counters ]]; then
+	echo "$dev: no slowpath counters read - counter check SKIPPED"
+	return 0
+    fi
 
     while IFS= read -r line; do
 	linea=($line)
