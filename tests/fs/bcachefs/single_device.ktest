@@ -1780,17 +1780,23 @@ test_btree_node_csum_error_dry_run()
 	# one real result under a pile of noise. $pid is the pipeline's tail,
 	# not the fsck, so kill the fsck by name: SIGKILL because the whole
 	# point of being here is that it isn't responding to anything gentler.
-	pkill -KILL -f "bcachefs fsck" 2>/dev/null
+	#
+	# -x matches the process name. -f would match the whole command line,
+	# and so would also match any shell whose cmdline merely contains the
+	# pattern - including one running a script that mentions it. Nothing
+	# else is named bcachefs by this point; the format and kill_btree_node
+	# runs are long finished.
+	pkill -KILL -x bcachefs 2>/dev/null
 	kill -KILL $pid 2>/dev/null
 	wait $pid 2>/dev/null
 
 	local j
 	for j in $(seq 1 10); do
-	    pgrep -f "bcachefs fsck" >/dev/null || break
+	    pgrep -x bcachefs >/dev/null || break
 	    sleep 1
 	done
 
-	if pgrep -f "bcachefs fsck" >/dev/null; then
+	if pgrep -x bcachefs >/dev/null; then
 	    echo "       AND it survived SIGKILL - the device stays busy and"
 	    echo "       the rest of this run is not trustworthy"
 	fi
