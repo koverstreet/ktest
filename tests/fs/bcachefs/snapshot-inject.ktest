@@ -1190,10 +1190,15 @@ test_refused_interior_delete()
 
     # The manifest proves no data was lost; this proves the mechanism -
     # nothing may name a node below its own parent.
-    local id parent
+    #
+    # Say how much was checked. A silent loop that passes looks exactly like
+    # a loop that never ran, and working out which from a CI log means
+    # counting kvdb invocations - which is what I ended up doing.
+    local id parent nr_checked=0
     for id in $(all_snap_ids); do
 	parent=$(snap_field $id parent)
 	(( parent == 0 )) && continue
+	nr_checked=$((nr_checked + 1))
 	for skip in $(snap_field $id skip); do
 	    if (( skip != 0 && skip < parent )); then
 		echo "TEST FAILED: snapshot $id skiplist names $skip, below its parent $parent"
@@ -1201,6 +1206,13 @@ test_refused_interior_delete()
 	    fi
 	done
     done
+
+    if (( nr_checked == 0 )); then
+	echo "TEST FAILED: no snapshot nodes with a parent left to check -" \
+	     "the skiplist assertion proved nothing"
+	exit 1
+    fi
+    echo "skiplists checked on $nr_checked node(s), none below their parent"
 }
 
 # creation_parent: genealogy metadata, but live - deletion reparents
