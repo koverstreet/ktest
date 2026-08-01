@@ -54,7 +54,7 @@ prepare_ec_degraded_io()
 	--time_based				\
 	--fdatasync=16
 
-    bcachefs fs usage -a -h /mnt | tee "$usage"
+    bcachefs fs usage -h /mnt | tee "$usage"
     if ! grep -qE '^user:[[:space:]]+2/4' "$usage"; then
 	echo "no EC-striped user data found before degraded IO" >&2
 	return 1
