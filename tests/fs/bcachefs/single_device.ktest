@@ -1772,6 +1772,29 @@ test_btree_node_csum_error_dry_run()
 	echo "       repetitions in the first 256K of output:" \
 	     $(grep -c "checksum error" /tmp/fsck-dry-run.log)
 	grep -m2 "checksum error" /tmp/fsck-dry-run.log
+
+	# Take it down before failing. A spinning fsck keeps the scratch
+	# device open, and every later test in the run then dies instantly
+	# on "Device or resource busy" - six of them the first time this
+	# fired, all reported as failures having never run, which buries the
+	# one real result under a pile of noise. $pid is the pipeline's tail,
+	# not the fsck, so kill the fsck by name: SIGKILL because the whole
+	# point of being here is that it isn't responding to anything gentler.
+	pkill -KILL -f "bcachefs fsck" 2>/dev/null
+	kill -KILL $pid 2>/dev/null
+	wait $pid 2>/dev/null
+
+	local j
+	for j in $(seq 1 10); do
+	    pgrep -f "bcachefs fsck" >/dev/null || break
+	    sleep 1
+	done
+
+	if pgrep -f "bcachefs fsck" >/dev/null; then
+	    echo "       AND it survived SIGKILL - the device stays busy and"
+	    echo "       the rest of this run is not trustworthy"
+	fi
+
 	exit 1
     fi
 
