@@ -903,6 +903,120 @@ test_missing_child()
     check_fsck repair
 }
 
+# The same injection as test_missing_child, except the missing child held
+# only metadata - which is the whole difference.
+#
+# check_snapshot_edge() may clear a dangling child pointer when nothing is
+# accounted to the child, and before 9dbf41365793 it asked only for
+# external_sectors in the extents btree. A snapshot someone renamed a file
+# or set an xattr in, and never wrote data to, has no sectors - so it read
+# as empty. Clearing the pointer isn't itself what loses the keys; it's
+# that clearing it skips the "beyond single-corruption repair" fail-stop
+# that would have kept them, after which bkey_in_missing_snapshot deletes
+# them as orphans.
+#
+# So the victim writes no data at all, and its parent keeps a live
+# sibling, since the clear only fires when one exists.
+#
+# skip_snaps stays empty deliberately. Skipping the victim is exactly how
+# refused_interior_delete passed while destroying thirteen inodes (see
+# check_sb_errors): here the victim's surviving keys ARE the assertion.
+test_missing_child_metadata_only()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # Every extent is written before any snapshot exists, so the snapshots
+    # below inherit the data and account no sectors of their own.
+    echo "payload" > /mnt/file
+    dd if=/dev/zero of=/mnt/fill bs=1M count=1 oflag=direct
+
+    # Sibling first: it is what the parent still points at once the victim
+    # is gone, and without it the clear never fires at all.
+    bcachefs subvolume snapshot /mnt/snap-sibling
+    bcachefs subvolume snapshot /mnt/snap-victim
+
+    # Metadata only - a rename and an xattr. Dirent and xattr keys at this
+    # snapshot id, nothing in the extents btree.
+    mv /mnt/snap-victim/file /mnt/snap-victim/renamed
+    setfattr -n user.marker -v present /mnt/snap-victim/renamed
+
+    capture_state $MANIFEST
+    umount /mnt
+
+    skip_snaps=""
+    skip_paths=""
+    ktest_expect_sb_errors="snapshot_child_missing_but_accounted"
+
+    # Subvol ids allocate upward from 2 in creation order (main is 1), as
+    # everywhere else in this file: snap-sibling is 2, snap-victim is 3.
+    local victim=$(subvol_snapshot 3)
+
+    # Only the snapshot node. test_missing_child deletes the subvolume too,
+    # which models the whole snapshot going away - but here that would leave
+    # nothing claiming the id, so the node comes back with subvol 0 and its
+    # root inode cascades out to lost+found, burying the case under a second
+    # unrelated repair. Leaving the subvolume is also the sharper test: the
+    # resurrected node has to adopt it, or the subvolume is stranded.
+    kvdb_rw -c "set snapshots 0:$victim:0 deleted"
+
+    # fsck is run here rather than through check_fsck so the log can be
+    # asserted on. Which of the two repair arms fires is the whole question,
+    # and both of them leave fsck reporting "errors fixed" - the exit status
+    # can't tell them apart.
+    local log=/tmp/snapshot-inject-fsck.log
+    local rc=0
+    bcachefs fsck -y ${ktest_scratch_dev[0]} > $log 2>&1 || rc=$?
+    cat $log
+    echo "fsck -y exited $rc"
+
+    if (( rc == 0 )); then
+	echo "TEST FAILED: fsck missed the injected corruption"
+	exit 1
+    fi
+
+    # Positive evidence that the edge check reached this edge and took the
+    # resurrect arm rather than the clear arm. Without this, the survival
+    # check below passes on any run that never got as far as
+    # check_snapshots - and it also fails if the accounting gate sends a
+    # metadata-only node down the clear path, which is the bug this whole
+    # case exists for.
+    if ! grep -q "accounted to $victim - recreating it as a leaf" $log; then
+	echo "TEST FAILED: check_snapshot_edge did not recreate $victim -" \
+	     "either the injection missed the branch, or a metadata-only" \
+	     "snapshot was read as empty and the pointer cleared instead"
+	exit 1
+    fi
+
+    # And the keys are still there. Read through kvdb rather than the mount
+    # below so this still reports the right thing if recovery regresses and
+    # leaves the filesystem unmountable again.
+    if ! kvdb -c 'list dirents' | grep -q renamed; then
+	echo "TEST FAILED: the victim's dirent is gone - its child pointer" \
+	     "was cleared as though a metadata-only snapshot were empty"
+	exit 1
+    fi
+    echo "edge check declined to clear; victim's metadata intact"
+
+    # And the filesystem has to come back. Checking this is the point: the
+    # first two versions of this test stopped above and reported success on
+    # a filesystem that recovery had left emergency read-only.
+    #
+    # 8 is fsck(8)'s operational error - fsck hit something fatal rather
+    # than declining to repair. Checked separately from the mount because it
+    # names the failure where it happens.
+    if (( rc & 8 )); then
+	echo "TEST FAILED: fsck exited $rc - operational error, the filesystem" \
+	     "never came back"
+	exit 1
+    fi
+
+    # Full manifest: the victim keeps its name, its xattr and its subvolume,
+    # so nothing may have moved. skip_snaps is empty for the same reason.
+    verify_fs_state must-mount
+    check_sb_errors
+}
+
 # R2/I2: parent lost its pointer to a live child (child's parent pointer
 # intact). Fail-stop: EINVAL_snapshot_parent_missing_child_ptr. Ancestry
 # is parent-pointer-driven, so no view breaks and no data is lost.
