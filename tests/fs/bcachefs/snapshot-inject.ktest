@@ -145,12 +145,20 @@ MANIFEST=/tmp/snapshot-inject-manifest
 # du. Hence a plain bash walker.
 #
 # Each subvolume is walked once, at its canonical top-level path.
-# Subvolume boundaries are pruned by name (snap-*, other - this file only
-# ever creates subvolumes with those names): an interior subvolume dirent
-# inside a snapshot points at the *live* subvolume, not a frozen copy, so
-# descending would duplicate live state under snapshot paths. lost+found
-# is pruned too, but anything a repair moves there still shows up as
-# missing from its real path.
+# walk_subvols() enumerates them there, so walk_tree() prunes those names
+# (snap-*, other - this file only ever creates subvolumes with those names)
+# to keep from visiting one twice.
+#
+# Note what this is NOT working around: a nested subvolume does not appear
+# inside a snapshot of its parent at all. The dirent is inherited into the
+# snapshot's snapshot id, but it still names the original parent in
+# d_parent_subvol, and bch2_dirent_read_target() (fs/fs/dirent.c) returns 1
+# for a DT_SUBVOL dirent whose d_parent_subvol isn't the subvolume doing the
+# reading - bch2_readdir() skips those. So snapshot paths never expose the
+# live child; there's nothing to prune on that account.
+#
+# lost+found is pruned too, but anything a repair moves there still shows up
+# as missing from its real path.
 
 # "type path" for everything under $1 (excluding $1 itself), in find
 # -printf '%y %p' format
