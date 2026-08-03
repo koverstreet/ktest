@@ -2945,4 +2945,137 @@ test_fsck_damage_report()
     verify_fs_state must-mount
 }
 
+# lost+found deleted in one snapshot, still alive in the tree's root snapshot,
+# and fsck has to reattach something into the snapshot that lost it.
+#
+# Reported by piotrszegda 2026-08-03: he deleted a lost+found that had
+# collected a pile of unnamed files, after restoring them from backup. The two
+# halves of "get lost+found" were looking in different snapshots -
+#
+#   lookup_lostfound()  looks in the caller's snapshot, sees the whiteout
+#                       shadowing the root snapshot's dirent -> ENOENT
+#   create_lostfound()  creates it in the tree's root snapshot, where the
+#                       dirent is alive -> EEXIST_str_hash_set
+#
+#   lookup_lostfound(): error creating lost+found EEXIST_str_hash_set
+#   error in recovery: EEXIST_str_hash_set
+#     emergency read only at seq 1131707459
+#   error starting filesystem: EEXIST_str_hash_set
+#
+# - and the filesystem stopped mounting. No injection reaches this state; rm
+# does. The one injection here is the orphan that gives fsck something to
+# reattach.
+#
+# The assertion that matters is the last one: the restored lost+found has to be
+# the SAME inode as the one the other snapshots see. A second lost+found would
+# also make fsck pass, and would be wrong - the tree has one lost+found, and it
+# is reached at a different dirent position in the snapshot that lost it, which
+# is what a directory renamed after a snapshot already looks like.
+test_lostfound_deleted_in_snapshot()
+{
+    set_watchdog 120
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    pushd /mnt
+    # format makes lost+found, so the tree's one is already in the root snapshot
+    [[ -d lost+found ]] || {
+	echo "TEST FAILED: no lost+found to delete - setup broken"
+	exit 1
+    }
+
+    # The restore inserts a dirent into this directory, so don't leave the
+    # directory empty: the slot the hash table picks has to not disturb the
+    # entries around it, and an empty parent proves nothing about that.
+    local i
+    for i in $(seq 1 32); do
+	echo "content-$i" > file-$i
+    done
+    echo salvaged > lost+found/salvaged	# what the snapshot has to keep seeing
+
+    bcachefs subvolume snapshot snap-1
+    rm -rf lost+found			# whiteout, in the live snapshot only
+    touch orphan			# ditto: exists only in the live snapshot
+    popd
+
+    capture_state $MANIFEST
+    umount /mnt
+
+    local live=$(subvol_snapshot 1)
+    local pos=$(dirent_pos orphan)
+    [[ -n $pos ]] || {
+	echo "TEST FAILED: can't find orphan's dirent - setup broken"
+	exit 1
+    }
+
+    # The dirent has to be gone in $live while lost+found's whiteout is still
+    # there: if the rm didn't land, fsck runs against a tree that has a
+    # lost+found where it looks for one and tests nothing.
+    kvdb -c 'list dirents' | grep -q "lost+found" || {
+	echo "TEST FAILED: no lost+found dirent survives - setup broken"
+	exit 1
+    }
+
+    kvdb_rw -c "set -s dirents $pos deleted"
+
+    local out=/tmp/fsck-lostfound-deleted.log
+    local rc1=0
+    bcachefs fsck -y ${ktest_scratch_dev[0]} > $out 2>&1 || rc1=$?
+    cat $out
+    echo "fsck -y exited $rc1"
+
+    if (( rc1 == 0 )); then
+	echo "TEST FAILED: fsck missed the orphaned inode"
+	exit 1
+    fi
+    if grep -q "EEXIST_str_hash_set" $out; then
+	echo "TEST FAILED: lost+found create collided with the root snapshot's dirent"
+	exit 1
+    fi
+    grep -q "restoring .*lost+found in subvol .* snapshot $live" $out || {
+	echo "TEST FAILED: lost+found not restored in snapshot $live"
+	exit 1
+    }
+
+    local rc2=0
+    bcachefs fsck -n ${ktest_scratch_dev[0]} || rc2=$?
+    echo "second fsck -n exited $rc2"
+    if (( rc2 != 0 )); then
+	echo "TEST FAILED: errors remain after repair"
+	exit 1
+    fi
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    local live_lf=$(stat -c %i /mnt/lost+found)
+    local snap_lf=$(stat -c %i /mnt/snap-1/lost+found)
+    echo "lost+found: live inum $live_lf, snap-1 inum $snap_lf"
+    echo "live:   $(ls /mnt/lost+found)"
+    echo "snap-1: $(ls /mnt/snap-1/lost+found)"
+
+    # One directory, two snapshot views of it: the snapshot still sees what
+    # was in it, the live one sees only what fsck just put there. That's the
+    # shape a directory renamed after a snapshot already has - the restored
+    # dirent is at a different position, the inode is the same one.
+    local ok=1
+    [[ $live_lf == $snap_lf ]] || {
+	echo "TEST FAILED: restored lost+found is a second directory, not the tree's"
+	ok=0
+    }
+    [[ $(cat /mnt/snap-1/lost+found/salvaged 2>&1) == salvaged ]] || {
+	echo "TEST FAILED: snap-1's lost+found lost its contents"
+	ok=0
+    }
+    [[ ! -e /mnt/lost+found/salvaged ]] || {
+	echo "TEST FAILED: deleted lost+found contents came back in the live snapshot"
+	ok=0
+    }
+    umount /mnt
+    (( ok )) || exit 1
+
+    skip_snaps=""
+    skip_paths="./orphan"
+    verify_fs_state must-mount
+}
+
 main "$@"
