@@ -1106,6 +1106,90 @@ test_subvol_list()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# bch2_check_path_accessible() is the reason `bcachefs subvolume list` doesn't
+# tell an unprivileged caller about subvolumes it has no path to. Subvolume
+# children are keyed by fs_path_parent, not by directory nesting, so the raw
+# iteration finds every subvolume of the parent wherever it sits in the tree;
+# the walk from each child's root back up to the listing subvolume, requiring
+# MAY_EXEC on every directory along the way, is what filters it.
+#
+# Nothing exercised that. Every listing test runs as root, and for a directory
+# with MAY_EXEC generic_permission() returns 0 on CAP_DAC_READ_SEARCH - so the
+# walk's answer is a foregone yes and only its side effects were under test.
+# BCH_IOCTL_SUBVOLUME_LIST has no capability check of its own, so an
+# unprivileged caller really does get here.
+#
+# Both directions matter, and the second is the one that bit a user: a
+# subvolume the caller can't reach must be omitted, and omitting it must not
+# take the rest of the listing with it.
+test_subvol_list_unprivileged()
+{
+    set_watchdog 120
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    local as_user=""
+    if command -v setpriv > /dev/null; then
+	as_user="setpriv --reuid=65534 --regid=65534 --clear-groups"
+    elif command -v runuser > /dev/null; then
+	as_user="runuser -u nobody --"
+    else
+	echo "TEST FAILED: no setpriv or runuser to drop privileges with"
+	exit 1
+    fi
+
+    chmod 755 /mnt
+
+    # Reachable: every directory on the path is searchable
+    mkdir -m 755 /mnt/open
+    bcachefs subvolume create /mnt/open/visible
+
+    # Unreachable: a root-owned 0700 directory in the middle of the path.
+    # Both are children of the root subvolume either way.
+    mkdir -m 755 /mnt/closed
+    bcachefs subvolume create /mnt/closed/hidden
+    chmod 700 /mnt/closed
+
+    # Assert the setup before asserting the behaviour: if 'hidden' were missing
+    # outright, the unprivileged check below would pass having tested nothing.
+    local root_out=/tmp/subvol-list-root.log
+    bcachefs subvolume list /mnt > $root_out 2>&1
+    cat $root_out
+    local n
+    for n in visible hidden; do
+	grep -q "$n" $root_out || {
+	    echo "TEST FAILED: root listing is missing $n - setup broken"
+	    exit 1
+	}
+    done
+
+    local user_out=/tmp/subvol-list-user.log
+    local rc=0
+    $as_user bcachefs subvolume list /mnt > $user_out 2>&1 || rc=$?
+    echo "--- unprivileged listing exited $rc"
+    cat $user_out
+
+    local ok=1
+    (( rc == 0 )) || {
+	echo "TEST FAILED: unprivileged listing failed ($rc) instead of omitting the unreachable subvolume"
+	ok=0
+    }
+    grep -q visible $user_out || {
+	echo "TEST FAILED: reachable subvolume missing from the unprivileged listing"
+	ok=0
+    }
+    if grep -q hidden $user_out; then
+	echo "TEST FAILED: subvolume behind a 0700 directory listed to an unprivileged caller"
+	ok=0
+    fi
+
+    umount /mnt
+    (( ok )) || exit 1
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_subvol_list_stress()
 {
     set_watchdog 300
