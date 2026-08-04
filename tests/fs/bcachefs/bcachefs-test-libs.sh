@@ -577,6 +577,84 @@ bcachefs_test_end_checks()
     check_bcachefs_counters $@
 }
 
+# On-disk corruption injection: parse physical pointer locations out of
+# bkey listings (bcachefs list / list_journal), then overwrite them on
+# the raw device. Used by the scrub corruption tests.
+
+# bcachefs_ptr_sectors <bucket_size_sectors> <dev_idx>
+#
+# Print the raw device sector of every pointer on member device
+# <dev_idx>, parsed from a bkey listing on stdin. Pointers print as
+# "ptr: <devname> <dev>:<bucket>:<offset> gen <g>"; key positions are
+# also colon-separated numbers, so only accept tokens adjacent to a
+# "ptr:" marker.
+bcachefs_ptr_sectors()
+{
+    awk -v bsz="$1" -v dev="$2" '
+	{
+	    for (i = 1; i < NF; i++) {
+		if ($i != "ptr:")
+		    continue
+		for (j = i + 1; j <= i + 2 && j <= NF; j++)
+		    if ($j ~ /^[0-9]+:[0-9]+:[0-9]+$/) {
+			split($j, p, ":")
+			if (p[1] == dev)
+			    print p[2] * bsz + p[3]
+			break
+		    }
+	    }
+	}'
+}
+
+# bcachefs_first_stripe_blocks <bucket_size_sectors>
+#
+# For the first stripe in `bcachefs list -b stripes` output on stdin,
+# print "meta <nr_data> <nr_redundant>" followed by one
+# "block <idx> <dev> <sector>" line per stripe block, in block order
+# (data blocks first, then parity).
+bcachefs_first_stripe_blocks()
+{
+    awk -v bsz="$1" '
+	/blocks [0-9]+:[0-9]+/ {
+	    if (found)
+		exit
+	    found = 1
+	    match($0, /blocks [0-9]+:[0-9]+/)
+	    split(substr($0, RSTART + 7, RLENGTH - 7), b, ":")
+	    nr_data = b[1]
+	    nr_red = b[2]
+	    idx = 0
+	    print "meta", nr_data, nr_red
+	    next
+	}
+	found {
+	    for (i = 1; i <= NF; i++)
+		if ($i ~ /^[0-9]+:[0-9]+:[0-9]+$/) {
+		    split($i, p, ":")
+		    print "block", idx, p[1], p[2] * bsz + p[3]
+		    idx++
+		}
+	    if (idx >= nr_data + nr_red)
+		exit
+	}'
+}
+
+# bcachefs_corrupt_sectors <dev>
+#
+# Overwrite 4k with random data at each sector read from stdin; prints
+# the number of locations corrupted.
+bcachefs_corrupt_sectors()
+{
+    local dev=$1 nr=0 sector
+    while read -r sector; do
+	dd if=/dev/urandom of="$dev" bs=512 seek="$sector" count=8 \
+	    conv=notrunc status=none
+	nr=$((nr + 1))
+    done
+    echo "corrupted $nr x 4k at pointer locations on $dev" >&2
+    echo $nr
+}
+
 fill_device()
 {
     local filename=$1

@@ -1,0 +1,307 @@
+#!/usr/bin/env bash
+#
+# Scrub detection and repair of real on-disk data corruption: locate
+# extent/stripe pointers from key listings (dev:bucket:offset, fixed
+# 512k buckets so the sector math is static), overwrite the data with
+# the filesystem unmounted, then verify scrub's exit code: bit 2 =
+# errors corrected, bit 4 = uncorrectable errors found.
+#
+# Four cases:
+#   single_replica - no redundancy: scrub must report uncorrectable
+#   replicated     - four replicas, random subsets of copies corrupt
+#                    (including one extent with three of four gone):
+#                    scrub must repair everything from the survivors
+#   ec_data        - EC stripe data block corrupt: scrub must repair
+#                    via stripe reconstruction
+#   ec_parity      - EC stripe parity block corrupt: scrub must repair
+#                    it (parity is reconstructible from the intact data
+#                    blocks).
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+require-kernel-config BCACHEFS_ERASURE_CODING
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+
+BUCKET_SIZE_KB=512
+BUCKET_SIZE_SECTORS=$((BUCKET_SIZE_KB * 2))
+
+test_scrub_corrupt_single_replica()
+{
+    ktest_expect_device_errors=1
+    ktest_expect_sb_errors="data_read_(io|csum)_err(_recovered)?"
+    set_watchdog 120
+
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f --bucket_size=${BUCKET_SIZE_KB}k "$dev"
+    mount -t bcachefs "$dev" /mnt
+    dd if=/dev/urandom of=/mnt/testfile bs=1M count=16 oflag=direct
+    sync
+    umount /mnt
+
+    local nr=$(bcachefs list -b extents "$dev" |
+	bcachefs_ptr_sectors $BUCKET_SIZE_SECTORS 0 | head -8 |
+	bcachefs_corrupt_sectors "$dev")
+    if ((nr == 0)); then
+	echo "ERROR: found no extent locations to corrupt"
+	return 1
+    fi
+
+    mount -t bcachefs "$dev" /mnt
+    local rc=0
+    bcachefs scrub "$dev" || rc=$?
+    echo "scrub exit code: $rc"
+    umount /mnt
+
+    if (((rc & 4) == 0)); then
+	echo "ERROR: scrub did not report uncorrectable errors"
+	return 1
+    fi
+
+    bcachefs fsck -ny "$dev"
+    bcachefs_test_end_checks "$dev"
+}
+
+# Print "extent# dev sector" for every replica pointer in a bkey
+# listing on stdin, grouping pointers by the extent they belong to.
+extent_replica_locations()
+{
+    awk -v bsz="$1" '
+	/ type extent / { ext++ }
+	ext {
+	    for (i = 1; i < NF; i++) {
+		if ($i != "ptr:")
+		    continue
+		for (j = i + 1; j <= i + 2 && j <= NF; j++)
+		    if ($j ~ /^[0-9]+:[0-9]+:[0-9]+$/) {
+			split($j, p, ":")
+			print ext, p[1], p[2] * bsz + p[3]
+			break
+		    }
+	    }
+	}'
+}
+
+test_scrub_corrupt_replicated()
+{
+    ktest_expect_device_errors=1
+    ktest_expect_sb_errors="data_read_(io|csum)_err(_recovered)?"
+    set_watchdog 180
+
+    run_quiet "" bcachefs format -f --replicas=4	\
+	--bucket_size=${BUCKET_SIZE_KB}k		\
+	"${ktest_scratch_dev[@]}"
+    local devs="$(join_by : "${ktest_scratch_dev[@]}")"
+    mount -t bcachefs $devs /mnt
+    dd if=/dev/urandom of=/mnt/testfile bs=1M count=16 oflag=direct
+    cp /mnt/testfile /root/scrub-orig
+    sync
+    umount /mnt
+
+    local locations=$(bcachefs list -b extents "${ktest_scratch_dev[@]}" |
+	extent_replica_locations $BUCKET_SIZE_SECTORS)
+    local nr_extents=$(echo "$locations" |
+	awk '{ if ($1 > m) m = $1 } END { print m + 0 }')
+    if ((nr_extents < 6)); then
+	echo "ERROR: only $nr_extents extents to corrupt"
+	return 1
+    fi
+
+    # Corrupt random replicas of six random extents. The first victim
+    # loses three of its four copies - repair must work from a single
+    # surviving replica - and the rest lose a random one to three.
+    local ext k dev sector nr=0 first=1
+    for ext in $(seq 1 $nr_extents | shuf -n6); do
+	if ((first)); then
+	    k=3
+	    first=0
+	else
+	    k=$((RANDOM % 3 + 1))
+	fi
+	while read -r _ dev sector; do
+	    echo "corrupting extent $ext replica: dev $dev sector $sector"
+	    echo "$sector" |
+		bcachefs_corrupt_sectors ${ktest_scratch_dev[$dev]} > /dev/null
+	    nr=$((nr + 1))
+	done < <(echo "$locations" | awk -v e=$ext '$1 == e' | shuf -n$k)
+    done
+    echo "corrupted $nr replicas across 6 extents"
+
+    mount -t bcachefs $devs /mnt
+
+    # Scrub each device in turn - sequentially, so concurrent
+    # per-device repairs of the same extent can't race. Combined they
+    # must find and repair everything, nothing uncorrectable.
+    local rc=0 drc d
+    for d in "${ktest_scratch_dev[@]}"; do
+	drc=0
+	bcachefs scrub "$d" || drc=$?
+	echo "scrub $d exit code: $drc"
+	rc=$((rc | drc))
+    done
+
+    if (((rc & 2) == 0)); then
+	echo "ERROR: scrub did not report corrected errors"
+	return 1
+    fi
+    if (((rc & 4) != 0)); then
+	echo "ERROR: scrub reported uncorrectable errors with a good replica present"
+	return 1
+    fi
+
+    # Repair must converge: a second full pass runs clean.
+    rc=0
+    for d in "${ktest_scratch_dev[@]}"; do
+	drc=0
+	bcachefs scrub "$d" || drc=$?
+	rc=$((rc | drc))
+    done
+    if ((rc != 0)); then
+	echo "ERROR: second scrub pass still found errors (exit code $rc)"
+	return 1
+    fi
+
+    cmp /mnt/testfile /root/scrub-orig
+    umount /mnt
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+# Format with erasure coding, write data, wait for background reconcile
+# to build at least one stripe, and leave the fs unmounted. Sets
+# stripe_meta and stripe_block_lines from the first stripe found.
+setup_ec_corrupt()
+{
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	--bucket_size=${BUCKET_SIZE_KB}k	\
+	"${ktest_scratch_dev[@]}"
+    local devs="$(join_by : "${ktest_scratch_dev[@]}")"
+    mount -t bcachefs $devs /mnt
+
+    dd if=/dev/urandom of=/mnt/testfile bs=1M count=128 oflag=direct
+    cp /mnt/testfile /root/scrub-orig
+    sync
+
+    # Stripe creation is a background reconcile operation; kick it and
+    # poll the stripe_create counter until a stripe exists.
+    local created=0 i
+    for i in $(seq 1 60); do
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_wakeup
+	created=$(awk '/since mount/ {print $3}' \
+	    /sys/fs/bcachefs/*/counters/stripe_create)
+	if ((created > 0)); then
+	    break
+	fi
+	sleep 1
+    done
+    if ((created == 0)); then
+	echo "ERROR: no stripes created after 60s"
+	return 1
+    fi
+    umount /mnt
+
+    local blocks=$(bcachefs list -b stripes "${ktest_scratch_dev[@]}" |
+	bcachefs_first_stripe_blocks $BUCKET_SIZE_SECTORS)
+    echo "first stripe:"
+    echo "$blocks"
+
+    stripe_meta=$(echo "$blocks" | awk '$1 == "meta" {print $2, $3}')
+    stripe_block_lines=$(echo "$blocks" | awk '$1 == "block"')
+    if [[ -z $stripe_meta || -z $stripe_block_lines ]]; then
+	echo "ERROR: could not parse stripe blocks"
+	return 1
+    fi
+}
+
+# Print "<dev> <sector>" for stripe block index $1.
+stripe_block()
+{
+    echo "$stripe_block_lines" | awk -v want="$1" '$2 == want {print $3, $4}'
+}
+
+test_scrub_corrupt_ec_data()
+{
+    ktest_expect_device_errors=1
+    ktest_expect_sb_errors="data_read_(io|csum)_err(_recovered)?"
+    set_watchdog 300
+
+    setup_ec_corrupt
+
+    # Corrupt the first data block of the stripe.
+    local tdev tsector
+    read -r tdev tsector <<< "$(stripe_block 0)"
+    echo "corrupting stripe data block 0: dev $tdev sector $tsector"
+    echo "$tsector" | bcachefs_corrupt_sectors ${ktest_scratch_dev[$tdev]} > /dev/null
+
+    local devs="$(join_by : "${ktest_scratch_dev[@]}")"
+    mount -t bcachefs $devs /mnt
+
+    local rc=0
+    bcachefs scrub ${ktest_scratch_dev[$tdev]} || rc=$?
+    echo "scrub exit code: $rc"
+
+    if (((rc & 2) == 0)); then
+	echo "ERROR: scrub did not report corrected errors"
+	return 1
+    fi
+    if (((rc & 4) != 0)); then
+	echo "ERROR: scrub reported uncorrectable errors despite EC redundancy"
+	return 1
+    fi
+
+    cmp /mnt/testfile /root/scrub-orig
+    umount /mnt
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_scrub_corrupt_ec_parity()
+{
+    ktest_expect_device_errors=1
+    ktest_expect_sb_errors="data_read_(io|csum)_err(_recovered)?"
+    set_watchdog 300
+
+    setup_ec_corrupt
+
+    # Corrupt the first parity block (block index nr_data): three 4k
+    # spots spread across the block.
+    local nr_data nr_red
+    read -r nr_data nr_red <<< "$stripe_meta"
+
+    local tdev tsector
+    read -r tdev tsector <<< "$(stripe_block $nr_data)"
+    echo "corrupting stripe parity block $nr_data: dev $tdev sector $tsector"
+    printf '%s\n' $tsector $((tsector + 256)) $((tsector + 512)) |
+	bcachefs_corrupt_sectors ${ktest_scratch_dev[$tdev]} > /dev/null
+
+    local devs="$(join_by : "${ktest_scratch_dev[@]}")"
+    mount -t bcachefs $devs /mnt
+
+    local rc=0
+    bcachefs scrub ${ktest_scratch_dev[$tdev]} || rc=$?
+    echo "scrub exit code: $rc"
+    umount /mnt
+
+    if (((rc & 2) == 0)); then
+	echo "ERROR: scrub did not repair parity block corruption"
+	return 1
+    fi
+    if (((rc & 4) != 0)); then
+	echo "ERROR: scrub reported parity corruption as uncorrectable" \
+	     "despite intact data blocks"
+	return 1
+    fi
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+main "$@"

@@ -1,8 +1,71 @@
 #!/usr/bin/env bash
+#
+# Scrub cancellation tests.
+#
+# Cancelling a scrub job means closing its progress fd, which blocks in
+# kthread_stop() until that device's scrub thread notices and drains its
+# in-flight reads. The scrub command must issue those closes in parallel
+# on interrupt: serial closes cost the sum of per-device stop latencies.
+#
+# scrub_cancel is the basic single-device test; the parallel_* tests
+# use dm-delay to make per-device stop latency large and controlled,
+# then verify the parallelism property directly (timing, and
+# simultaneous kthread_stop stack samples).
 
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
 
-config-scratch-devs 8G
+require-kernel-config DM_DELAY
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+
+NR_DEVS=4
+delay_devs=()
+
+# dm-delay wrappers over the scratch devices. Created with no delay so
+# format/mount/writes run at full speed; set_read_delay swaps in a
+# read-side delay just before the scrub under test.
+setup_delay_devs()
+{
+    local i
+
+    # Self-clean in case an earlier failed subtest left state behind:
+    umount /mnt 2>/dev/null || true
+    for i in $(seq 0 $((NR_DEVS - 1))); do
+	dmsetup remove --retry scrubdelay$i 2>/dev/null || true
+    done
+
+    delay_devs=()
+    for i in $(seq 0 $((NR_DEVS - 1))); do
+	local dev=${ktest_scratch_dev[$i]}
+	dmsetup create scrubdelay$i --table \
+	    "0 $(blockdev --getsz $dev) delay $dev 0 0"
+	delay_devs+=(/dev/mapper/scrubdelay$i)
+    done
+}
+
+set_read_delay()
+{
+    local ms=$1 i
+    for i in $(seq 0 $((NR_DEVS - 1))); do
+	local dev=${ktest_scratch_dev[$i]}
+	dmsetup reload scrubdelay$i --table \
+	    "0 $(blockdev --getsz $dev) delay $dev 0 $ms $dev 0 0"
+	dmsetup suspend scrubdelay$i
+	dmsetup resume scrubdelay$i
+    done
+}
+
+teardown_delay_devs()
+{
+    local i
+    for i in $(seq 0 $((NR_DEVS - 1))); do
+	dmsetup remove --retry scrubdelay$i
+    done
+    delay_devs=()
+}
 
 test_scrub_cancel()
 {
@@ -85,6 +148,149 @@ test_scrub_cancel()
     umount /mnt
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+# Start a scrub against the delay devices with the given read delay and
+# wait until all four device jobs have reads in flight; sets scrub_pid.
+# Callers take over from the SIGINT.
+#
+# The workload must be many small extents: scrub keeps up to
+# move_ios_in_flight (64) reads in flight per device, and anything that
+# fits in one submission burst completes after a single delay round no
+# matter how large the delay - a handful of big extents makes the whole
+# scrub finish in one round before we can interrupt it. 4k random
+# writes produce thousands of physically discontiguous (so unmergeable)
+# extents per device, sustaining delayed read rounds for minutes.
+start_delayed_scrub()
+{
+    local delay_ms=$1
+
+    setup_delay_devs
+    run_quiet "" bcachefs format -f "${delay_devs[@]}"
+    local devs="$(join_by : "${delay_devs[@]}")"
+    mount -t bcachefs $devs /mnt
+
+    run_fio_base				\
+	--name=frag				\
+	--rw=randwrite				\
+	--bs=4k					\
+	--filesize=32M
+    sync
+
+    set_read_delay $delay_ms
+
+    bcachefs scrub /mnt &
+    scrub_pid=$!
+    sleep 3
+
+    # A scrub that finished (needs a bigger workload or delay) and a
+    # scrub that died on startup (a broken CLI) both show up here as a
+    # dead pid but want opposite fixes; tell them apart by exit status.
+    if ! kill -0 $scrub_pid 2>/dev/null; then
+	if wait $scrub_pid; then
+	    echo "ERROR: scrub finished before it could be interrupted"
+	else
+	    echo "ERROR: scrub exited nonzero before it could be interrupted - it never started"
+	fi
+	return 1
+    fi
+}
+
+# Wait for the scrub command to exit; sets scrub_exit_s. If it is still
+# running after $1 seconds, dump its kernel stacks and the filesystem's
+# moving_ctxts - a wedged cancellation with no state dump is
+# undebuggable from a test log - then kill it so teardown can proceed.
+wait_scrub_exit()
+{
+    local timeout=$1
+    local start=$(date +%s)
+
+    while kill -0 $scrub_pid 2>/dev/null; do
+	if (($(date +%s) - start > timeout)); then
+	    echo "ERROR: scrub still running after ${timeout}s"
+	    echo "Thread state:"
+	    cat /proc/$scrub_pid/task/*/stack 2>/dev/null || true
+	    echo "Moving contexts:"
+	    cat /sys/fs/bcachefs/*/moving_ctxts 2>/dev/null || true
+	    kill -9 $scrub_pid 2>/dev/null || true
+	    wait $scrub_pid 2>/dev/null || true
+	    return 1
+	fi
+	sleep 0.1
+    done
+    wait $scrub_pid 2>/dev/null || true
+    scrub_exit_s=$(($(date +%s) - start))
+}
+
+finish_delayed_scrub()
+{
+    set_read_delay 0
+    umount /mnt
+    teardown_delay_devs
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_scrub_cancel_parallel_timing()
+{
+    set_watchdog 300
+
+    # Stopping one device's scrub job means draining its current batch
+    # of delayed reads, up to one full 8s round. The four jobs submit
+    # their bursts in lockstep (same start, same delay, same batch
+    # size), so batch boundaries stay aligned across devices: serial
+    # cancellation finishes one device's drain exactly when the others
+    # have just submitted fresh batches, cascading into further full
+    # rounds. Measured: parallel ~14s (signal poll + up to two rounds),
+    # serial ~47s; the 25s threshold sits between with >10s margin to
+    # each.
+    start_delayed_scrub 8000
+
+    local start_ms=$(date +%s%3N)
+    kill -INT $scrub_pid
+    if ! wait_scrub_exit 60; then
+	finish_delayed_scrub
+	return 1
+    fi
+    local elapsed_ms=$(($(date +%s%3N) - start_ms))
+    echo "cancellation took ${elapsed_ms}ms"
+
+    finish_delayed_scrub
+
+    if ((elapsed_ms > 25000)); then
+	echo "ERROR: cancellation took ${elapsed_ms}ms - serial kthread_stop?"
+	return 1
+    fi
+}
+
+test_scrub_cancel_parallel_stacks()
+{
+    set_watchdog 300
+
+    start_delayed_scrub 3000
+
+    kill -INT $scrub_pid
+
+    # Sample the scrub process's kernel stacks while it tears down: with
+    # parallel cancellation multiple threads block in kthread_stop() at
+    # once; the serial implementation can never show more than one.
+    local max_parallel=0 n
+    while kill -0 $scrub_pid 2>/dev/null; do
+	n=$(grep -l kthread_stop /proc/$scrub_pid/task/*/stack 2>/dev/null | wc -l || true)
+	if ((n > max_parallel)); then
+	    max_parallel=$n
+	fi
+	sleep 0.05
+    done
+    wait $scrub_pid || true
+    echo "max threads simultaneously in kthread_stop: $max_parallel"
+
+    finish_delayed_scrub
+
+    if ((max_parallel < 2)); then
+	echo "ERROR: never saw parallel kthread_stop - cancellation is serial"
+	return 1
+    fi
 }
 
 main "$@"
