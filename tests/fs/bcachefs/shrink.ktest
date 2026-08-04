@@ -496,6 +496,8 @@ test_online_four_device_ec_shrink()
 
     dd if=/dev/urandom of=/mnt/foo bs=1M count=700 oflag=direct
 
+    record_checksums "$ktest_out/online-four-device-ec.md5" foo
+
     bcachefs reconcile wait -t erasure_code /mnt
 
     # at this points all three devs should have ~365M
@@ -507,6 +509,8 @@ test_online_four_device_ec_shrink()
     # unmount & remount to trigger scheduled recovery passes. TODO: remove once no longer neccessary
     umount /mnt
     mount_mnt "${devs[0]}"
+
+    verify_checksums "$ktest_out/online-four-device-ec.md5"
 
     finish "" "${devs[@]}"
 }
