@@ -293,10 +293,31 @@ set_watchdog()
     echo WATCHDOG $ktest_timeout
 }
 
+# Scan what the kernel logged during this test - everything after the marker
+# run_tests() wrote to kmsg before calling us.
+#
+# If the marker isn't there, the ring buffer overflowed and evicted it. It is
+# FIFO, so everything older than the marker went first: whatever is left is all
+# this test's own output, and we scan the lot. The previous version required a
+# marker and printed nothing without one, so an overflowing test was checked
+# against an empty input and passed - the noisiest tests, the ones most likely
+# to have tripped something, were exactly the ones that stopped being checked.
+#
+# Scanning everything is still best-effort, since a BUG early enough in the test
+# would have been evicted too, so say so rather than let a quiet pass stand in
+# for a clean one.
 check_dmesg()
 {
     ! dmesg |
-	awk '/========= TEST/{last=NR} {if(NR>last && last!=0) print}'|
+	awk '
+	    { line[NR] = $0 }
+	    /========= TEST/ { last = NR }
+	    END {
+		if (!last)
+		    print "ktest: dmesg ring buffer overflowed - the TEST marker is gone, so anything logged earlier in this test is lost and this check is best-effort" > "/dev/stderr"
+		for (i = last + 1; i <= NR; i++)
+		    print line[i]
+	    }' |
 	grep -E -q -e "kernel BUG at" \
 	    -e "WARNING:" \
 	    -e "\bBUG:" \
