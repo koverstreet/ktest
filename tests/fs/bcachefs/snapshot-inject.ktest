@@ -781,6 +781,159 @@ test_subvol_root_reattach_names_subvol()
     assert_output_lacks ": $root_inum ->.*type dir" kvdb -c 'list dirents'
 }
 
+# ── a snapshotted subvolume that loses its key must come back ────────────
+#
+# Delete the subvolume key of a subvolume that has been snapshotted, and fsck
+# has to rebuild it: the root inode and the snapshot both still name it, so
+# the information is all there.
+#
+# It didn't. Every route to the repair was blocked, each for a locally
+# sensible reason, and the filesystem came out unmountable:
+#
+#   - check_inode()'s reconstruct arm was gated on the root inode being at a
+#     leaf snapshot. Taking a snapshot rewrites the root inode of the NEW
+#     subvolume and not of the old one, so a live subvolume's root inode key
+#     stays at a node that has since become interior - and the entire
+#     subvolume-validation block was therefore skipped for every subvolume
+#     that had ever been snapshotted.
+#   - check_snapshots() clears the snapshot's subvol backref precisely
+#     BECAUSE the subvolume is missing, removing the corroboration reconstruct
+#     would have wanted.
+#   - check_snapshot_trees() leaves the tree pointing at the missing subvolume
+#     because bch2_snapshot_tree_master_subvol() finds no eligible
+#     replacement master, and returns 0 having done nothing.
+#
+# So fsck reported snapshot_tree_to_missing_subvol on every run, repaired it
+# on none, and since it isn't FSCK_AUTOFIX the mount-time verification pass
+# then failed the filesystem with fsck_errors_not_fixed.
+#
+# The repair now runs from check_snapshots(), which is the only pass that can:
+# the snapshot it's holding names the subvolume, and a snapshot carrying a
+# subvol backref is a leaf - which is what bch2_reconstruct_subvol() needs and
+# what its inode and dirent callers can't promise.
+#
+# Nested subvolumes because the child gives the reconstruction something to be
+# checked against: its dirent and fs_path_parent name the parent throughout,
+# so a rebuild that got the wrong root inode or the wrong snapshot shows up as
+# a broken chain rather than as a silently plausible key.
+#
+# Because that's a multi-part setup, the test asserts the error actually
+# fired rather than trusting "fsck -y exited non-zero" - an injection that
+# went inert somewhere else would otherwise still trip fsck and report green.
+nested_subvols()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    bcachefs subvolume create /mnt/parent
+    bcachefs subvolume create /mnt/parent/child
+    echo "child-data" > /mnt/parent/child/file
+    echo "parent-data" > /mnt/parent/file
+
+    # Snapshotting the parent is load-bearing, not scenery: it leaves the
+    # parent's root inode key at a node that is now interior, because taking a
+    # snapshot rewrites the root inode of the NEW subvolume and not of the old
+    # one. That is the ordinary state of every subvolume that has ever been
+    # snapshotted, and it is what this test is about - see the header above.
+    bcachefs subvolume snapshot /mnt/parent /mnt/parent-snap
+
+    # Reference manifest, same contract as setup_snapshot_tree: rebuilding the
+    # subvolume key must not cost any of the data underneath it. walk_subvols'
+    # snap-*/other enumeration doesn't know this layout, but walk_tree descends
+    # into anything it isn't told to skip, so parent, parent/child and
+    # parent-snap are all captured from the root walk.
+    capture_state $MANIFEST
+
+    umount /mnt
+
+    skip_snaps=""
+    skip_paths=""
+    ktest_expect_sb_errors=""
+}
+
+test_subvol_key_lost_reconstructs()
+{
+    nested_subvols
+
+    # Three non-root subvolumes now (parent, child, the parent's snapshot),
+    # and the child is the only one not parented on the root subvolume - its
+    # fs_path_parent names the subvolume to delete.
+    local parent_id="" child_id="" id p
+    for id in $(all_subvol_ids); do
+	[[ $id == 1 ]] && continue
+	p=$(subvol_field $id fs_path_parent)
+	if [[ $p != 1 ]]; then
+	    child_id=$id
+	    parent_id=$p
+	fi
+    done
+
+    if [[ -z $parent_id || -z $child_id ]]; then
+	echo "TEST FAILED: no nested subvolume found - expected one whose" \
+	     "fs_path_parent isn't the root subvolume"
+	kvdb -c 'list subvolumes' || true
+	exit 1
+    fi
+
+    echo "=== nested pair: parent $parent_id, child $child_id"
+
+    # Remove the parent's subvolume key: the child's dirent and fs_path_parent
+    # stay consistent with each other, so check_dirents has nothing to fix,
+    # and the walk up from the child runs off the end at the parent.
+    local parent_inum=$(subvol_field $parent_id inode)
+
+    kvdb_rw -c "set subvolumes 0:$parent_id:0 deleted"
+
+    assert_output_lacks "type subvolume 0:$parent_id:0" kvdb -c 'list subvolumes'
+
+    local out=/tmp/fsck-subvol-reconstruct.out
+    local rc1=0 rc2=0
+
+    bcachefs fsck -y ${ktest_scratch_dev[0]} 2>&1 | tee $out || rc1=$?
+    echo "first fsck -y exited $rc1"
+
+    if (( rc1 == 0 )); then
+	echo "TEST FAILED: fsck missed injected corruption"
+	exit 1
+    fi
+
+    # The repair, named: the subvolume comes back rather than the filesystem
+    # going down. Without this the test would pass on any non-zero exit,
+    # including the fsck_errors_not_fixed that this used to produce.
+    if ! grep -q "reconstructing subvol $parent_id" $out; then
+	echo "TEST FAILED: subvol $parent_id was not reconstructed"
+	exit 1
+    fi
+
+    bcachefs fsck -n ${ktest_scratch_dev[0]} || rc2=$?
+    echo "second fsck -n exited $rc2"
+
+    if (( rc2 != 0 )); then
+	echo "TEST FAILED: errors remain after fsck -y"
+	exit 1
+    fi
+
+    # The subvolume key is back, pointing at the root inode that was there all
+    # along - not at a freshly minted empty one, which would strand the real
+    # contents and leave two claimants for the subvolume.
+    assert_output_has "type subvolume 0:$parent_id:0" kvdb -c 'list subvolumes'
+
+    if [[ $(subvol_field $parent_id inode) != $parent_inum ]]; then
+	echo "TEST FAILED: subvol $parent_id reconstructed with root inode" \
+	     "$(subvol_field $parent_id inode), expected the original $parent_inum"
+	exit 1
+    fi
+
+    # And the child is reachable again through it.
+    if [[ $(subvol_field $child_id fs_path_parent) != $parent_id ]]; then
+	echo "TEST FAILED: child $child_id's fs_path_parent is" \
+	     "$(subvol_field $child_id fs_path_parent), expected $parent_id"
+	exit 1
+    fi
+
+    verify_fs_state must-mount
+}
+
 # ── check_root repair trio (FSCK_AUTOFIX) ────────────────────────────────
 #
 # The root objects are recreatable: contents are keyed by inum, so a
