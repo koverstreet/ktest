@@ -2,16 +2,23 @@
 
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
 
-config-scratch-devs 4G
+config-scratch-devs 8G
 
 test_scrub_cancel()
 {
-    set_watchdog 60
+    set_watchdog 180
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
-    # Create some data to scrub
-    dd if=/dev/urandom of=/mnt/testfile bs=1M count=100 oflag=direct
+    # Enough data that the scrub can't finish before we get to cancel it. There
+    # is no --rate to slow a scrub down, so the only lever on how long it runs
+    # is how much it has to walk, and a scrub that has already finished tells us
+    # nothing about cancelling one: the first version wrote 100M and the scrub
+    # reported 100% complete before the two second wait below was up. That puts
+    # the rate somewhere above 70MB/s - we only know it beat the wait, not by
+    # how much - so size for the pessimistic end and leave the wait alone, since
+    # shortening it risks cancelling during startup instead of mid-walk.
+    dd if=/dev/urandom of=/mnt/testfile bs=1M count=2000 oflag=direct
     sync
 
     umount /mnt
@@ -21,17 +28,24 @@ test_scrub_cancel()
     bcachefs scrub ${ktest_scratch_dev[0]} &
     scrub_pid=$!
 
-    # Let it run briefly
+    # Let it get going, but nowhere near finishing
     sleep 2
 
-    # Check it's actually running before we try to cancel it. Without this a
-    # scrub that died on startup - a renamed subcommand, say, which is what
-    # "bcachefs data scrub" had silently become - surfaces several lines below
-    # as "kill: no such process", which reads like a cancellation bug rather
-    # than a scrub that never began.
+    # Check it's actually running before we try to cancel it. Without this both
+    # of the ways that can fail - a scrub that died on startup (a renamed
+    # subcommand, say, which is what "bcachefs data scrub" had silently become)
+    # and a scrub that ran to completion because there wasn't enough to walk -
+    # surface several lines below as "kill: no such process", which reads like a
+    # cancellation bug rather than a scrub we never got to cancel.
+    #
+    # They want opposite fixes, so tell them apart by how it exited.
     if ! kill -0 $scrub_pid 2>/dev/null; then
-        echo "FAILED: scrub exited before we could cancel it - it never started"
-        wait $scrub_pid
+        if wait $scrub_pid; then
+            echo "FAILED: scrub finished before we could cancel it"
+            echo "        (it needs more data to walk, or a shorter wait above)"
+        else
+            echo "FAILED: scrub exited nonzero before we could cancel it - it never started"
+        fi
         umount /mnt
         exit 1
     fi
