@@ -298,9 +298,12 @@ check_bcachefs_leaks()
 
 check_bcachefs_errors()
 {
+    local ignore=${ktest_expect_errors:-^$}
+
     for i in $@; do
 	if bcachefs show-super -f errors $i|
 	    sed -n '/^errors /,${/^errors /!p;}'|
+	    grep -vE "$ignore" |
 	    grep -E '[a-z]'; then
 	    return 1
 	fi

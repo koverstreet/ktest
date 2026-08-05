@@ -506,9 +506,10 @@ test_online_four_device_ec_shrink()
 
     bcachefs device resize "${devs[0]}" 256M # (should) shrink only ~5M away
 
-    # unmount & remount to trigger scheduled recovery passes. TODO: remove once no longer neccessary
+    # unmount & remount to trigger scheduled accounting recovery pass, and expect accounting_mismatch. TODO: remove once no longer neccessary
     umount /mnt
     mount_mnt "${devs[0]}"
+    ktest_expect_errors=accounting_mismatch
 
     verify_checksums "$ktest_out/online-four-device-ec.md5"
 
@@ -548,9 +549,10 @@ test_online_minimal_ec_shrink()
 
     bcachefs device resize "${devs[0]}" 362M # (should) shrink only ~2M away
 
-    # unmount & remount to trigger scheduled recovery passes. TODO: remove once no longer neccessary
+    # unmount & remount to trigger scheduled accounting recovery pass, and expect accounting_mismatch. TODO: remove once no longer neccessary
     umount /mnt
     mount_mnt "${devs[0]}"
+    ktest_expect_errors=accounting_mismatch
 
     finish "" "${devs[@]}"
 }
