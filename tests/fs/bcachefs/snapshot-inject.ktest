@@ -763,6 +763,14 @@ test_subvol_root_reattach_names_subvol()
     # Its path is gone by construction; the manifest can't look for it.
     skip_snaps="$name"
 
+    # Both follow from deleting the dirent: check_inodes finds the root inode
+    # pointing at a dirent that isn't there and clears the backpointer, and
+    # check_unreachable_inodes then has an inode with no name. Anything beyond
+    # these two is fsck making a mess of the reattach - inode_dir_wrong_nlink
+    # was here until bch2_reattach_inode() stopped counting a subvolume root
+    # towards lost+found's link count.
+    ktest_expect_sb_errors="inode_points_to_missing_dirent|inode_unreachable"
+
     check_fsck repair
 
     # Reattached as a subvolume...
