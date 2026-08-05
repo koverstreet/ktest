@@ -22,6 +22,26 @@
 # folio to itself. Where it flattens is the folio size, so the output shows the
 # folio-vs-page claim directly instead of asserting it. A kernel that tracked
 # dirty per page would be flat at ~1x throughout.
+#
+# Measured on 7.2.0-rc4, XFS, THP on (so MAX_PAGECACHE_ORDER is 9 = 2M):
+#
+#   stride     4k  dirtied 2048k  written    2065k    1.0x
+#   stride    16k  dirtied 2048k  written    2065k    1.0x
+#   stride    64k  dirtied 2048k  written   18961k    9.3x
+#   stride   256k  dirtied 2048k  written  109201k   53.3x
+#   stride  1024k  dirtied 2048k  written  494257k  241.3x
+#   stride  2048k  dirtied 2048k  written 1013089k  494.7x
+#
+# 2MB dirtied, 1,013,089k written. The kernel-side counters in the iomap
+# instrumentation patch independently reported 498.74x over the same run, from
+# a completely different measurement (bytes handed to ->dirty_folio vs one page
+# per fault) than these block-layer sector counts.
+#
+# That first sweep stopped at 2048k, which IS the max folio size, so it never
+# reached the flat part - amplification was still tracking stride at the last
+# point. 4096k and 8192k were added to get past the knee: those should come out
+# at roughly the same ~500x as 2048k, and that plateau is MAX_PAGECACHE_ORDER
+# read straight off the data.
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../../test-libs.sh
 
@@ -30,12 +50,12 @@ require-kernel-config XFS_FS
 # still visible, but the sweep is less clear.
 require-kernel-config TRANSPARENT_HUGEPAGE
 
-config-scratch-devs 8G
+config-scratch-devs 12G
 
 # Same number of dirtied pages every pass, so "written" is directly comparable
 # across strides. The file has to cover NR_PAGES * the largest stride.
 NR_PAGES=512
-MAX_STRIDE_K=2048
+MAX_STRIDE_K=8192
 FILE_MB=$((NR_PAGES * MAX_STRIDE_K / 1024))
 
 sectors_written()
@@ -103,7 +123,7 @@ test_mmap_write_amp()
     echo "folio size. A kernel tracking dirty per page would stay near 1x throughout."
     echo
 
-    for stride_k in 4 16 64 256 1024 2048; do
+    for stride_k in 4 16 64 256 1024 2048 4096 8192; do
 	measure_stride $devname $stride_k
     done
 
