@@ -712,6 +712,67 @@ test_subvol_root_missing_unlinked_flag()
     verify_fs_state must-mount
 }
 
+# ── reattaching a subvolume root ─────────────────────────────────────────
+#
+# A subvolume root that has lost its name must come back as a SUBVOLUME:
+# lost+found/subvol-<id>, a DT_SUBVOL dirent naming the subvolume.
+#
+# check_unreachable_inode() used to run find_oldest_inode_needs_reattach()
+# first. That climbs toward ancestor versions of the inum while
+# inode_should_reattach() keeps saying yes, and reattaches the oldest one it
+# lands on - right for an ordinary inode, whose ancestor versions are
+# unreachable too, but a subvolume root has exactly one dirent, in the parent
+# subvolume, and dirents to subvolumes aren't versioned. There is no chain to
+# walk back to. The ancestor version it landed on doesn't carry bi_subvol, so
+# bch2_reattach_inode() took every plain-file branch: named after the inode
+# number, DT_DIR, targeting bi_inum. The descendant fixup loop then propagated
+# that borrowed backpointer down over the live versions below, leaving a live
+# subvolume root reachable by two dirents - inode_dir_multiple_links, which at
+# runtime is emergency read-only. (field report, #bcache 2026-08-04)
+#
+# Deleting the subvolume's dirent is the whole injection - fsck does the rest
+# of the setup itself, which is what makes this the shape the field hits.
+# check_inode() -> check_inode_dirent_inode() sees inode_points_to_missing_dirent
+# and clears bi_dir/bi_dir_offset (check_inodes, pass 24); the root is then
+# backpointer-less by the time check_unreachable_inodes (pass 40) walks it.
+# Clearing the backpointer here by hand isn't an option anyway: inode fields are
+# varint-packed and kvdb can't edit them yet.
+test_subvol_root_reattach_names_subvol()
+{
+    setup_snapshot_tree
+
+    local victim=$((2 + NR_SNAPS - 1))
+    local root_inum=$(subvol_field $victim inode)
+    local name=snap-$((NR_SNAPS - 1))
+    local dirent=$(dirent_pos $name)
+
+    if [[ -z $dirent ]]; then
+	echo "TEST FAILED: couldn't find the $name dirent"
+	exit 1
+    fi
+
+    kvdb_rw -c "set dirents $dirent deleted"
+
+    echo "=== post-surgery (subvol $victim, root inum $root_inum):"
+    kvdb -c "get subvolumes 0:$victim:0" || true
+
+    # The injection has to still be on disk here, or fsck runs against a
+    # healthy tree and passes having exercised nothing - see the header.
+    assert_output_lacks ": $name ->" kvdb -c 'list dirents'
+
+    # Its path is gone by construction; the manifest can't look for it.
+    skip_snaps="$name"
+
+    check_fsck repair
+
+    # Reattached as a subvolume...
+    assert_output_has ": subvol-$victim ->.*type subvol" kvdb -c 'list dirents'
+
+    # ...and not as a plain directory named after the inode number, which is
+    # what reattaching an ancestor version produces:
+    assert_output_lacks ": $root_inum ->.*type dir" kvdb -c 'list dirents'
+}
+
 # ── check_root repair trio (FSCK_AUTOFIX) ────────────────────────────────
 #
 # The root objects are recreatable: contents are keyed by inum, so a
