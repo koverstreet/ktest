@@ -263,6 +263,38 @@ test_scrub_cancel_parallel_timing()
     fi
 }
 
+# Going read-only must abort running data jobs: every job holds a
+# c->writes ref for its thread's lifetime, and the read-only transition
+# (asynchronous - the trigger returns immediately) blocks in the write
+# ref drain until the jobs are gone. With the abort, each job errors
+# out at its next loop iteration, drops its ref, and the scrub command
+# sees its jobs finish and exits within seconds. Without it, the jobs
+# run to completion - the dm-delay reads make that take minutes - and
+# the scrub outliving the trigger by 30s is the failure signature.
+test_scrub_emergency_ro()
+{
+    set_watchdog 300
+
+    start_delayed_scrub 3000
+
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+
+    if ! wait_scrub_exit 30; then
+	return 1
+    fi
+    echo "scrub exited ${scrub_exit_s}s after emergency read-only"
+
+    set_read_delay 0
+    umount /mnt
+    teardown_delay_devs
+
+    # Journal replay from the unclean shutdown, then verify:
+    local devs="$(join_by : "${ktest_scratch_dev[@]}")"
+    mount -t bcachefs $devs /mnt
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+}
+
 test_scrub_cancel_parallel_stacks()
 {
     set_watchdog 300
