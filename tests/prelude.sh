@@ -293,6 +293,71 @@ set_watchdog()
     echo WATCHDOG $ktest_timeout
 }
 
+# assert_output_lacks PATTERN CMD...
+# assert_output_has   PATTERN CMD...
+#
+# Assert on a command's output, having first established there IS output to
+# assert on.
+#
+# The idiom these replace is
+#
+#	! some_command | grep -q PATTERN
+#
+# which is a silent pass waiting to happen: pipefail isn't set here, so only
+# grep's status counts. If some_command segfaults, exits nonzero, or has its
+# output format changed out from under the test, grep matches nothing, the
+# negation turns that into success, and the assertion has quietly stopped
+# asserting. (Setting pipefail makes it worse, not better: a failing command
+# would then mask even a real match.)
+#
+# An assertion whose command died is not a passing assertion - it's a test that
+# can no longer tell you what it claims to. Fail, and print what was captured.
+assert_output_lacks()
+{
+    local pattern=$1 out rc
+    shift
+
+    # Capture the status before testing it: inside "if ! cmd", $? is the status
+    # of the negation, which is always 0, so the message would report every
+    # failure as "exited 0".
+    out=$("$@" 2>&1)
+    rc=$?
+    if [[ $rc != 0 ]]; then
+	echo "FAILED: '$*' exited $rc, so '$pattern must be absent' was never tested"
+	echo "$out"
+	exit 1
+    fi
+
+    if grep -q -- "$pattern" <<<"$out"; then
+	echo "FAILED: '$pattern' present in output of '$*'"
+	echo "$out"
+	exit 1
+    fi
+}
+
+assert_output_has()
+{
+    local pattern=$1 out rc
+    shift
+
+    # Capture the status before testing it: inside "if ! cmd", $? is the status
+    # of the negation, which is always 0, so the message would report every
+    # failure as "exited 0".
+    out=$("$@" 2>&1)
+    rc=$?
+    if [[ $rc != 0 ]]; then
+	echo "FAILED: '$*' exited $rc, so '$pattern must be present' was never tested"
+	echo "$out"
+	exit 1
+    fi
+
+    if ! grep -q -- "$pattern" <<<"$out"; then
+	echo "FAILED: '$pattern' missing from output of '$*'"
+	echo "$out"
+	exit 1
+    fi
+}
+
 # Scan what the kernel logged during this test - everything after the marker
 # run_tests() wrote to kmsg before calling us.
 #
