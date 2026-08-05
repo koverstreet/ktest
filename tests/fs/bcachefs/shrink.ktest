@@ -509,6 +509,7 @@ test_online_four_device_ec_shrink()
     # unmount & remount to trigger scheduled recovery passes. TODO: remove once no longer neccessary
     umount /mnt
     mount_mnt "${devs[0]}"
+    bcachefs reset-counters --counters accounting_mismatch
 
     verify_checksums "$ktest_out/online-four-device-ec.md5"
 
@@ -551,6 +552,7 @@ test_online_minimal_ec_shrink()
     # unmount & remount to trigger scheduled recovery passes. TODO: remove once no longer neccessary
     umount /mnt
     mount_mnt "${devs[0]}"
+    bcachefs reset-counters --counters accounting_mismatch
 
     finish "" "${devs[@]}"
 }
