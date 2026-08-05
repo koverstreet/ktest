@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+#
+# mmap write amplification on bcachefs. See ../mmap-write-amp.sh.
+#
+# The XFS run measured 494.7x. bcachefs should land in the same place, and that
+# is a prediction worth checking rather than assuming: bcachefs's ->page_mkwrite
+# is already per-page (fs/vfs/pagecache.c:733 derives the faulting page's offset
+# within the folio and dirties one page), where iomap_page_mkwrite widens to the
+# whole folio immediately. So there is a visible reason to expect bcachefs to do
+# better.
+#
+# It shouldn't, and the analysis says why: after one fault mm maps the entire
+# folio writable, so the per-page path only ever sees the first page touched in
+# each folio, and folio_clear_dirty_for_io() then calls ->dirty_folio for the
+# whole folio on every writeback anyway (mm/page-writeback.c:2909).
+#
+# If bcachefs comes out materially below XFS here, that chain is wrong somewhere
+# and the write-up in bcachefs-tools .claude/2026-08-04-mmap-write-amp-who-owns-it.md
+# needs revisiting.
+
+export MWA_KCONFIG=BCACHEFS_FS
+export MWA_MKFS="bcachefs format -f"
+export MWA_FSTYP=bcachefs
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../mmap-write-amp.sh
+
+main "$@"
