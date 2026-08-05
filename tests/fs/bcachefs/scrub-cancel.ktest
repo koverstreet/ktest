@@ -18,11 +18,23 @@ test_scrub_cancel()
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     echo "Starting scrub in background..."
-    bcachefs data scrub ${ktest_scratch_dev[0]} &
+    bcachefs scrub ${ktest_scratch_dev[0]} &
     scrub_pid=$!
 
     # Let it run briefly
     sleep 2
+
+    # Check it's actually running before we try to cancel it. Without this a
+    # scrub that died on startup - a renamed subcommand, say, which is what
+    # "bcachefs data scrub" had silently become - surfaces several lines below
+    # as "kill: no such process", which reads like a cancellation bug rather
+    # than a scrub that never began.
+    if ! kill -0 $scrub_pid 2>/dev/null; then
+        echo "FAILED: scrub exited before we could cancel it - it never started"
+        wait $scrub_pid
+        umount /mnt
+        exit 1
+    fi
 
     echo "Sending SIGINT to scrub (pid $scrub_pid)..."
     kill -INT $scrub_pid
