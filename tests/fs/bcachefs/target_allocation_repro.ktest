@@ -175,6 +175,23 @@ test_background_target_changed_offline_reconcile_progress()
     bcachefs set-fs-option --background_target=hdd \
         "${ktest_scratch_dev[0]}" "${ktest_scratch_dev[1]}"
 
+    local scheduled_passes
+    scheduled_passes=$(bcachefs recovery-pass \
+        "${ktest_scratch_dev[0]}" "${ktest_scratch_dev[1]}") || {
+        echo "could not read scheduled recovery passes"
+        return 1
+    }
+    if ! grep -qw set_fs_needs_reconcile <<<"$scheduled_passes"; then
+        echo "offline IO-option change did not persist set_fs_needs_reconcile"
+        echo "$scheduled_passes"
+        return 1
+    fi
+    if grep -qw check_reconcile_work <<<"$scheduled_passes"; then
+        echo "offline IO-option change incorrectly scheduled check_reconcile_work"
+        echo "$scheduled_passes"
+        return 1
+    fi
+
     mount -t bcachefs "${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}" /mnt
     uuid=$(basename /sys/fs/bcachefs/*)
 
