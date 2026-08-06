@@ -2151,6 +2151,46 @@ test_no_keys_two_children()
     check_fsck repair
 }
 
+# A filesystem that has never been snapshotted: the root subvolume's node
+# is the entire tree, parent 0 and children 0 0. Mark it deleted while it
+# owns every key on the filesystem and check_snapshots() reaches
+# snapshot_undelete_owns_data() -> bch2_snapshot_node_undelete(), whose
+# childless arm relinks through the parent - and there isn't one.
+#
+# Nothing else here can reach that arm. Every other snapshot-state
+# injection runs on setup_snapshot_tree(), so the victim always has a
+# parent or children and the splice-undo always has somewhere to go; the
+# four tests built on fresh_fs_with_files() never touch the snapshots
+# btree. It took a plain single-subvolume root filesystem in the field
+# (reddit 1vggt4f) to find it: "cannot undelete a childless root",
+# fsck_repair_unimplemented, unbootable.
+#
+# expect=repair: there is no splice to undo and no parent to reach, so
+# reviving in place is the whole repair - which is what the function's
+# own contract already says happens when the topology retained nothing
+# ("the node revives unlinked and the tree pointer checks handle it
+# downstream").
+test_deleted_childless_root()
+{
+    fresh_fs_with_files
+
+    local root=$(subvol_snapshot 1)
+
+    # The shape is the entire point of this test - assert it, so this
+    # can't quietly decay into a test of some other topology.
+    local parent=$(snap_field $root parent)
+    local children=($(snap_field $root children))
+    if [[ $parent != 0 || ${children[0]} != 0 || ${children[1]:-0} != 0 ]]; then
+	echo "TEST BROKEN: expected a childless root, got parent=$parent children=${children[*]}"
+	exit 1
+    fi
+
+    kvdb_rw -c "update snapshots 0:$root:0 state=deleted"
+
+    ktest_expect_sb_errors="snapshot_deleted_but_has_data"
+    check_fsck_fresh_converges
+}
+
 # expect=repair (FAILING until the R6 scan + revive lands): the subvol
 # key (subvol 4) still points at the victim - it IS the corroborating
 # record the node's own cleared backref can't provide. Scan subvolumes
