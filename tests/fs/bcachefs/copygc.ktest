@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+#
+# copygc corner cases.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 2G
+
+config-mem 2G
+
+# Reproducer for the copygc livelock on buckets whose backpointers never
+# resolve (bcachefs-tools .claude/2026-07-11-copygc-livelock-missing-backpointers.md,
+# observed in production at ~230k no-op evacuations/sec):
+#
+# The trap needs three properties, all present here and in the field:
+#   1. is_movable approves: alloc says dirty/fragmented, the fragmentation
+#      LRU entry matches, the bp-mismatch bitmap is clear.
+#   2. Evacuation moves nothing: every backpointer is silently skipped
+#      before the pred runs.
+#   3. The self-heal never fires: the bucket's backpointers sum exactly to
+#      its alloc counters, so check_bucket_backpointer_mismatch sees a
+#      consistent bucket.
+# Copygc counts the no-op evacuation as did_work, skips its backoff, and
+# re-picks the same buckets forever.
+#
+# Injection (bcachefs kvdb): flip the backpointers' btree_id field to
+# stripes — one corrupted byte, and a *valid* btree id. The production
+# variant of "backpointer that never resolves" (bps pointing at
+# overwritten btree nodes, swallowed while the replacement node is in an
+# in-flight interior update) is timing-dependent and can't be staged
+# statically; every other statically-stageable valid-id variant gets
+# repaired on first touch (backpointer_to_missing_ptr is FSCK_AUTOFIX).
+# This one is stable because __bch2_move_data_phys skips level-0
+# stripes bps before ever attempting resolution (the EC exception), so
+# the repair machinery is never reached — while the bp-mismatch check
+# still counts the bps by data_type/gen, which are untouched, so the
+# alloc<->bp sums stay consistent and the self-heal sees nothing wrong.
+# Offline fsck CAN repair this state (check_backpointers_to_extents
+# resolves against the stripes btree and autofixes) — the trap is
+# runtime-only, like the field livelock.
+#
+# If the EC exception in __bch2_move_data_phys is ever removed, these
+# bps start resolving via the autofix path and the test rots into a
+# false pass — it would need a new vector.
+#
+# On a fixed kernel copygc notices it moved nothing (did_work), backs off,
+# and the io clock stops it; on a broken kernel this asserts within 40s.
+test_copygc_unresolvable_backpointers()
+{
+    set_watchdog 900
+
+    run_quiet "" bcachefs format -f		\
+	--block_size=4k				\
+	--bucket_size=1M			\
+	${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # Fill most of the device, then punch out the back half of every
+    # bucket: ~800M of genuinely fragmented space, past copygc's
+    # allowance (reserve + free/2), fragmentation LRU fully loaded.
+    dd if=/dev/zero of=/mnt/f bs=1M count=1600 oflag=direct
+    sync
+
+    local cmds=()
+    local -i off
+    for ((off = 0; off < 1600; off++)); do
+	cmds+=(-c "fpunch $((off * 1048576 + 524288)) 524288")
+    done
+    xfs_io "${cmds[@]}" /mnt/f
+    sync
+
+    umount /mnt
+
+    # The injection: flip every user-data backpointer's btree_id to
+    # stripes (6) — see header comment. Positions are taken verbatim
+    # from the bp btree, so alloc info, LRU state and bp<->alloc sector
+    # sums all stay consistent — only resolution breaks. Btree-node bps
+    # are left alone: background node rewrites (e.g. the version-upgrade
+    # btree_bitmap_gc pass in the injection session itself) churn them,
+    # and they're not the fragmentation carriers here anyway.
+    bcachefs kvdb -c "list backpointers POS_MIN SPOS_MAX" ${ktest_scratch_dev[0]} |
+	awk '$4 == "backpointer" && /data_type=user/ \
+	     {print "update backpointers", $5, "btree_id=6"}' \
+	    > /tmp/kvdb-inject
+
+    [[ -s /tmp/kvdb-inject ]] || { echo "no backpointers found - setup broken?"; false; }
+    echo "repointing $(wc -l < /tmp/kvdb-inject) backpointers"
+
+    bcachefs kvdb ${ktest_scratch_dev[0]} < /tmp/kvdb-inject
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # Let copygc engage and take a swing at the (unevacuatable) candidates.
+    sleep 10
+
+    local counter=/sys/fs/bcachefs/*/counters/evacuate_bucket
+    local before=$(awk '/since mount/ {print $3}' $counter)
+
+    if (( before == 0 )); then
+	echo "copygc never attempted an evacuation - setup broken?"
+	false
+    fi
+
+    sleep 30
+    local after=$(awk '/since mount/ {print $3}' $counter)
+    local delta=$((after - before))
+
+    echo "evacuate_bucket: $before -> $after (delta $delta in 30s)"
+
+    # Healthy: evacuations move nothing, copygc concludes no-progress and
+    # backs off (the io clock isn't advancing, so it goes quiet almost
+    # immediately). Broken: hundreds of thousands.
+    if (( delta >= 10000 )); then
+	echo "copygc is livelocked: $delta no-op evacuations in 30s"
+	false
+    fi
+
+    umount /mnt
+}
+
+main "$@"
