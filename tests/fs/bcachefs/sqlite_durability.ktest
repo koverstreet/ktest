@@ -1,0 +1,291 @@
+#!/usr/bin/env bash
+
+# ktest_out and ktest_scratch_dev are provided by the ktest harness.
+# shellcheck disable=SC2154
+
+# shellcheck source=tests/fs/bcachefs/bcachefs-test-libs.sh
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+require-kernel-config EXT4_FS
+
+config-mem 4G
+config-timeout 900
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+
+sqlite_iterations=80
+sqlite_rows_per_txn=16
+
+init_sqlite3()
+{
+    if ! command -v sqlite3 >/dev/null; then
+	apt-get -qq update
+	apt-get -qq install --no-install-recommends sqlite3
+    fi
+}
+
+cleanup_mounts()
+{
+    umount /mnt 2>/dev/null || true
+}
+
+sqlite_exec()
+{
+    local db=$1
+    local sql=$2
+
+    sqlite3 "$db" < "$sql"
+}
+
+sqlite_prepare()
+{
+    local db=$1
+    local sql="$ktest_out/sqlite-prepare.sql"
+
+    mkdir -p "$(dirname "$db")" "$ktest_out"
+
+    {
+	echo "PRAGMA page_size=4096;"
+	echo "PRAGMA journal_mode=delete;"
+	echo "PRAGMA synchronous=FULL;"
+	echo "PRAGMA auto_vacuum=NONE;"
+	echo "PRAGMA cache_size=-1024;"
+	echo "CREATE TABLE marker (id INTEGER PRIMARY KEY CHECK (id = 1), iteration INTEGER NOT NULL);"
+	echo "INSERT INTO marker VALUES (1, 0);"
+	echo "CREATE TABLE events (id INTEGER PRIMARY KEY, generation INTEGER NOT NULL, tag TEXT NOT NULL, payload BLOB NOT NULL);"
+	echo "CREATE INDEX events_generation_tag_idx ON events(generation, tag);"
+	echo "CREATE TABLE churn (id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, note TEXT NOT NULL);"
+	echo "CREATE INDEX churn_event_idx ON churn(event_id);"
+    } > "$sql"
+
+    sqlite_exec "$db" "$sql" >/dev/null
+}
+
+sqlite_transaction_sql()
+{
+    local sql=$1
+    local iter=$2
+
+    {
+	echo "PRAGMA journal_mode=delete;"
+	echo "PRAGMA synchronous=FULL;"
+	echo "PRAGMA cache_size=-1024;"
+	echo "BEGIN IMMEDIATE;"
+	echo "UPDATE marker SET iteration = $iter WHERE id = 1;"
+
+	for row in $(seq 1 "$sqlite_rows_per_txn"); do
+	    local id=$((iter * 100000 + row))
+	    echo "INSERT INTO events(id, generation, tag, payload) VALUES ($id, $iter, 'event-$iter-$row', zeroblob(3072));"
+	    echo "INSERT INTO churn(event_id, note) VALUES ($id, 'note-$iter-$row');"
+	done
+
+	echo "DELETE FROM churn WHERE id IN (SELECT id FROM churn WHERE (id % 7) = $((iter % 7)) LIMIT 8);"
+	echo "DELETE FROM events WHERE id IN (SELECT id FROM events WHERE generation < $((iter - 8)) ORDER BY id LIMIT 8);"
+	echo "UPDATE events SET tag = tag || '-u' WHERE id IN (SELECT id FROM events WHERE (id % 13) = $((iter % 13)) LIMIT 12);"
+	echo "COMMIT;"
+	echo "PRAGMA quick_check;"
+    } > "$sql"
+}
+
+sqlite_churn()
+{
+    local db=$1
+    local iterations=$2
+    local max_ms=0
+    local total_ms=0
+
+    sqlite_prepare "$db"
+
+    for iter in $(seq 1 "$iterations"); do
+	local sql="$ktest_out/sqlite-txn-$iter.sql"
+	local start_ms
+	local finish_ms
+	local elapsed_ms
+	local result
+
+	start_ms=$(date +%s%3N)
+	sqlite_transaction_sql "$sql" "$iter"
+	result=$(sqlite_exec "$db" "$sql")
+
+	if [[ "$result" != "delete"$'\n'"ok" && "$result" != "ok" ]]; then
+	    echo "sqlite quick_check failed at iteration $iter:"
+	    echo "$result"
+	    return 1
+	fi
+
+	finish_ms=$(date +%s%3N)
+	elapsed_ms=$((finish_ms - start_ms))
+	total_ms=$((total_ms + elapsed_ms))
+	(( elapsed_ms > max_ms )) && max_ms=$elapsed_ms
+
+	if (( iter % 10 == 0 )); then
+	    echo "sqlite iteration $iter/$iterations elapsed=${elapsed_ms}ms max=${max_ms}ms"
+	fi
+    done
+
+    echo "sqlite workload complete iterations=$iterations total=${total_ms}ms max=${max_ms}ms"
+}
+
+sqlite_verify()
+{
+    local db=$1
+    local expected_iteration=$2
+    local out="$ktest_out/sqlite-verify.out"
+    local marker
+
+    sqlite3 "$db" > "$out" <<-SQL
+	PRAGMA journal_mode=delete;
+	PRAGMA integrity_check;
+	SELECT iteration FROM marker WHERE id = 1;
+	SELECT count(*) FROM events;
+SQL
+
+    if ! grep -qx ok "$out"; then
+	echo "sqlite integrity_check failed:"
+	cat "$out"
+	return 1
+    fi
+
+    marker=$(sed -n '3p' "$out")
+    if [[ "$marker" != "$expected_iteration" ]]; then
+	echo "sqlite marker mismatch: got $marker, want $expected_iteration"
+	cat "$out"
+	return 1
+    fi
+
+    echo "sqlite verify ok marker=$marker events=$(sed -n '4p' "$out")"
+}
+
+dump_bcachefs_pressure_state()
+{
+    echo "bcachefs pressure state:"
+    # ktest diagnostics need the full process snapshot, not just PID matching.
+    # shellcheck disable=SC2009
+    ps -eo pid,ppid,stat,wchan:32,etime,comm,args |
+	grep -E "bcachefs|sqlite|evacuate|ktest" |
+	grep -v grep || true
+
+    findmnt -t bcachefs -o TARGET,SOURCE,OPTIONS || true
+
+    for f in \
+	/sys/fs/bcachefs/*/options/reconcile_enabled \
+	/sys/fs/bcachefs/*/options/reconcile_on_ac_only \
+	/sys/fs/bcachefs/*/options/copygc_enabled \
+	/sys/fs/bcachefs/*/options/move_bytes_in_flight \
+	/sys/fs/bcachefs/*/options/move_ios_in_flight \
+	/sys/fs/bcachefs/*/options/move_writes_fua \
+	/sys/fs/bcachefs/*/options/journal_flush_disabled \
+	/sys/fs/bcachefs/*/counters/reconcile_data \
+	/sys/fs/bcachefs/*/counters/reconcile_btree \
+	/sys/fs/bcachefs/*/counters/reconcile_set_pending \
+	/sys/fs/bcachefs/*/counters/copygc \
+	/sys/fs/bcachefs/*/counters/journal_flush \
+	/sys/fs/bcachefs/*/counters/journal_full \
+	/sys/fs/bcachefs/*/time_stats_json/journal_flush_seq \
+	/sys/fs/bcachefs/*/time_stats_json/journal_noflush_write \
+	/sys/fs/bcachefs/*/time_stats_json/journal_flush_write; do
+	if [[ -r $f ]]; then
+	    echo "$f: $(cat "$f")"
+	fi
+    done
+}
+
+test_sqlite_ext4_control()
+{
+    set_watchdog 180
+    cleanup_mounts
+
+    mkfs.ext4 -F "${ktest_scratch_dev[0]}"
+    mount -t ext4 "${ktest_scratch_dev[0]}" /mnt
+
+    sqlite_churn /mnt/temporalish.db "$sqlite_iterations"
+    sync
+    umount /mnt
+
+    mount -t ext4 "${ktest_scratch_dev[0]}" /mnt
+    sqlite_verify /mnt/temporalish.db "$sqlite_iterations"
+    umount /mnt
+}
+
+test_sqlite_bcachefs_control()
+{
+    set_watchdog 240
+    cleanup_mounts
+
+    run_quiet "" bcachefs format -f "${ktest_scratch_dev[1]}"
+    mount -t bcachefs "${ktest_scratch_dev[1]}" /mnt
+
+    sqlite_churn /mnt/temporalish.db "$sqlite_iterations"
+    sync
+    umount /mnt
+
+    mount -t bcachefs "${ktest_scratch_dev[1]}" /mnt
+    sqlite_verify /mnt/temporalish.db "$sqlite_iterations"
+    umount /mnt
+
+    bcachefs fsck -ny "${ktest_scratch_dev[1]}"
+    bcachefs_test_end_checks "${ktest_scratch_dev[1]}"
+}
+
+test_sqlite_bcachefs_evacuate_recovery()
+{
+    set_watchdog 600
+    cleanup_mounts
+
+    run_quiet "" bcachefs format -f		\
+	--replicas=2				\
+	--metadata_replicas=2			\
+	"${ktest_scratch_dev[2]}"		\
+	"${ktest_scratch_dev[3]}"		\
+	"${ktest_scratch_dev[4]}"
+
+    local bcachefs_devs="${ktest_scratch_dev[2]}:${ktest_scratch_dev[3]}:${ktest_scratch_dev[4]}"
+
+    mount -t bcachefs "$bcachefs_devs" /mnt
+
+    fallocate -l 512M /mnt/allocator-seed
+    sync
+
+    local sqlite_out="$ktest_out/sqlite-evacuate.out"
+    sqlite_churn /mnt/temporalish.db "$sqlite_iterations" > "$sqlite_out" 2>&1 &
+    local sqlite_pid=$!
+
+    sleep 2
+
+    echo "evacuating ${ktest_scratch_dev[2]} while SQLite commits"
+    local evacuate_out="$ktest_out/bcachefs-evacuate.out"
+    if timeout --foreground 120s bcachefs device evacuate "${ktest_scratch_dev[2]}" > "$evacuate_out" 2>&1; then
+	cat "$evacuate_out"
+    else
+	local evacuate_ret=$?
+	cat "$sqlite_out"
+	cat "$evacuate_out"
+	echo "bcachefs device evacuate failed or timed out: ret=$evacuate_ret"
+	dump_bcachefs_pressure_state
+	return 1
+    fi
+
+    if ! wait "$sqlite_pid"; then
+	cat "$sqlite_out"
+	return 1
+    fi
+
+    cat "$sqlite_out"
+
+    echo "triggering emergency read-only recovery boundary"
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+    umount /mnt
+
+    mount -t bcachefs "$bcachefs_devs" /mnt
+    sqlite_verify /mnt/temporalish.db "$sqlite_iterations"
+    umount /mnt
+
+    bcachefs fsck -ny "${ktest_scratch_dev[2]}" "${ktest_scratch_dev[3]}" "${ktest_scratch_dev[4]}"
+    bcachefs_test_end_checks "${ktest_scratch_dev[2]}"
+}
+
+main "$@"
