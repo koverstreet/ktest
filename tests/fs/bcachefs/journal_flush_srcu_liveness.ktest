@@ -27,6 +27,12 @@ journal_srcu_trace_events()
 	bcachefs:journal_reclaim_start
 	bcachefs:journal_reclaim_finish
 	bcachefs:journal_res_get_blocked
+	bcachefs:reconcile_scan_device
+	bcachefs:reconcile_clear_scan
+	bcachefs:reconcile_btree
+	bcachefs:reconcile_data
+	bcachefs:reconcile_phys
+	bcachefs:reconcile_set_pending
 	block:block_bio_queue
 	block:block_bio_complete
     )
@@ -39,23 +45,71 @@ journal_srcu_trace_events()
     done
 }
 
+reconcile_status()
+{
+    local status
+
+    for status in /sys/fs/bcachefs/*/reconcile_status; do
+	[[ -r $status ]] || continue
+	cat "$status"
+    done
+}
+
 dump_journal_srcu_debug()
 {
-    findmnt /mnt || true
-    fuser -vm /mnt || true
-    bcachefs fs usage -h --all /mnt || true
-    cat /sys/fs/bcachefs/*/reconcile_status || true
-    cat /sys/fs/bcachefs/*/internal/copy_gc_wait || true
-    cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
-    cat /sys/fs/bcachefs/*/journal_reclaim || true
-    cat /sys/fs/bcachefs/*/time_stats/journal_flush_write || true
-    cat /sys/fs/bcachefs/*/time_stats/journal_flush_seq || true
-    cat /sys/fs/bcachefs/*/time_stats/blocked_journal_low_on_space || true
-    cat /sys/fs/bcachefs/*/time_stats/blocked_journal_low_on_pin || true
-    cat /sys/fs/bcachefs/*/time_stats/blocked_journal_max_in_flight || true
-    cat /sys/kernel/debug/bcachefs/*/write_points || true
-    tail -n 1200 /sys/kernel/tracing/trace || true
-    dmesg | tail -n 300 || true
+    local dir=${1:-}
+    local out=/dev/stdout
+
+    if [[ -n $dir ]]; then
+	mkdir -p "$dir"
+	out="$dir/status"
+	reconcile_status >"$dir/reconcile-status" 2>&1 || true
+	tail -n 1200 /sys/kernel/tracing/trace >"$dir/trace" 2>&1 || true
+	dmesg >"$dir/dmesg" 2>&1 || true
+    fi
+
+    {
+	findmnt /mnt || true
+	fuser -vm /mnt || true
+	cat /proc/mounts || true
+	for dev in "${ktest_scratch_dev[@]}"; do
+	    echo "===== $dev queue/rotational ====="
+	    cat "/sys/block/$(basename "$dev")/queue/rotational" 2>&1 || true
+	done
+	ps -eLo pid,ppid,stat,wchan:32,comm,args || true
+	for stack in /proc/[0-9]*/stack; do
+	    pid=${stack#/proc/}
+	    pid=${pid%/stack}
+	    echo "===== /proc/$pid/stack ($(cat "/proc/$pid/comm" 2>/dev/null || true)) ====="
+	    cat "$stack" 2>&1 || true
+	done
+	echo w > /proc/sysrq-trigger 2>/dev/null || true
+	bcachefs fs usage -h --all /mnt || true
+	if [[ -n $dir ]]; then
+	    cat "$dir/reconcile-status" || true
+	else
+	    reconcile_status || true
+	fi
+	cat /sys/fs/bcachefs/*/internal/copy_gc_wait || true
+	cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
+	cat /sys/fs/bcachefs/*/journal_reclaim || true
+	cat /sys/fs/bcachefs/*/time_stats/journal_flush_write || true
+	cat /sys/fs/bcachefs/*/time_stats/journal_flush_seq || true
+	cat /sys/fs/bcachefs/*/time_stats/blocked_journal_low_on_space || true
+	cat /sys/fs/bcachefs/*/time_stats/blocked_journal_low_on_pin || true
+	cat /sys/fs/bcachefs/*/time_stats/blocked_journal_max_in_flight || true
+	cat /sys/kernel/debug/bcachefs/*/write_points || true
+	for keys in /sys/kernel/debug/bcachefs/*/btrees/{extents,reflink}/keys; do
+	    echo "===== $keys ====="
+	    sed -n '1,320p' "$keys" 2>&1 || true
+	done
+	for keys in /sys/kernel/debug/bcachefs/*/btrees/{backpointers,reconcile_scan,reconcile_hipri,reconcile_work,reconcile_pending,reconcile_hipri_phys,reconcile_work_phys}/keys; do
+	    echo "===== $keys ====="
+	    sed -n '1,240p' "$keys" 2>&1 || true
+	done
+	tail -n 1200 /sys/kernel/tracing/trace || true
+	dmesg | tail -n 300 || true
+    } >"$out" 2>&1
 }
 
 format_journal_srcu_fs()
@@ -65,7 +119,7 @@ format_journal_srcu_fs()
 	--bucket_size=256k				\
 	--replicas=1					\
 	--foreground_target=src				\
-	--background_target=src				\
+	--background_target=dst				\
 	--metadata_target=dst				\
 	--rotational=1 --label=src "${ktest_scratch_dev[0]}" \
 	--rotational=1 --label=dst "${ktest_scratch_dev[1]}" \
@@ -138,6 +192,35 @@ assert_no_srcu_journal_warnings()
     fi
 }
 
+assert_source_device_evacuated()
+{
+    local usage="$ktest_out/journal-srcu-post-evacuate-usage"
+    local has_data
+
+    sync
+    bcachefs fs usage -h --all /mnt >"$usage" 2>&1
+    has_data=$(cat /sys/fs/bcachefs/*/dev-0/has_data 2>/dev/null || true)
+
+    if [[ -n $has_data && $has_data != "0" && $has_data != "none" ]]; then
+	cat "$usage" >&2 || true
+	echo "source device still reports has_data after evacuate: $has_data" >&2
+	dump_journal_srcu_debug >&2
+	return 1
+    fi
+
+    if ! awk '
+	/src \(device 0\):/ { in_src = 1; next }
+	in_src && /^$/ { in_src = 0 }
+	in_src && /^[[:space:]]*user:/ { saw_user = 1; exit ($2 == "0" ? 0 : 1) }
+	END { if (!saw_user) exit 1 }
+    ' "$usage"; then
+	cat "$usage" >&2 || true
+	echo "source device still has user data after evacuate" >&2
+	dump_journal_srcu_debug >&2
+	return 1
+    fi
+}
+
 teardown_journal_srcu_fs()
 {
     if ! timeout 90 mount -o remount,ro /mnt; then
@@ -167,9 +250,10 @@ test_journal_flush_srcu_liveness()
 {
     set_watchdog 900
 
-    local fioout="$ktest_out/journal-srcu-dst-pressure-fio-out"
-    local evacuate_log="$ktest_out/journal-srcu-evacuate-out"
-    local fiopid
+	local fioout="$ktest_out/journal-srcu-dst-pressure-fio-out"
+	local evacuate_log="$ktest_out/journal-srcu-evacuate-out"
+	local evacuate_timeout=${ktest_journal_srcu_evac_timeout:-360}
+	local fiopid
     local events
     local ret=0
 
@@ -189,7 +273,7 @@ test_journal_flush_srcu_liveness()
     fiopid=$(start_dst_pressure "$fioout")
     sleep 3
 
-    if ! timeout 360 bcachefs device evacuate "${ktest_scratch_dev[0]}" \
+	if ! timeout "$evacuate_timeout" bcachefs device evacuate "${ktest_scratch_dev[0]}" \
 	>"$evacuate_log" 2>&1; then
 	cat "$evacuate_log" || true
 	cat "$fioout" || true
@@ -200,12 +284,18 @@ test_journal_flush_srcu_liveness()
     stop_dst_pressure "$fiopid"
 
     if ((ret)); then
-	dump_journal_srcu_debug >&2
-	timeout 30 umount /mnt || true
+	dump_journal_srcu_debug "$ktest_out/journal-srcu-debug-failure"
+	poweroff -f || true
 	return 1
     fi
 
     sync
+	reconcile_status >"$ktest_out/journal-srcu-reconcile-status" 2>&1 || true
+
+    if ! assert_source_device_evacuated; then
+	ret=1
+    fi
+
     if ! assert_no_srcu_journal_warnings; then
 	ret=1
     fi
