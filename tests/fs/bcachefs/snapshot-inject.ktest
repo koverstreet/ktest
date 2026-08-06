@@ -3348,4 +3348,116 @@ test_lostfound_deleted_in_snapshot()
     verify_fs_state must-mount
 }
 
+# A directory inode lost in one snapshot but surviving in a descendant:
+# the reconstruct must recover the hash seed from the survivor.
+#
+# reconstruct_inode() takes bi_hash_seed and the str_hash type from an
+# existing version of the inode, falling back to the random seed
+# bch2_inode_init_early() left behind when there is none. It used to look
+# for that version with bch2_inode_find_oldest_snapshot(), which skips
+# anything that is not an ancestor - so a copy surviving in a DESCENDANT
+# was invisible and we minted a fresh random seed with the real one still
+# on disk. Every dirent already under the directory was hashed with the old
+# seed, so all of them land at the wrong offset: lookups miss, creates
+# insert duplicates instead of overwriting, and the directory is quietly
+# untraversable while still looking structurally fine.
+#
+# Construction: snapshot the filesystem, then dirty the directory in the
+# live subvolume so its inode is COWed down to the live leaf. The dirents
+# stay at the tree root (created before the snapshot). Deleting the inode
+# at the root leaves it present ONLY in a descendant - which is exactly the
+# case the ancestor-only search could not see. `set -s` is what makes this
+# constructible: it deletes within pos's snapshot rather than inserting a
+# whiteout the descendants would inherit.
+#
+# The seed comparison is the assertion that matters. Convergence alone
+# does not pin this: fsck moves misplaced keys to their correct offsets
+# afterwards, so a run with the wrong seed still converges - it just
+# rewrites every dirent in the directory to match a seed it invented.
+test_reconstruct_inode_seed_from_descendant()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    mkdir /mnt/dir
+    local i
+    for i in $(seq 0 15); do
+	echo "content-$i" > /mnt/dir/file-$i
+    done
+    local inum=$(stat -c %i /mnt/dir)
+
+    bcachefs subvolume snapshot /mnt/snap
+
+    # Dirty the directory in the live subvolume: this COWs its inode down
+    # to the live leaf, which becomes the surviving descendant copy.
+    echo "after-snapshot" > /mnt/dir/file-new
+
+    umount /mnt
+
+    local root=$(snap_root)               # interior: where the dirents live
+    local leaf=$(subvol_snapshot 1)       # live leaf: where the inode COWed to
+
+    if [[ $root == $leaf ]]; then
+	echo "TEST BROKEN: expected the snapshot to split root from the live leaf"
+	exit 1
+    fi
+
+    local want=$(kvdb -c "get inodes 0:$inum:$leaf bi_hash_seed")
+    local before=$(kvdb -c "get inodes 0:$inum:$root bi_hash_seed")
+    if [[ -z $want || $want != $before ]]; then
+	echo "TEST BROKEN: seed unreadable, or the two versions already disagree"
+	echo "  root($root)=$before leaf($leaf)=$want"
+	exit 1
+    fi
+
+    kvdb_rw -c "set -s inodes 0:$inum:$root deleted"
+
+    if [[ -n $(kvdb -c "get inodes 0:$inum:$root bi_hash_seed" 2>/dev/null) ]]; then
+	echo "TEST BROKEN: the inode is still present at the root snapshot"
+	exit 1
+    fi
+
+    ktest_expect_sb_errors="key_in_missing_inode"
+
+    local rc1=0 rc2=0
+    bcachefs fsck -y ${ktest_scratch_dev[0]} || rc1=$?
+    echo "first fsck -y exited $rc1"
+    if (( rc1 == 0 )); then
+	echo "TEST FAILED: fsck did not notice the deleted inode"
+	exit 1
+    fi
+    bcachefs fsck -n ${ktest_scratch_dev[0]} || rc2=$?
+    echo "second fsck -n exited $rc2"
+    if (( rc2 != 0 )); then
+	echo "TEST FAILED: errors remain after fsck -y"
+	exit 1
+    fi
+
+    local got=$(kvdb -c "get inodes 0:$inum:$root bi_hash_seed")
+    echo "hash seed: survivor=$want reconstructed=$got"
+    if [[ $got != $want ]]; then
+	echo "TEST FAILED: reconstruct minted a new hash seed instead of"
+	echo "  recovering it from the surviving descendant copy"
+	exit 1
+    fi
+
+    # And the directory is still readable from both views.
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    local ok=1
+    [[ $(ls /mnt/dir | wc -l) == 17 ]] || {
+	echo "TEST FAILED: live view lost entries: $(ls /mnt/dir | wc -l) of 17"
+	ok=0
+    }
+    [[ $(ls /mnt/snap/dir | wc -l) == 16 ]] || {
+	echo "TEST FAILED: snapshot view lost entries: $(ls /mnt/snap/dir | wc -l) of 16"
+	ok=0
+    }
+    [[ $(cat /mnt/dir/file-7) == content-7 ]] || {
+	echo "TEST FAILED: file contents not readable through the repaired directory"
+	ok=0
+    }
+    umount /mnt
+    (( ok )) || exit 1
+}
+
 main "$@"
