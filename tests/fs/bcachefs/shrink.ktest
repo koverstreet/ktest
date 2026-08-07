@@ -1070,4 +1070,46 @@ test_online_resize_to_zero_buckets_rejected()
 	finish "" "${devs[@]}"
 }
 
+# TODO: remove once shrinking is stabilized / no --shrink flag is needed anymore
+_no_shrink_without_flag()
+{
+
+	local mode=$1
+	local devs=("${ktest_scratch_dev[0]}")
+
+	run_quiet "" bcachefs format -f		\
+		--fs_size=1G			\
+		"${devs[0]}"
+
+	if [[ $mode != offline ]]; then
+	    mount_mnt "${devs[0]}"
+	fi
+
+	if bcachefs device resize "${devs[0]}" 512M 2>&1; then
+		echo "Shrink without '--shrink' flag succeeded"
+		cat "$resizeout"
+		return 1
+	fi
+
+	if [[ $mode == offline ]]; then
+	    mount_mnt "${devs[0]}"
+	fi
+
+	finish "" "${devs[@]}"
+}
+test_online_no_shrink_without_flag()
+{
+
+	set_watchdog 60
+	bcachefs_antagonist
+	_no_shrink_without_flag online
+}
+test_offline_no_shrink_without_flag()
+{
+
+	set_watchdog 60
+	bcachefs_antagonist
+	_no_shrink_without_flag offline
+}
+
 main "$@"
