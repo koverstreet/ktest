@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+
+config-timeout 600
+
+# Recovery must not start the journal on a blacklisted sequence number.
+#
+# After an unclean shutdown, recovery skips and blacklists a window of
+# journal sequence numbers past the last entry it read (currently 4096,
+# see __bch2_fs_recovery()), persisting the blacklist to the superblock
+# before any journal write. If that recovery attempt never gets as far
+# as writing the journal - aborted fsck, mount that errors out, a
+# recovery_pass_last= data-recovery mount - the superblock keeps a
+# blacklist range extending ~4096 past the on-disk journal.
+#
+# A later recovery that reads a shorter journal - journal device lost
+# its contents, or an older tool whose blacklist window is smaller than
+# the one that wrote the superblock - computes a starting seq inside
+# that leftover range. bch2_fs_journal_start() tries to skip past it,
+# but lands exactly ON the last blacklisted seq instead of one past it,
+# and the first journal entry open trips the blacklist check:
+#
+#   attempting to open blacklisted journal seq N
+#   journal_replay(): error journal_shutdown
+#
+# Nothing is wrong with the filesystem when this fires - the starting
+# sequence number is a free choice, and recovery should pick a
+# non-blacklisted one and proceed.
+#
+# Reproducer: the journal lives only on dev1, btree and user data only
+# on dev0. Assertable data is cleanly persisted to the btree, then the
+# journal tail is pushed deep into dev1 with sync traffic and the fs
+# crashed. A recovery_pass_last= read-only mount stands in for the
+# aborted recovery: it persists the blacklist but never writes the
+# journal. Then dev1 loses its journal contents (superblock regions
+# preserved), so the next recovery sees only an early prefix of the
+# journal - and must still come up.
+
+# Highest journal seq visible on disk:
+get_max_journal_seq()
+{
+    bcachefs list_journal -B -n1 "$@" 2>/dev/null |
+	grep "journal entry"			|
+	tail -1					|
+	awk '{print $3}'
+}
+
+test_journal_start_blacklisted()
+{
+    set_watchdog 300
+
+    local dev0=${ktest_scratch_dev[0]}
+    local dev1=${ktest_scratch_dev[1]}
+
+    run_quiet "" bcachefs format -f		\
+	--data_allowed=btree,user $dev0		\
+	--data_allowed=journal	  $dev1
+
+    # Persist test data all the way into the btree via a clean unmount,
+    # so a lost journal loses nothing we assert on:
+    mount -t bcachefs $dev0:$dev1 /mnt
+    mkdir /mnt/data
+    for i in $(seq 1 10); do
+	echo "content-$i" > /mnt/data/file_$i
+    done
+    umount /mnt
+
+    # Push the journal write head well past the 8M prefix of dev1 that
+    # the surgery below preserves (one flush entry per O_DSYNC write),
+    # then crash:
+    mount -t bcachefs $dev0:$dev1 /mnt
+    dd if=/dev/zero of=/mnt/journalfill bs=32k count=3000 oflag=dsync
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+    umount /mnt
+
+    # Aborted recovery attempt: runs recovery - including persisting the
+    # unclean-shutdown blacklist to the superblock - but stops before
+    # journal replay and never goes read-write:
+    mount -t bcachefs -o ro,recovery_pass_last=snapshots_read $dev0:$dev1 /mnt
+    umount /mnt
+
+    # Premise checks - still unclean, and the superblock now carries a
+    # blacklist range extending past the on-disk journal:
+    bcachefs show-super $dev0 | grep -E "^Clean:.*0$" ||
+	{ echo "PREMISE FAIL: fs marked clean after aborted recovery"; return 1; }
+    bcachefs show-super -f journal_seq_blacklist $dev0
+    [[ -n $(bcachefs show-super --field-only journal_seq_blacklist $dev0) ]] ||
+	{ echo "PREMISE FAIL: no journal seq blacklist in superblock"; return 1; }
+
+    local seq_before=$(get_max_journal_seq $dev0 $dev1)
+    echo "journal tail before surgery: seq $seq_before"
+
+    # dev1 loses its journal contents: zero everything but the
+    # superblock regions at the front and back of the device. dev1 is a
+    # journal-only device, so nothing else lives there:
+    local dev1_mb=$(($(blockdev --getsz $dev1) / 2048))
+    dd if=/dev/zero of=$dev1 bs=1M seek=8 count=$((dev1_mb - 16)) oflag=direct
+
+    # Premise check - the visible journal must now be shorter than what
+    # the aborted recovery attempt saw (else the traffic above didn't
+    # push the tail past the preserved prefix):
+    local seq_after=$(get_max_journal_seq $dev0 $dev1)
+    echo "journal tail after surgery: seq ${seq_after:-none}"
+    [[ -n $seq_before && ${seq_after:-0} -lt $seq_before ]] ||
+	{ echo "PREMISE FAIL: journal tail not truncated (before $seq_before, after ${seq_after:-none})"; return 1; }
+
+    # Recovery must start the journal past the leftover blacklist range
+    # and come up:
+    if ! mount -t bcachefs -o fsck,fix_errors=yes $dev0:$dev1 /mnt; then
+	dmesg | grep "blacklisted journal seq" | tail -3 || true
+	echo "FAIL: could not recover from a journal shorter than the superblock blacklist"
+	return 1
+    fi
+
+    local fail=0
+    for i in $(seq 1 10); do
+	[[ $(cat /mnt/data/file_$i 2>/dev/null) = "content-$i" ]] || {
+	    echo "FAIL: /mnt/data/file_$i missing or wrong content"
+	    fail=1
+	}
+    done
+    umount /mnt
+
+    # Losing the journal tail is handled entirely by the
+    # newer-than-journal bset rules - recovery records no sb errors:
+    bcachefs_test_end_checks $dev0 $dev1
+
+    return $fail
+}
+
+main "$@"
