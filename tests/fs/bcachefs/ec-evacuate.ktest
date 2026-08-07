@@ -35,7 +35,7 @@ prepare_ec_degraded_io()
     bcachefs subvolume create /mnt/data
 
     fio --output-format=json			\
-	--output="$ktest_out/fio-seed.json"	\
+	--output="$test_output/fio-seed.json"	\
 	--name=seed				\
 	--filename=/mnt/data/seed.dat		\
 	--rw=write				\
@@ -44,7 +44,7 @@ prepare_ec_degraded_io()
 	--end_fsync=1
 
     fio --output-format=json			\
-	--output="$ktest_out/fio-churn.json"	\
+	--output="$test_output/fio-churn.json"	\
 	--name=churn				\
 	--filename=/mnt/data/seed.dat		\
 	--rw=randwrite				\
@@ -63,7 +63,7 @@ prepare_ec_degraded_io()
     bcachefs device offline --force "${ktest_scratch_dev[1]}"
 
     fio --output-format=json				\
-	--output="$ktest_out/fio-degraded-write.json"	\
+	--output="$test_output/fio-degraded-write.json"	\
 	--name=degraded-write				\
 	--directory=/mnt/data				\
 	--rw=randwrite					\
@@ -101,14 +101,24 @@ dump_degraded_read_stall()
     dmesg --color=never
 }
 
+capture_bcachefs_stall_stats()
+{
+    local suffix=$1
+
+    timeout 15s bcachefs fs timestats --once /mnt \
+	> "$test_output/fs-timestats-$suffix.txt" 2>&1 || true
+    timeout 15s bcachefs fs top --human-readable --count 5 --delay 1 /mnt \
+	> "$test_output/fs-top-$suffix.txt" 2>&1 || true
+}
+
 test_ec_evacuate_after_degraded_io()
 {
     set_watchdog 1200
 
-    prepare_ec_degraded_io "$ktest_out/ec-evacuate-usage.txt"
+    prepare_ec_degraded_io "$test_output/ec-evacuate-usage.txt"
 
     fio --output-format=json				\
-	--output="$ktest_out/fio-degraded-read.json"	\
+	--output="$test_output/fio-degraded-read.json"	\
 	--name=degraded-read				\
 	--filename=/mnt/data/seed.dat			\
 	--rw=randread					\
@@ -133,15 +143,15 @@ test_ec_degraded_read_forward_progress()
     local fio_pid monitor_pid fio_rc=0
     local read_watchdog=${READ_WATCHDOG:-90}
     local release_timeout=${RELEASE_TIMEOUT:-60}
-    local stalled_marker="$ktest_out/ec-degraded-read-stalled"
+    local stalled_marker="$test_output/ec-degraded-read-stalled"
 
     set_watchdog 1200
 
-    prepare_ec_degraded_io "$ktest_out/ec-degraded-read-usage.txt"
+    prepare_ec_degraded_io "$test_output/ec-degraded-read-usage.txt"
 
     rm -f "$stalled_marker"
     fio --output-format=json				\
-	--output="$ktest_out/fio-degraded-read.json"	\
+	--output="$test_output/fio-degraded-read.json"	\
 	--name=degraded-read				\
 	--filename=/mnt/data/seed.dat			\
 	--rw=randread					\
@@ -154,14 +164,16 @@ test_ec_degraded_read_forward_progress()
     (
 	sleep "$read_watchdog"
 	if fio_running "$fio_pid"; then
+	    capture_bcachefs_stall_stats stalled
 	    dump_degraded_read_stall "$fio_pid" \
-		> "$ktest_out/degraded-read-stalled.txt" 2>&1
+		> "$test_output/degraded-read-stalled.txt" 2>&1
 	    : > "$stalled_marker"
 	    bcachefs device online "${ktest_scratch_dev[1]}"
 	    sleep "$release_timeout"
 	    if fio_running "$fio_pid"; then
+		capture_bcachefs_stall_stats still-blocked-after-online
 		dump_degraded_read_stall "$fio_pid" \
-		    > "$ktest_out/still-blocked-after-online.txt" 2>&1
+		    > "$test_output/still-blocked-after-online.txt" 2>&1
 	    fi
 	fi
     ) &
