@@ -63,7 +63,7 @@ show_super_buckets()
 assert_member_size_bytes()
 {
     local dev=$1
-    local expected_bytes=$2
+    local expected_bytes=$(numfmt --from=iec "$2")
     local bucket_size_bytes=$(show_super_bucket_size_bytes "$dev")
     local expected_buckets=$((expected_bytes / bucket_size_bytes))
 
