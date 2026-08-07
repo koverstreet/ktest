@@ -89,7 +89,7 @@ offline_device_resize()
     local dev=$1
     local size=$2
 
-    bcachefs device resize "$dev" "$size"
+    bcachefs device resize --shrink "$dev" "$size"
     assert_member_size_bytes "$dev" "$size"
     assert_resize_target_inactive "$dev"
 }
@@ -111,7 +111,7 @@ _do_empty_shrink()
 	offline_device_resize "${devs[0]}" 500M
 	mount_mnt "${devs[0]}"
     else
-	bcachefs device resize "${devs[0]}" 500M
+	bcachefs device resize --shrink "${devs[0]}" 500M
     fi
 
     df -h /mnt
@@ -139,7 +139,7 @@ _do_two_device_data_shrink()
 	offline_device_resize "${devs[0]}" 256M
 	mount_mnt "${devs[@]}"
     else
-	bcachefs device resize "${devs[0]}" 256M
+	bcachefs device resize --shrink "${devs[0]}" 256M
     fi
 
     verify_checksums "$ktest_out/do-two-device-data.md5"
@@ -169,7 +169,7 @@ _do_impossible_shrink()
 	umount /mnt
     fi
 
-    if bcachefs device resize "${devs[0]}" 256M >"$resizeout" 2>&1; then
+    if bcachefs device resize --shrink "${devs[0]}" 256M >"$resizeout" 2>&1; then
 	echo "Impossible shrink unexpectedly succeeded"
 	cat "$resizeout"
 	return 1
@@ -459,7 +459,7 @@ test_online_three_device_replicas_shrink()
 
     # resize dev1 to minimum size -> should evacuate most data to dev3 to ensure replicas are met
     df -h /mnt
-    bcachefs device resize "${devs[0]}" 256M
+    bcachefs device resize --shrink "${devs[0]}" 256M
     df -h /mnt
 
     finish "" "${devs[@]}"
@@ -504,7 +504,7 @@ test_online_four_device_ec_shrink()
 
     bcachefs device add -f /mnt --bucket_size=512k "${devs[3]}"
 
-    bcachefs device resize "${devs[0]}" 256M # (should) shrink only ~5M away
+    bcachefs device resize --shrink "${devs[0]}" 256M # (should) shrink only ~5M away
 
     # unmount & remount to trigger scheduled accounting recovery pass, and expect accounting_mismatch. TODO: remove once no longer neccessary
     umount /mnt
@@ -547,7 +547,7 @@ test_online_minimal_ec_shrink()
 
     bcachefs device add -f /mnt --bucket_size=512k "${devs[3]}"
 
-    bcachefs device resize "${devs[0]}" 362M # (should) shrink only ~2M away
+    bcachefs device resize --shrink "${devs[0]}" 362M # (should) shrink only ~2M away
 
     # unmount & remount to trigger scheduled accounting recovery pass, and expect accounting_mismatch. TODO: remove once no longer neccessary
     umount /mnt
@@ -585,7 +585,7 @@ test_online_two_device_crypto_compression_shrink_under_randrw()
     sleep 5
 
     df -h /mnt
-    bcachefs device resize "${devs[0]}" 256M
+    bcachefs device resize --shrink "${devs[0]}" 256M
     df -h /mnt
 
     if ! wait $fiopid; then
@@ -620,7 +620,7 @@ test_online_three_device_variable_buckets_shrink()
 	--loops=1
 
     df -h /mnt
-    bcachefs device resize "${devs[0]}" 768M
+    bcachefs device resize --shrink "${devs[0]}" 768M
     df -h /mnt
 
     finish "" "${devs[@]}"
@@ -682,7 +682,7 @@ test_online_three_device_replicas_snapshot_shrink()
     bcachefs device add -f /mnt "${devs[2]}"
 
     df -h /mnt
-    bcachefs device resize "${devs[0]}" 256M
+    bcachefs device resize --shrink "${devs[0]}" 256M
     df -h /mnt
 
     finish verify_snapshots "${devs[@]}"
@@ -712,7 +712,7 @@ test_online_two_device_xattrs_hardlinks_shrink()
     bcachefs device add -f /mnt "${devs[1]}"
 
     df -h /mnt
-    bcachefs device resize "${devs[0]}" 256M
+    bcachefs device resize --shrink "${devs[0]}" 256M
     df -h /mnt
 
     finish verify_xattrs_hardlinks "${devs[@]}"
@@ -744,7 +744,7 @@ test_online_two_device_restart_resume_shrink()
 
     bcachefs device add -f /mnt "${devs[1]}"
 
-    bcachefs device resize "${devs[0]}" 512M >"$resizeout" 2>&1 &
+    bcachefs device resize --shrink "${devs[0]}" 512M >"$resizeout" 2>&1 &
     local resizepid=$!
 
     # Kill the ioctl after the target is safely persisted so the next mount
@@ -760,7 +760,7 @@ test_online_two_device_restart_resume_shrink()
 
     # Resume should have finished before mount returns; reissuing the same
     # shrink must now be a no-op instead of "device already resizing".
-    bcachefs device resize "${devs[0]}" 512M
+    bcachefs device resize --shrink "${devs[0]}" 512M
 
     finish verify_restart_resume "${devs[@]}"
 }
@@ -795,11 +795,11 @@ test_online_two_device_shrink_retarget_larger()
 
     bcachefs device add -f /mnt "${devs[1]}"
 
-    bcachefs device resize "${devs[0]}" 512M >"$resizeout" 2>&1 &
+    bcachefs device resize --shrink "${devs[0]}" 512M >"$resizeout" 2>&1 &
     local resizepid=$!
 
     wait_for_resize_to_start "$resizepid" "$resizeout"
-    bcachefs device resize "${devs[0]}" 1G
+    bcachefs device resize --shrink "${devs[0]}" 1G
     wait_for_canceled_resize "$resizepid" "$resizeout"
 
     finish verify_retarget_resize "${devs[@]}"
@@ -837,11 +837,11 @@ test_online_two_device_shrink_retarget_cancel()
 
     bcachefs device add -f /mnt "${devs[1]}"
 
-    bcachefs device resize "${devs[0]}" 512M >"$resizeout" 2>&1 &
+    bcachefs device resize --shrink "${devs[0]}" 512M >"$resizeout" 2>&1 &
     local resizepid=$!
 
     wait_for_resize_to_start "$resizepid" "$resizeout"
-    bcachefs device resize "${devs[0]}" 3G
+    bcachefs device resize --shrink "${devs[0]}" 3G
     wait_for_canceled_resize "$resizepid" "$resizeout"
 
     finish verify_retarget_resize "${devs[@]}"
@@ -877,11 +877,11 @@ test_online_two_device_shrink_retarget_grow()
 
     bcachefs device add -f /mnt "${devs[1]}"
 
-    bcachefs device resize "${devs[0]}" 512M >"$resizeout" 2>&1 &
+    bcachefs device resize --shrink "${devs[0]}" 512M >"$resizeout" 2>&1 &
     local resizepid=$!
 
     wait_for_resize_to_start "$resizepid" "$resizeout"
-    bcachefs device resize "${devs[0]}" 3584M
+    bcachefs device resize --shrink "${devs[0]}" 3584M
     wait_for_canceled_resize "$resizepid" "$resizeout"
 
     finish verify_retarget_resize "${devs[@]}"
@@ -927,7 +927,7 @@ test_online_three_device_targeted_subdirs_shrink()
     bcachefs device add -f --label=fast /mnt "${devs[1]}"
 
     df -h /mnt
-    bcachefs device resize "${devs[0]}" 512M
+    bcachefs device resize --shrink "${devs[0]}" 512M
     df -h /mnt
 
     finish verify_targeted_subdirs "${devs[@]}"
@@ -963,7 +963,7 @@ test_online_three_device_replicas_metadata_under_randrw_shrink()
     sleep 2
 
     df -h /mnt
-    bcachefs device resize "${devs[0]}" 512M
+    bcachefs device resize --shrink "${devs[0]}" 512M
     df -h /mnt
 
     if ! wait $livepid; then
@@ -992,11 +992,11 @@ test_online_shrink_cancel()
     dd if=/dev/urandom of=/mnt/payload bs=1M count=750 oflag=direct
     bcachefs device add -f /mnt "${devs[1]}"
 
-    bcachefs device resize "${devs[0]}" 200M >"$resizeout" 2>&1 &
+    bcachefs device resize --shrink "${devs[0]}" 200M >"$resizeout" 2>&1 &
     local resizepid=$!
 
     wait_for_resize_to_start "$resizepid" "$resizeout"
-    bcachefs device resize "${devs[0]}" cancel
+    bcachefs device resize --shrink "${devs[0]}" cancel
     wait_for_canceled_resize "$resizepid" "$resizeout"
 
     assert_member_size_bytes "${devs[0]}" $initial_size_bytes
@@ -1016,9 +1016,9 @@ test_online_shrink_then_cancel()
 
     mount_mnt "${devs[0]}"
 
-    bcachefs device resize "${devs[0]}" 500M
+    bcachefs device resize --shrink "${devs[0]}" 500M
 
-    bcachefs device resize "${devs[0]}" cancel
+    bcachefs device resize --shrink "${devs[0]}" cancel
 
     assert_member_size_bytes "${devs[0]}" $((500 * 1024 * 1024))
     assert_resize_target_inactive "${devs[0]}"
@@ -1059,7 +1059,7 @@ test_online_resize_to_zero_buckets_rejected()
 
 	mount_mnt "${devs[0]}"
 
-	if bcachefs device resize "${devs[0]}" 0 >"$resizeout" 2>&1; then
+	if bcachefs device resize --shrink "${devs[0]}" 0 >"$resizeout" 2>&1; then
 		echo "Resize to 0 buckets unexpectedly succeeded"
 		cat "$resizeout"
 		return 1
