@@ -314,14 +314,15 @@ set_watchdog()
 # can no longer tell you what it claims to. Fail, and print what was captured.
 assert_output_lacks()
 {
-    local pattern=$1 out rc
+    local pattern=$1 out rc=0
     shift
 
-    # Capture the status before testing it: inside "if ! cmd", $? is the status
-    # of the negation, which is always 0, so the message would report every
-    # failure as "exited 0".
-    out=$("$@" 2>&1)
-    rc=$?
+    # "|| rc=$?", not a bare assignment followed by rc=$?: run_test runs these
+    # under `set -e`, where a bare `out=$(cmd)` with a failing cmd exits the
+    # shell on the spot - before the check below, making the whole diagnostic
+    # unreachable and reporting the raw prelude line instead. A compound
+    # command is exempt from errexit, so this keeps the status to test.
+    out=$("$@" 2>&1) || rc=$?
     if [[ $rc != 0 ]]; then
 	echo "FAILED: '$*' exited $rc, so '$pattern must be absent' was never tested"
 	echo "$out"
@@ -337,14 +338,11 @@ assert_output_lacks()
 
 assert_output_has()
 {
-    local pattern=$1 out rc
+    local pattern=$1 out rc=0
     shift
 
-    # Capture the status before testing it: inside "if ! cmd", $? is the status
-    # of the negation, which is always 0, so the message would report every
-    # failure as "exited 0".
-    out=$("$@" 2>&1)
-    rc=$?
+    # See assert_output_lacks() on "|| rc=$?" and errexit.
+    out=$("$@" 2>&1) || rc=$?
     if [[ $rc != 0 ]]; then
 	echo "FAILED: '$*' exited $rc, so '$pattern must be present' was never tested"
 	echo "$out"
