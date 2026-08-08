@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+#
+# Does bcachefs compile without warnings?
+#
+# ktest's baseline is allnoconfig followed by an explicit rewrite of every
+# surviving option to "is not set" (libktest.sh new_config, "Really undefine
+# everything"). Required options are added back afterwards. That is the right
+# baseline for fast minimal test kernels, but it means CONFIG_WERROR is never
+# set, so a warning in bcachefs is never fatal anywhere in the matrix while it
+# is fatal for anyone building from defconfig.
+#
+# koverstreet/bcachefs-tools#819 is what fell through that gap: a duplicate
+# const in bindgen-generated extern.c, fatal under CONFIG_WERROR=y and
+# invisible here. It survived because nothing in CI ever built with warnings
+# as errors.
+#
+# -Werror is scoped to bcachefs rather than the tree: KCFLAGS applies to
+# whatever this invocation compiles, and config-kbuild-target restricts that
+# to fs/bcachefs/. Host tools use HOSTCFLAGS and are unaffected, so an
+# unrelated warning elsewhere in the kernel cannot fail this test. Frame-size
+# warnings stay warnings either way -- kbuild passes
+# -Wno-error=frame-larger-than= unconditionally. No VM: the assertion is that
+# it compiles.
+#
+# test-libs.sh rather than prelude.sh, and it matters here: kconfig.sh is
+# what pins CONFIG_64BIT per-arch. Without it, allnoconfig on x86_64 answers
+# n to the 64BIT prompt (make's SUBARCH is the generic "x86"), and 32-bit x86
+# adds -ffreestanding (arch/x86/Makefile, the llvm/53645 workaround) -- which
+# stops gcc folding strlen("literal"), so any file-scope QSTR() in bcachefs
+# fails as "initializer element is not constant" before -Werror gets a say.
+# Measured, not hypothetical: fs/check.c's lostfound_str did exactly that.
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/../../test-libs.sh"
+
+config-no-vm
+config-timeout $((30 * 60))
+
+config-kbuild-target fs/bcachefs/
+require-kernel-config BCACHEFS_FS
+
+# RUST so the kernel generates rustc_cfg and bcachefs's Rust side actually
+# builds -- bindgen-generated extern.c is the file #819 was in, so a build
+# without it cannot see the class of warning this test exists for. The
+# fs/Makefile auto-probe (BCACHEFS_RUST ?= auto) silently drops Rust when the
+# toolchain is missing, hence the hard assertion on extern.o below instead of
+# trusting the probe.
+require-kernel-config RUST
+
+require-kernel-make-append "KCFLAGS=-Werror"
+
+test_werror()
+{
+    local build="$ktest_kernel_build/fs/bcachefs"
+
+    # The build has already happened and succeeded by the time we get here --
+    # that is the test. What is left is to confirm it actually compiled
+    # bcachefs, because a -Werror build of nothing at all passes just as
+    # cleanly as a -Werror build of a clean tree, and reports the same thing.
+    local nr_obj=$(find "$build" -name '*.o' 2>/dev/null | wc -l)
+
+    echo "compiled $nr_obj objects under $build with -Werror"
+
+    if [[ $nr_obj -lt 20 ]]; then
+        echo "FAIL: expected fs/bcachefs to compile many objects, got $nr_obj"
+        echo "the -Werror assertion covered nothing -- treat this as a broken"
+        echo "test rather than a clean bcachefs"
+        return 1
+    fi
+
+    if [[ ! -f $build/rust/extern.o ]]; then
+        echo "FAIL: bindgen-generated rust/extern.o was not built"
+        echo "bcachefs's Rust support auto-disables when rustc or bindgen are"
+        echo "missing; install both, or this test cannot see the class of"
+        echo "warning it was written for"
+        checkdep bindgen
+        checkdep rustc
+        return 1
+    fi
+
+    echo "bindgen-generated rust/extern.o built with -Werror"
+}
+
+main "$@"
