@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config BCACHEFS_FS
+require-kernel-config SWAP
+
+config-mem 768M
+config-scratch-devs 2G
+
+dump_swap_debug()
+{
+    cat /proc/swaps || true
+    cat /proc/meminfo || true
+    dmesg | tail -n 200 || true
+}
+
+disable_swapfile()
+{
+    swapoff /mnt/swapfile 2>/dev/null || true
+}
+
+test_bcachefs_swapfile_under_reclaim()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f "${ktest_scratch_dev[0]}"
+    mount -t bcachefs "${ktest_scratch_dev[0]}" /mnt
+
+    fallocate -l 512M /mnt/swapfile
+    chmod 600 /mnt/swapfile
+    mkswap /mnt/swapfile
+
+    if ! swapon /mnt/swapfile; then
+	echo "bcachefs swapfile swapon failed"
+	dump_swap_debug
+	return 1
+    fi
+    trap disable_swapfile EXIT
+
+    grep -q /mnt/swapfile /proc/swaps
+
+    stress-ng --vm 2 --vm-bytes 600M --vm-keep -t 60 --metrics-brief || {
+	echo "swap pressure workload failed"
+	dump_swap_debug
+	return 1
+    }
+
+    swapoff /mnt/swapfile
+    trap - EXIT
+
+    rm -f /mnt/swapfile
+    umount /mnt
+
+    bcachefs fsck -ny "${ktest_scratch_dev[0]}"
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+main "$@"
