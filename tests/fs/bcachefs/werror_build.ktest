@@ -17,16 +17,14 @@
 # is the next warning of that kind, in generated or ordinary code, that
 # nobody has waived on purpose.
 #
-# -Werror arrives via KCFLAGS, restricted to this invocation by
-# config-kbuild-target fs/bcachefs/. Not perfectly scoped: KCFLAGS is global
-# to the invocation, and the fs/bcachefs/ goal also compiles a few
-# prerequisite objects (scripts/mod/empty.o, rust/helpers) with it -- a
-# warning there fails this test too. Accepted rather than hidden: those
-# files are warning-clean in any tree whose own CI builds with WERROR, and
-# there is no per-directory KCFLAGS. Host tools use KBUILD_HOSTCFLAGS and
-# are unaffected. Frame-size warnings stay warnings, as everywhere else in
-# kbuild (-Wno-error=frame-larger-than= is unconditional). No VM: the
-# assertion is that it compiles.
+# -Werror comes from bcachefs's own fs/Makefile: BCACHEFS_WERROR=1 adds it
+# via subdir-ccflags-y, so it covers fs/bcachefs and below and nothing else
+# the invocation compiles, and the per-file -Wno-* waivers still apply on
+# top. Needs a bcachefs-tools tree that has the knob; on one that does not,
+# the variable is ignored and the .cmd assertion below fails loudly rather
+# than letting the test pass while checking nothing. Frame-size warnings
+# stay warnings, as everywhere else in kbuild (-Wno-error=frame-larger-than=
+# is unconditional). No VM: the assertion is that it compiles.
 #
 # test-libs.sh rather than prelude.sh, and it matters here: kconfig.sh is
 # what pins CONFIG_64BIT per-arch. Without it, allnoconfig on x86_64 answers
@@ -52,7 +50,7 @@ require-kernel-config BCACHEFS_FS
 # the probe.
 require-kernel-config RUST
 
-require-kernel-make-append "KCFLAGS=-Werror"
+require-kernel-make-append "BCACHEFS_WERROR=1"
 
 test_werror()
 {
