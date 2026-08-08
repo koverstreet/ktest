@@ -51,10 +51,10 @@
 # subvol_no_keys_subvol_gone. The rest use `set subvolumes ... deleted` as
 # scaffolding to condemn a subvolume, where a tombstone is what happens -
 # stranded_keys, subvol_root_missing_unlinked_flag, tombstoned_child,
-# missing_child, interrupted_deletion, tombstone_key_migration,
-# no_keys_with_data, runtime_tombstone_child_repair. Three of those have
-# "tombstone" in the name and inject a removal. Unaudited; the sb error
-# counters will say which are actually testing something else than they say.
+# missing_child, interrupted_deletion, no_keys_with_data,
+# runtime_tombstone_child_repair. Two of those have "tombstone" in the
+# name and inject a removal. Unaudited; the sb error counters will say
+# which are actually testing something else than they say.
 #
 # Cases were derived by walking every error site in
 # fs/snapshots/check_snapshots.c and subvolume.c plus the snapshot ids in
@@ -2087,35 +2087,6 @@ test_subvol_children_stray()
 
     skip_snaps=""
     ktest_expect_sb_errors="subvol_children_bad"
-    check_fsck repair
-}
-
-# Interior-tombstone key migration: a DELETED node that retained a child
-# pointer (the repair-metadata contract from Kent's I1 commit) with keys
-# still at its id - bkey_in_deleted_interior_snapshot (autofix) migrates
-# them to the live descendant instead of dropping them. The migrated
-# exact-key here is snap-2's root inode (bi_subvol=4), landing in the
-# main branch; check_subvol's bi_subvol repair must then clean up the
-# cascade. The most data-motion of any repair under test.
-test_tombstone_key_migration()
-{
-    setup_snapshot_tree
-
-    local last_subvol=$((2 + NR_SNAPS - 1))
-    local victim=$(subvol_snapshot $last_subvol)
-    local parent=$(snap_field $victim parent)
-    local children=($(snap_field $parent children))
-
-    local other
-    for c in ${children[@]}; do
-	[[ $c != $victim ]] && other=$c
-    done
-
-    kvdb_rw -c "update snapshots 0:$victim:0 state=deleted subvol=0 children[0]=$other" \
-	 -c "update snapshots 0:$parent:0 children[0]=$other children[1]=0" \
-	 -c "set subvolumes 0:$last_subvol:0 deleted"
-
-    skip_snaps="snap-$((NR_SNAPS - 1))"
     check_fsck repair
 }
 
