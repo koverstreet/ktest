@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+#
+# What the tools say when they can't open a device.
+#
+# Every command that takes a device path goes through bch2_read_super() ->
+# read_super_and_backups() -> bdev_file_open_by_path(), which in the tools is a
+# plain open(2) with O_RDWR|O_DIRECT|O_EXCL. There are only a few ways that
+# fails, they are all things a user hits by accident, and until 2026-08-06 the
+# report was the bare errno repeated by three layers - "Permission denied"
+# about a device you can plainly read.
+#
+# From a field report on IRC (kenny): device added to a filesystem, then
+# set-fs-option and fsck against the member device, and:
+#
+#   bcachefs (/dev/sda): error reading superblock: Permission denied
+#   error starting filesystem: Permission denied
+#
+# These tests pin the two properties that made that report hard to act on:
+# the message says what we asked the block layer for, and separate messages
+# stay on separate lines.
+#
+# Plus the routing the same code path owns. Pointing a command at a member
+# device of a mounted filesystem is supported, and goes to the online path;
+# what must never happen is it going offline against a live filesystem. A
+# regression there is silent and expensive, so it gets tests of its own.
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+config-scratch-devs 1G
+
+# ── the message says what we asked for ──────────────────────────────────
+#
+# A missing path, because it's the one open failure reachable as root - which
+# is what a VM is. The errno differs from the field report's EACCES, but the
+# line under test doesn't: read_super_and_backups() prints the requested mode
+# for every open failure, and that line is what was missing when a user was
+# told "Permission denied" about a device he could plainly read.
+test_open_missing_device()
+{
+    set_watchdog 60
+
+    assert_fails_with "requested read-write, exclusive" \
+	bcachefs set-fs-option --errors=ro /dev/no-such-device
+}
+
+# ── a failed superblock write must not report success ───────────────────
+#
+# blockdev --setro does NOT make the open fail: in the tools
+# bdev_file_open_by_path() is a plain open(2) (linux/blkdev.c), and Linux
+# permits O_RDWR on a BLKROSET device - only the writes fail. So this lands
+# somewhere more interesting than the open: every superblock write returns
+# BLK_STS_IOERR, __bch2_write_super() reports "Unable to write superblock to
+# sufficient devices" and forces the filesystem read-only...
+#
+#   Error writing superblock, wrote to 0/1 devices:
+#      8=BLK_STS_IOERR 2056=BLK_STS_IOERR 2095104=BLK_STS_IOERR (all failed)
+#     emergency read only at seq 0
+#
+# ...and it used to then return 0, so set-fs-option exited 0 having persisted
+# nothing. A configuration command that reports success while changing nothing
+# is the one failure a script cannot detect. This test is what found that; the
+# fatal branch now returns erofs_sb_err, like the two other paths in that
+# function that go emergency read-only.
+test_write_failure_is_not_success()
+{
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+
+    # Mount once and drop it: a freshly formatted filesystem has
+    # sb_initialized == 0, and set-fs-option refuses those up front
+    # ("superblock not initialized... mount it once first") - so without this
+    # the command never gets as far as writing anything.
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    umount /mnt
+
+    # Capture, then restore the device BEFORE asserting. An assertion that
+    # exits leaves the device write protected for every test after this one,
+    # and they fail at format with "Failed to wipe preexisting metadata" -
+    # a thoroughly confusing way to be told that this test broke.
+    blockdev --setro ${ktest_scratch_dev[0]}
+    local out rc=0
+    out=$(bcachefs set-fs-option --errors=ro ${ktest_scratch_dev[0]} 2>&1) || rc=$?
+    blockdev --setrw ${ktest_scratch_dev[0]}
+
+    echo "$out"
+    echo "set-fs-option exited $rc"
+
+    if (( rc == 0 )); then
+	echo "TEST FAILED: exited 0 after failing to write the superblock"
+	exit 1
+    fi
+
+    # ...and with the write protection gone it works, so this pins the
+    # failure reporting and not just a permanently broken device:
+    bcachefs set-fs-option --errors=ro ${ktest_scratch_dev[0]}
+}
+
+# ── separate messages stay on separate lines ────────────────────────────
+#
+# bch2_read_super() embeds its detail printbuf mid-format, and the validate
+# helpers that fill it append a reason with no trailing newline - correct for
+# them, since the caller frames it. Unterminated, the next message ran onto
+# the end of ours:
+#
+#   Not a bcachefs superblock layouterror starting filesystem: invalid_sb_layout
+#
+# which is how the field report arrived, and is why it took a while to see
+# there were two separate errors in it.
+test_open_bad_superblock()
+{
+    set_watchdog 60
+
+    dd if=/dev/urandom of=${ktest_scratch_dev[0]} bs=1M count=4 oflag=direct
+
+    assert_fails_with "Not a bcachefs superblock" \
+	bcachefs set-fs-option --errors=ro ${ktest_scratch_dev[0]}
+
+    # Anchored at BOTH ends, which is the whole point: with the reason
+    # unterminated the line reads "...superblock layouterror starting
+    # filesystem: invalid_sb_layout", and a pattern anchored only at the end
+    # still matches that - it ends in "invalid_sb_layout". Requiring the line
+    # to both start and stop where the reason does is what distinguishes them.
+    assert_fails_with "^Not a bcachefs superblock layout$" \
+	bcachefs set-fs-option --errors=ro ${ktest_scratch_dev[0]}
+}
+
+# ── fsck on a mounted filesystem must go online ─────────────────────────
+#
+# The safety property, and it is not "fsck refuses". Pointing fsck at a member
+# block device of a mounted filesystem is supported and routes to online fsck
+# by design (cmd_fsck: "If any path resolves to a mounted filesystem - mount
+# point, member block device, or UUID - fsck online").
+#
+# What must never happen is fsck taking the OFFLINE path against a filesystem
+# the kernel has mounted: two writers on one device, unbounded corruption.
+# That is reachable, because the routing rests on open_if_mounted_any()
+# noticing the mount, and open_if_mounted() opens the path O_RDONLY and
+# returns Ok(None) - indistinguishable from "not mounted" - on ANY open error.
+# The comment on its own UUID branch warns about exactly this: an error there
+# "must not be mistaken for 'not mounted', or callers fall back to offline
+# superblock access on a live filesystem."
+#
+# So assert the routing, by its banner. If this ever regresses to the offline
+# path the banner disappears, and the only thing left between us and the
+# corruption is O_EXCL on the real open - which the scan phase deliberately
+# does not use (device_scan.rs read_super_silent opens noexcl|nochanges,
+# correctly: probing shouldn't claim anything).
+test_fsck_mounted_goes_online()
+{
+    set_watchdog 120
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    echo hello > /mnt/file
+
+    assert_output_has "Running fsck online" \
+	bcachefs fsck -y ${ktest_scratch_dev[0]}
+
+    umount /mnt
+
+    # Unmounted, the same command takes the offline path - so the banner above
+    # was the mount being noticed, not something that prints unconditionally:
+    assert_output_lacks "Running fsck online" \
+	bcachefs fsck -y ${ktest_scratch_dev[0]}
+}
+
+# ── a mounted filesystem is still configurable ──────────────────────────
+#
+# The other half of the field report: pointing set-fs-option at a member
+# device of a mounted filesystem is supposed to work - open_online_or_offline()
+# finds it via open_if_mounted_any() and takes the online sysfs path. Only if
+# that probe comes back "not mounted" do we fall through to opening the device
+# offline, which is where the O_EXCL refusal lives.
+#
+# So this must NOT be refused, and the runtime option must actually change.
+test_set_option_on_mounted_member()
+{
+    set_watchdog 120
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    bcachefs set-fs-option --errors=ro ${ktest_scratch_dev[0]}
+
+    # Resolve the filesystem's sysfs directory through the block device's
+    # own "bcachefs" symlink (dev.c: sysfs_create_link(block, &ca->kobj,
+    # "bcachefs")), which lands on <fs>/dev-N.
+    #
+    # Not by UUID: a single device filesystem is registered under c->name,
+    # not the UUID - fs.c only uses "%pU" when c->sb.multi_device. Building
+    # /sys/fs/bcachefs/$uuid/... looks right and cannot exist here.
+    local dev=$(basename ${ktest_scratch_dev[0]})
+    local fs_sysfs=$(dirname $(readlink -f /sys/block/$dev/bcachefs))
+    echo "filesystem sysfs dir: $fs_sysfs"
+
+    # sysfs prints the whole choice list with the live one bracketed
+    # ("continue fix_safe panic [ro]"), not a bare value - so match [ro],
+    # not the string "ro", which also appears unbracketed as a choice.
+    local got=$(cat $fs_sysfs/options/errors)
+    echo "errors option now: $got"
+
+    if [[ $got != *"[ro]"* ]]; then
+	echo "TEST FAILED: errors option did not take effect (got '$got')"
+	umount /mnt
+	exit 1
+    fi
+
+    umount /mnt
+}
+
+main "$@"
