@@ -285,6 +285,36 @@ create_ktest_user()
     useradd -u 1000 -g 1000 ktest_user	>& /dev/null || true
 }
 
+# set_as_user
+#
+# Sets $as_user to a command prefix that runs its arguments unprivileged, and
+# $as_user_uid/$as_user_gid to the identity they'll run as.
+#
+# Tests that enforce a limit against a caller need this, because root is not an
+# ordinary caller: it holds CAP_SYS_RESOURCE, which bcachefs' ignore_hardlimit()
+# honours, so a quota set against root is never enforced against root. A test
+# that sets a limit and then exceeds it as root is testing nothing.
+#
+# The uid is reported rather than assumed because the two implementations don't
+# name the same thing - setpriv takes a number, runuser takes a name - and a
+# caller that has to name the same identity somewhere else ("setquota -u") has
+# to use whatever we actually ran as.
+set_as_user()
+{
+    if command -v setpriv > /dev/null; then
+	as_user_uid=65534
+	as_user_gid=65534
+	as_user="setpriv --reuid=$as_user_uid --regid=$as_user_gid --clear-groups"
+    elif command -v runuser > /dev/null; then
+	as_user_uid=$(id -u nobody)
+	as_user_gid=$(id -g nobody)
+	as_user="runuser -u nobody --"
+    else
+	echo "TEST FAILED: no setpriv or runuser to drop privileges with"
+	exit 1
+    fi
+}
+
 set_watchdog()
 {
     ktest_timeout=$1

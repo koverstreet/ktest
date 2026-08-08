@@ -1129,15 +1129,7 @@ test_subvol_list_unprivileged()
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
-    local as_user=""
-    if command -v setpriv > /dev/null; then
-	as_user="setpriv --reuid=65534 --regid=65534 --clear-groups"
-    elif command -v runuser > /dev/null; then
-	as_user="runuser -u nobody --"
-    else
-	echo "TEST FAILED: no setpriv or runuser to drop privileges with"
-	exit 1
-    fi
+    set_as_user
 
     chmod 755 /mnt
 
