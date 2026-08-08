@@ -87,7 +87,8 @@ dkms_cache_key() {
     {
         printf '%s\0' "$kver" "$rev" \
             "${BCACHEFS_DEBUG-}" "${BCACHEFS_TESTS-}" \
-            "${BCACHEFS_INJECT_TRANSACTION_RESTARTS-}"
+            "${BCACHEFS_INJECT_TRANSACTION_RESTARTS-}" \
+            "${BCACHEFS_WERROR-}"
         cat "$config"
     } | sha256sum | cut -d' ' -f1
 }

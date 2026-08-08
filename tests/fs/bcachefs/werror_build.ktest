@@ -1,104 +1,155 @@
 #!/usr/bin/env bash
 #
-# Does bcachefs compile without warnings?
+# Does bcachefs build warning-clean as a DKMS module, and does that module
+# load?
 #
-# ktest's baseline is allnoconfig followed by an explicit rewrite of every
-# surviving option to "is not set" (libktest.sh new_config, "Really undefine
-# everything"). Required options are added back afterwards. That is the right
-# baseline for fast minimal test kernels, but it means CONFIG_WERROR is never
-# set, so a warning in bcachefs is never fatal anywhere in the matrix while it
-# is fatal for anyone building from defconfig.
+# Two claims, and they fail independently.
 #
-# koverstreet/bcachefs-tools#819 is what fell through that gap: a warning
-# class in bindgen-generated extern.c, fatal under CONFIG_WERROR=y and
-# invisible here. That particular diagnostic is deliberately waived now
-# (fs/Makefile adds -Wno-duplicate-decl-specifier to rust/extern.o -- that
-# was the fix), so this test would not re-catch #819 itself; what it catches
-# is the next warning of that kind, in generated or ordinary code, that
-# nobody has waived on purpose.
+# Warnings: distro kernels come from defconfig, i.e. CONFIG_WERROR=y, so a
+# warning anywhere under fs/bcachefs is fatal for everyone building the DKMS
+# package. ktest's kernels are the opposite -- new_config() runs allnoconfig
+# and then rewrites every surviving option to "is not set" ("Really undefine
+# everything"), so CONFIG_WERROR is off across the whole matrix and a warning
+# is fatal nowhere. BCACHEFS_WERROR=1 closes that from bcachefs's own side:
+# fs/Makefile adds -Werror via subdir-ccflags-y, scoped to fs/bcachefs and
+# below, with the per-file -Wno-* waivers still applying on top. Nothing about
+# the kernel matters, which is why this needs no kernel build of its own -- the
+# knob applies to the module compile however the target kernel was configured.
+# koverstreet/bcachefs-tools#819 is the class of bug it exists for: a warning
+# in bindgen-generated extern.c, fatal under CONFIG_WERROR and invisible here.
+# #819 itself is waived on purpose now, so this would not re-catch it; what it
+# catches is the next warning nobody waived deliberately.
 #
-# -Werror comes from bcachefs's own fs/Makefile: BCACHEFS_WERROR=1 adds it
-# via subdir-ccflags-y, so it covers fs/bcachefs and below and nothing else
-# the invocation compiles, and the per-file -Wno-* waivers still apply on
-# top. Needs a bcachefs-tools tree that has the knob; on one that does not,
-# the variable is ignored and the .cmd assertion below fails loudly rather
-# than letting the test pass while checking nothing. Frame-size warnings
-# stay warnings, as everywhere else in kbuild (-Wno-error=frame-larger-than=
-# is unconditional). No VM: the assertion is that it compiles.
-#
-# test-libs.sh rather than prelude.sh, and it matters here: kconfig.sh is
-# what pins CONFIG_64BIT per-arch. Without it, allnoconfig on x86_64 answers
-# n to the 64BIT prompt (make's SUBARCH is the generic "x86"), and 32-bit x86
-# adds -ffreestanding (arch/x86/Makefile, the llvm/53645 workaround) -- which
-# stops gcc folding strlen("literal"), so any file-scope QSTR() in bcachefs
-# fails as "initializer element is not constant" before -Werror gets a say.
-# Measured, not hypothetical: fs/check.c's lostfound_str did exactly that.
+# Loading: the 1.39.0 failures that actually reached users were not warnings.
+# A makefile install_dkms never shipped killed the build at parse time, and a
+# Rust probe that checked the wrong rustc killed it at compile time -- both
+# producing no module at all, and a bcachefs root filesystem dropping to an
+# emergency shell (koverstreet/bcachefs#1197). "It compiled" and "there is a
+# module that loads" are separate claims, and only the second one is what a
+# user has.
 
-. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/../../test-libs.sh"
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
 
-config-no-vm
 config-timeout $((30 * 60))
 
-config-kbuild-target fs/bcachefs/
-require-kernel-config BCACHEFS_FS
-
-# RUST so the kernel generates rustc_cfg and bcachefs's Rust side actually
-# builds -- generated code is where #819's class of warning lives, so a build
-# without it misses the surface this test exists for. The fs/Makefile
-# auto-probe (BCACHEFS_RUST ?= auto) silently drops Rust when the toolchain
-# is missing, hence the hard assertion on extern.o below instead of trusting
-# the probe.
-require-kernel-config RUST
-
-require-kernel-make-append "BCACHEFS_WERROR=1"
+# Read by the shared DKMS build (init_build_bcachefs_tools, which runs after
+# this file is sourced) and folded into its cache key, so a -Werror build and
+# an ordinary one can never be served from the same cache entry.
+export BCACHEFS_WERROR=1
 
 test_werror()
 {
-    local build="$ktest_kernel_build/fs/bcachefs"
+    # The module build already happened, in the init hook -- that *is* the
+    # -Werror assertion, and a warning would have failed the run before we got
+    # here. What is left is to confirm it covered what it claims: a -Werror
+    # build of nothing passes exactly as cleanly as a -Werror build of a clean
+    # tree.
+    # Where the objects landed depends on which path the build hook took:
+    # `dkms-reload` stages under /var/lib/dkms, `dkms-reload-interactive`
+    # (ktest_interactive, the dev loop) builds in place under bcachefs-tools's
+    # DKMS_INTERACTIVE_DIR, and a dkms cache hit copies a prebuilt .ko and
+    # compiles nothing at all.
+    local build=
+    local d
+    for d in /var/lib/dkms/bcachefs/*/build/src/fs/bcachefs \
+	     /ktest-out/bcachefs-module/src/fs/bcachefs; do
+	if [[ -d $d ]]; then
+	    build=$d
+	    break
+	fi
+    done
 
-    # The build has already happened and succeeded by the time we get here --
-    # that is the test. What is left is to confirm it covered what it claims,
-    # because a -Werror build of nothing at all passes just as cleanly as a
-    # -Werror build of a clean tree.
-    local nr_obj=$(find "$build" -name '*.o' 2>/dev/null | wc -l)
+    if [[ -z $build ]]; then
+	# Only one thing legitimately compiles nothing: a cache hit, which
+	# copies the .ko straight into the module tree. dkms_cache_key hashes
+	# the kernel, its config, the bcachefs-tools revision and the build
+	# flags, so a hit means this exact compile already ran clean under
+	# -Werror. Anything else means we cannot see the build at all, and
+	# saying so beats printing a reassurance we did not earn.
+	if [[ ! -f /lib/modules/$(uname -r)/updates/dkms/bcachefs.ko ]]; then
+	    echo "FAIL: no bcachefs build tree and no cached module"
+	    echo "looked under /var/lib/dkms/bcachefs/*/build and"
+	    echo "/ktest-out/bcachefs-module -- the build hook did something"
+	    echo "this test does not know how to inspect"
+	    return 1
+	fi
+	echo "cached module -- warnings proven on an earlier run under this same key"
+    else
+	local nr_obj=$(find "$build" -name '*.o' | wc -l)
 
-    echo "compiled $nr_obj objects under $build"
+	echo "compiled $nr_obj objects under $build"
 
-    if [[ $nr_obj -lt 20 ]]; then
-        echo "FAIL: expected fs/bcachefs to compile many objects, got $nr_obj"
-        echo "the -Werror assertion covered nothing -- treat this as a broken"
-        echo "test rather than a clean bcachefs"
-        return 1
+	if [[ $nr_obj -lt 20 ]]; then
+	    echo "FAIL: expected fs/bcachefs to compile many objects, got $nr_obj"
+	    echo "the -Werror assertion covered nothing -- treat this as a"
+	    echo "broken test rather than a clean bcachefs"
+	    return 1
+	fi
+
+	if [[ ! -f $build/rust/extern.o ]]; then
+	    echo "FAIL: bindgen-generated rust/extern.o was not built"
+	    echo "bcachefs's Rust support auto-disables when rustc or bindgen"
+	    echo "are missing; install both, or this test cannot see"
+	    echo "generated-code warnings at all"
+	    checkdep bindgen
+	    checkdep rustc
+	    return 1
+	fi
+
+	# Existence is not enough: with stale artefacts the objects can predate
+	# this invocation and predate -Werror entirely. kbuild records each
+	# object's actual command line in its .cmd file and rebuilds on command
+	# change, so "-Werror is in every .cmd" proves every object that exists
+	# was built under it, whether or not it was rebuilt just now.
+	#
+	# The pattern has to be the bare flag: kbuild adds -Werror=<warning>
+	# forms (implicit-function-declaration, return-type, ...)
+	# unconditionally, so a substring match on "-Werror" hits those and
+	# matches every object on every kernel, proving nothing. rustc-built
+	# objects (mod.o and the vendored crates) are exempt -- KCFLAGS is a C
+	# thing and rustc never sees it.
+	#
+	# Two kbuild artefacts at the module root are exempt for a different
+	# reason: they are not bcachefs source, so subdir-ccflags-y was never
+	# going to reach them. bcachefs.o is the `ld -r` of every member (no
+	# compiler runs at all), and bcachefs.mod.o is compiled from the .mod.c
+	# glue modpost generates.
+	local missing
+	missing=$(find "$build" -name '.*.o.cmd' \
+		      -not -name '.bcachefs.o.cmd' \
+		      -not -name '.bcachefs.mod.o.cmd' \
+		      -exec grep -LE -e '-Werror( |$)' {} + |
+		  xargs --no-run-if-empty grep -L --max-count=1 -e rustc)
+	if [[ -n $missing ]]; then
+	    echo "FAIL: objects built without -Werror:"
+	    echo "$missing"
+	    echo "is BCACHEFS_WERROR reaching the DKMS build? it travels via"
+	    echo "\$(DKMSDIR)/build.vars, not the environment -- dkms runs make"
+	    echo "itself, so an exported variable never reaches the compile"
+	    return 1
+	fi
+
+	echo "all $nr_obj objects (incl. bindgen-generated extern.o) built with -Werror"
     fi
 
-    if [[ ! -f $build/rust/extern.o ]]; then
-        echo "FAIL: bindgen-generated rust/extern.o was not built"
-        echo "bcachefs's Rust support auto-disables when rustc or bindgen are"
-        echo "missing; install both, or this test cannot see generated-code"
-        echo "warnings at all"
-        checkdep bindgen
-        checkdep rustc
-        return 1
+    # Loaded already on two of the three paths: dkms-reload-interactive
+    # insmods by path (so a by-name modprobe would NOT find it -- the module
+    # never enters /lib/modules), and a cache hit modprobes. Only plain
+    # dkms-reload installs without loading, so ask before reaching for it.
+    if ! lsmod | grep -qw bcachefs; then
+	modprobe bcachefs || true
+    fi
+    if ! lsmod | grep -qw bcachefs; then
+	echo "FAIL: bcachefs is not loaded, and modprobe could not load it"
+	echo "the module built, so this is a load failure -- check dmesg for"
+	echo "unresolved symbols or a vermagic mismatch against $(uname -r)"
+	return 1
     fi
 
-    # Existence is not enough: with -K (skip kernel build) or stale artefacts
-    # the objects can predate this invocation and predate -Werror entirely.
-    # kbuild records each object's actual command line in its .cmd file and
-    # rebuilds on command change, so "-Werror is in every .cmd" proves every
-    # object that exists was built under it, whether or not it was rebuilt
-    # just now. rustc-built objects (mod.o and the vendored crates) are
-    # exempt: KCFLAGS is a C thing and rustc never sees it.
-    local missing=$(find "$build" -name '.*.o.cmd' \
-                        -exec grep --files-without-match -- -Werror {} + |
-                    xargs --no-run-if-empty grep --files-without-match --max-count=1 -- rustc)
-    if [[ -n $missing ]]; then
-        echo "FAIL: objects built without -Werror:"
-        echo "$missing"
-        echo "stale build dir? rerun without -K, or remove the build dir"
-        return 1
-    fi
-
-    echo "all $nr_obj objects (incl. bindgen-generated extern.o) built with -Werror"
+    # /sys/module, not modinfo: modinfo resolves by name through /lib/modules,
+    # which the insmod-by-path build never populates.
+    echo "PASS: bcachefs.ko built warning-clean and loaded," \
+	 "version $(cat /sys/module/bcachefs/version 2>/dev/null || echo '?')"
 }
 
 main "$@"
