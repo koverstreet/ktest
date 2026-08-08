@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+
+test_subvol_mount_option()
+{
+    local dev=${ktest_scratch_dev[0]}
+
+    set_watchdog 30
+
+    run_quiet "" bcachefs format -f $dev
+    mount -t bcachefs $dev /mnt
+
+    echo root > /mnt/root-only
+    bcachefs subvolume create /mnt/subvol
+    echo subvol > /mnt/subvol/subvol-only
+
+    umount /mnt
+
+    mount -t bcachefs -o subvol=subvol $dev /mnt
+    test "$(cat /mnt/subvol-only)" = subvol
+    ! test -e /mnt/root-only
+    umount /mnt
+
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
