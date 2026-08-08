@@ -3389,11 +3389,21 @@ test_reconstruct_inode_seed_from_descendant()
     done
     local inum=$(stat -c %i /mnt/dir)
 
-    bcachefs subvolume snapshot /mnt/snap
+    # snap-0, not snap: walk_subvols only recognises snap-*/other as
+    # subvolume roots, and would otherwise descend into this one as if it
+    # were an ordinary directory.
+    bcachefs subvolume snapshot /mnt/snap-0
 
     # Dirty the directory in the live subvolume: this COWs its inode down
     # to the live leaf, which becomes the surviving descendant copy.
     echo "after-snapshot" > /mnt/dir/file-new
+
+    # The state repair has to put back. This test builds its own filesystem
+    # rather than calling setup_snapshot_tree, so it captures its own
+    # manifest and clears the filters setup_snapshot_tree would have reset.
+    capture_state $MANIFEST
+    skip_snaps=""
+    skip_paths=""
 
     umount /mnt
 
@@ -3444,23 +3454,11 @@ test_reconstruct_inode_seed_from_descendant()
 	exit 1
     fi
 
-    # And the directory is still readable from both views.
-    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
-    local ok=1
-    [[ $(ls /mnt/dir | wc -l) == 17 ]] || {
-	echo "TEST FAILED: live view lost entries: $(ls /mnt/dir | wc -l) of 17"
-	ok=0
-    }
-    [[ $(ls /mnt/snap/dir | wc -l) == 16 ]] || {
-	echo "TEST FAILED: snapshot view lost entries: $(ls /mnt/snap/dir | wc -l) of 16"
-	ok=0
-    }
-    [[ $(cat /mnt/dir/file-7) == content-7 ]] || {
-	echo "TEST FAILED: file contents not readable through the repaired directory"
-	ok=0
-    }
-    umount /mnt
-    (( ok )) || exit 1
+    # Every path and every file's contents, in both views. The entry counts
+    # and single cat this replaces would have passed with a directory whose
+    # dirents had all been rewritten to a seed fsck invented - the count is
+    # the same either way, and only one file was ever read back.
+    verify_fs_state must-mount
 }
 
 main "$@"
