@@ -26,6 +26,21 @@ rm -f /ktest /ktest-out
 ln -sf $ktest_dir /ktest
 ln -sf $ktest_out /ktest-out
 
+# The host's nix store, when it has one: libktest.sh exports it as a second
+# virtiofs tag, because virtiofs does not cross submounts and /nix/store is a
+# separate filesystem - so it shows up as an empty directory under /host.
+#
+# Mounted at the same absolute path it occupies on the host. Store paths are
+# self-referential: a store tree reached through /host would have every
+# internal reference point at something that is not there.
+#
+# Not in lib/fstab, which is baked into the root image at build time - a
+# missing tag would then fail the boot mount on every non-nix host, and every
+# existing image would need rebuilding. Here, a host without a store just
+# leaves an empty directory.
+mkdir -p /nix/store
+mount -t virtiofs nix /nix/store 2>/dev/null || rmdir /nix/store 2>/dev/null || true
+
 # Some home directories are in weird places:
 mkdir -p $(dirname $home)
 ln -sf /host/$home $home

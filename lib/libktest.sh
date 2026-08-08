@@ -494,6 +494,19 @@ start_vm()
 	-device		vhost-user-fs-pci,chardev=virtiofs,tag=host	\
     )
 
+    # virtiofs does not cross submounts, so anything on its own filesystem is
+    # an empty directory under /host. On a nix host /nix/store is exactly that
+    # — a separate mount — which makes every store path invisible to the guest.
+    # Export it separately when it exists, and mount it in the guest at the
+    # same absolute path: store paths are self-referential, so a store tree
+    # relocated under /host would have every internal reference dangle.
+    if [[ -d /nix/store ]]; then
+	qemu_cmd+=(							\
+	    -chardev	socket,id=virtiofs-nix,path=$ktest_out/vm/virtiofsd-nix.sock \
+	    -device	vhost-user-fs-pci,chardev=virtiofs-nix,tag=nix	\
+	)
+    fi
+
     if [[ -f $ktest_kernel_binary/initramfs ]]; then
 	qemu_cmd+=(-initrd 	"$ktest_kernel_binary/initramfs")
     fi
@@ -628,25 +641,38 @@ start_vm()
     # the invoking user means guest-root file ops on /host need no CAP_CHOWN.
     # This mirrors 9p security_model=none, which also ran as the unprivileged
     # user. The only cost is no file handles (more fds — ulimit is raised below).
-    rm -f "$ktest_out/vm/virtiofsd.sock"
-    virtiofsd	--socket-path="$ktest_out/vm/virtiofsd.sock"		\
-		--shared-dir / --sandbox none				\
-		--translate-uid map:0:$(id -u):1			\
-		--translate-gid map:0:$(id -g):1			\
-		>& "$ktest_out/vm/virtiofsd.log" &
-    local virtiofsd_pid=$!
-    while [[ ! -S "$ktest_out/vm/virtiofsd.sock" ]]; do
-	if ! kill -0 $virtiofsd_pid 2>/dev/null; then
-	    echo "virtiofsd failed to start:" >&2
-	    cat "$ktest_out/vm/virtiofsd.log" >&2
-	    exit 1
-	fi
-	sleep 0.1
-    done
+    local virtiofsd_pids=()
+
+    # $1: socket basename, $2: directory to export
+    start_virtiofsd()
+    {
+	local sock="$ktest_out/vm/$1" dir=$2 pid
+
+	rm -f "$sock"
+	virtiofsd	--socket-path="$sock"				\
+			--shared-dir "$dir" --sandbox none		\
+			--translate-uid map:0:$(id -u):1		\
+			--translate-gid map:0:$(id -g):1		\
+			>& "$sock.log" &
+	pid=$!
+	while [[ ! -S "$sock" ]]; do
+	    if ! kill -0 $pid 2>/dev/null; then
+		echo "virtiofsd for $dir failed to start:" >&2
+		cat "$sock.log" >&2
+		exit 1
+	    fi
+	    sleep 0.1
+	done
+	virtiofsd_pids+=($pid)
+    }
+
+    start_virtiofsd virtiofsd.sock /
+    # Paired with the -device above; both are conditional on the same test.
+    [[ -d /nix/store ]] && start_virtiofsd virtiofsd-nix.sock /nix/store
 
     "${qemu_cmd[@]}"
 
-    kill $virtiofsd_pid 2>/dev/null
+    kill "${virtiofsd_pids[@]}" 2>/dev/null
 }
 
 map_clang_version() {
