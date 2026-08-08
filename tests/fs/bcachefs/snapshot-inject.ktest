@@ -622,11 +622,22 @@ test_subvol_child_bit_missing()
     check_fsck repair
 }
 
-# Keys stranded under a *clean* tombstone - node fully DELETED and spliced
-# out of its parent, subvolume record gone, but its keys never swept: the
-# gondezee stage-2 shape. bkey_in_deleted_snapshot (autofix) deletes them
-# and delete_dead_snapshots reaps the tombstone. The assertion that
-# matters: every OTHER snapshot's data survives the sweep.
+# A leaf tombstoned with its keys still accounted to it, and spliced out of
+# its parent.
+#
+# The accounting settles it: nothing we write leaves keys under a deleted
+# node, so the state field is the lie and the node comes back.
+# bch2_snapshot_node_undelete()'s childless path revives it in place -
+# there is no splice of its own to undo - and the edge repairs put the
+# parent's cleared child slot back from the child's side. That relink is
+# what this case covers and no_keys_with_data doesn't: no_keys stays in the
+# tree, so it has nothing to reattach.
+#
+# The subvolume is left alone, so the node keeps its subvol field, the
+# subvolume key stays, and the snapshot returns whole - the full manifest
+# has to match. This used to zero the subvol field and delete the subvolume
+# key as well, which stranded the subvolume, cost the snapshot its dirent
+# and its root inode, and then hid all of that behind skip_snaps.
 test_stranded_keys()
 {
     setup_snapshot_tree
@@ -642,11 +653,11 @@ test_stranded_keys()
 	[[ $c != $victim ]] && other=$c
     done
 
-    kvdb_rw -c "update snapshots 0:$victim:0 state=deleted subvol=0" \
-	 -c "update snapshots 0:$parent:0 children[0]=$other children[1]=0" \
-	 -c "set subvolumes 0:$last_subvol:0 deleted"
+    kvdb_rw -c "update snapshots 0:$victim:0 state=deleted" \
+	 -c "update snapshots 0:$parent:0 children[0]=$other children[1]=0"
 
-    skip_snaps="snap-$((NR_SNAPS - 1))"
+    skip_snaps=""
+    ktest_expect_sb_errors="snapshot_deleted_but_has_data"
     check_fsck repair
 }
 
