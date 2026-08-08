@@ -75,9 +75,64 @@ test_werror()
 	fi
 	echo "cached module -- warnings proven on an earlier run under this same key"
     else
-	local nr_obj=$(find "$build" -name '*.o' | wc -l)
+	# One walk over the .cmd files, two questions about each object.
+	# kbuild records every object's actual command line there and rebuilds
+	# on command change, so the .cmd files are an exact record of how each
+	# object that exists was built - whether or not it was rebuilt just now.
+	#
+	# Asked with grep -q inside an if, not `find -exec grep -L {} +`: grep
+	# exits 1 when *no* file matches, find passes that out of -exec {} +,
+	# and under errexit the test then dies at the exact moment every object
+	# is stale - which is the case this check exists for.
+	#
+	# Two kbuild artefacts at the module root are exempt from both
+	# questions: they are not bcachefs source, so subdir-ccflags-y was never
+	# going to reach them. bcachefs.o is the `ld -r` of every member (no
+	# compiler runs at all), and bcachefs.mod.o is compiled from the .mod.c
+	# glue modpost generates.
+	local kver=$(uname -r)
+	local nr_obj=0 stale=() missing=() cmd
+	while IFS= read -r cmd; do
+	    nr_obj=$((nr_obj + 1))
+	    # Is it from THIS run? DKMS_INTERACTIVE_DIR persists across runs, so
+	    # a build that failed outright leaves the previous run's objects
+	    # sitting there, and every check below happily certifies them.
+	    # Measured, not hypothetical: a run against an Arch kernel whose
+	    # build died on the first file reported "all 129 objects built with
+	    # -Werror" about objects compiled for a 7.1.4 ktest kernel an hour
+	    # earlier. (ktest runs tests after a failed init hook -
+	    # lib/testrunner does not check `$ktest_test init` - so a failed
+	    # build does not by itself stop us getting here.)
+	    #
+	    # kbuild writes the kernel build directory into every .cmd,
+	    # rustc-built objects included, so the running kernel's release
+	    # string has to appear in all of them.
+	    if ! grep -q -e "$kver" "$cmd"; then
+		stale+=("$cmd")
+	    # Was it built with -Werror? The pattern has to be the bare flag:
+	    # kbuild adds -Werror=<warning> forms (implicit-function-declaration,
+	    # return-type, ...) unconditionally, so a substring match on
+	    # "-Werror" hits those and matches every object on every kernel,
+	    # proving nothing. rustc-built objects (mod.o and the vendored
+	    # crates) are exempt - KCFLAGS is a C thing and rustc never sees it.
+	    elif ! grep -qE -e '-Werror( |$)' "$cmd" &&
+		 ! grep -q -e rustc "$cmd"; then
+		missing+=("$cmd")
+	    fi
+	done < <(find "$build" -name '.*.o.cmd' \
+		      -not -name '.bcachefs.o.cmd' \
+		      -not -name '.bcachefs.mod.o.cmd')
 
 	echo "compiled $nr_obj objects under $build"
+
+	if (( ${#stale[@]} )); then
+	    echo "FAIL: not built against the running kernel ($kver):" \
+		 "${#stale[@]} of $nr_obj objects, e.g."
+	    printf '  %s\n' "${stale[@]:0:3}"
+	    echo "left over from an earlier run - this build did not happen,"
+	    echo "so there is nothing here to make a claim about"
+	    return 1
+	fi
 
 	if [[ $nr_obj -lt 20 ]]; then
 	    echo "FAIL: expected fs/bcachefs to compile many objects, got $nr_obj"
@@ -96,33 +151,9 @@ test_werror()
 	    return 1
 	fi
 
-	# Existence is not enough: with stale artefacts the objects can predate
-	# this invocation and predate -Werror entirely. kbuild records each
-	# object's actual command line in its .cmd file and rebuilds on command
-	# change, so "-Werror is in every .cmd" proves every object that exists
-	# was built under it, whether or not it was rebuilt just now.
-	#
-	# The pattern has to be the bare flag: kbuild adds -Werror=<warning>
-	# forms (implicit-function-declaration, return-type, ...)
-	# unconditionally, so a substring match on "-Werror" hits those and
-	# matches every object on every kernel, proving nothing. rustc-built
-	# objects (mod.o and the vendored crates) are exempt -- KCFLAGS is a C
-	# thing and rustc never sees it.
-	#
-	# Two kbuild artefacts at the module root are exempt for a different
-	# reason: they are not bcachefs source, so subdir-ccflags-y was never
-	# going to reach them. bcachefs.o is the `ld -r` of every member (no
-	# compiler runs at all), and bcachefs.mod.o is compiled from the .mod.c
-	# glue modpost generates.
-	local missing
-	missing=$(find "$build" -name '.*.o.cmd' \
-		      -not -name '.bcachefs.o.cmd' \
-		      -not -name '.bcachefs.mod.o.cmd' \
-		      -exec grep -LE -e '-Werror( |$)' {} + |
-		  xargs --no-run-if-empty grep -L --max-count=1 -e rustc)
-	if [[ -n $missing ]]; then
-	    echo "FAIL: objects built without -Werror:"
-	    echo "$missing"
+	if (( ${#missing[@]} )); then
+	    echo "FAIL: built without -Werror: ${#missing[@]} of $nr_obj objects"
+	    printf '  %s\n' "${missing[@]}"
 	    echo "is BCACHEFS_WERROR reaching the DKMS build? it travels via"
 	    echo "\$(DKMSDIR)/build.vars, not the environment -- dkms runs make"
 	    echo "itself, so an exported variable never reaches the compile"
