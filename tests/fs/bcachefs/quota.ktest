@@ -25,17 +25,20 @@ test_usrquota_twodevices()
     echo foo:10	    >> /etc/projid
     echo 10:/mnt    >> /etc/projects
 
-    setquota -u root 256M 512M 64 128 /mnt
+    set_as_user
+    chmod 777 /mnt
+
+    setquota -u $as_user_uid 256M 512M 64 128 /mnt
     #setquota -t 60 60 /mnt
 
     echo "testing direct writes"
-    assert_fails_with "Disk quota exceeded" dd if=/dev/zero of=/mnt/foo bs=1M count=1024 oflag=direct
+    assert_fails_with "Disk quota exceeded" $as_user dd if=/dev/zero of=/mnt/foo bs=1M count=1024 oflag=direct
     repquota -s /mnt
 
     rm /mnt/foo
 
     echo "testing buffered writes"
-    assert_fails_with "Disk quota exceeded" dd if=/dev/zero of=/mnt/foo bs=1M count=1024
+    assert_fails_with "Disk quota exceeded" $as_user dd if=/dev/zero of=/mnt/foo bs=1M count=1024
     repquota -s /mnt
     rm /mnt/foo
 
@@ -55,17 +58,20 @@ test_usrquota()
     echo foo:10	    >> /etc/projid
     echo 10:/mnt    >> /etc/projects
 
-    setquota -u root 256M 512M 64 128 /mnt
+    set_as_user
+    chmod 777 /mnt
+
+    setquota -u $as_user_uid 256M 512M 64 128 /mnt
     #setquota -t 60 60 /mnt
 
     echo "testing direct writes"
-    assert_fails_with "Disk quota exceeded" dd if=/dev/zero of=/mnt/foo bs=1M count=1024 oflag=direct
+    assert_fails_with "Disk quota exceeded" $as_user dd if=/dev/zero of=/mnt/foo bs=1M count=1024 oflag=direct
     repquota -s /mnt
 
     rm /mnt/foo
 
     echo "testing buffered writes"
-    assert_fails_with "Disk quota exceeded" dd if=/dev/zero of=/mnt/foo bs=1M count=1024
+    assert_fails_with "Disk quota exceeded" $as_user dd if=/dev/zero of=/mnt/foo bs=1M count=1024
     repquota -s /mnt
     rm /mnt/foo
 
@@ -80,13 +86,16 @@ test_grpquota()
 
     mount -t bcachefs -o usrquota,grpquota,prjquota ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
 
-    setquota -g root 256M 512M 64 128 /mnt
+    set_as_user
+    chmod 777 /mnt
+
+    setquota -g $as_user_gid 256M 512M 64 128 /mnt
     #setquota -t 60 60 /mnt
 
     repquota -g -s /mnt
 
     echo "testing direct writes"
-    assert_fails_with "Disk quota exceeded" dd if=/dev/zero of=/mnt/foo bs=1M count=1024 oflag=direct
+    assert_fails_with "Disk quota exceeded" $as_user dd if=/dev/zero of=/mnt/foo bs=1M count=1024 oflag=direct
     repquota -g -s /mnt
 
     umount /mnt
@@ -103,19 +112,23 @@ test_prjquota()
     repquota -vP  /mnt
     mkdir /mnt/q1
     mkdir /mnt/q2
-    touch /mnt/q1/foo
-    touch /mnt/q1/foo
 
     setproject -c -P q1 /mnt/q1
     setproject -c -P q2_averylongprojectquotanamefooooooooooooooooooooooooooooooooooooooooobar /mnt/q2
 
     getfattr -R -d -m - /mnt/
 
+    set_as_user
+    chmod 777 /mnt/q1
+
     #setquota -t 60 60 /mnt
     setquota -P q1 256M 512M 64 128 /mnt
 
+    # dd creates q1/foo itself, after setproject, so it inherits q1's project
+    # id. A file created before setproject stays in project 0, and writes to it
+    # wouldn't count against this limit at all.
     echo "testing direct writes"
-    assert_fails_with "Disk quota exceeded" dd if=/dev/zero of=/mnt/q1/foo bs=1M count=1024 oflag=direct
+    assert_fails_with "Disk quota exceeded" $as_user dd if=/dev/zero of=/mnt/q1/foo bs=1M count=1024 oflag=direct
     repquota -P -s /mnt
 
     chattr -p 0 /mnt/q1/foo
@@ -138,19 +151,23 @@ test_prjquota_multidevices()
     repquota -vP  /mnt
     mkdir /mnt/q1
     mkdir /mnt/q2
-    touch /mnt/q1/foo
-    touch /mnt/q1/foo
 
     setproject -c -P q1 /mnt/q1
     setproject -c -P q2 /mnt/q2
 
     getfattr -R -d -m - /mnt/
 
+    set_as_user
+    chmod 777 /mnt/q1
+
     #setquota -t 60 60 /mnt
     setquota -P q1 256M 512M 64 128 /mnt
 
+    # dd creates q1/foo itself, after setproject, so it inherits q1's project
+    # id. A file created before setproject stays in project 0, and writes to it
+    # wouldn't count against this limit at all.
     echo "testing direct writes"
-    assert_fails_with "Disk quota exceeded" dd if=/dev/zero of=/mnt/q1/foo bs=1M count=1024 oflag=direct
+    assert_fails_with "Disk quota exceeded" $as_user dd if=/dev/zero of=/mnt/q1/foo bs=1M count=1024 oflag=direct
     repquota -P -s /mnt
 
     mv /mnt/q1/foo /mnt/q2
