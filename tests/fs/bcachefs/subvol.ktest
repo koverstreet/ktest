@@ -350,8 +350,8 @@ test_subvol_snapshot_create()
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
 
-    # snapshots are read only by default:
-    assert_fails touch /mnt/snapshot_1/foo
+    # Writable by default, as in btrfs; subvol_snapshot_create_ro covers -r.
+    touch /mnt/snapshot_1/foo
 
     umount /mnt
 
@@ -384,6 +384,12 @@ test_subvol_snapshot_create_rw()
     bcachefs subvolume snapshot --rw /mnt/subvolume_1 /mnt/snapshot_1
 
     touch /mnt/snapshot_1/foo
+
+    # --rw is the default written out, so the only thing it can do that the
+    # default can't is contradict --read-only - and that has to be refused
+    # rather than silently resolved, which is what happened while the flag
+    # was parsed and thrown away.
+    assert_fails bcachefs subvolume snapshot --rw -r /mnt/subvolume_1 /mnt/snapshot_2
 
     umount /mnt
 
