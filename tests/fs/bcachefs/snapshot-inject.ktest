@@ -2099,28 +2099,31 @@ test_tombstone_key_migration()
 }
 
 # The gondezee-class guard, exercised directly: a NO_KEYS node that still
-# has data sectors accounted to it. The deletion finish must REFUSE
-# (bch2_snapshot_node_check_no_data -> EINVAL_snapshot_delete_with_data),
-# schedule check_allocations/check_inodes, and converge once the sweep
-# autofixes catch up - the data was condemned (we deleted the
-# subvolume), so it legitimately goes; the guard's job is making the
-# machine prove that before the node vanishes.
+# has keys accounted to it.
+#
+# NO_KEYS says "this node's keys have migrated down to its children", so it
+# is only ever meaningful on an interior node - hence the parent of a leaf
+# here, which owns the keys written before the last snapshot was taken.
+# check_snapshot() holds that claim up against the accounting, finds keys,
+# and sets the node live (check_snapshots.c, snapshot_deleted_but_has_data):
+# nothing we write leaves keys accounted to a node that has none, so the
+# state field is the lie.
+#
+# Nothing else is disturbed - the node keeps its subvol field and every
+# subvolume key stays - so the revive is the whole repair and the full
+# manifest must match.
 test_no_keys_with_data()
 {
     setup_snapshot_tree
 
-    # post-snapshot write, so sectors are accounted to snap-2's id exactly
-    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
-    dd if=/dev/zero of=/mnt/snap-2/big bs=1M count=2 oflag=direct
-    capture_state $MANIFEST
-    umount /mnt
+    local leaf=$(subvol_snapshot 4)
+    local victim=$(snap_field $leaf parent)
+    (( victim != 0 ))
 
-    local victim=$(subvol_snapshot 4)
+    kvdb_rw -c "update snapshots 0:$victim:0 state=no_keys"
 
-    kvdb_rw -c "update snapshots 0:$victim:0 state=no_keys subvol=0" \
-	 -c "set subvolumes 0:4:0 deleted"
-
-    skip_snaps="snap-2"
+    skip_snaps=""
+    ktest_expect_sb_errors="snapshot_deleted_but_has_data"
     check_fsck repair
 }
 
