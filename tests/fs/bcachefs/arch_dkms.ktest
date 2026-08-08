@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+#
+# Arch: CONFIG_RUST=y, GCC 16.1.1, no LTO. The kernel ships its Rust artifacts,
+# so bcachefs's Rust builds against them and all three Rust objects are
+# expected - a C-only module here means the probe declined when it should not
+# have, and every Rust-path bug went untested behind a green run.
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/distro-dkms-libs.sh"
+
+distro_rootfs_prepare arch
+
+test_arch_dkms()
+{
+    distro_dkms_build arch 3
+}
+
+main "$@"
