@@ -1110,8 +1110,24 @@ test_subvol_to_missing_node()
 # shrunk to only entities the repair legitimately removes). Failing is
 # the point - each test drives and accepts its corresponding R-table repair.
 
-# S2/I1/R4: live parent points at a DELETED tombstone - an interrupted
-# parent-splice. Fail-stop: EINVAL_snapshot_child_deleted.
+# A live parent still pointing at a DELETED tombstone that owns keys - an
+# interrupted parent-splice, caught from the parent's side.
+#
+# check_snapshot_edge() weighs the child's state against the accounting and
+# undeletes it, explicitly "rather than splicing past it": routing the tree
+# around a node that still owns keys is what would strand them. That check
+# lives on the edge and not only in check_snapshot_deleted() because
+# bch2_check_snapshots_trans() walks in reverse from POS_MAX while ids
+# descend from the root, so a parent always reaches a deleted child's edge
+# before the child itself is visited.
+#
+# stranded_keys is the same undelete reached the other way: there the node
+# was spliced out, so its own visit is what finds it. Here the parent's
+# child slot still names it, so the edge check gets there first.
+#
+# Nothing else is touched - the node keeps its subvol field and the
+# subvolume key stays - so the snapshot comes back whole and the full
+# manifest has to match.
 test_tombstoned_child()
 {
     setup_snapshot_tree
@@ -1119,16 +1135,10 @@ test_tombstoned_child()
     local last_subvol=$((2 + NR_SNAPS - 1))
     local victim=$(subvol_snapshot $last_subvol)
 
-    kvdb_rw -c "update snapshots 0:$victim:0 state=deleted subvol=0" \
-	 -c "set subvolumes 0:$last_subvol:0 deleted"
+    kvdb_rw -c "update snapshots 0:$victim:0 state=deleted"
 
-    # expect=repair (FAILING until R4 lands): splice the tombstone out of
-    # the parent - redirect the child pointer to the tombstone's live
-    # descendant, migrate its keys to where they're visible. The tombstoned
-    # snap is genuinely gone, so it stays skipped; every other snap's
-    # tree+data must match, and the migrated keys must land in the live
-    # descendant, not be dropped.
-    skip_snaps="snap-$((NR_SNAPS - 1))"
+    skip_snaps=""
+    ktest_expect_sb_errors="snapshot_deleted_but_has_data"
     check_fsck repair
 }
 
