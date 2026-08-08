@@ -411,6 +411,7 @@ start_vm()
 
     rm -f "$ktest_out/core.*"
     rm -f "$ktest_out/vmcore"
+    rm -f "$ktest_out/status"
     rm -f "$ktest_out/vm"
     ln -s "$ktest_tmp" "$ktest_out/vm"
 
@@ -645,8 +646,34 @@ start_vm()
     done
 
     "${qemu_cmd[@]}"
+    local ret=$?
 
-    kill $virtiofsd_pid 2>/dev/null
+    # `|| true`: virtiofsd normally exits by itself when qemu drops the
+    # vhost-user connection, so by now it's usually already gone.
+    kill $virtiofsd_pid 2>/dev/null || true
+
+    # -I keeps the VM alive on purpose; the user ended the run themselves
+    # and there's no verdict to report. Otherwise the guest left one in
+    # $ktest_out/status on its way down (lib/testrunner) - report it as
+    # our exit status, so a caller can just test $? instead of grepping
+    # the console for TEST SUCCESS. Those markers are the CI supervisor's
+    # interface; everyone else deserves an exit code.
+    #
+    # No status file means the VM never got that far: a panic, an OOM
+    # kill, a hang someone interrupted. That's a failure.
+    if ! $ktest_interactive; then
+	if [[ ! -f $ktest_out/status ]]; then
+	    echo "VM exited without a test verdict (qemu exited $ret)"
+	    ret=1
+	elif [[ $(<"$ktest_out/status") != SUCCESS ]]; then
+	    ret=1
+	fi
+    fi
+
+    # exit, not return: a bare `return 1` would trip common.sh's ERR trap
+    # on the way out and print a spurious "Error 1 at ..." for an ordinary
+    # test failure. This is the end of the run either way.
+    exit $ret
 }
 
 map_clang_version() {
