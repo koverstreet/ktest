@@ -9,18 +9,24 @@
 # set, so a warning in bcachefs is never fatal anywhere in the matrix while it
 # is fatal for anyone building from defconfig.
 #
-# koverstreet/bcachefs-tools#819 is what fell through that gap: a duplicate
-# const in bindgen-generated extern.c, fatal under CONFIG_WERROR=y and
-# invisible here. It survived because nothing in CI ever built with warnings
-# as errors.
+# koverstreet/bcachefs-tools#819 is what fell through that gap: a warning
+# class in bindgen-generated extern.c, fatal under CONFIG_WERROR=y and
+# invisible here. That particular diagnostic is deliberately waived now
+# (fs/Makefile adds -Wno-duplicate-decl-specifier to rust/extern.o -- that
+# was the fix), so this test would not re-catch #819 itself; what it catches
+# is the next warning of that kind, in generated or ordinary code, that
+# nobody has waived on purpose.
 #
-# -Werror is scoped to bcachefs rather than the tree: KCFLAGS applies to
-# whatever this invocation compiles, and config-kbuild-target restricts that
-# to fs/bcachefs/. Host tools use HOSTCFLAGS and are unaffected, so an
-# unrelated warning elsewhere in the kernel cannot fail this test. Frame-size
-# warnings stay warnings either way -- kbuild passes
-# -Wno-error=frame-larger-than= unconditionally. No VM: the assertion is that
-# it compiles.
+# -Werror arrives via KCFLAGS, restricted to this invocation by
+# config-kbuild-target fs/bcachefs/. Not perfectly scoped: KCFLAGS is global
+# to the invocation, and the fs/bcachefs/ goal also compiles a few
+# prerequisite objects (scripts/mod/empty.o, rust/helpers) with it -- a
+# warning there fails this test too. Accepted rather than hidden: those
+# files are warning-clean in any tree whose own CI builds with WERROR, and
+# there is no per-directory KCFLAGS. Host tools use KBUILD_HOSTCFLAGS and
+# are unaffected. Frame-size warnings stay warnings, as everywhere else in
+# kbuild (-Wno-error=frame-larger-than= is unconditional). No VM: the
+# assertion is that it compiles.
 #
 # test-libs.sh rather than prelude.sh, and it matters here: kconfig.sh is
 # what pins CONFIG_64BIT per-arch. Without it, allnoconfig on x86_64 answers
@@ -39,11 +45,11 @@ config-kbuild-target fs/bcachefs/
 require-kernel-config BCACHEFS_FS
 
 # RUST so the kernel generates rustc_cfg and bcachefs's Rust side actually
-# builds -- bindgen-generated extern.c is the file #819 was in, so a build
-# without it cannot see the class of warning this test exists for. The
-# fs/Makefile auto-probe (BCACHEFS_RUST ?= auto) silently drops Rust when the
-# toolchain is missing, hence the hard assertion on extern.o below instead of
-# trusting the probe.
+# builds -- generated code is where #819's class of warning lives, so a build
+# without it misses the surface this test exists for. The fs/Makefile
+# auto-probe (BCACHEFS_RUST ?= auto) silently drops Rust when the toolchain
+# is missing, hence the hard assertion on extern.o below instead of trusting
+# the probe.
 require-kernel-config RUST
 
 require-kernel-make-append "KCFLAGS=-Werror"
@@ -53,12 +59,12 @@ test_werror()
     local build="$ktest_kernel_build/fs/bcachefs"
 
     # The build has already happened and succeeded by the time we get here --
-    # that is the test. What is left is to confirm it actually compiled
-    # bcachefs, because a -Werror build of nothing at all passes just as
-    # cleanly as a -Werror build of a clean tree, and reports the same thing.
+    # that is the test. What is left is to confirm it covered what it claims,
+    # because a -Werror build of nothing at all passes just as cleanly as a
+    # -Werror build of a clean tree.
     local nr_obj=$(find "$build" -name '*.o' 2>/dev/null | wc -l)
 
-    echo "compiled $nr_obj objects under $build with -Werror"
+    echo "compiled $nr_obj objects under $build"
 
     if [[ $nr_obj -lt 20 ]]; then
         echo "FAIL: expected fs/bcachefs to compile many objects, got $nr_obj"
@@ -70,14 +76,31 @@ test_werror()
     if [[ ! -f $build/rust/extern.o ]]; then
         echo "FAIL: bindgen-generated rust/extern.o was not built"
         echo "bcachefs's Rust support auto-disables when rustc or bindgen are"
-        echo "missing; install both, or this test cannot see the class of"
-        echo "warning it was written for"
+        echo "missing; install both, or this test cannot see generated-code"
+        echo "warnings at all"
         checkdep bindgen
         checkdep rustc
         return 1
     fi
 
-    echo "bindgen-generated rust/extern.o built with -Werror"
+    # Existence is not enough: with -K (skip kernel build) or stale artefacts
+    # the objects can predate this invocation and predate -Werror entirely.
+    # kbuild records each object's actual command line in its .cmd file and
+    # rebuilds on command change, so "-Werror is in every .cmd" proves every
+    # object that exists was built under it, whether or not it was rebuilt
+    # just now. rustc-built objects (mod.o and the vendored crates) are
+    # exempt: KCFLAGS is a C thing and rustc never sees it.
+    local missing=$(find "$build" -name '.*.o.cmd' \
+                        -exec grep --files-without-match -- -Werror {} + |
+                    xargs --no-run-if-empty grep --files-without-match --max-count=1 -- rustc)
+    if [[ -n $missing ]]; then
+        echo "FAIL: objects built without -Werror:"
+        echo "$missing"
+        echo "stale build dir? rerun without -K, or remove the build dir"
+        return 1
+    fi
+
+    echo "all $nr_obj objects (incl. bindgen-generated extern.o) built with -Werror"
 }
 
 main "$@"
