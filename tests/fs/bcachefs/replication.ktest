@@ -244,6 +244,104 @@ test_device_evacuate_online()
     do_remove_test 0 1
 }
 
+hot_remove_blockdev()
+{
+    local dev=$1
+    local name=${dev#/dev/}
+    local block_sys=/sys/block/$name
+
+    if [[ ! -d $block_sys ]]; then
+	echo "block device $dev is not present in sysfs"
+	return 1
+    fi
+
+    local remove_path
+    for remove_path in "$block_sys/device/delete" "$block_sys/device/remove"; do
+	if [[ -e $remove_path ]]; then
+	    echo 1 > "$remove_path"
+	    return 0
+	fi
+    done
+
+    remove_path=$(readlink -f "$block_sys/device")
+    while [[ $remove_path != /sys && $remove_path != / ]]; do
+	if [[ -e $remove_path/remove ]]; then
+	    echo 1 > "$remove_path/remove"
+	    return 0
+	fi
+	remove_path=$(dirname "$remove_path")
+    done
+
+    echo "no sysfs hot-remove knob found for $dev"
+    return 1
+}
+
+wait_dev_state_not_rw()
+{
+    local fs_uuid=$1
+    local dev_idx=$2
+    local state_file=/sys/fs/bcachefs/$fs_uuid/dev-$dev_idx/state
+    local state=
+
+    for _ in $(seq 1 100); do
+	if [[ ! -e $state_file ]]; then
+	    return 0
+	fi
+
+	state=$(cat "$state_file")
+	if [[ $state != *"[rw]"* ]]; then
+	    echo "dev-$dev_idx state after hot remove: $state"
+	    return 0
+	fi
+
+	sleep .1
+    done
+
+    echo "dev-$dev_idx still rw after hot remove: $state"
+    return 1
+}
+
+test_device_hot_remove_offlines_dead_dev()
+{
+    # Reproducer for koverstreet/bcachefs#142: a surprise-removed member must
+    # not stay readwrite and receive new writes as a ghost device.
+    ktest_expect_device_errors=1
+    set_watchdog 120
+
+    run_quiet "" bcachefs format -f		\
+	--replicas=2				\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}			\
+	${ktest_scratch_dev[2]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]} /mnt
+
+    dd if=/dev/urandom of=/mnt/before-hot-remove bs=1M count=64 oflag=direct
+    sync
+
+    local fs_uuid=$(bcachefs fs usage -h /mnt | awk '/^Filesystem:/ {print $2; exit}')
+    bcachefs fs usage -h /mnt
+
+    echo "hot-removing ${ktest_scratch_dev[1]}"
+    hot_remove_blockdev ${ktest_scratch_dev[1]}
+    wait_dev_state_not_rw "$fs_uuid" 1
+
+    dd if=/dev/urandom of=/mnt/after-hot-remove bs=1M count=64 oflag=direct
+    sync
+    (cd /mnt && md5sum before-hot-remove after-hot-remove) > /root/hot-remove.md5
+    bcachefs fs usage -h /mnt
+
+    umount /mnt
+
+    mount -t bcachefs -o degraded ${ktest_scratch_dev[0]}:${ktest_scratch_dev[2]} /mnt
+    (cd /mnt && md5sum -c /root/hot-remove.md5)
+    umount /mnt
+
+    bcachefs reset-counters --counters=data_update_fail ${ktest_scratch_dev[0]}
+    bcachefs reset-counters --counters=bucket_alloc_fail ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]} ${ktest_scratch_dev[2]}
+}
+
 test_device_add()
 {
     set_watchdog 240
