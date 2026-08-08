@@ -356,6 +356,38 @@ assert_output_has()
     fi
 }
 
+# assert_fails_with PATTERN CMD...
+#
+# The error-path counterpart of the two above: assert the command failed AND
+# said the right thing about it.
+#
+# Both halves matter, and the exit status is the half that's easy to lose. For
+# a refusal - "fsck declined to touch a mounted filesystem" - success and
+# failure can produce similar-looking output, and a test that only grepped
+# would pass whether we refused or went ahead and rewrote a live filesystem.
+# Check the status first, and print what was captured when it's wrong.
+assert_fails_with()
+{
+    local pattern=$1 out rc=0
+    shift
+
+    # "|| rc=$?" is load-bearing here, not defensive: run_test runs under
+    # `set -e`, and this helper exists to run commands that fail, so a bare
+    # assignment would exit the shell on every single call.
+    out=$("$@" 2>&1) || rc=$?
+    if [[ $rc == 0 ]]; then
+	echo "FAILED: '$*' succeeded; expected failure matching '$pattern'"
+	echo "$out"
+	exit 1
+    fi
+
+    if ! grep -q -- "$pattern" <<<"$out"; then
+	echo "FAILED: '$*' exited $rc, but '$pattern' missing from output"
+	echo "$out"
+	exit 1
+    fi
+}
+
 # Scan what the kernel logged during this test - everything after the marker
 # run_tests() wrote to kmsg before calling us.
 #
