@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+#
+# CachyOS: CONFIG_RUST=n, Clang 22.1.8 ThinLTO. LLVM=1 because a module for a
+# ThinLTO kernel has to be built with the LLVM toolchain.
+#
+# Zero Rust objects is the *correct* result here, not a degradation: bcachefs
+# gates its vendored-Rust path to kernels < 7.0 (217e4fccd8c0), and CachyOS
+# ships 7.x, so a CONFIG_RUST=n kernel builds C-only by design.
+#
+# This is the configuration koverstreet/bcachefs#1197 died in. v1.39.0's probe
+# took the vendored path on any CONFIG_RUST=n kernel, and that path includes a
+# Makefile.rust.vendor which install_dkms never shipped - so the build stopped
+# at parse time with no module at all. Reproduced here on the reporter's exact
+# kernel; the test asserts a module exists, which is what 1.39.0 could not do.
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/distro-dkms-libs.sh"
+
+distro_rootfs_prepare cachyos
+
+test_cachyos_dkms()
+{
+    distro_dkms_build cachyos 0 LLVM=1
+}
+
+main "$@"
