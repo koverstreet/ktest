@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+#
+# Dirty-writeback under memory exhaustion — the no-swap sibling of
+# swapfile_deadlock.ktest.  No swap is configured, so when the eater
+# exhausts memory the ONLY way reclaim can make progress is writing
+# back dirty bcachefs page cache — while the bcachefs write path itself
+# needs memory to do that.  Same recursion class as the swap deadlock
+# (allocation → reclaim → fs writeback → allocation), reached without
+# any swap support in the fs.
+#
+# The writer keeps a large dirty working set on the fs; the eater denies
+# reclaim everything else (unkillable, crushes the file LRU).  A kernel
+# whose writeback path allocates carelessly under pressure deadlocks or
+# OOM-panics ("System is deadlocked on memory"); a correct one grinds
+# through.  hung_task_panic makes a wedge fail loudly within ~30s; run
+# through lib/supervisor for the livelock case.
+#
+#   WRITEBACK_TEST_MEM=512M      VM memory
+#   WRITEBACK_TEST_CPUS=2        vCPUs
+#   WRITEBACK_TEST_ROUNDS=3      pressure rounds per boot
+#   WRITEBACK_TEST_DURATION=120  seconds per round
+#   WRITEBACK_TEST_DIRTY_MB=256  writer working set
+#   WRITEBACK_TEST_NO_KBUILD=1   reuse a prebuilt kernel
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/memory-pressure-libs.sh
+
+require-kernel-config DETECT_HUNG_TASK
+
+config-mem ${WRITEBACK_TEST_MEM:-512M}
+config-cpus ${WRITEBACK_TEST_CPUS:-2}
+config-scratch-devs 2G
+config-timeout 900
+
+[[ -n ${WRITEBACK_TEST_NO_KBUILD:-} ]] && config-no-kbuild
+
+test_writeback_reclaim_pressure()
+{
+    set_watchdog 700
+
+    local dev=${ktest_scratch_dev[0]}
+    echo "=== $(grep MemTotal /proc/meminfo), $(nproc) cpus, no swap ==="
+
+    run_quiet "" bcachefs format -f "$dev"
+    mount -t bcachefs "$dev" /mnt
+
+    build_eater
+
+    # No swap: the default overcommit heuristic would refuse an mmap
+    # bigger than RAM outright.  The eater must be allowed to overcommit
+    # so the pressure comes from page touches, not the commit limit.
+    echo 1 > /proc/sys/vm/overcommit_memory
+
+    # Let dirty pages pile up: writeback should be driven by reclaim and
+    # the fs, not by the dirty throttle kicking in early.
+    echo 40 > /proc/sys/vm/dirty_ratio
+    echo 20 > /proc/sys/vm/dirty_background_ratio
+
+    hung_task_panic_on
+
+    # The writer: continuously rewrite a working set of 8M files,
+    # fsync-free, keeping a steady supply of dirty bcachefs pages that
+    # only writeback can reclaim.
+    local dirty_mb=${WRITEBACK_TEST_DIRTY_MB:-256}
+    local nfiles=$((dirty_mb / 8))
+    mkdir -p /mnt/dirty
+    (
+	trap - ERR
+	set +e
+	while true; do
+	    for (( i = 0; i < nfiles; i++ )); do
+		dd if=/dev/zero of=/mnt/dirty/f$i bs=1M count=8 2>/dev/null
+	    done
+	done
+    ) &
+    local writer_pid=$!
+
+    start_mem_telemetry
+
+    local eat_mb=${WRITEBACK_TEST_EAT_MB:-$(eater_squeeze_mb)}
+    local duration=${WRITEBACK_TEST_DURATION:-120}
+    local rounds=${WRITEBACK_TEST_ROUNDS:-3}
+    local round
+    for (( round = 1; round <= rounds; round++ )); do
+	echo "=== round $round/$rounds: eater ${eat_mb}M for ${duration}s ==="
+	/tmp/eater "$eat_mb" "$duration" || {
+	    stop_mem_telemetry
+	    echo "eater failed"
+	    return 1
+	}
+	sleep 5
+    done
+
+    stop_mem_telemetry
+    kill $writer_pid 2>/dev/null || true
+    wait $writer_pid 2>/dev/null || true
+
+    hung_task_panic_off
+
+    grep -E "Dirty|Writeback:" /proc/meminfo
+
+    sync
+    rm -rf /mnt/dirty
+    umount /mnt
+
+    mount -t bcachefs -o fsck,ro "$dev" /mnt
+    umount /mnt
+
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+main "$@"

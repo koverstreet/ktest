@@ -50,6 +50,7 @@ ktest_images=()
 ktest_rw_images=()
 ktest_scratch_dev=()
 ktest_scratch_dev_sizes=()
+ktest_scratch_slowdevs=()
 ktest_scratch_dev_count=0
 ktest_make_install=()
 ktest_kernel_config_require=()
@@ -197,6 +198,25 @@ config-scratch-devs()
     ktest_scratch_dev_count=$((ktest_scratch_dev_count + 1))
 
     ktest_scratch_dev_sizes+=("$1")
+}
+
+# Like config-scratch-devs, but the device is rate limited by qemu (300 iops,
+# 100MB/s) -- see ktest_scratch_slowdevs in lib/libktest.sh. Use this to model a
+# mixed fast/slow pool, e.g. an SSD tier plus rotational disks that are also
+# allowed to carry the journal: journal writes then take long enough for
+# unwritten entries to accumulate, which uniformly fast virtio disks never do.
+#
+# NOTE: libktest attaches every normal scratch dev before any slow one, so all
+# config-scratch-devs lines must come BEFORE the config-scratch-slowdevs lines
+# or the ktest_scratch_dev names will not line up with the attach order.
+config-scratch-slowdevs()
+{
+    local chars=( {b..z} )
+
+    ktest_scratch_dev+=("/dev/${ktest_dev_prefix}${chars[$ktest_scratch_dev_count]}")
+    ktest_scratch_dev_count=$((ktest_scratch_dev_count + 1))
+
+    ktest_scratch_slowdevs+=("$1")
 }
 
 config-pmem-devs()
@@ -522,6 +542,15 @@ run_test()
 
     if ktest_in_vm; then
 	echo "|/bin/cp --sparse=always /dev/stdin $test_output/core.%e.PID%p.SIG%s.TIME%t" > /proc/sys/kernel/core_pattern
+    fi
+
+    # Optional per-test hooks (e.g. bcachefs's livelock watchdog).  The EXIT
+    # trap ensures teardown runs even when $test_fn fails under set -e.
+    if [[ $(type -t ktest_test_teardown) = function ]]; then
+	trap ktest_test_teardown EXIT
+    fi
+    if [[ $(type -t ktest_test_setup) = function ]]; then
+	ktest_test_setup "$test_name"
     fi
 
     $test_fn

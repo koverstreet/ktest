@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#
+# In-kernel unit test for bch2_trans_commit_lazy() (bcachefs-tools#780):
+# the lazy commit must be a no-op on an empty transaction and a regular
+# commit otherwise.  With the empty-check inverted it returns success
+# while silently dropping every queued update — test_commit_lazy queues
+# one update through it and then verifies the key actually persisted.
+#
+# Requires the module built with BCACHEFS_TESTS=1 (and Rust support:
+# BCACHEFS_RUST=1 for dkms builds, since the test harness lives in
+# fs/debug/tests.rs).
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config BCACHEFS_DEBUG
+require-kernel-config BCACHEFS_TESTS
+
+# The unit-test harness (fs/debug/tests.rs) is Rust; a C-only module has
+# no perf_test attribute at all.  For dkms runs, force the Rust module
+# build (fs/Makefile reads the unprefixed var; sourced env vars are not
+# exported, so re-export here the way test-libs does for BCACHEFS_TESTS).
+export BCACHEFS_RUST=1
+
+config-mem 4G
+config-scratch-devs 2G
+config-timeout 1800
+
+[[ -n ${KTEST_NO_KBUILD:-} ]] && config-no-kbuild
+
+test_commit_lazy_unit()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f "${ktest_scratch_dev[0]}"
+    mount -t bcachefs "${ktest_scratch_dev[0]}" /mnt
+
+    # Fails the write (and the test) if the lazy commit dropped the update.
+    echo "test_commit_lazy 1 1" > /sys/fs/bcachefs/*/perf_test
+
+    umount /mnt
+
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+main "$@"
