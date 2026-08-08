@@ -1271,7 +1271,7 @@ disabled_test_device_add_faults()
     device_add_fault_fn()
     {
 	set_faults "$1 enable"
-	! bcachefs device add -f /mnt ${ktest_scratch_dev[1]}
+	assert_fails bcachefs device add -f /mnt ${ktest_scratch_dev[1]}
     }
 
     run_fault_injection_test bcachefs:add			device_add_fault_fn
@@ -1467,7 +1467,7 @@ test_key_type_error()
     bcachefs device remove --force ${ktest_scratch_dev[1]}
 
     # should fail:
-    ! dd if=/mnt/foo of=/dev/null bs=64k count=1 iflag=direct
+    assert_fails dd if=/mnt/foo of=/dev/null bs=64k count=1 iflag=direct
 
     umount /mnt
 

@@ -18,7 +18,7 @@ test_wipe_btrfs()
     mkfs.btrfs -f  ${ktest_scratch_dev[0]}
     bcachefs format -f ${ktest_scratch_dev[0]}
 
-    ! mount -t btrfs ${ktest_scratch_dev[0]} /mnt
+    assert_fails mount -t btrfs ${ktest_scratch_dev[0]} /mnt
 }
 
 test_stress_ng()
@@ -76,7 +76,7 @@ test_remount_ro_rw()
 
     echo "test: remount-ro"
     mount -o remount,ro /mnt
-    ! touch /mnt/foo
+    assert_fails touch /mnt/foo
     echo "test: remount-rw"
     mount -o remount,rw /mnt
     touch /mnt/bar
@@ -118,9 +118,9 @@ test_mount_again_after_ebusy()
 
     mkdir -p /mnt2
     echo "test: try mount rw (1)"
-    ! mount -t bcachefs -o rw ${ktest_scratch_dev[0]} /mnt2
+    assert_fails mount -t bcachefs -o rw ${ktest_scratch_dev[0]} /mnt2
     echo "test: try mount rw (2)"
-    ! mount -t bcachefs -o rw ${ktest_scratch_dev[0]} /mnt2
+    assert_fails mount -t bcachefs -o rw ${ktest_scratch_dev[0]} /mnt2
 
     umount /mnt
 
@@ -146,13 +146,13 @@ test_mount_options()
     umount /mnt
 
     echo "test: invalid mount options"
-    ! mount -t bcachefs -o metadata_checksum=invalid $dev /mnt
-    ! mount -t bcachefs -o promote_target=$(basename $dev),metadata_target=not_a_device $dev /mnt
+    assert_fails mount -t bcachefs -o metadata_checksum=invalid $dev /mnt
+    assert_fails mount -t bcachefs -o promote_target=$(basename $dev),metadata_target=not_a_device $dev /mnt
 
     echo "test: invalid remount options"
     mount -t bcachefs $dev /mnt
-    ! mount -o remount,promote_target=not_a_device /mnt
-    ! mount -o remount,metadata_replicas=not_a_number /mnt
+    assert_fails mount -o remount,promote_target=not_a_device /mnt
+    assert_fails mount -o remount,metadata_replicas=not_a_number /mnt
     umount /mnt
 
     bcachefs fsck -ny $dev
@@ -1382,7 +1382,7 @@ d_test_init_faults()
     {
 	set_faults "$1 enable"
 	# should fail:
-	! mount -t bcachefs -o verbose ${ktest_scratch_dev[0]} /mnt
+	assert_fails mount -t bcachefs -o verbose ${ktest_scratch_dev[0]} /mnt
     }
 
     run_fault_injection_test bcachefs:bch_fs_init   init_fault_fn
@@ -1402,7 +1402,7 @@ d_test_meta_write_faults()
 	(sleep 2; set_faults "$1 enable") &
 
 	# Should fail due to read only cache set
-	! run_fio
+	assert_fails run_fio
 
 	# XXX: verify we've gone RO
 	umount /mnt
@@ -2024,7 +2024,7 @@ test_recover_super()
     dd if=/dev/zero of=${ktest_scratch_dev[0]} bs=1M count=1 oflag=direct
 
     echo "Attempting mount, should fail"
-    ! mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    assert_fails mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     echo "Recovering superblock"
     bcachefs recover-super -y ${ktest_scratch_dev[0]}
@@ -2075,11 +2075,11 @@ test_casefold_overlayfs()
     umount /mnt/merged
 
     echo "Test using casefolded dir - should fail"
-    ! mount -t overlay -o lowerdir=/mnt/casefold,upperdir=/mnt/dir/casefold,workdir=/mnt/work overlay /mnt/merged
+    assert_fails mount -t overlay -o lowerdir=/mnt/casefold,upperdir=/mnt/dir/casefold,workdir=/mnt/work overlay /mnt/merged
 
     echo "Test using a dir with a casefold subdir - should mount"
     mount -t overlay -o lowerdir=/mnt/dir,upperdir=/mnt/upper,workdir=/mnt/work overlay /mnt/merged
-    ! ls /mnt/merged/dir/casefold
+    assert_fails ls /mnt/merged/dir/casefold
     umount /mnt/merged
 
     umount /mnt

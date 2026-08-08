@@ -258,7 +258,7 @@ test_check_damage_orphan()
 
     [[ $(damage_key_count) = 1 ]]
     kvdb -c "list damage" | grep -q "0:$inum:"
-    ! kvdb -c "list damage" | grep -q "0:99999:"
+    assert_output_lacks "0:99999:" kvdb -c "list damage"
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
 }
@@ -334,7 +334,7 @@ test_clear()
     bcachefs damage clear /mnt/file
     [[ -z $(bcachefs damage /mnt/file) ]]
     [[ $(damage_names /mnt/snap/file) = "jset_seq_blacklisted" ]]
-    ! bcachefs damage ls /mnt | grep -q "^file:"
+    assert_output_lacks "^file:" bcachefs damage ls /mnt
     bcachefs damage ls -R /mnt | grep -q "^snap/file:"
 
     # sole view: the key is really deleted
@@ -351,7 +351,7 @@ test_clear()
     kvdb -c "list damage"
     [[ $(damage_key_count) = 1 ]]
     kvdb -c "list damage" | grep -q "whiteout"
-    ! kvdb -c "list damage" | grep -q "0:$inum_plain:"
+    assert_output_lacks "0:$inum_plain:" kvdb -c "list damage"
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
 }

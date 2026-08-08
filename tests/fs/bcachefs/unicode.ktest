@@ -43,8 +43,16 @@ test_casefold_disabled()
 
     mkdir /mnt/test_dir
 
-    # Trying to enable casefolding should fail
-    ! bcachefs set-file-option --casefold /mnt/test_dir 2>&1 | tee /dev/stderr | grep -q "casefolding"
+    # Trying to enable casefolding should fail: bch2_inode_set_casefold()
+    # refuses via bch2_fs_casefold_enabled(), which throws casefolding_disabled
+    # (class EOPNOTSUPP) when the fs was mounted casefold_disabled.
+    #
+    # The old form here grepped for "casefolding" and could never match: that
+    # word is in bch_err_ratelimited()'s "Cannot enable casefolding: %s", which
+    # goes to dmesg. What reaches us is set-file-option's own context line
+    # around the failing setxattr, "setting bcachefs.casefold on ...", which has
+    # "casefold" but not "casefolding".
+    assert_fails_with "casefold" bcachefs set-file-option --casefold /mnt/test_dir
 
     umount /mnt
     bcachefs fsck -ny ${ktest_scratch_dev[0]}

@@ -351,7 +351,7 @@ test_subvol_snapshot_create()
     bcachefs subvolume snapshot /mnt/subvolume_1 /mnt/snapshot_1
 
     # snapshots are read only by default:
-    ! touch /mnt/snapshot_1/foo
+    assert_fails touch /mnt/snapshot_1/foo
 
     umount /mnt
 
@@ -367,7 +367,7 @@ test_subvol_snapshot_create_ro()
     bcachefs subvolume create /mnt/subvolume_1
     bcachefs subvolume snapshot -r /mnt/subvolume_1 /mnt/snapshot_1
 
-    ! touch /mnt/snapshot_1/foo
+    assert_fails touch /mnt/snapshot_1/foo
 
     umount /mnt
 
@@ -869,7 +869,7 @@ test_delete_subvol_nested()
 
     bcachefs subvolume create /mnt/a
     bcachefs subvolume create /mnt/a/b
-    ! bcachefs subvolume delete /mnt/a
+    assert_fails bcachefs subvolume delete /mnt/a
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
@@ -994,7 +994,7 @@ test_subvol_delete_by_rename()
 
     # now a plain directory, not a subvolume:
     [[ -f /mnt/victim/file ]]
-    ! bcachefs subvolume delete /mnt/victim
+    assert_fails bcachefs subvolume delete /mnt/victim
 
     # the snapshot and its contents survive the source's deletion:
     [[ -f /mnt/snap/keep ]]

@@ -617,7 +617,7 @@ test_recover_super()
     dd if=/dev/zero of=${ktest_scratch_dev[0]} bs=1M count=1 oflag=direct
 
     echo "Attempting mount, should fail"
-    ! mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    assert_fails mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     echo "Recovering superblock"
     bcachefs recover-super --src_device ${ktest_scratch_dev[1]} --dev_idx 0 -y ${ktest_scratch_dev[0]}

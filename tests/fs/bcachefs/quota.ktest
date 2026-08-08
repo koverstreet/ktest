@@ -29,13 +29,13 @@ test_usrquota_twodevices()
     #setquota -t 60 60 /mnt
 
     echo "testing direct writes"
-    ! dd if=/dev/zero of=/mnt/foo bs=1M oflag=direct
+    assert_fails_with "Disk quota exceeded" dd if=/dev/zero of=/mnt/foo bs=1M count=1024 oflag=direct
     repquota -s /mnt
 
     rm /mnt/foo
 
     echo "testing buffered writes"
-    ! dd if=/dev/zero of=/mnt/foo bs=1M
+    assert_fails_with "Disk quota exceeded" dd if=/dev/zero of=/mnt/foo bs=1M count=1024
     repquota -s /mnt
     rm /mnt/foo
 
@@ -59,13 +59,13 @@ test_usrquota()
     #setquota -t 60 60 /mnt
 
     echo "testing direct writes"
-    ! dd if=/dev/zero of=/mnt/foo bs=1M oflag=direct
+    assert_fails_with "Disk quota exceeded" dd if=/dev/zero of=/mnt/foo bs=1M count=1024 oflag=direct
     repquota -s /mnt
 
     rm /mnt/foo
 
     echo "testing buffered writes"
-    ! dd if=/dev/zero of=/mnt/foo bs=1M
+    assert_fails_with "Disk quota exceeded" dd if=/dev/zero of=/mnt/foo bs=1M count=1024
     repquota -s /mnt
     rm /mnt/foo
 
@@ -86,7 +86,7 @@ test_grpquota()
     repquota -g -s /mnt
 
     echo "testing direct writes"
-    ! dd if=/dev/zero of=/mnt/foo bs=1M oflag=direct
+    assert_fails_with "Disk quota exceeded" dd if=/dev/zero of=/mnt/foo bs=1M count=1024 oflag=direct
     repquota -g -s /mnt
 
     umount /mnt
@@ -115,7 +115,7 @@ test_prjquota()
     setquota -P q1 256M 512M 64 128 /mnt
 
     echo "testing direct writes"
-    ! dd if=/dev/zero of=/mnt/q1/foo bs=1M oflag=direct
+    assert_fails_with "Disk quota exceeded" dd if=/dev/zero of=/mnt/q1/foo bs=1M count=1024 oflag=direct
     repquota -P -s /mnt
 
     chattr -p 0 /mnt/q1/foo
@@ -150,7 +150,7 @@ test_prjquota_multidevices()
     setquota -P q1 256M 512M 64 128 /mnt
 
     echo "testing direct writes"
-    ! dd if=/dev/zero of=/mnt/q1/foo bs=1M oflag=direct
+    assert_fails_with "Disk quota exceeded" dd if=/dev/zero of=/mnt/q1/foo bs=1M count=1024 oflag=direct
     repquota -P -s /mnt
 
     mv /mnt/q1/foo /mnt/q2

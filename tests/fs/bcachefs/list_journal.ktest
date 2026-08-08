@@ -48,7 +48,7 @@ test_headers_only()
     grep -q "journal entry" /tmp/lj_headers
 
     # btree_keys entries should NOT be present (those are sub-entries)
-    ! grep -q "btree_keys" /tmp/lj_headers
+    assert_fails grep -q "btree_keys" /tmp/lj_headers
 
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
@@ -71,7 +71,7 @@ test_datetime()
     grep -q "journal entry" /tmp/lj_datetime
 
     # Should NOT have full headers (bytes/sectors/version lines)
-    ! grep -q "^  bytes" /tmp/lj_datetime
+    assert_fails grep -q "^  bytes" /tmp/lj_datetime
 
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }

@@ -356,6 +356,41 @@ assert_output_has()
     fi
 }
 
+# assert_fails CMD...
+#
+# Assert the command failed. Use this instead of
+#
+#	! some_command
+#
+# which does nothing at all: bash's `set -e` explicitly exempts any command
+# whose return value is inverted with '!', so a negated assertion cannot fail a
+# test no matter what the command does. It reads like an assertion, it is in the
+# test for the same reason an assertion would be, and it has never once fired.
+#
+#	set -e
+#	! true				# keeps going
+#	! echo x | grep -q x		# grep matches - and keeps going
+#
+# Prefer assert_fails_with when you can name something the failure should say;
+# "it failed" and "it failed for the reason we meant" are different assertions,
+# and a command can usually fail for reasons that have nothing to do with what
+# the test is about.
+# Unlike the three above this doesn't capture: only the exit status is being
+# asserted on, so the command's output can go straight to the log where it's
+# useful, and the command runs in this shell rather than a subshell - which
+# matters when it's a function (run_fio) rather than a binary.
+assert_fails()
+{
+    local rc=0
+
+    # See assert_fails_with() on "|| rc=$?" and errexit.
+    "$@" || rc=$?
+    if [[ $rc == 0 ]]; then
+	echo "FAILED: '$*' succeeded; expected it to fail"
+	exit 1
+    fi
+}
+
 # assert_fails_with PATTERN CMD...
 #
 # The error-path counterpart of the two above: assert the command failed AND

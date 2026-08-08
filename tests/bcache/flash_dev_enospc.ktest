@@ -18,7 +18,7 @@ test_main()
     run_antagonist
 
     # Should fail since volume is too big
-    ! run_fio
+    assert_fails run_fio
 
     echo 300M > /sys/fs/bcache/*/volume0/size
 

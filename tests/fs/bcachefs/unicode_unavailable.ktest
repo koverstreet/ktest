@@ -36,11 +36,12 @@ test_no_unicode_casefold_fails()
 
     mkdir /mnt/test_dir
 
-    # Trying to enable casefolding should fail with clear error
-    ! bcachefs set-file-option --casefold /mnt/test_dir 2>&1 | tee /tmp/cf_error.txt
-
-    # Should mention casefolding/unicode in error
-    grep -qi "casefold\|unicode\|utf8" /tmp/cf_error.txt
+    # Trying to enable casefolding should fail, and say what it was trying to
+    # do. set-file-option is a setxattr, so the message is our own context line
+    # ("setting bcachefs.casefold on ...") plus the errno; the kernel's
+    # explanation - bch2_inode_set_casefold()'s "Cannot enable casefolding: %s"
+    # - goes to dmesg, not to us, so don't grep for that wording here.
+    assert_fails_with "casefold" bcachefs set-file-option --casefold /mnt/test_dir
 
     umount /mnt
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
