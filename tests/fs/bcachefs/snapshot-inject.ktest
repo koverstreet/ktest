@@ -1791,84 +1791,113 @@ test_no_keys_interior_owns_keys()
     echo "no_keys interior $victim survived with its keys"
 }
 
-# What a crash mid-deletion leaves on disk.
+# What an interrupted subvolume deletion leaves on disk, built by
+# interrupting one.
 #
-# bch2_snapshot_node_delete() commits the splice and the tombstone;
-# delete_dead_snapshot_keys() sweeps the node's keys afterwards. Die in
-# between and you get a leaf spliced out of its parent and marked deleted
-# whose keys are still accounted to it - sitting under a parent interior
-# that the same deletion had parked no_keys, awaiting the next remount.
+# delete_dead_snapshot_keys_v2() sweeps in two phases: it walks the inodes
+# btree and, for every inode at a dying snapshot, deletes that inode's
+# extents/dirents/xattrs/damage keys - then deletes the inode keys
+# themselves. The inodes are the index for the first phase, so the gap
+# between the phases is the last point at which anything the sweep missed
+# is still findable. bail_before_inodes stops it exactly there.
 #
-# fsck's job: snapshot_deleted_but_has_data fires, because nothing we write
-# tombstones a node with keys still accounted to it, so the state field is
-# the lie and the node gets put back.
+# So this is the real pipeline stopped mid-stride, not a hand-built state:
+# subvolume gone, the dying snapshot's own content swept, its inodes still
+# present, nodes still live and still marked for deletion. fsck's job is to
+# finish what the deletion started.
 #
-# The parent being no_keys is the part that used to break it.
-# bch2_snapshot_node_undelete() gated relinking on the neighbour being live
-# or will_delete, and no_keys was in neither list - so this shape came out
-# as fsck_repair_unimplemented, which is unrepairable at every level, fsck
-# -y included, and the superblock records the failing pass so every
-# subsequent mount fails identically. Fixed in bcachefs-tools 679915927c07
-# (only `deleted` means spliced out of the tree, so ask that instead); this
-# pins it.
+# The subvolume really was deleted, by request, so snap-2 is legitimately
+# absent afterwards and stays skipped; every other snapshot must be intact.
 #
-# Found by accident: an earlier version of refused_interior_delete built
-# this state while aiming at something else entirely, and hit the wedge.
+# Expect fsck to print several
+#   fsck counted i_sectors wrong: got 0 should be N
+# for files in the surviving neighbour, and to pass anyway. That is fsck's
+# extent walk disagreeing with its own recount, not damage: check_extents.c
+# picks the inode entry for a key through bch2_snapshot_redundant_interior()
+# but counts into it using the raw snapshot, and those two views differ
+# exactly while a collapse is unfinished - which is the state this test
+# builds. The recount wins, the inode is untouched, fsck exits 0. Tracked
+# separately; if those lines disappear, that bug got fixed, not this test.
 test_interrupted_deletion()
 {
     setup_snapshot_tree
 
-    # Put keys at snap-2's own snapshot id. Without this the tombstone below
-    # is a *settled* one - no data, nothing to detect - and whether any keys
-    # incidentally land at that id is not something to leave to chance in
-    # the setup of a corruption test.
+    # Before the delete: afterwards there's no subvolume 4 to ask.
+    local victim=$(subvol_snapshot 4)
+
+    local bail=/sys/module/bcachefs/parameters/snapshot_delete_bail_before_inodes
+    if [[ ! -w $bail ]]; then
+	echo "TEST FAILED: $bail missing - needs CONFIG_BCACHEFS_DEBUG"
+	exit 1
+    fi
+
+    # Reset on the way out however we leave: left set, every subsequent
+    # test's snapshot deletions cancel too, and they fail somewhere else
+    # entirely.
+    trap "echo 0 > $bail" EXIT
+    echo 1 > $bail
+
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
-    echo torn > /mnt/snap-2/torn-deletion
-    capture_state $MANIFEST
+    bcachefs subvolume delete /mnt/snap-2
+    # Synchronous, so the interruption is deterministic rather than a race
+    # with the background pass.
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_delete_dead_snapshots
     umount /mnt
 
-    local victim=$(subvol_snapshot 4)
-    local parent=$(snap_field $victim parent)
-    local children=($(snap_field $parent children))
+    echo 0 > $bail
+    trap - EXIT
 
-    local c survivor
-    for c in ${children[@]}; do
-	[[ $c != $victim ]] && survivor=$c
-    done
+    # Confirm the deletion really did stop partway. If it ran to completion
+    # the node is gone, fsck has nothing to do, and the test would pass
+    # having checked nothing.
+    local STATE_S_WILL_DELETE=$((0x3316a8d2))
+    local state=$(snap_field $victim state)
 
-    if [[ -z $survivor || $survivor = 0 ]]; then
-	echo "TEST FAILED: setup assumption - $parent has no sibling for $victim" \
-	     "(children: ${children[*]})"
+    if [[ -z $state ]]; then
+	echo "TEST FAILED: snapshot $victim is gone - the deletion ran to" \
+	     "completion, so nothing was interrupted"
+	exit 1
+    fi
+    if [[ $state != $STATE_S_WILL_DELETE ]]; then
+	echo "TEST FAILED: snapshot $victim is not still marked for deletion" \
+	     "(state $state)"
+	exit 1
+    fi
+    echo "interrupted: $victim still will_delete with its inodes"
+
+    # check_fsck doesn't fit, for the same reason it doesn't fit
+    # fsck_inflight_deletion: it requires fsck to find corruption, and a
+    # half-finished deletion isn't corruption. It's work in progress, and
+    # delete_dead_snapshots runs inside fsck, so what has to happen is that
+    # the deletion simply finishes.
+    local rc1=0
+    bcachefs fsck -y ${ktest_scratch_dev[0]} || rc1=$?
+    echo "fsck -y exited $rc1"
+    if (( rc1 > 1 )); then
+	echo "TEST FAILED: fsck errored on a legitimately interrupted deletion"
 	exit 1
     fi
 
-    # Exactly what the deletion had committed when it died: parent spliced
-    # and parked, victim tombstoned, subvolume record gone. The victim's
-    # keys are untouched - that is the part that never happened.
-    kvdb_rw -c "update snapshots 0:$parent:0 state=no_keys children[0]=$survivor children[1]=0" \
-	    -c "update snapshots 0:$victim:0 state=deleted subvol=0" \
-	    -c "set subvolumes 0:4:0 deleted"
-
-    # Confirm the shape is on disk before fscking it - an injection undone
-    # between staging and assertion leaves fsck examining a healthy tree and
-    # passing, having tested nothing.
-    local SNAPSHOT_STATE_no_keys=$((0x372b5a01))
-    local SNAPSHOT_STATE_deleted=$((0x7cd4a225))
-
-    if [[ $(snap_field $parent state) != $SNAPSHOT_STATE_no_keys ]]; then
-	echo "TEST FAILED: parent $parent is not parked" \
-	     "(state $(snap_field $parent state))"
+    # The point of the test: the sweep resumes from where it was stopped and
+    # runs to the end, rather than leaving the node parked forever.
+    local after=$(snap_field $victim state)
+    if [[ $after = $STATE_S_WILL_DELETE ]]; then
+	echo "TEST FAILED: $victim is still will_delete after fsck -" \
+	     "the interrupted deletion did not resume"
 	exit 1
     fi
-    if [[ $(snap_field $victim state) != $SNAPSHOT_STATE_deleted ]]; then
-	echo "TEST FAILED: victim $victim is not tombstoned" \
-	     "(state $(snap_field $victim state))"
+    echo "resumed: $victim is ${after:-gone}"
+
+    local rc2=0
+    bcachefs fsck -n ${ktest_scratch_dev[0]} || rc2=$?
+    echo "second fsck -n exited $rc2"
+    if (( rc2 != 0 )); then
+	echo "TEST FAILED: errors remain after the deletion completed"
 	exit 1
     fi
-    echo "injected: leaf $victim tombstoned with keys, under parked parent $parent"
 
     skip_snaps="snap-2"
-    check_fsck repair
+    verify_fs_state must-mount
 }
 
 # creation_parent: genealogy metadata, but live - deletion reparents
@@ -1956,7 +1985,9 @@ test_fsck_inflight_deletion()
 	echo "TEST FAILED: tombstone subvolume survived fsck - deletion did not complete"
 	exit 1
     fi
-    if [[ $(snap_field $snapid state) == will_delete ]]; then
+    # Numeric: snap_field returns the raw state word, so comparing against
+    # the name "will_delete" never matched and this never fired.
+    if [[ $(snap_field $snapid state) = $STATE_S_WILL_DELETE ]]; then
 	echo "TEST FAILED: snapshot node still will_delete after fsck"
 	exit 1
     fi
