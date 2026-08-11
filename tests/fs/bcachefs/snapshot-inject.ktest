@@ -3195,6 +3195,14 @@ test_fsck_damage_report()
     local v1=$(stat -c %i /mnt/somedir/victim1)
     local v2=$(stat -c %i /mnt/somedir/victim2)
 
+    # Content the injection doesn't touch. Every other path this test creates
+    # is meant to be damaged, so without a survivor the manifest comparison
+    # filters down to nothing and proves nothing - which is what the
+    # vacuous-comparison guard caught. With one, the check earns its keep:
+    # the repair must damage the victims and leave this alone.
+    mkdir /mnt/keep
+    echo survivor > /mnt/keep/file
+
     capture_state $MANIFEST
     umount /mnt
 
