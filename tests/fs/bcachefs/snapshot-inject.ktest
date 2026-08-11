@@ -392,11 +392,19 @@ verify_fs_state()
 # passed while destroying thirteen inodes, because its own setup removed a
 # leaf node, fsck recorded thirteen bkey_in_missing_snapshot and deleted
 # the keys, and $skip_snaps kept that subvolume out of the comparison.
+# Defaulted at source time, not only in the baseline-capture path: a test
+# that builds its own image (build_dirent_repair_image and friends) never
+# runs that reset, and under set -u it then dies on the *reporting* line
+# below instead of being told what it hit.
+skip_snaps=""
+skip_paths=""
+ktest_expect_sb_errors=""
+
 check_sb_errors()
 {
     if ! check_bcachefs_errors ${ktest_scratch_dev[0]}; then
 	echo "TEST FAILED: superblock error counters the test didn't declare" \
-	     "(ktest_expect_sb_errors='$ktest_expect_sb_errors')"
+	     "(ktest_expect_sb_errors='${ktest_expect_sb_errors:-}')"
 	echo "If these are what the injection is meant to cause, add them;" \
 	     "if not, the test is passing on damage it never checked for."
 	exit 1
@@ -3027,6 +3035,7 @@ test_dirent_repair_trans_mem()
 
     skip_snaps=""
     skip_paths="./snap-1/$TM_NAME"
+    ktest_expect_sb_errors="dirent_to_inode_in_descendant_snapshot"
     check_fsck repair
 }
 
@@ -3057,6 +3066,7 @@ test_dirent_repair_trans_mem_mount()
 
     skip_snaps=""
     skip_paths="./snap-1/$TM_NAME"
+    ktest_expect_sb_errors="dirent_to_inode_in_descendant_snapshot"
     verify_fs_state must-mount
 }
 
