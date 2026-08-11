@@ -79,4 +79,41 @@ test_casefold_fs_feature()
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
 }
 
+test_casefold_negative_parallel_lookup()
+{
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount ${ktest_scratch_dev[0]} /mnt
+
+    mkdir /mnt/casefold_dir
+    bcachefs set-file-option --casefold /mnt/casefold_dir
+
+    local start_gate=$(mktemp -u /tmp/casefold-negative-lookup.XXXXXX)
+    mkfifo "$start_gate"
+
+    lookup_miss()
+    {
+	read -r _ < "$start_gate"
+	for i in $(seq 1 2000); do
+	    [[ ! -e /mnt/casefold_dir/MiSsInG ]]
+	done
+    }
+
+    for i in $(seq 1 16); do
+	lookup_miss &
+    done
+    for i in $(seq 1 16); do
+	echo go
+    done > "$start_gate"
+    wait
+    rm "$start_gate"
+
+    echo "created" > /mnt/casefold_dir/missing
+    [[ $(cat /mnt/casefold_dir/MISSING) == "created" ]]
+
+    umount /mnt
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+}
+
 main "$@"
