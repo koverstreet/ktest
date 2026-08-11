@@ -1,6 +1,5 @@
 #define _GNU_SOURCE
 
-#include <ctype.h>
 #include <getopt.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -148,13 +147,22 @@ static FILE *log_open()
 	return f;
 }
 
+/*
+ * Strip the line terminator getline() left on, and nothing else.
+ *
+ * This used to scan for the first iscntrl() character and truncate there,
+ * which is a tab: every console line was cut at its first tab, in all three
+ * sinks, with no marker. bcachefs formats a lot of diagnostic output with
+ * tabstops - that output survived only because printbuf rewrites tabs to
+ * spaces once tabstops are pushed. Anything emitting a literal tab lost
+ * everything after it, and only in CI, since this is the CI console capture.
+ */
 static void strim(char *line)
 {
-	char *p = line;
+	char *p = line + strlen(line);
 
-	while (!iscntrl(*p))
-		p++;
-	*p = 0;
+	while (p > line && (p[-1] == '\n' || p[-1] == '\r'))
+		*--p = 0;
 }
 
 static const char *str_starts_with(const char *str, const char *prefix)
