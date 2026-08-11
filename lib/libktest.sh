@@ -670,7 +670,18 @@ start_vm()
     # Paired with the -device above; both are conditional on the same test.
     [[ -d /nix/store ]] && start_virtiofsd virtiofsd-nix.sock /nix/store
 
-    "${qemu_cmd[@]}"
+    # Volunteer the VM as the OOM killer's first choice. A test VM is the most
+    # disposable thing on a build machine - killing one costs a retry, whereas
+    # the alternatives cost a broken CI job or a broken host. On farm1
+    # 2026-07-30 a burst of 12G VMs drove the box into global OOM and the
+    # kernel took a package build's cc1, plus a login session's systemd and
+    # (sd-pam), while the VMs themselves sat at oom_score_adj 0 - the session
+    # plumbing was more killable than the thing eating the memory.
+    #
+    # Raising oom_score_adj needs no privilege (only lowering does), so this
+    # works unprivileged; the subshell keeps it off ktest's own process, and
+    # exec means qemu keeps the same pid so the caller still sees its status.
+    ( echo 800 > /proc/self/oom_score_adj 2>/dev/null; exec "${qemu_cmd[@]}" )
 
     kill "${virtiofsd_pids[@]}" 2>/dev/null
 }
