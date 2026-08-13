@@ -293,6 +293,52 @@ test_snapshots_while_stressed()
     umount /mnt
 }
 
+# The subvolume commands' own argument handling, as opposed to what the
+# filesystem does with them: every one of these must either do the thing or
+# say why not. Exiting 0 having done nothing is the failure mode being
+# tested for - cmd_create()/cmd_delete()/cmd_snapshot() used to skip the
+# ioctl entirely when Path::parent() returned None, so `bcachefs subvolume
+# snapshot -r /mnt` on a mountpoint was a silent no-op.
+test_subvol_cli_args()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # A filesystem root has no parent directory. It's still a perfectly good
+    # path to hand these commands, and the kernel is what decides what's
+    # wrong with it:
+    assert_fails_with EEXIST bcachefs subvolume create /mnt
+    assert_fails_with EEXIST bcachefs subvolume snapshot -r /mnt
+
+    # Deleting the root subvolume of a mounted filesystem. What's asserted is
+    # that the delete path refused it - not the errno, which today is EXDEV
+    # and is an artifact of where a mountpoint's name lives (in the parent
+    # filesystem, so the victim dentry isn't ours) rather than an answer
+    # anyone designed.
+    assert_fails_with "Failed to delete the subvolume" bcachefs subvolume delete /mnt
+
+    # A path whose parent doesn't exist either: the error must name what the
+    # user typed, not a directory we invented by chopping the last component
+    # off it.
+    assert_fails_with ENOENT bcachefs subvolume create /mnt/no/such/dir/sub
+
+    # Relative paths: the filesystem handle comes from the cwd.
+    cd /mnt
+    bcachefs subvolume create sub
+    bcachefs subvolume snapshot sub snap
+    [[ -d /mnt/sub && -d /mnt/snap ]]
+
+    bcachefs subvolume delete snap
+    bcachefs subvolume delete /mnt/sub
+    [[ ! -e /mnt/sub && ! -e /mnt/snap ]]
+    cd /
+
+    umount /mnt
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_subvol_create()
 {
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
