@@ -342,6 +342,18 @@ set_watchdog()
 #
 # An assertion whose command died is not a passing assertion - it's a test that
 # can no longer tell you what it claims to. Fail, and print what was captured.
+
+# What the command actually said, for the assertions below. Labelled and
+# indented because it lands in a log between kernel messages and ktest's own
+# errors: unmarked, the one thing that says why the assertion failed reads as
+# ambient noise, and the reader is left with what we expected and no sight of
+# what we got.
+print_output()
+{
+    echo "output was:"
+    sed 's/^/\t/' <<<"$1"
+}
+
 assert_output_lacks()
 {
     local pattern=$1 out rc=0
@@ -355,13 +367,13 @@ assert_output_lacks()
     out=$("$@" 2>&1) || rc=$?
     if [[ $rc != 0 ]]; then
 	echo "FAILED: '$*' exited $rc, so '$pattern must be absent' was never tested"
-	echo "$out"
+	print_output "$out"
 	exit 1
     fi
 
     if grep -q -- "$pattern" <<<"$out"; then
 	echo "FAILED: '$pattern' present in output of '$*'"
-	echo "$out"
+	print_output "$out"
 	exit 1
     fi
 }
@@ -375,13 +387,13 @@ assert_output_has()
     out=$("$@" 2>&1) || rc=$?
     if [[ $rc != 0 ]]; then
 	echo "FAILED: '$*' exited $rc, so '$pattern must be present' was never tested"
-	echo "$out"
+	print_output "$out"
 	exit 1
     fi
 
     if ! grep -q -- "$pattern" <<<"$out"; then
 	echo "FAILED: '$pattern' missing from output of '$*'"
-	echo "$out"
+	print_output "$out"
 	exit 1
     fi
 }
@@ -442,13 +454,13 @@ assert_fails_with()
     out=$("$@" 2>&1) || rc=$?
     if [[ $rc == 0 ]]; then
 	echo "FAILED: '$*' succeeded; expected failure matching '$pattern'"
-	echo "$out"
+	print_output "$out"
 	exit 1
     fi
 
     if ! grep -q -- "$pattern" <<<"$out"; then
 	echo "FAILED: '$*' exited $rc, but '$pattern' missing from output"
-	echo "$out"
+	print_output "$out"
 	exit 1
     fi
 }
