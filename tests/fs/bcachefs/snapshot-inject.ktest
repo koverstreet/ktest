@@ -2225,6 +2225,139 @@ test_deleted_childless_root()
     check_fsck_fresh_converges
 }
 
+# The other end of the same family as test_deleted_childless_root: a node the
+# accounting says is alive, whose splice can't be undone because the neighbour
+# it retained is a tombstone too. Field report 2026-08-13, unmountable:
+#
+#   deleted snapshot node has data accounted - undeleting:
+#     extents: 0 keys (0 bytes), 5 sectors
+#     u64s 12 type snapshot 0:4294963259:0 : parent 0 children 4294963171 ... deleted
+#   attaching to child  u64s 13 type snapshot 0:4294963171:0 : parent 0 children 4294963097 ... deleted
+#     cannot undelete: child is itself deleted
+#   check_snapshots(): error fsck_repair_unimplemented
+#     emergency read only at seq 19048636
+#
+# Three tombstones in a row, each retaining the child it had when it died, and
+# every one of them parent 0 - the residue of successive deletions of the tree
+# root. Splicing out a root makes its child the new root, so each tombstone
+# recorded parent 0 because each WAS the root at the moment it was deleted.
+#
+# bch2_snapshot_node_undelete() tests children[0] with snapshot_in_tree() and
+# gives up if that one node is out of the tree. The tombstones below it are its
+# own splice undone one step at a time, so what it should attach to is the
+# nearest descendant still in the tree.
+#
+# Nothing here covers it. All nine state=deleted injections in this file
+# tombstone exactly one node in a tree where everything around it is
+# attachable; two of them touch a second node, but as no_keys, which
+# snapshot_in_tree() deliberately counts as an ordinary neighbour.
+#
+# Visit order works against us rather than for us: bch2_check_snapshots_trans()
+# iterates for_each_btree_key_reverse from POS_MAX and ids descend from the
+# root, so the node nearest the root is reached FIRST - the tombstone beneath
+# it has not been reconsidered yet. Every chain takes the walk.
+#
+# Construction: a node is only ever spliced out when it has one child, so a
+# chain of tombstones is a chain of single-child interiors. Each of the two
+# interiors above the main leaf has its second child slot cleared - and the
+# sibling leaf it named is left exactly where it is, node, keys, subvolume and
+# all. Removing those nodes instead strands every key stamped with their
+# snapshot ids, and fsck deletes the keys and the inodes under them: the first
+# version of this test did that, 23 bkey_in_missing_snapshot and 25
+# damage_key_no_inode, kept out of sight by skip_snaps - the exact failure
+# this file's header warns about. An orphaned edge is the cheaper lie, and a
+# repairable one; the undelete gets to run first either way, because the
+# has-data check is at check_snapshots.c:1365 and the edge checks at :1394.
+#
+# Then both are tombstoned in the order two successive splices would leave
+# them: top retains mid (its child when it died), mid retains bottom, both
+# retain the grandparent as their parent, and bottom is spliced up into top's
+# old slot.
+#
+# Reparenting means the skiplists have to be cleared. bch2_snapshot_validate()
+# rejects skip[i] && skip[i] < parent (snapshot.c:776) - the entries are
+# ancestors, and ids ascend towards the root - so the retained entries, which
+# name the nodes being spliced out, are illegal the moment the parent becomes
+# the grandparent. Zero is legal and means "no skip"; fsck recomputes them.
+# The first version of this test left them alone and every write bounced with
+# "bad skiplist node", which the post-injection assertion caught.
+#
+# Depth is different: it isn't validated at write time, only by fsck
+# (snapshot_bad_depth, FSCK_AUTOFIX). bottom's is corrected here because its
+# new parent is known; the tombstones keep theirs and fsck can have them.
+#
+# expect=repair: top owns keys (versioned's older extents live at the interior
+# ids) so it has to come back, and mid with it - final tree top -> mid ->
+# bottom. Nothing was destroyed to build this, so the oracle is the whole
+# manifest: every snapshot, every file, no skip_snaps.
+test_deleted_chain_owns_data()
+{
+    setup_snapshot_tree
+
+    local bottom=$(subvol_snapshot 1)
+    local mid=$(snap_field $bottom parent)
+    local top=$(snap_field $mid parent)
+    local grandparent=$(snap_field $top parent)
+
+    local mid_children=($(snap_field $mid children))
+    local top_children=($(snap_field $top children))
+    local gp_children=($(snap_field $grandparent children))
+
+    # The shape is the test. Assert it rather than assume it: an injection
+    # applied to some other topology is a test of nothing, and this one needs
+    # two stacked two-child interiors with a live node above them.
+    if (( mid == 0 || top == 0 || grandparent == 0 )) ||
+       [[ ${mid_children[1]:-0} == 0 || ${top_children[1]:-0} == 0 ]]; then
+	echo "TEST BROKEN: expected two stacked two-child interiors above the main leaf"
+	echo "  bottom=$bottom"
+	echo "  mid=$mid children=${mid_children[*]}"
+	echo "  top=$top children=${top_children[*]}"
+	echo "  grandparent=$grandparent children=${gp_children[*]}"
+	kvdb -c 'list snapshots'
+	exit 1
+    fi
+
+    # bottom takes top's place under the grandparent - but it's a descendant,
+    # so its id is lower, and children have to stay normalized (children[0] >=
+    # children[1], snapshot.c:750). Substituting in place can invert them, so
+    # write both slots sorted rather than assume the old order still holds.
+    local c gp_other gp0 gp1
+    for c in ${gp_children[@]}; do [[ $c != $top ]] && gp_other=$c; done
+    gp_other=${gp_other:-0}
+    if (( bottom >= gp_other )); then
+	gp0=$bottom gp1=$gp_other
+    else
+	gp0=$gp_other gp1=$bottom
+    fi
+
+    local no_skip="skip[0]=0 skip[1]=0 skip[2]=0"
+    local bottom_depth=$(( $(snap_field $grandparent depth) + 1 ))
+
+    kvdb_rw \
+	-c "update snapshots 0:$top:0 state=deleted parent=$grandparent children[0]=$mid children[1]=0 $no_skip" \
+	-c "update snapshots 0:$mid:0 state=deleted parent=$grandparent children[0]=$bottom children[1]=0 $no_skip" \
+	-c "update snapshots 0:$bottom:0 parent=$grandparent depth=$bottom_depth $no_skip" \
+	-c "update snapshots 0:$grandparent:0 children[0]=$gp0 children[1]=$gp1"
+
+    # An injection can be undone between staging and assertion - by a repair
+    # the tool ran at open, or by an earlier edit's own repair - and then fsck
+    # runs against a healthy tree and passes, having tested nothing.
+    local SNAPSHOT_STATE_deleted=$((0x7cd4a225))
+    local s
+    for s in $top $mid; do
+	if [[ $(snap_field $s state) != $SNAPSHOT_STATE_deleted ]]; then
+	    echo "TEST FAILED: injection did not take on $s" \
+		 "(state $(snap_field $s state))"
+	    exit 1
+	fi
+    done
+
+    # Nothing was spent, so the whole filesystem has to come back.
+    skip_snaps=""
+    ktest_expect_sb_errors="snapshot_deleted_but_has_data|snapshot_bad_depth|snapshot_bad_skiplist|snapshot_edge_bad|snapshot_deleted_but_linked"
+    check_fsck repair
+}
+
 # expect=repair (FAILING until the R6 scan + revive lands): the subvol
 # key (subvol 4) still points at the victim - it IS the corroborating
 # record the node's own cleared backref can't provide. Scan subvolumes
