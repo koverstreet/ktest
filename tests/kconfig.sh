@@ -97,6 +97,36 @@ require-kernel-config COMPACTION	# host fs passthrough doesn't do well without i
 # when the bcachefs DKMS module is built against the running kernel.
 require-kernel-config KEYS
 
+# LSMs, for security_labels.ktest: bcachefs has to label new inodes from
+# security_inode_init_security() in the creation transaction
+# (bch2_inode_init_security -> __bch2_xattr_set), and that path is only
+# reachable with an LSM that actually writes an xattr at create time.
+#
+# Which LSM is active is a boot-time choice (security=), not a build-time
+# one - the tests pass it via require-kernel-append. CONFIG_LSM is a string
+# option and can't go through require-kernel-config: kernel_opt uses
+# `scripts/config --set-val`, which writes strings unquoted, and
+# olddefconfig then resets it. So build both in and select at boot.
+#
+# Note the asymmetry: Smack labels every new inode with the creating task's
+# label with no policy loaded at all, so it exercises the create path in a
+# bare test VM. SELinux does not label without a loaded policy, so it's here
+# for code coverage and distro-alike runs rather than for the bare case.
+require-kernel-config SECURITY
+require-kernel-config SECURITY_NETWORK	# SECURITY_SELINUX depends on it
+require-kernel-config AUDIT		# ditto
+require-kernel-config SECURITY_SMACK	# → NETLABEL
+require-kernel-config SECURITY_SELINUX	# → NETLABEL, NETWORK_SECMARK
+require-kernel-config SECURITY_SELINUX_BOOTPARAM  # selinux=0/1 without a rebuild
+
+# securityfs, for /sys/kernel/security/lsm: the list of LSMs that actually
+# came up, which is otherwise not observable from userspace. Without it the
+# only evidence an LSM is running is whatever private interface it happens to
+# expose (Smack has /sys/fs/smackfs, others have nothing), so a test asking
+# "is an LSM active?" has to guess per-LSM. Cheap, and it makes a failed boot
+# selection diagnosable instead of looking like a missing config.
+require-kernel-config SECURITYFS
+
 # bcachefs DKMS deps. When bcachefs is in-tree these are auto-selected
 # from fs/bcachefs/Kconfig; for DKMS the host kernel has to provide them
 # so the module's symbol references resolve at insmod time.
