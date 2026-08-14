@@ -46,7 +46,12 @@ reconcile_work_remaining()
 }
 
 # Compile the poison driver in the VM against the bcachefs-tools tree
-# the harness checked out for this kernel ($ktest_deps_dir/bcachefs-tools).
+# for the kernel under test ($ktest_deps_dir/bcachefs-tools — CI checks
+# it out there; interactive runners point ktest_deps_dir at a directory
+# on the /host share containing a built bcachefs-tools checkout, e.g.
+# ktest_deps_dir=/host/home/<user>/prog/bcachefses with a bcachefs-tools
+# symlink to the tree). If libbcachefs.a is missing the pinned tools get
+# built first (init_build_bcachefs_tools, host-side cached).
 # $1 = scratch directory; prints the driver path on success.
 build_poison_driver()
 {
@@ -54,7 +59,12 @@ build_poison_driver()
     local tools="$ktest_deps_dir/bcachefs-tools"
 
     if [[ ! -f "$tools/libbcachefs.a" ]]; then
-	echo "FAIL: poison driver needs $tools/libbcachefs.a (build the tools first)" >&2
+	echo "libbcachefs.a missing in $tools - building the tools"
+	init_build_bcachefs_tools
+    fi
+
+    if [[ ! -f "$tools/libbcachefs.a" ]]; then
+	echo "FAIL: poison driver needs $tools/libbcachefs.a (tools build did not produce it)" >&2
 	return 1
     fi
 
