@@ -46,17 +46,19 @@ reconcile_work_remaining()
 }
 
 # Compile the poison driver in the VM against the bcachefs-tools tree
-# for the kernel under test ($ktest_deps_dir/bcachefs-tools — CI checks
-# it out there; interactive runners point ktest_deps_dir at a directory
-# on the /host share containing a built bcachefs-tools checkout, e.g.
-# ktest_deps_dir=/host/home/<user>/prog/bcachefses with a bcachefs-tools
-# symlink to the tree). If libbcachefs.a is missing the pinned tools get
-# built first (init_build_bcachefs_tools, host-side cached).
+# for the kernel under test. Default: $ktest_deps_dir/bcachefs-tools,
+# the checkout require-git provisions from bcachefs-test-libs.sh.
+# Override with ktest_bcachefs_tools_tree (a ktest_* env var rides
+# save_env into the VM) to pin a specific tree, e.g. for local
+# pre/post-fix validation:
+#   ktest_bcachefs_tools_tree=/host/home/<user>/prog/bcachefses/<tree>
+# If libbcachefs.a is missing the pinned tools get built first
+# (init_build_bcachefs_tools, host-side cached).
 # $1 = scratch directory; prints the driver path on success.
 build_poison_driver()
 {
     local dir=$1
-    local tools="$ktest_deps_dir/bcachefs-tools"
+    local tools="${ktest_bcachefs_tools_tree:-$ktest_deps_dir/bcachefs-tools}"
 
     if [[ ! -f "$tools/libbcachefs.a" ]]; then
 	echo "libbcachefs.a missing in $tools - building the tools"
