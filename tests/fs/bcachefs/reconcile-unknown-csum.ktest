@@ -301,8 +301,12 @@ test_unknown_csum_survives()
     # Offline poison: on a buggy build the driver's own commit aborts
     # here (rc 134) — the same bch2_csum_opt_to_type assert, in the
     # tools' userspace lib which shares the source with the module.
+    # set +e: the harness runs tests under set -e, and the expected
+    # failure must not skip the log capture.
+    set +e
     timeout 120 "$driver" $dev "$inode" "$inode" > "$dir/driver.log" 2>&1
     local rc=$?
+    set -e
     echo "poison driver rc=$rc"
     tail -n 20 "$dir/driver.log"
     if (( rc != 0 )); then
