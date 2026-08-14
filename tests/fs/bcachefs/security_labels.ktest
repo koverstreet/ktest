@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+#
+# Security xattr / LSM labeling coverage:
+#
+# - manual security.* xattr round-trip (KEY_TYPE_XATTR_INDEX_SECURITY via
+#   the xattr handler) — works on any kernel
+# - creation-time labeling via security_inode_init_security(): boot with
+#   Smack active (no policy required — every new inode gets the creating
+#   task's label as security.SMACK64), so this actually exercises the
+#   bch2_inode_init_security() -> __bch2_xattr_set() path in the creation
+#   transaction. Skipped gracefully if the booted kernel lacks Smack.
+# - snapshotting a labeled subvolume (test_snapshot_labeled_subvol):
+#   regression test for EEXIST_str_hash_set on snapshot create.
+#
+# tests/kconfig.sh builds Smack and SELinux in, and require-kernel-append above
+# selects Smack at boot, so a ktest-built kernel runs all of this. It also works
+# against a distro kernel with CONFIG_SECURITY_SMACK=y, e.g.:
+#   btk run -P -k ubuntu/noble-updates tests/fs/bcachefs/security_labels.ktest creation_labels
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+require-kernel-append security=smack
+
+config-scratch-devs 4G
+
+# Smack creates /sys/fs/smackfs (its own filesystem) when it initializes.
+# Don't check /sys/kernel/security/lsm for this: that one lives in securityfs,
+# so it is absent without CONFIG_SECURITYFS - which ktest kernels don't build -
+# and gating on it silently skipped both tests on a kernel where Smack was
+# running perfectly well.
+smack_active()
+{
+    [[ -d /sys/fs/smackfs ]]
+}
+
+test_security_xattr_roundtrip()
+{
+    set_watchdog 10
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    touch /mnt/selinux-test
+    setfattr -n security.selinux -v system_u:object_r:unlabeled_t:s0 /mnt/selinux-test
+    getfattr -n security.selinux --only-values /mnt/selinux-test |
+	grep -qx system_u:object_r:unlabeled_t:s0
+
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_creation_labels()
+{
+    set_watchdog 10
+
+    if ! smack_active; then
+	echo "no /sys/fs/smackfs: smack is not active - the kernel was built"
+	echo "without CONFIG_SECURITY_SMACK, or booted without security=smack,"
+	echo "or smack is missing from CONFIG_LSM. Skipping."
+	return 0
+    fi
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # Smack labels every new inode with the creating task's label at
+    # creation time - if bch2_inode_init_security() is wired up, these
+    # exist without any setxattr:
+    touch /mnt/file
+    mkdir /mnt/dir
+    ln -s file /mnt/symlink
+
+    for f in /mnt/file /mnt/dir; do
+	label=$(getfattr -n security.SMACK64 --only-values $f)
+	[[ -n $label ]] || { echo "FAIL: no security.SMACK64 on $f"; return 1; }
+	echo "$f: security.SMACK64=$label"
+    done
+
+    # tmpfile path (NULL qstr) - creation must still succeed:
+    (exec {fd}<>/mnt/dir/tmpfile-probe && rm /mnt/dir/tmpfile-probe) 2>/dev/null || true
+
+    umount /mnt
+
+    # the labels are real on-disk xattrs in the creation transaction:
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    getfattr -n security.SMACK64 --only-values /mnt/file >/dev/null ||
+	{ echo "FAIL: security.SMACK64 not persisted across remount"; return 1; }
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+#
+# Reported by copyliu on IRC 2026-08-11/14 as EEXIST_str_hash_set from
+# 'bcachefs subvolume snapshot'. His reproducer used SELinux with
+# (fsuse xattr bcachefs ...) + restorecon; Smack gets to the same place with
+# no policy, because all we need is an LSM that writes an xattr at create.
+#
+# The snapshot's root is the same inode number at a new snapshot ID, so the
+# source's security xattr is already visible there through snapshot ancestry.
+# __bch2_ioctl_subvolume_create() then calls __bch2_create() with snapshot_src
+# set, which calls bch2_inode_init_security() unconditionally - and the LSM
+# tries to set a label that is already present at that key.
+#
+test_snapshot_labeled_subvol()
+{
+    set_watchdog 30
+
+    if ! smack_active; then
+	echo "no /sys/fs/smackfs: smack is not active - the kernel was built"
+	echo "without CONFIG_SECURITY_SMACK, or booted without security=smack,"
+	echo "or smack is missing from CONFIG_LSM. Skipping."
+	return 0
+    fi
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    bcachefs subvolume new /mnt/subvol
+
+    # Precondition, not decoration: if the subvolume root has no security
+    # xattr there is nothing to collide with and the rest of this test would
+    # pass for the wrong reason.
+    label=$(getfattr -n security.SMACK64 --only-values /mnt/subvol 2>/dev/null)
+    if [[ -z $label ]]; then
+	echo "FAIL: no security.SMACK64 on subvolume root - LSM not labeling, test is vacuous"
+	return 1
+    fi
+    echo "subvol root: security.SMACK64=$label"
+
+    bcachefs subvolume snapshot /mnt/subvol /mnt/snap
+
+    # The snapshot inherits the source's label rather than getting a freshly
+    # computed one:
+    snaplabel=$(getfattr -n security.SMACK64 --only-values /mnt/snap 2>/dev/null)
+    if [[ $snaplabel != "$label" ]]; then
+	echo "FAIL: snapshot label '$snaplabel' != source label '$label'"
+	return 1
+    fi
+
+    # And a snapshot of a snapshot, since that's the nightly-cronjob shape
+    # that found this in the field:
+    bcachefs subvolume snapshot /mnt/snap /mnt/snap2
+
+    umount /mnt
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    getfattr -n security.SMACK64 --only-values /mnt/snap >/dev/null ||
+	{ echo "FAIL: snapshot label not persisted across remount"; return 1; }
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+main "$@"
