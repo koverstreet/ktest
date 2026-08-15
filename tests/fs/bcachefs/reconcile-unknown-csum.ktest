@@ -15,22 +15,28 @@
 # via bch2_data_checksum_type_rb <- bch2_bkey_needs_reconcile
 # (trigger.c:488) <- bch2_extent_trigger_set_needs_reconcile <-
 # bch2_trigger_extent <- trans commit. The fix sanitises out-of-range
-# enums at the overlay (falling back to the filesystem option), and the
-# same commit that carries the poison then rewrites the entry away.
+# enums at the overlay (falling back to the filesystem option).
 #
 # This test writes the poison offline — a small driver compiled in the
 # VM against the bcachefs-tools tree's libbcachefs.a converts a plain
 # extent into a reflink chain with the real bch2_make_extent_indirect()
-# and appends the poisoned entry to the reflink_v — then mounts the
-# filesystem with the kernel and forces a reconcile scan. On a buggy
-# build the driver's own commit aborts (the same code is shared between
-# the tools' userspace lib and the kernel module); on a fixed build the
-# commit, the mount and the scan all survive and fsck stays clean.
+# and appends the poisoned entry to the reflink_v — then injects the
+# key update JOURNAL-ONLY and exits unclean. The writer's own btree
+# never sees the poisoned key, so no userspace trigger runs on it: the
+# kernel mount's journal replay is the first consumer. The test then
+# mounts with the kernel and forces a reconcile scan.
 #
-# On a fixed build the entry never survives into the kernel: the commit
-# trigger already rewrites it with sanitised values (that is the fix).
-# The mount/scan leg still earns its keep — it fails the test if a
-# regression ever lets the poisoned entry leak through instead.
+# That makes the KERNEL the oracle: a buggy kernel BUGs when its
+# reconcile processing meets the entry (at mount recovery or at the
+# forced scan) and the VM dies; a fixed kernel sanitises the enum via
+# the overlay and survives. The userspace tools are only the courier,
+# so the test also catches a mixed configuration (fixed tools + buggy
+# kernel) — measured: with a trigger-based writer that combination
+# passed vacuously because the fixed userspace lib sanitised the entry
+# before the kernel ever saw it.
+#
+# On a fixed build fsck -y after the scan reports the entry fixed
+# (reconcile_work_incorrectly_set) and the final fsck -ny is clean.
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
 
@@ -72,9 +78,31 @@ build_poison_driver()
 
     cat > "$dir/poison-driver.c" <<'DRIVER_EOF'
 /*
- * Poison driver: converts an existing extent into a reflink chain via
- * the real bch2_make_extent_indirect(), then appends a poisoned
- * bch_extent_reconcile entry to the new reflink_v key and commits.
+ * reconcile-repro driver: converts an existing extent into a reflink
+ * chain, then injects a poisoned bch_extent_reconcile entry on the
+ * new reflink_v key JOURNAL-ONLY: the key update goes straight into
+ * the journal, so this process's btree never sees it and no trigger
+ * runs here (a trigger would either BUG pre-fix or sanitise the entry
+ * post-fix). The next mount replays the journal: pre-fix the replay
+ * trigger's bch2_bkey_needs_reconcile ->
+ * bch2_data_checksum_type_rb BUGs, post-fix the overlay sanitises the
+ * enum. The kernel is the oracle either way.
+ *
+ * This is the honest equivalent of "a newer bcachefs version wrote an
+ * extent with a checksum type we do not know": the crash site
+ * (bch2_bkey_needs_reconcile -> bch2_data_checksum_type_rb) reads
+ * exactly this entry from the replayed key.
+ *
+ * Mechanism (mirrors bch2_remap_range + the reconcile scan):
+ *   - make_extent_indirect(may_update=true) converts the src extent to
+ *     a reflink_p key with REFLINK_P_MAY_UPDATE_OPTIONS set and creates
+ *     the reflink_v in the reflink btree
+ *   - the poison entry is appended to the reflink_v's val (that is
+ *     where reconcile reads entries from; it skips reflink_p keys)
+ *   - do_reconcile_scan_fs sees the may-update reflink_p, follows it to
+ *     the reflink_v via do_reconcile_scan_indirect, and
+ *     bch2_update_reconcile_opts() calls bch2_bkey_needs_reconcile()
+ *     on the entry
  *
  * The entry u64 (LE bitfield order, struct bch_extent_reconcile in
  * data/reconcile/format.h):
@@ -82,18 +110,14 @@ build_poison_driver()
  *     (extent_entry_type() is __ffs(e->type), so the type is one-hot)
  *   pending:1 = 1                               bit 16
  *   need_rb:5 = BIT(BCH_RECONCILE_data_checksum)  bit 17 + 1 = 18
- *   data_checksum_from_inode:1 = 1              bit 23 (the reflink
+ *   data_checksum_from_inode:1 = 1                bit 23 (the reflink
  *     overlay in bch2_bkey_get_io_opts() only copies the persisted
  *     value into the live opts when this bit is set)
- *   data_checksum:4 = 15 (invalid enum)         bits 31-34
+ *   data_checksum:4 = 15 (invalid enum)           bits 31-34
  *
- * Pre-fix: the commit trigger runs bch2_bkey_needs_reconcile() on the
- * updated key, the overlay copies data_checksum=15 into the live opts,
- * and bch2_data_checksum_type_rb() BUGs. Post-fix: the overlay
- * sanitises the enum and the commit succeeds.
- *
- * Usage: poison-driver <bcachefs-device> <src-inode> <dst-inode>
- * (the dst inode is accepted for interface compatibility but unused)
+ * Usage: driver <bcachefs-image> <src-inode> <dst-inode>   (the dst
+ * inode is accepted for interface compatibility with run.sh but
+ * unused; see run.sh which does the format + write step)
  */
 #include "bcachefs.h"
 #include "btree/bkey_buf.h"
@@ -103,6 +127,7 @@ build_poison_driver()
 #include "data/reconcile/types.h"
 #include "data/reconcile/work.h"
 #include "init/fs.h"
+#include "journal/journal.h"
 
 #include <pthread.h>
 #include <stdio.h>
@@ -134,7 +159,7 @@ int main(int argc, char **argv)
 	setbuf(stdout, NULL);
 
 	if (argc != 4) {
-		fprintf(stderr, "usage: %s <bcachefs-device> <src-inode> <dst-inode>\n", argv[0]);
+		fprintf(stderr, "usage: %s <bcachefs-image> <src-inode> <dst-inode>\n", argv[0]);
 		return 2;
 	}
 
@@ -156,18 +181,30 @@ int main(int argc, char **argv)
 	u64 src_inum = strtoull(argv[2], NULL, 10);
 	int ret = 0;
 
+	/*
+	 * Poisoned entry: type=reconcile, data_checksum=15 (invalid enum),
+	 * need_rb=checksum, pending - but no *_from_inode bits, so
+	 * needs_reconcile compares the entry against the inode opts and
+	 * finds the checksum differs.
+	 */
 	u64 entry = (1ULL << 7)				/* type, one-hot */
 		| (1ULL << 16)				/* pending */
 		| (1ULL << 18)				/* need_rb: data_checksum */
 		| (1ULL << 23)				/* data_checksum_from_inode */
+		| (1ULL << 28)				/* data_replicas = 1 (a real
+							 * newer-version entry always has
+							 * replicas; 0 trips the validator) */
 		| (15ULL << 31);			/* data_checksum = invalid */
 
 	/*
-	 * Scoped so the transaction is gone before bch2_fs_exit() - a live
-	 * trans at fs teardown trips the bch2_fs_btree_iter_exit assert.
+	 * Scoped so the transaction is gone before the journal submit - a
+	 * live trans at fs teardown trips the bch2_fs_btree_iter_exit
+	 * assert (we exit without teardown, but keep the scoping anyway).
 	 */
 	{
 	CLASS(btree_trans, trans)(c);
+	struct bkey_buf poison;
+	bch2_bkey_buf_init(&poison);
 
 	/* extents live at snapshot U32_MAX (POS() defaults to snapshot 0);
 	 * with the slots iterator, peek_slot returns the extent covering
@@ -187,7 +224,7 @@ int main(int argc, char **argv)
 		if (!_ret) {
 			/* orig must live in a bkey_buf, not the trans pool:
 			 * make_extent_indirect's internal trans_kmalloc can
-			 * realloc the pool (see the comment at reflink.c) */
+			 * realloc the pool (see the comment at reflink.c:537) */
 			struct bkey_buf buf;
 			bch2_bkey_buf_init(&buf);
 			bch2_bkey_buf_reassemble(&buf, src_k);
@@ -216,22 +253,21 @@ int main(int argc, char **argv)
 					 * reflink_v's val (v is a zero-sized
 					 * struct bch_val member, so take its
 					 * address - same idiom as reflink.c) */
-					struct bkey_buf rvbuf;
-					bch2_bkey_buf_init(&rvbuf);
-					bch2_bkey_buf_reassemble(&rvbuf, rv_k);
+					bch2_bkey_buf_reassemble(&poison, rv_k);
 
-					u64 val_bytes_old = bkey_val_bytes(&rvbuf.k->k);
-					rvbuf.k->k.u64s += 1;
-					*(u64 *)((char *)&rvbuf.k->v + val_bytes_old) =
+					u64 val_bytes_old = bkey_val_bytes(&poison.k->k);
+					poison.k->k.u64s += 1;
+					*(u64 *)((char *)&poison.k->v + val_bytes_old) =
 						cpu_to_le64(entry);
-
-					_ret = bch2_trans_update(trans, &rv_iter, rvbuf.k, 0) ?:
-					       bch2_trans_commit(trans, NULL, NULL, 0);
-					bch2_bkey_buf_exit(&rvbuf);
 				}
 			}
 			bch2_bkey_buf_exit(&buf);
 		}
+
+		/* commit only the CLEAN conversion; the poisoned key is
+		 * injected journal-only below */
+		if (!_ret)
+			_ret = bch2_trans_commit(trans, NULL, NULL, 0);
 		_ret;
 	}));
 	fprintf(stderr, "commit done, ret %d\n", ret);
@@ -239,20 +275,42 @@ int main(int argc, char **argv)
 		fprintf(stderr, "insert failed: %s\n", bch2_err_str(ret));
 		return 5;
 	}
-	printf("poisoned reflink_v inserted at idx 0, inode %llu\n", src_inum);
+
+	/* Journal-only injection: the poisoned key goes straight into the
+	 * journal. This process's btree never sees it, so no trigger runs
+	 * here - the next mount's journal replay is the first (and only)
+	 * consumer. The replay runs triggers, so a pre-fix kernel BUGs at
+	 * mount and a post-fix one sanitises the enum there. */
+	struct journal *j = &c->journal;
+	struct journal_res res = {};
+	unsigned entry_u64s = 1 + poison.k->k.u64s;
+
+	ret = bch2_journal_res_get(j, &res, entry_u64s, 0, NULL);
+	if (!ret) {
+		struct jset_entry *e = bch2_journal_add_entry(j, &res,
+				BCH_JSET_ENTRY_btree_keys, BTREE_ID_reflink, 0,
+				poison.k->k.u64s);
+		bkey_copy((struct bkey_i *) e->start, poison.k);
+		bch2_journal_res_put(j, &res);
+		ret = bch2_journal_flush_seq(j, res.seq, 0);
+	}
+	if (ret) {
+		fprintf(stderr, "journal inject failed: %s\n", bch2_err_str(ret));
+		return 5;
+	}
+	printf("journal poison submitted, seq %llu\n", res.seq);
+	bch2_bkey_buf_exit(&poison);
 	} /* trans scope */
 
-	ret = bch2_set_reconcile_needs_scan(c,
-			(struct reconcile_scan) { .type = RECONCILE_SCAN_fs }, true);
-	printf("fs scan queued (ret %d)\n", ret);
-
-	/* let the reconcile worker scan it (pre-fix: BUG here) */
-	sleep(3);
-
-	bch2_fs_exit(c);
-	printf("driver done\n");
-	return 0;
+	/*
+	 * Deliberately unclean: the poison must reach the consumer only
+	 * via the journal. A clean shutdown would flush btree nodes
+	 * whose journal seqs supersede the injected entry, and the
+	 * replay would skip it.
+	 */
+	_exit(0);
 }
+
 DRIVER_EOF
 
     local pkgconf_libs="blkid uuid liburcu libsodium zlib liblz4 libzstd libudev libkeyutils libunwind"
@@ -298,19 +356,18 @@ test_unknown_csum_survives()
 	return 1
     fi
 
-    # Offline poison: on a buggy build the driver's own commit aborts
-    # here (rc 134) — the same bch2_csum_opt_to_type assert, in the
-    # tools' userspace lib which shares the source with the module.
-    # set +e: the harness runs tests under set -e, and the expected
-    # failure must not skip the log capture.
+    # Offline poison, journal-only: the driver exits unclean (no
+    # fs_exit) so the kernel's replay is the first consumer of the
+    # poisoned key. Expect "journal poison submitted" and rc 0 for
+    # both fixed and buggy tools — the tools are only the courier.
     set +e
     timeout 120 "$driver" $dev "$inode" "$inode" > "$dir/driver.log" 2>&1
     local rc=$?
     set -e
     echo "poison driver rc=$rc"
     tail -n 20 "$dir/driver.log"
-    if (( rc != 0 )); then
-	echo "FAIL: poison driver did not commit cleanly"
+    if (( rc != 0 )) || ! grep -q "journal poison submitted" "$dir/driver.log"; then
+	echo "FAIL: poison driver did not submit the journal entry"
 	rm -rf "$dir"
 	return 1
     fi
