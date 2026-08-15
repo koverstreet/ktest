@@ -245,8 +245,12 @@ int main(int argc, char **argv)
 					/* append the poisoned entry to the
 					 * reflink_v's val (v is a zero-sized
 					 * struct bch_val member, so take its
-					 * address - same idiom as reflink.c) */
+					 * address - same idiom as reflink.c).
+					 * Realloc to +1 first: the buf may be
+					 * kmalloc'd at the exact source size. */
 					bch2_bkey_buf_reassemble(&poison, rv_k);
+					bch2_bkey_buf_realloc(&poison,
+							      poison.k->k.u64s + 1);
 
 					u64 val_bytes_old = bkey_val_bytes(&poison.k->k);
 					poison.k->k.u64s += 1;
@@ -285,7 +289,28 @@ int main(int argc, char **argv)
 				poison.k->k.u64s);
 		bkey_copy((struct bkey_i *) e->start, poison.k);
 		bch2_journal_res_put(j, &res);
-		ret = bch2_journal_flush_seq(j, res.seq, 0);
+
+		/*
+		 * Keep the poison off the journal tail: the first entry
+		 * after a clean shutdown is the clean->dirty transition
+		 * entry, whose flushers must not ride directly (its write
+		 * completion marks the sb dirty, and the flusher attaches
+		 * to a later entry instead - but only if one exists).
+		 * Submit a trailing empty entry so a later seq always
+		 * exists, then flush the poison's seq, the whole journal,
+		 * and the superblock itself - belt, braces, and belt.
+		 */
+		struct journal_res tail = {};
+		if (!bch2_journal_res_get(j, &tail, 1, 0, NULL)) {
+			bch2_journal_add_entry(j, &tail,
+					BCH_JSET_ENTRY_btree_keys, BTREE_ID_reflink,
+					0, 0);
+			bch2_journal_res_put(j, &tail);
+		}
+
+		ret = bch2_journal_flush_seq(j, res.seq, 0) ?:
+		      bch2_journal_flush(j) ?:
+		      bch2_write_super(c);
 	}
 	if (ret) {
 		fprintf(stderr, "journal inject failed: %s\n", bch2_err_str(ret));
