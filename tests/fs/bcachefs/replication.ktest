@@ -5,6 +5,7 @@
 require-kernel-config MD
 require-kernel-config BLK_DEV_DM
 require-kernel-config DM_FLAKEY
+require-kernel-config BLK_DEV_LOOP
 
 config-scratch-devs 4G
 config-scratch-devs 4G
@@ -1599,6 +1600,58 @@ test_self_healing()
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
     #bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+# A filesystem with more devices than a mount syscall parameter can hold.
+#
+# fsconfig(2) copies a string value with strndup_user(_value, 256) and refuses
+# anything longer with EINVAL rather than truncating it, so the colon-separated
+# device list stops fitting at 24 loop devices; 64 of them come to 757 bytes.
+# That made every array above ~25 devices unmountable in bcachefs-tools 1.39.2,
+# and nothing here caught it because no other test mounts more than ten.
+#
+# Loopback rather than scratch devices: this wants more devices than is
+# reasonable to attach to the VM, and the backing files are sparse - 64 x 32M
+# costs about 5M of real space once formatted.
+test_many_device_mount()
+{
+    set_watchdog 180
+
+    local nr=64
+    local dir=/loop-devs
+    local devs=()
+    local i
+
+    mkdir -p $dir
+    for ((i = 0; i < nr; i++)); do
+	truncate -s 32M $dir/dev-$i
+	devs+=("$(losetup --find --show $dir/dev-$i)")
+    done
+
+    run_quiet "" bcachefs format -f		\
+	--bucket_size=32k			\
+	--block_size=4k				\
+	"${devs[@]}"
+
+    # mount(8) execs mount.bcachefs for -t bcachefs, and a device string
+    # containing ':' is taken as the complete list (device_scan.rs) - so this
+    # goes through the helper's mount path without needing udev to find the
+    # members.
+    local dev_str
+    printf -v dev_str '%s:' "${devs[@]}"
+    dev_str=${dev_str%:}
+
+    mount -t bcachefs "$dev_str" /mnt
+    dd if=/dev/zero of=/mnt/foo bs=1M count=64 oflag=direct
+    umount /mnt
+
+    bcachefs fsck -ny "${devs[@]}"
+    bcachefs_test_end_checks "${devs[0]}"
+
+    for i in "${devs[@]}"; do
+	losetup -d "$i"
+    done
+    rm -rf $dir
 }
 
 main "$@"
