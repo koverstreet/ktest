@@ -658,6 +658,34 @@ to_kmsg()
     fi
 }
 
+# ktest_skip <reason>
+#
+# Declare the current subtest not applicable here, and stop it: the runner
+# reports NOTRUN rather than FAILED, and the run as a whole still succeeds.
+#
+# For a precondition the test cannot satisfy and that says nothing about the
+# code under test - a kernel built without the feature, hardware that isn't
+# there. NOT for "the thing I was testing didn't work". Dressing a failure as
+# a skip is how a suite goes quietly green while the thing it guards rots, so
+# the bar is: would a developer seeing this need to do something? Then it's a
+# failure.
+#
+# The reason travels on the NOTRUN line, so it reaches the per-subtest status
+# file that the dashboard shows - a skip whose reason you have to go digging
+# in a log for is most of the way to no signal at all.
+#
+# Via a file because run_tests runs each subtest in a subshell, and an exit
+# status can't carry a reason - or be told apart from a test that happened to
+# exit with the same number.
+ktest_skip()
+{
+    get_tmpdir
+
+    echo "SKIPPING: $*"
+    echo "$*" > "$ktest_tmp/ktest_skip"
+    exit 1
+}
+
 run_test()
 {
     local test_file=$(basename -s .ktest $0)
@@ -689,6 +717,11 @@ run_tests()
 {
     local tests_passed=()
     local tests_failed=()
+    local tests_skipped=()
+
+    # so ktest_skip's marker lands somewhere this shell can find it, and not
+    # in a tmpdir the subshell made for itself
+    get_tmpdir
 
     echo
     echo "Running tests $@"
@@ -696,6 +729,8 @@ run_tests()
 
     for i in $@; do
 	echo "========= TEST   $i" | to_kmsg
+
+	rm -f "$ktest_tmp/ktest_skip"
 
 	local start=$(date '+%s')
 	local ret=0
@@ -710,6 +745,9 @@ run_tests()
 	if [[ $ret = 0 ]]; then
 	    echo "========= PASSED $i in $(($finish - $start))s" | to_kmsg
 	    tests_passed+=($i)
+	elif [[ -e $ktest_tmp/ktest_skip ]]; then
+	    echo "========= NOTRUN $i in $(($finish - $start))s: $(cat $ktest_tmp/ktest_skip)" | to_kmsg
+	    tests_skipped+=($i)
 	else
 	    echo "========= FAILED $i in $(($finish - $start))s" | to_kmsg
 	    tests_failed+=($i)
@@ -733,6 +771,9 @@ run_tests()
     echo
     echo "Passed: ${tests_passed[@]}"
     echo "Failed: ${tests_failed[@]}"
+    if [[ ${#tests_skipped[@]} != 0 ]]; then
+	echo "Skipped: ${tests_skipped[@]}"
+    fi
 
     return ${#tests_failed[@]}
 }
