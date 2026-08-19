@@ -358,6 +358,12 @@ qemu_monitor()
     echo QEMU_MONITOR "$@"
 }
 
+# How many times each scratch device has been replugged: a plug cannot reuse
+# the qemu ids the previous one had, so this is what says which ids the device
+# currently answers to. Unset means "still the ones start_vm gave it". See
+# scratch_dev_plug() for why.
+declare -a ktest_plug_gen
+
 # scratch_dev_unplug <index>
 # scratch_dev_plug   <index>
 #
@@ -406,9 +412,10 @@ scratch_dev_unplug()
     fi
 
     local nr=$((ktest_scratch_dev_base + $1))
+    local id=dev$nr${ktest_plug_gen[$1]:+p${ktest_plug_gen[$1]}}
 
-    qemu_monitor device_del dev$nr
-    wait_for_dev "$dev" gone "device_del dev$nr"
+    qemu_monitor device_del $id
+    wait_for_dev "$dev" gone "device_del $id"
 }
 
 scratch_dev_plug()
@@ -433,18 +440,35 @@ scratch_dev_plug()
 	exit 1
     fi
 
-    # The unplug took the drive with it - qdev's property release runs
-    # blockdev_auto_del(), so `info block` comes back empty and a bare
-    # device_add answers
+    # The unplug took the backend with it - qdev's property release runs
+    # blockdev_auto_del() - so the drive has to be put back before the device
+    # can reference it. What it must NOT be put back as is the id it had
+    # before: after a device_del, qemu can be left holding the id without the
+    # backend, and answers both halves of that state at once -
     #
-    #	Property 'virtio-blk-pci.drive' can't find value 'disk1'
+    #	drive_add  0 ...,id=disk1,...	Duplicate ID 'disk1' for drive
+    #	device_add ...,drive=disk1	Property 'virtio-blk-device.drive'
+    #					can't find value 'disk1'
     #
-    # (measured against qemu 11.0.1). Put the backend back first. If some
-    # future qemu keeps it instead, the duplicate drive_add fails and says so
-    # in the log, and the device_add still works - wait_for_dev is what
-    # decides either way.
+    # - the name taken, and the thing it names gone. The -drive on the command
+    # line registers a QemuOpts entry under that id which outlives the
+    # BlockBackend it created.
+    #
+    # drive_del cannot clean it up: it finds the drive by name, and the name is
+    # what has already gone ("Error: Device 'disk1' not found", measured
+    # against qemu 11.0.1). So don't try to reclaim the id - take a fresh one
+    # for both the backend and the device, and rewrite the specs to match.
+    # Nothing outside these two functions refers to either id.
+    local gen=$(( ${ktest_plug_gen[$1]:-0} + 1 ))
+
+    drive=${drive/id=disk$nr,/id=disk${nr}p$gen,}
+    spec=${spec/drive=disk$nr,/drive=disk${nr}p$gen,}
+    spec=${spec/id=dev$nr/id=dev${nr}p$gen}
+
     qemu_monitor drive_add 0 "$drive"
     qemu_monitor device_add "$spec"
+
+    ktest_plug_gen[$1]=$gen
 
     wait_for_dev "$dev" present "device_add $spec"
 }
