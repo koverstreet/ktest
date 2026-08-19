@@ -606,31 +606,62 @@ start_vm()
 
     local disknr=0
 
+    # The -drive and -device arguments for each disk, in disk number order.
+    # save_env hands these to the guest, so a test that hot-unplugs a disk
+    # can put the same one back without keeping copies of the specs that then
+    # have to stay in step with this function.
+    #
+    # Both are needed, because device_del takes the drive with it: the qdev
+    # property release runs blockdev_auto_del(), so putting a disk back means
+    # drive_add and then device_add. See prelude.sh scratch_dev_plug().
+    #
+    # Strings and not arrays: save_env goes out through the environment,
+    # which bash arrays can't cross (see prelude.sh). Newline-separated
+    # because a drive spec has a file path in it, which can contain spaces.
+    ktest_qemu_devices=""
+    ktest_qemu_drives=""
+
     qemu_disk()
     {
-	qemu_cmd+=(-drive if=none,format=raw,id=disk$disknr,"$1")
+	local dev
+	local drive="if=none,format=raw,id=disk$disknr,$1"
+
 	case $ktest_storage_bus in
 	    ahci|piix4-ide)
-		qemu_cmd+=(-device ide-hd,bus=hba.$disknr,drive=disk$disknr,id=dev$disknr)
+		dev=ide-hd,bus=hba.$disknr,drive=disk$disknr,id=dev$disknr
 		;;
 	    virtio-blk)
 		if (( disknr < 20 )); then
-		    qemu_cmd+=(-device virtio-blk-pci,drive=disk$disknr,id=dev$disknr)
+		    dev=virtio-blk-pci,drive=disk$disknr,id=dev$disknr
 		else
-		    qemu_cmd+=(-device virtio-blk-pci,drive=disk$disknr,bus=pci.2,id=dev$disknr)
+		    dev=virtio-blk-pci,drive=disk$disknr,bus=pci.2,id=dev$disknr
 		fi
 		;;
 	    *)
-		qemu_cmd+=(-device scsi-hd,bus=hba.0,drive=disk$disknr,id=dev$disknr)
+		dev=scsi-hd,bus=hba.0,drive=disk$disknr,id=dev$disknr
 		;;
 	esac
+
+	qemu_cmd+=(-drive "$drive")
+	qemu_cmd+=(-device "$dev")
+
+	ktest_qemu_drives+="${ktest_qemu_drives:+$'\n'}$drive"
+	ktest_qemu_devices+="${ktest_qemu_devices:+$'\n'}$dev"
+
 	disknr=$((disknr + 1))
     }
 
     qemu_pmem()
     {
+	local dev=nvdimm,memdev=mem$disknr,id=nv$disknr,label-size=2M
+
 	qemu_cmd+=(-object memory-backend-file,id=mem$disknr,share,"$1",align=128M)
-	qemu_cmd+=(-device nvdimm,memdev=mem$disknr,id=nv$disknr,label-size=2M)
+	qemu_cmd+=(-device "$dev")
+
+	# no -drive, but the empty field keeps both lists indexed by disk number
+	ktest_qemu_drives+="${ktest_qemu_drives:+$'\n'}"
+	ktest_qemu_devices+="${ktest_qemu_devices:+$'\n'}$dev"
+
 	disknr=$((disknr + 1))
     }
 
@@ -643,6 +674,12 @@ start_vm()
     for file in "${ktest_rw_images[@]}"; do
 	qemu_disk file="$file",cache.no-flush=on,cache.direct=$ktest_dio
     done
+
+    # Disk number of the first scratch device, for the guest: it knows
+    # scratch devices by index, qemu knows them by position in the order
+    # above, and this is the offset between the two. See prelude.sh
+    # scratch_dev_unplug().
+    ktest_scratch_dev_base=$disknr
 
     # Scratch files are reused across runs and truncate -s preserves
     # existing content: stale signatures from a previous test (mdraid,
