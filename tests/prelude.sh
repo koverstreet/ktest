@@ -358,11 +358,45 @@ qemu_monitor()
     echo QEMU_MONITOR "$@"
 }
 
-# How many times each scratch device has been replugged: a plug cannot reuse
-# the qemu ids the previous one had, so this is what says which ids the device
-# currently answers to. Unset means "still the ones start_vm gave it". See
-# scratch_dev_plug() for why.
-declare -a ktest_plug_gen
+# What qemu currently calls a scratch device, and whether the guest has it.
+#
+# A plug cannot reuse the ids the previous one had (see scratch_dev_plug), so
+# this is what says which ids the device answers to now. It lives in a file
+# rather than a variable because run_tests() runs each subtest in a subshell:
+# a variable set by a test that unplugs and replugs dies with that subtest,
+# and the next one would go on to delete an id qemu no longer has.
+#
+# Format is "gone|present <device id> <generation>".
+scratch_dev_state_file()	{ echo "$ktest_tmp/qemu-scratch-dev.$1"; }
+
+scratch_dev_state()
+{
+    local f=$(scratch_dev_state_file $1)
+
+    if [[ -e $f ]]; then
+	cat "$f"
+    else
+	echo "present dev$((ktest_scratch_dev_base + $1)) 0"
+    fi
+}
+
+# After a failed test, put back whatever it unplugged: a test that dies between
+# the unplug and the plug would otherwise take every test after it down with
+# it, and five failures that are one failure are worse than useless.
+scratch_dev_replug_all()
+{
+    local f state id gen
+
+    for f in "${ktest_tmp:-/nonexistent}"/qemu-scratch-dev.*; do
+	[[ -e $f ]] || continue
+
+	read -r state id gen < "$f"
+	[[ $state = gone ]] || continue
+
+	echo "restoring scratch device ${f##*.}, left unplugged by a failed test"
+	scratch_dev_plug "${f##*.}"
+    done
+}
 
 # scratch_dev_unplug <index>
 # scratch_dev_plug   <index>
@@ -411,11 +445,14 @@ scratch_dev_unplug()
 	exit 1
     fi
 
-    local nr=$((ktest_scratch_dev_base + $1))
-    local id=dev$nr${ktest_plug_gen[$1]:+p${ktest_plug_gen[$1]}}
+    local state id gen
+
+    read -r state id gen <<< "$(scratch_dev_state $1)"
 
     qemu_monitor device_del $id
     wait_for_dev "$dev" gone "device_del $id"
+
+    echo "gone $id $gen" > "$(scratch_dev_state_file $1)"
 }
 
 scratch_dev_plug()
@@ -459,7 +496,10 @@ scratch_dev_plug()
     # against qemu 11.0.1). So don't try to reclaim the id - take a fresh one
     # for both the backend and the device, and rewrite the specs to match.
     # Nothing outside these two functions refers to either id.
-    local gen=$(( ${ktest_plug_gen[$1]:-0} + 1 ))
+    local state old_id gen
+
+    read -r state old_id gen <<< "$(scratch_dev_state $1)"
+    gen=$((gen + 1))
 
     drive=${drive/id=disk$nr,/id=disk${nr}p$gen,}
     spec=${spec/drive=disk$nr,/drive=disk${nr}p$gen,}
@@ -468,7 +508,7 @@ scratch_dev_plug()
     qemu_monitor drive_add 0 "$drive"
     qemu_monitor device_add "$spec"
 
-    ktest_plug_gen[$1]=$gen
+    echo "present dev${nr}p$gen $gen" > "$(scratch_dev_state_file $1)"
 
     wait_for_dev "$dev" present "device_add $spec"
 }
@@ -804,6 +844,8 @@ run_tests()
 		done
 		umount $mnt
 	    done
+
+	    scratch_dev_replug_all
 	fi
     done
 
