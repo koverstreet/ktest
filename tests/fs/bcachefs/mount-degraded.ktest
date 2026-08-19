@@ -20,6 +20,10 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
 
+# SCSI so scratch_dev_unplug works; see device-hotplug.ktest on why that isn't
+# the default.
+ktest_storage_bus=virtio-scsi-pci
+
 config-scratch-devs 1G
 config-scratch-devs 1G
 config-scratch-devs 1G

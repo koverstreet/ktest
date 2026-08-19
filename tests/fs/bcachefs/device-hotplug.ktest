@@ -19,8 +19,16 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
 
-# Needs a storage bus qemu can unplug from - see prelude.sh, which now
-# defaults to SCSI for exactly this reason.
+# SCSI, because qemu will not hotplug on the root complex - "Bus 'pcie.0' does
+# not support hotplugging" - and that is where virtio-blk disks are attached.
+# The PCI ways around it need a bridge or a root port per disk plus a PCI
+# hotplug driver in the guest; a SCSI unplug needs none of that.
+#
+# Set here rather than globally: virtio-scsi-pci has a bug where the root
+# filesystem's superblock sometimes reads back as zeroes (see prelude.sh), so
+# a few percent of boots panic. Confined to this test that's one flaky test;
+# as the default it was a few percent of every boot in the suite.
+ktest_storage_bus=virtio-scsi-pci
 
 config-scratch-devs 4G
 

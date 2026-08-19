@@ -22,17 +22,18 @@ fi
 : "${ktest_timeout_multiplier:=1}"
 : "${ktest_mem_multiplier:=1}"
 
-# SCSI, because a disk on it can be unplugged and plugged back in.
-# virtio-blk disks are attached to qemu's root complex, and qemu will not
-# hotplug there ("Bus 'pcie.0' does not support hotplugging"); the PCI ways
-# around that need a bridge or a root port per disk and a PCI hotplug driver
-# in the guest, where a SCSI unplug needs none of it.
+# virtio-scsi-pci seems to be buggy: reading the superblock on the root
+# filesystem randomly returns zeroes. Still true as of 2026-08-19 - the guest
+# panics with "unable to mount root fs on /dev/sda" a few percent of boots,
+# more often under load, with the disk itself enumerated and attached. It was
+# briefly the default here and had to be backed out.
 #
-# There used to be a note here that virtio-scsi-pci randomly returned zeroes
-# reading the root filesystem's superblock. That was years ago and is believed
-# long fixed - but if odd, hard-to-place CI failures turn up, suspect this
-# first and set it back to virtio-blk.
-: "${ktest_storage_bus:=virtio-scsi-pci}"
+# Tests that need to unplug a device set it for themselves: qemu won't hotplug
+# on the root complex, which is where virtio-blk disks are attached. Paying
+# for that per-test costs one flaky test; paying for it globally costs a
+# random few percent of every boot in the suite.
+#ktest_storage_bus=virtio-scsi-pci
+: "${ktest_storage_bus:=virtio-blk}"
 
 : "${ktest_compiler:=${CC:-gcc}}"
 : "${ktest_allow_taint:=false}"
