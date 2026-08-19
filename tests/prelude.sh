@@ -342,9 +342,126 @@ set_watchdog()
 # stronger check than the monitor's acknowledgement, and it is what a test
 # actually cares about. Nothing arrives if the supervisor could not reach the
 # socket, so a test must never treat "I asked" as "it happened".
+#
+# scratch_dev_unplug()/scratch_dev_plug() below are that done properly for
+# scratch devices, and are what a test wants instead of this.
 qemu_monitor()
 {
     echo QEMU_MONITOR "$@"
+}
+
+# scratch_dev_unplug <index>
+# scratch_dev_plug   <index>
+#
+# Take a scratch device away from the guest and give it back: the block device
+# disappears entirely, along with anything udev built on top of it, the way it
+# does when a disk is pulled and later reseated.
+#
+# The two things needed to name a device to qemu both come from start_vm, so
+# nothing here has to be kept in step with how disks are attached there:
+# $ktest_scratch_dev_base is the disk number of scratch device 0, and field N
+# of $ktest_qemu_devices is the -device argument that created disk N.
+#
+# Waiting for the guest to catch up is the whole point, not a nicety. qemu
+# discards a monitor command naming a device that doesn't exist and tells
+# nobody, and qemu_monitor has no reply to check, so without the wait a test
+# that named the wrong device would pass exactly as happily as one that
+# worked.
+scratch_dev_unplug()
+{
+    local dev=${ktest_scratch_dev[$1]}
+
+    # Guarded rather than defaulted: an unset base would resolve to disk 0,
+    # which is the root disk. Spelled :- so the guard is what reports it,
+    # rather than nounset firing first with a message about a variable name.
+    if [[ -z ${ktest_scratch_dev_base:-} ]]; then
+	echo "scratch_dev_unplug: ktest_scratch_dev_base unset, don't know which qemu disk $dev is"
+	exit 1
+    fi
+
+    if [[ ! -b $dev ]]; then
+	echo "scratch_dev_unplug: $dev is not there to unplug"
+	exit 1
+    fi
+
+    # Whichever hotplug driver claimed the slots registers them here - acpiphp
+    # for q35's root bus, pciehp behind a root port. Nothing here means the
+    # kernel has no PCI hotplug at all and qemu's eject request has no one to
+    # answer it, which is worth saying outright rather than spending 30s and
+    # then reporting a device that didn't move.
+    #
+    local nr=$((ktest_scratch_dev_base + $1))
+
+    qemu_monitor device_del dev$nr
+    wait_for_dev "$dev" gone "device_del dev$nr"
+}
+
+scratch_dev_plug()
+{
+    local dev=${ktest_scratch_dev[$1]}
+    local devices drives
+
+    if [[ -z ${ktest_scratch_dev_base:-} ]]; then
+	echo "scratch_dev_plug: ktest_scratch_dev_base unset, don't know which qemu disk $dev is"
+	exit 1
+    fi
+
+    mapfile -t devices <<< "${ktest_qemu_devices:-}"
+    mapfile -t drives  <<< "${ktest_qemu_drives:-}"
+
+    local nr=$((ktest_scratch_dev_base + $1))
+    local spec=${devices[$nr]:-}
+    local drive=${drives[$nr]:-}
+
+    if [[ -z $spec || -z $drive ]]; then
+	echo "scratch_dev_plug: no qemu drive/device for disk $nr"
+	exit 1
+    fi
+
+    # The unplug took the drive with it - qdev's property release runs
+    # blockdev_auto_del(), so `info block` comes back empty and a bare
+    # device_add answers
+    #
+    #	Property 'virtio-blk-pci.drive' can't find value 'disk1'
+    #
+    # (measured against qemu 11.0.1). Put the backend back first. If some
+    # future qemu keeps it instead, the duplicate drive_add fails and says so
+    # in the log, and the device_add still works - wait_for_dev is what
+    # decides either way.
+    qemu_monitor drive_add 0 "$drive"
+    qemu_monitor device_add "$spec"
+
+    wait_for_dev "$dev" present "device_add $spec"
+}
+
+# wait_for_dev <dev> gone|present <what we asked qemu for>
+#
+# The third argument is only for the failure message: what we asked for is the
+# interesting thing by then, and the caller no longer has it in the log.
+wait_for_dev()
+{
+    local dev=$1
+    local want=$2
+    local asked=$3
+    local have
+    local i
+
+    for ((i = 0; i < 300; i++)); do
+	have=gone
+	if [[ -b $dev ]]; then
+	    have=present
+	fi
+
+	if [[ $have = $want ]]; then
+	    return 0
+	fi
+
+	sleep 0.1
+    done
+
+    echo "$dev not $want 30s after asking qemu for '$asked'"
+    cat /proc/partitions
+    exit 1
 }
 
 # assert_output_lacks PATTERN CMD...
