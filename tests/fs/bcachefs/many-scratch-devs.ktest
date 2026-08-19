@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+#
+# More scratch devices than there are letters.
+#
+# Two limits used to sit just past the end of what anything tested, and both
+# are crossed here deliberately:
+#
+#   - names. config-scratch-devs indexed a hardcoded {b..z}, so the 26th
+#     scratch device died with "chars[$n]: unbound variable" - a bash error,
+#     not a message. Past vdz the kernel goes vdaa, vdab (26-base counting
+#     with a nil entry from the second digit on; virtblk_name_format() and
+#     sd_format_disk_name() are the same function).
+#
+#   - buses. A PCI bus holds 31 devices, so libktest.sh qemu_disk() allocates
+#     another PCIe-to-PCI bridge every 31 disks. With the root disk on the
+#     root complex that boundary falls at scratch device 31.
+#
+# 35 devices is the smallest count that crosses both: vdb..vdz is 25, then
+# vdaa..vdaj, and disk 32 opens the second bridge.
+#
+# The test is that every device is there and usable - the interesting failure
+# is a device that got the wrong name, which shows up as a missing block
+# device rather than as anything bcachefs would notice.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+for i in $(seq 1 35); do
+    config-scratch-devs 512M
+done
+
+config-mem 8G
+
+test_all_devices_present()
+{
+    set_watchdog 300
+
+    local missing=()
+    local dev
+
+    for dev in "${ktest_scratch_dev[@]}"; do
+	[[ -b $dev ]] || missing+=("$dev")
+    done
+
+    if (( ${#missing[@]} )); then
+	echo "${#missing[@]} of ${#ktest_scratch_dev[@]} scratch devices are not there:"
+	printf '    %s\n' "${missing[@]}"
+	echo "block devices the guest does have:"
+	cat /proc/partitions
+	exit 1
+    fi
+
+    echo "all ${#ktest_scratch_dev[@]} scratch devices present: ${ktest_scratch_dev[0]} .. ${ktest_scratch_dev[-1]}"
+}
+
+# ...and that they work, not just that the nodes exist: a filesystem across
+# all of them writes to every one.
+test_format_across_all()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f --bucket_size=32k "${ktest_scratch_dev[@]}"
+
+    mount -t bcachefs "$(IFS=:; echo "${ktest_scratch_dev[*]}")" /mnt
+    dd if=/dev/urandom of=/mnt/foo bs=1M count=64 oflag=direct
+    umount /mnt
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+main "$@"

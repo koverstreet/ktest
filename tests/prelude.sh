@@ -197,18 +197,38 @@ require-gcov()
     require-kernel-config GCOV_KERNEL
 }
 
+# The suffix the kernel gives the disk at <index>: 26-base counting with a nil
+# entry from the second digit on, so 0 is "a", 25 is "z", 26 is "aa", 701 is
+# "zz" and 702 is "aaa". virtio_blk's virtblk_name_format() and sd's
+# sd_format_disk_name() are the same function, so this covers every bus.
+#
+# A hardcoded {b..z} covered 25 devices and then died on the 26th with
+# "chars[$n]: unbound variable" - no message, just a bash error, on a test
+# that had asked for one disk too many.
+disk_name_suffix()
+{
+    local index=$1
+    local letters=abcdefghijklmnopqrstuvwxyz
+    local out=""
+
+    while (( index >= 0 )); do
+	out=${letters:$((index % 26)):1}$out
+	index=$(( index / 26 - 1 ))
+    done
+
+    echo "$out"
+}
+
 config-scratch-devs()
 {
     # The root disk is virtio-blk on every bus (see libktest.sh qemu_disk), so
-    # it only consumes a letter when the scratch devices are virtio-blk too.
-    # On any other bus the first scratch device is sda, not sdb.
-    local chars
-    case $ktest_storage_bus in
-	virtio-blk)	chars=( {b..z} ) ;;
-	*)		chars=( {a..z} ) ;;
-    esac
+    # it only takes up a name when the scratch devices are virtio-blk too: on
+    # any other bus the first scratch device is sda, not sdb.
+    local index=$ktest_scratch_dev_count
 
-    ktest_scratch_dev+=("/dev/${ktest_dev_prefix}${chars[$ktest_scratch_dev_count]}")
+    [[ $ktest_storage_bus = virtio-blk ]] && index=$((index + 1))
+
+    ktest_scratch_dev+=("/dev/$ktest_dev_prefix$(disk_name_suffix $index)")
     ktest_scratch_dev_count=$((ktest_scratch_dev_count + 1))
 
     ktest_scratch_dev_sizes+=("$1")
