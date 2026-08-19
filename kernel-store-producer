@@ -156,6 +156,30 @@ main() {
             log "WARNING: incomplete store (${degraded[*]}) — deploying what built anyway"
         fi
 
+        # A failed build leaves its destination directory behind, empty or
+        # half-written, and packing that ships something worse than a gap: the
+        # store lists the variant, so it reads as present, but there is no
+        # kernel in it. That is the failure this script is supposed to have
+        # stopped making — an absence you can't see. It is not hypothetical;
+        # the first run after the tolerate-partial-failure change shipped an
+        # empty stable-kasan/aarch64/7.1.9.work.3 to four workers.
+        #
+        # manifest.json is the build-succeeded marker (it is exactly what
+        # upstream-kernel-build's already-built check keys on), so an entry
+        # without one is a husk. Distro entries carry manifests too, so this
+        # could widen to the whole store later — scoped to upstream/ for now
+        # because that's where the failure is demonstrated, and this deletes.
+        local husk
+        while IFS= read -r husk; do
+            log "dropping incomplete store entry ${husk#"$new/"}"
+            rm -rf "$husk"
+        done < <(find "$new/upstream" -mindepth 3 -maxdepth 3 -type d \
+                      '!' -exec test -e '{}/manifest.json' ';' -print 2>/dev/null)
+        # ...and the <release>-<variant>/<arch>/ dirs the husk left behind,
+        # or `ls upstream/` still lists a variant that has no kernel under it.
+        # -delete implies -depth, so parents empty out bottom-up in one pass.
+        find "$new/upstream" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+
         # A store with gaps is acceptable, an empty one is not. The deploy
         # swaps the worker's store wholesale, so shipping a store with no
         # upstream kernels would delete every kernel the CI has instead of
