@@ -611,17 +611,17 @@ start_vm()
 	qemu_cmd+=(-drive if=none,format=raw,id=disk$disknr,"$1")
 	case $ktest_storage_bus in
 	    ahci|piix4-ide)
-		qemu_cmd+=(-device ide-hd,bus=hba.$disknr,drive=disk$disknr)
+		qemu_cmd+=(-device ide-hd,bus=hba.$disknr,drive=disk$disknr,id=dev$disknr)
 		;;
 	    virtio-blk)
 		if (( disknr < 20 )); then
-		    qemu_cmd+=(-device virtio-blk-pci,drive=disk$disknr)
+		    qemu_cmd+=(-device virtio-blk-pci,drive=disk$disknr,id=dev$disknr)
 		else
-		    qemu_cmd+=(-device virtio-blk-pci,drive=disk$disknr,bus=pci.2)
+		    qemu_cmd+=(-device virtio-blk-pci,drive=disk$disknr,bus=pci.2,id=dev$disknr)
 		fi
 		;;
 	    *)
-		qemu_cmd+=(-device scsi-hd,bus=hba.0,drive=disk$disknr)
+		qemu_cmd+=(-device scsi-hd,bus=hba.0,drive=disk$disknr,id=dev$disknr)
 		;;
 	esac
 	disknr=$((disknr + 1))
