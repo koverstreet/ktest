@@ -12,17 +12,21 @@ test_upgrade()
     set_watchdog 60
     setup_tracing `bcachefs_slowpath_tracepoints`
 
-    bcachefs show-super /dev/vdb
-    #bcachefs fsck /dev/vdb || true
-    mount -t bcachefs /dev/vdb /mnt
+    # config-image disks start at the second one, whatever the storage bus
+    # happens to name it
+    local first=/dev/${ktest_dev_prefix}b
+
+    bcachefs show-super $first
+    #bcachefs fsck $first || true
+    mount -t bcachefs $first /mnt
     umount /mnt
 
-    mount -t bcachefs /dev/vdb /mnt
+    mount -t bcachefs $first /mnt
     umount /mnt
 
     exit
 
-    for dev in /dev/vd[bcde]; do
+    for dev in /dev/${ktest_dev_prefix}[bcde]; do
 	bcachefs show-super $dev
 	mount -t bcachefs $dev /mnt
 	umount /mnt

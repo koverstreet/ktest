@@ -1104,10 +1104,16 @@ test_rereplicate2()
 
     umount /mnt
 
+    # bcachefs names devices without the /dev/ prefix, so dev_remove and
+    # dev_keep are bare names throughout - which is also why they can't be
+    # hardcoded: the names depend on the storage bus.
+    local dev0=$(basename ${ktest_scratch_dev[0]})
+    local dev1=$(basename ${ktest_scratch_dev[1]})
+
     local dev_remove=
     if ! [[ -n "$residual_durability_1_data" ]]; then
 	echo ":: no residual durability=1 data found"
-	dev_remove="vdb"
+	dev_remove="$dev0"
         echo ":: we will simulate loss of device '$dev_remove' to verify proper replication"
     else
         echo ":: found residual durability=1 data:"
@@ -1120,11 +1126,12 @@ test_rereplicate2()
 
     # we want to keep the other device
     local dev_keep=
-    if [[ "$dev_remove" == "vdb" ]]; then
-        dev_keep="vdc"
-    elif [[ "$dev_remove" == "vdc" ]]; then
-        dev_keep="vdb"
+    if [[ "$dev_remove" == "$dev0" ]]; then
+        dev_keep="$dev1"
+    elif [[ "$dev_remove" == "$dev1" ]]; then
+        dev_keep="$dev0"
     else
+        echo "device '$dev_remove' is neither $dev0 nor $dev1"
         exit 1
     fi
 
@@ -1528,10 +1535,10 @@ do_scrub()
     dd if=/dev/urandom of=/mnt/test bs=1M count=1000 oflag=direct
     md5sum /mnt/test > /root/md5sum.before
 
-    dd if=/dev/zero of=/dev/vdd bs=1M seek=2 count=100 oflag=direct || true
+    dd if=/dev/zero of=${ktest_scratch_dev[2]} bs=1M seek=2 count=100 oflag=direct || true
 
     if $offline; then
-	bcachefs device offline -f /dev/vdb
+	bcachefs device offline -f ${ktest_scratch_dev[0]}
     fi
     bcachefs scrub /mnt || true
 

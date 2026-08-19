@@ -8,10 +8,14 @@ test_downgrade()
 {
     set_watchdog 60
 
-    bcachefs show-super /dev/vdb
-    mount -t bcachefs -o errors=ro /dev/vdb /mnt
+    # config-image disks start at the second one, whatever the storage bus
+    # happens to name it
+    local dev=/dev/${ktest_dev_prefix}b
+
+    bcachefs show-super $dev
+    mount -t bcachefs -o errors=ro $dev /mnt
     umount /mnt
-    bcachefs show-super /dev/vdb
+    bcachefs show-super $dev
 }
 
 main "$@"

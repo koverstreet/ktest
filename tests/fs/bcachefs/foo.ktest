@@ -63,14 +63,15 @@ test_foo()
 	echo 1 > /sys/module/bcachefs/parameters/expensive_debug_checks
     fi
     setup_tracing 'bcachefs:transaction_commit'
-    devs=$(ls /dev/vd*|grep -v vda|paste -sd:)
+    devs=$(ls /dev/${ktest_dev_prefix}* |
+	   grep -v ${ktest_dev_prefix}a | paste -sd:)
 
     cat >> /etc/fstab <<-ZZ
 OLD_BCACHEFS_UUID=foo   /mnt            bcachefs        x.systemd.requires=,x-systemd.after=
 ZZ
 
     #mount -t bcachefs -o verbose,very_degraded,fsck,fix_errors,noratelimit_errors $devs /mnt
-    bcachefs unlock /dev/vdb
+    bcachefs unlock /dev/${ktest_dev_prefix}b
     bcachefs mount -o verbose UUID=7594aea3-de1f-466c-8420-3c7e4997fb34 /mnt
 }
 
