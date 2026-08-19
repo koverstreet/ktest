@@ -631,10 +631,30 @@ start_vm()
 		dev=ide-hd,bus=hba.$disknr,drive=disk$disknr,id=dev$disknr
 		;;
 	    virtio-blk)
-		if (( disknr < 20 )); then
+		# Disk 0 is the root disk and is never unplugged, so it stays
+		# on the root complex - the boot path we know works.
+		#
+		# Everything after it goes behind a PCIe-to-PCI bridge,
+		# because qemu refuses to hotplug on the root complex ("Bus
+		# 'pcie.0' does not support hotplugging") and a test that
+		# takes a disk away needs somewhere it can be taken from. The
+		# guest side is acpiphp, which registers the bridge's slots.
+		#
+		# A PCI bus holds 31 devices, so allocate another bridge (and
+		# a root port to hang it off) every 31 disks. That replaces
+		# the old disknr<20 split, which put the overflow on a single
+		# fixed bridge and left the rest unpluggable.
+		if (( disknr == 0 )); then
 		    dev=virtio-blk-pci,drive=disk$disknr,id=dev$disknr
 		else
-		    dev=virtio-blk-pci,drive=disk$disknr,bus=pci.2,id=dev$disknr
+		    local br=$(( (disknr - 1) / 31 ))
+
+		    if (( (disknr - 1) % 31 == 0 )); then
+			qemu_cmd+=(-device pcie-root-port,id=rp.blk$br,bus=pcie.0,slot=$((8 + br)),chassis=$((8 + br)))
+			qemu_cmd+=(-device pcie-pci-bridge,id=pci.blk$br,bus=rp.blk$br)
+		    fi
+
+		    dev=virtio-blk-pci,drive=disk$disknr,bus=pci.blk$br,id=dev$disknr
 		fi
 		;;
 	    *)

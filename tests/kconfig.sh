@@ -10,6 +10,7 @@ case $ktest_arch in
 	require-kernel-config IO_DELAY_0XED
 	require-kernel-config 64BIT=n
 	require-kernel-config ACPI	# way slower without it, do not know why
+	require-kernel-config HOTPLUG_PCI_ACPI	# acpiphp: hotpluggable disk slots
 	require-kernel-config UNWINDER_ORC
 	require-kernel-config HARDLOCKUP_DETECTOR
 	require-kernel-config RTC_DRV_CMOS
@@ -26,6 +27,7 @@ case $ktest_arch in
 	#require-kernel-config IA32_EMULATION
 	require-kernel-config 64BIT
 	require-kernel-config ACPI	# way slower without it, do not know why
+	require-kernel-config HOTPLUG_PCI_ACPI	# acpiphp: hotpluggable disk slots
 	require-kernel-config UNWINDER_ORC
 	require-kernel-config HARDLOCKUP_DETECTOR
 	require-kernel-config RTC_DRV_CMOS
@@ -220,6 +222,10 @@ require-kernel-config PCI
 # at tens of thousands of interrupts/sec, pegging qemu's main thread and
 # stalling the guest. MSI-X gives each virtqueue its own coalesced vector.
 require-kernel-config PCI_MSI
+# Every disk but the root one is attached behind a PCIe-to-PCI bridge so a
+# test can unplug it - see libktest.sh qemu_disk(). acpiphp is what registers
+# those slots, measured on q35; SHPC is not involved.
+require-kernel-config HOTPLUG_PCI
 
 # Rng:
 require-kernel-config HW_RANDOM

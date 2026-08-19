@@ -19,16 +19,9 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
 
-# SCSI, because qemu will not hotplug on the root complex - "Bus 'pcie.0' does
-# not support hotplugging" - and that is where virtio-blk disks are attached.
-# The PCI ways around it need a bridge or a root port per disk plus a PCI
-# hotplug driver in the guest; a SCSI unplug needs none of that.
-#
-# Set here rather than globally: virtio-scsi-pci has a bug where the root
-# filesystem's superblock sometimes reads back as zeroes (see prelude.sh), so
-# a few percent of boots panic. Confined to this test that's one flaky test;
-# as the default it was a few percent of every boot in the suite.
-ktest_storage_bus=virtio-scsi-pci
+# Scratch disks live behind a PCIe-to-PCI bridge (see libktest.sh qemu_disk),
+# which is what makes them unpluggable; the root disk stays on the root
+# complex, where qemu refuses to hotplug.
 
 config-scratch-devs 4G
 
