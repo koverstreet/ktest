@@ -392,12 +392,19 @@ scratch_dev_unplug()
 	exit 1
     fi
 
-    # Whichever hotplug driver claimed the slots registers them here - acpiphp
-    # for q35's root bus, pciehp behind a root port. Nothing here means the
-    # kernel has no PCI hotplug at all and qemu's eject request has no one to
-    # answer it, which is worth saying outright rather than spending 30s and
-    # then reporting a device that didn't move.
-    #
+    # Whichever hotplug driver claimed the slots registers them under
+    # /sys/bus/pci/slots - acpiphp for the pcie-pci-bridge the scratch disks
+    # sit behind, pciehp for a bare root port. Nothing there means the kernel
+    # has no PCI hotplug at all, so qemu's eject request has no one to answer
+    # it: say that outright rather than spending 30s and then reporting a
+    # device that didn't move.
+    local slots=(/sys/bus/pci/slots/*)
+
+    if [[ ! -e ${slots[0]} ]]; then
+	echo "scratch_dev_unplug: no PCI hotplug slots registered - is CONFIG_HOTPLUG_PCI_ACPI set?"
+	exit 1
+    fi
+
     local nr=$((ktest_scratch_dev_base + $1))
 
     qemu_monitor device_del dev$nr
