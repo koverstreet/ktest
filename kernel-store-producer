@@ -11,6 +11,16 @@
 # The tarball is kept across runs — overwritten by the next pack — so a
 # failed deploy can be retried with --deploy-only without rebuilding.
 #
+# Partial failure is not fatal: a dead distro mirror or one broken kernel
+# variant must not stop the store from being refreshed at all. Whatever built
+# is packed and deployed, the gaps are named in the log, and the run still
+# exits non-zero so the unit shows failed. The alternative — abort on the
+# first failure — was what we had, and it was silent in the way that matters:
+# a Fedora release going EOL froze the entire CI kernel store on 7.1.2 for
+# seven weeks (2026-07-02 .. 2026-08-19) while every daily run "failed" in a
+# log nobody reads. A missing kernel breaks the jobs that ask for it, loudly,
+# on the next run; a frozen store silently invalidates every result.
+#
 # Modes (default is build + pack + deploy in one shot):
 #   --pack-only      Build + pack, then stop.
 #   --deploy-only    Skip build/pack; deploy the existing tarball.
@@ -129,12 +139,39 @@ deploy_to() {
 }
 
 main() {
+    # Build stages that partially failed. Named here, re-reported at the end,
+    # and turned into the exit status — but they do not stop the deploy.
+    local -a degraded=()
+
     if $do_pack; then
         log "fetching distro kernels"
-        "$ktest_dir/target/release/distro-kernel-fetch" --output "$new"
+        "$ktest_dir/target/release/distro-kernel-fetch" --output "$new" ||
+            degraded+=("distro fetch")
 
         log "building upstream kernels"
-        "$ktest_dir/upstream-kernel-build" -o "$new"
+        "$ktest_dir/upstream-kernel-build" -o "$new" ||
+            degraded+=("upstream builds")
+
+        if (( ${#degraded[@]} )); then
+            log "WARNING: incomplete store (${degraded[*]}) — deploying what built anyway"
+        fi
+
+        # A store with gaps is acceptable, an empty one is not. The deploy
+        # swaps the worker's store wholesale, so shipping a store with no
+        # upstream kernels would delete every kernel the CI has instead of
+        # leaving the previous one in place. Tolerating partial failure is
+        # only safe with this floor under it.
+        # find exits non-zero when $new/upstream doesn't exist at all, and
+        # pipefail passes that on — which under errexit would abort here
+        # instead of reporting. That case is just "zero kernels".
+        local nr_kernels
+        nr_kernels=$(find "$new/upstream" -name manifest.json 2>/dev/null | wc -l) ||
+            nr_kernels=0
+        if (( nr_kernels == 0 )); then
+            log "no upstream kernels in the new store — refusing to deploy, keeping what the workers have"
+            exit 1
+        fi
+        log "new store has $nr_kernels upstream kernel(s)"
 
         log "packing tarball"
         # Archive the kernels-new/ directory itself, so the tarball has a
@@ -169,6 +206,11 @@ main() {
             log "deploy failed: no workers received the store"
             exit 1
         fi
+    fi
+
+    if (( ${#degraded[@]} )); then
+        log "done, DEGRADED: ${degraded[*]} — store deployed with gaps"
+        exit 1
     fi
 
     log "done"
