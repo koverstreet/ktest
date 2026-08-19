@@ -336,6 +336,75 @@ out:
 }
 
 /*
+ * The monitor is a readline: it echoes every character we send back at us and
+ * redraws in place, with cursor-movement escapes. Rendering that the way a
+ * terminal would - moving the cursor rather than deleting the escapes - is
+ * what makes the echo come back out as exactly the command we sent, so the
+ * caller can recognise and drop it. Deleting the escapes instead concatenates
+ * successive redraws ("device_addevice_add") and the result matches nothing.
+ *
+ * Only what a readline actually emits is handled: \r to the left margin, \b
+ * and ESC[<n>D back n, ESC[K truncate here, \n end of line. Anything else is
+ * dropped, which is right for colour and wrong for nothing qemu sends.
+ */
+struct render {
+	char	line[4096];
+	unsigned cursor, len;
+};
+
+static void render_putc(struct render *r, char c,
+			void (*emit)(void *, const char *), void *ctx)
+{
+	switch (c) {
+	case '\n':
+		r->line[r->len] = '\0';
+		emit(ctx, r->line);
+		r->cursor = r->len = 0;
+		break;
+	case '\r':
+		r->cursor = 0;
+		break;
+	case '\b':
+		if (r->cursor)
+			r->cursor--;
+		break;
+	default:
+		if (r->cursor < sizeof(r->line) - 1) {
+			r->line[r->cursor++] = c;
+			if (r->cursor > r->len)
+				r->len = r->cursor;
+		}
+		break;
+	}
+}
+
+static void render(struct render *r, const char *buf, size_t n,
+		   void (*emit)(void *, const char *), void *ctx)
+{
+	for (size_t i = 0; i < n; i++) {
+		if (buf[i] != '\033') {
+			render_putc(r, buf[i], emit, ctx);
+			continue;
+		}
+
+		if (++i < n && buf[i] == '[') {
+			unsigned arg = 0;
+
+			while (++i < n && buf[i] >= '0' && buf[i] <= '9')
+				arg = arg * 10 + (buf[i] - '0');
+
+			if (i < n && buf[i] == 'D') {
+				unsigned back = arg ?: 1;
+
+				r->cursor = back < r->cursor ? r->cursor - back : 0;
+			} else if (i < n && buf[i] == 'K') {
+				r->len = r->cursor;
+			}
+		}
+	}
+}
+
+/*
  * Everything the monitor has to say goes in the log.
  *
  * qemu answers a command it didn't like - a device id that doesn't exist, a
@@ -343,30 +412,50 @@ out:
  * this those two are the same event as far as the guest can tell, and the
  * guest is the only thing watching.
  *
+ * What it has to say does NOT include our own command coming back at us, which
+ * once rendered arrives as the prompt line and is dropped with the prompt.
+ * Logging the raw stream instead cost 48K of log for three commands - one line
+ * per keystroke - which is how the replies came to be missed in the first
+ * place.
+ *
  * Bounded, because the child's console output is blocked behind this: a
  * refusal comes back immediately, and anything slower isn't a refusal.
  */
-static void monitor_drain(int fd)
+static void monitor_log_line(void *ctx, const char *l)
+{
+	const char *cmd = ctx;
+
+	/* the prompt, the connect banner, and our own echo aren't news */
+	if (!*l ||
+	    str_starts_with(l, "(qemu)") ||
+	    str_starts_with(l, "QEMU ") ||
+	    str_starts_with(l, "Type 'help'"))
+		return;
+
+	if (cmd && str_starts_with(cmd, l))
+		return;
+
+	log_line("qemu monitor: %s", l);
+}
+
+static void monitor_drain(int fd, const char *cmd)
 {
 	struct pollfd p = { .fd = fd, .events = POLLIN };
+	struct render r = {};
 	char buf[4096];
 
 	while (poll(&p, 1, 100) == 1) {
-		ssize_t r = read(fd, buf, sizeof(buf) - 1);
-		if (r <= 0)
+		ssize_t n = read(fd, buf, sizeof(buf));
+		if (n <= 0)
 			break;
-		buf[r] = '\0';
 
-		for (char *l = strtok(buf, "\r\n"); l; l = strtok(NULL, "\r\n")) {
-			/* the prompt and the connect banner aren't news */
-			if (!*l ||
-			    str_starts_with(l, "(qemu)") ||
-			    str_starts_with(l, "QEMU ") ||
-			    str_starts_with(l, "Type 'help'"))
-				continue;
+		render(&r, buf, n, monitor_log_line, (void *) cmd);
+	}
 
-			log_line("qemu monitor: %s", l);
-		}
+	/* a reply with no trailing newline still happened */
+	if (r.len) {
+		r.line[r.len] = '\0';
+		monitor_log_line((void *) cmd, r.line);
 	}
 }
 
@@ -385,13 +474,13 @@ static void monitor_send(const char *cmd)
 			return;
 		}
 
-		monitor_drain(fd);
+		monitor_drain(fd, NULL);
 	}
 
 	if (dprintf(fd, "%s\n", cmd) < 0)
 		fprintf(stderr, "writing to monitor: %m\n");
 
-	monitor_drain(fd);
+	monitor_drain(fd, cmd);
 }
 
 static void read_monitor_cmd(const char *line)
