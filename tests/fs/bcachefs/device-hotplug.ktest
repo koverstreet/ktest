@@ -19,17 +19,8 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
 
-# SCSI rather than the default virtio-blk, because virtio-blk disks are
-# attached to qemu's root complex and qemu will not hotplug there:
-#
-#	Error: Bus 'pcie.0' does not support hotplugging
-#
-# The alternatives are a PCIe root port per disk or the pcie-pci-bridge, and
-# both cap out around 32 devices, which is not enough - ktest runs have needed
-# more scratch devices than that. A SCSI unplug isn't a PCI operation at all:
-# one HBA carries hundreds of targets, it needs no PCI hotplug driver in the
-# guest, and qemu performs it synchronously.
-ktest_storage_bus=virtio-scsi-pci
+# Needs a storage bus qemu can unplug from - see prelude.sh, which now
+# defaults to SCSI for exactly this reason.
 
 config-scratch-devs 4G
 

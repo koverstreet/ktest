@@ -22,10 +22,17 @@ fi
 : "${ktest_timeout_multiplier:=1}"
 : "${ktest_mem_multiplier:=1}"
 
-# virtio-scsi-pci semes to be buggy: reading the superblock on the root
-# filesystem randomly returns zeroes
-#ktest_storage_bus=virtio-scsi-pci
-: "${ktest_storage_bus:=virtio-blk}"
+# SCSI, because a disk on it can be unplugged and plugged back in.
+# virtio-blk disks are attached to qemu's root complex, and qemu will not
+# hotplug there ("Bus 'pcie.0' does not support hotplugging"); the PCI ways
+# around that need a bridge or a root port per disk and a PCI hotplug driver
+# in the guest, where a SCSI unplug needs none of it.
+#
+# There used to be a note here that virtio-scsi-pci randomly returned zeroes
+# reading the root filesystem's superblock. That was years ago and is believed
+# long fixed - but if odd, hard-to-place CI failures turn up, suspect this
+# first and set it back to virtio-blk.
+: "${ktest_storage_bus:=virtio-scsi-pci}"
 
 : "${ktest_compiler:=${CC:-gcc}}"
 : "${ktest_allow_taint:=false}"
