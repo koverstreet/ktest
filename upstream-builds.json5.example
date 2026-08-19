@@ -19,9 +19,17 @@
 //             files the test machinery already uses for
 //             require-kernel-config).
 //
-// Tag resolution rules (see resolve_tag in upstream-kernel-build):
-//   - release name contains "rc"  → highest vX.Y-rcN
-//   - otherwise                    → highest vX.Y.Z (no -rc)
+// What gets built (see resolve_ref in upstream-kernel-build): the *head* of
+// the branch, never a tag. The `branch` is the whole selector — there is no
+// second rule picking a release out of it — so a series that has been tagged
+// but has no point release yet (vX.Y with no vX.Y.1) builds fine, and a
+// release tracking master can't silently resolve to the newest stable tag.
+//
+// The version in the store path is `git describe` of that ref: `v7.2-rc1`
+// when the head sits exactly on a tag, `v7.2-rc1-5-gdeadbeef` when it is
+// past one. That is commit-unique once ahead of a tag, so a stale manifest
+// cannot mask a moved head, and it sorts correctly under `sort -V` for
+// libktest.sh's resolve_kernel_name (rc2 > rc1-N-g… > rc1).
 {
     sources: {
         stable: "git://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git",
