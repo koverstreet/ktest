@@ -772,6 +772,12 @@ start_vm()
     # Raising oom_score_adj needs no privilege (only lowering does), so this
     # works unprivileged; the subshell keeps it off ktest's own process, and
     # exec means qemu keeps the same pid so the caller still sees its status.
+    # What we actually asked for. A guest that dies before userspace - no root
+    # device, a bus that wasn't created - is diagnosed from the command line
+    # and nothing else, and the tmpdir holding it is gone by the time anyone
+    # reads the log.
+    log_verbose "qemu: ${qemu_cmd[*]}"
+
     ( echo 800 > /proc/self/oom_score_adj 2>/dev/null; exec "${qemu_cmd[@]}" )
 
     kill "${virtiofsd_pids[@]}" 2>/dev/null
