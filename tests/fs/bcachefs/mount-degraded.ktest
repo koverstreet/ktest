@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+#
+# Mounting a filesystem that is missing a member device.
+#
+# The policy lives in the superblock as `degraded`: ask/yes/very/no, default
+# ask. The kernel implements yes and very; ask and no both fall to the default
+# arm of bch2_fs_may_start() and refuse, because a kernel has no console and
+# nobody to put a question to. Turning `ask` into a yes or a no is
+# mount.bcachefs's job, and so is waiting for a device that hasn't enumerated
+# yet - missing_dev_timeout bounds that wait.
+#
+# Mounting by UUID rather than by device path throughout, deliberately: naming
+# the paths tells mount.bcachefs the answer, and it is the search that has to
+# cope with a device that isn't there. This is also what fstab does at boot,
+# which is the case that sends people to an emergency shell.
+#
+# scratch_dev_unplug takes the device away for real - it leaves the PCI/SCSI
+# bus, the block device disappears, and udev tears down everything built on
+# top of it - so this is a pulled cable, not a simulated one.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+
+# Two replicas so the filesystem is readable with one device gone; without
+# that, "mount degraded" would be refused for lack of data rather than by
+# policy, and these tests would pass for the wrong reason.
+format_3dev()
+{
+    run_quiet "" bcachefs format -f		\
+	--replicas=2				\
+	"$@"					\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}			\
+	${ktest_scratch_dev[2]}
+
+    fs_uuid=$(bcachefs show-super ${ktest_scratch_dev[0]} |
+	      awk '$1 == "External" { print $3 }')
+
+    if [[ -z $fs_uuid ]]; then
+	echo "could not read the filesystem UUID back"
+	bcachefs show-super ${ktest_scratch_dev[0]}
+	exit 1
+    fi
+}
+
+# A device that turns up part way through the wait: the mount should finish on
+# its own, without going degraded, as soon as the last member appears.
+test_device_arrives_during_wait()
+{
+    set_watchdog 180
+
+    format_3dev
+    scratch_dev_unplug 2
+
+    # Long timeout: the mount returns as soon as every member is present, so
+    # this bounds how long we'd wait on failure, not how long the test takes.
+    mount -t bcachefs -o missing_dev_timeout=120 UUID=$fs_uuid /mnt &
+    local mount_pid=$!
+
+    sleep 5
+    scratch_dev_plug 2
+
+    if ! wait $mount_pid; then
+	echo "mount failed even though the device came back"
+	exit 1
+    fi
+
+    # Degraded would also have "succeeded" here, so check we got the whole
+    # filesystem: with all three present nothing should be marked missing.
+    if bcachefs fs usage /mnt | grep -qi "missing\|(no device)"; then
+	echo "mounted, but a device is still missing - it went degraded rather than waiting"
+	bcachefs fs usage /mnt
+	exit 1
+    fi
+
+    umount /mnt
+}
+
+# The timeout expiring with the policy set to yes: mount, degraded.
+test_degraded_yes()
+{
+    set_watchdog 120
+
+    format_3dev
+    scratch_dev_unplug 2
+
+    mount -t bcachefs -o degraded=yes,missing_dev_timeout=5 UUID=$fs_uuid /mnt
+
+    # replicas=2, one device gone: the data is still all readable.
+    dd if=/dev/urandom of=/mnt/foo bs=1M count=16 oflag=direct
+    umount /mnt
+
+    scratch_dev_plug 2
+}
+
+# ...and with it set to no: refuse, and name the device that's missing rather
+# than failing with a bare errno.
+test_degraded_no()
+{
+    set_watchdog 120
+
+    format_3dev
+    scratch_dev_unplug 2
+
+    assert_fails_with "Cannot mount without device"			\
+	mount -t bcachefs -o degraded=no,missing_dev_timeout=5 UUID=$fs_uuid /mnt
+
+    scratch_dev_plug 2
+}
+
+# degraded=ask with nothing to ask on. The safe answer is no: mounting
+# degraded is a decision about data, and making it by default because nobody
+# happened to be listening is how a filesystem quietly loses redundancy.
+#
+# stdin is redirected from a pipe so it is neither a terminal nor /dev/null,
+# which is the case that refuses immediately rather than going to
+# systemd-ask-password and waiting out its own timeout.
+test_ask_with_nobody_to_ask()
+{
+    set_watchdog 120
+
+    format_3dev
+    scratch_dev_unplug 2
+
+    assert_fails_with "no terminal to ask on"				\
+	sh -c "mount -t bcachefs -o missing_dev_timeout=5 UUID=$fs_uuid /mnt < /dev/zero"
+
+    scratch_dev_plug 2
+}
+
+# The timeout is a filesystem property, not just a mount option: formatted in,
+# it applies with no -o at all.
+test_timeout_from_the_superblock()
+{
+    set_watchdog 120
+
+    format_3dev --missing_dev_timeout=5
+
+    if [[ $(bcachefs show-super ${ktest_scratch_dev[0]} |
+	    awk '$1 == "missing_dev_timeout:" { print $2 }') != 5 ]]; then
+	echo "missing_dev_timeout did not survive format"
+	exit 1
+    fi
+
+    scratch_dev_unplug 2
+
+    # No -o missing_dev_timeout here: if the superblock value isn't being read
+    # this waits the 30s built-in instead, so time it.
+    local start=$(date '+%s')
+    assert_fails_with "no terminal to ask on"				\
+	sh -c "mount -t bcachefs UUID=$fs_uuid /mnt < /dev/zero"
+    local elapsed=$(($(date '+%s') - start))
+
+    if (( elapsed > 20 )); then
+	echo "waited ${elapsed}s; the superblock's 5s timeout was not used"
+	exit 1
+    fi
+
+    scratch_dev_plug 2
+}
+
+main "$@"
