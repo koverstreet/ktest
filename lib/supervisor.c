@@ -3,14 +3,17 @@
 #include <getopt.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -58,6 +61,31 @@ static char		*full_log;
 static char		*current_test;
 static struct timespec	current_test_start;
 static FILE		*current_test_log;
+
+static struct timespec	start;
+static FILE		*logfile;
+
+static void log_line(const char *fmt, ...)
+{
+	struct timespec now = xclock_gettime(CLOCK_MONOTONIC);
+	va_list args;
+	char *msg;
+
+	va_start(args, fmt);
+	if (vasprintf(&msg, fmt, args) < 0)
+		die("insufficient memory");
+	va_end(args);
+
+	char *output = mprintf("%.5lu %s\n", now.tv_sec - start.tv_sec, msg);
+
+	if (current_test_log)
+		fputs(output, current_test_log);
+	fputs(output, logfile);
+	fputs(output, stdout);
+
+	free(output);
+	free(msg);
+}
 
 static void term_handler(int sig)
 {
@@ -257,6 +285,122 @@ static void read_watchdog(const char *line)
 		set_timeout(atol(new_watchdog));
 }
 
+/*
+ * QEMU_MONITOR <command>: forward <command> to the VM's monitor socket.
+ *
+ * Tests need to manipulate the VM from the outside - detach a disk, attach it
+ * again - to exercise anything that depends on device timing. The monitor
+ * socket is on the host, but a test runs in the guest, so it asks us instead,
+ * over the console, the same way set_watchdog already asks for a timeout.
+ *
+ * That the request travels through the console is the point: the command and
+ * whatever the kernel says next land in one log, in order, from one clock.
+ *
+ * Connected on first use, not at startup: we are exec'd before qemu, so the
+ * socket does not exist yet, and a run that never asks should never care
+ * whether it appeared. logdir is $ktest_out/out and the socket is its sibling
+ * $ktest_out/vm/mon - the same relationship start_vm builds them with.
+ *
+ * Failure is a warning, not fatal: a test that wanted a device gone will fail
+ * its own checks, and that is a better error than the supervisor dying.
+ *
+ * We write and never read. HMP answers with a banner and prompts we have no
+ * use for; a handful of commands per test will not fill the socket buffer.
+ */
+static int monitor_connect(void)
+{
+	char *path = mprintf("%s/../vm/mon", logdir);
+	struct sockaddr_un addr = { .sun_family = AF_UNIX };
+	int fd = -1;
+
+	if (strlen(path) >= sizeof(addr.sun_path)) {
+		fprintf(stderr, "monitor socket path too long: %s\n", path);
+		goto out;
+	}
+	strcpy(addr.sun_path, path);
+
+	fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (fd < 0) {
+		fprintf(stderr, "monitor socket: %m\n");
+		goto out;
+	}
+
+	if (connect(fd, (struct sockaddr *) &addr, sizeof(addr))) {
+		fprintf(stderr, "connecting to %s: %m\n", path);
+		close(fd);
+		fd = -1;
+	}
+out:
+	free(path);
+	return fd;
+}
+
+/*
+ * Everything the monitor has to say goes in the log.
+ *
+ * qemu answers a command it didn't like - a device id that doesn't exist, a
+ * bus that can't hotplug - and says nothing at all when it worked. Without
+ * this those two are the same event as far as the guest can tell, and the
+ * guest is the only thing watching.
+ *
+ * Bounded, because the child's console output is blocked behind this: a
+ * refusal comes back immediately, and anything slower isn't a refusal.
+ */
+static void monitor_drain(int fd)
+{
+	struct pollfd p = { .fd = fd, .events = POLLIN };
+	char buf[4096];
+
+	while (poll(&p, 1, 100) == 1) {
+		ssize_t r = read(fd, buf, sizeof(buf) - 1);
+		if (r <= 0)
+			break;
+		buf[r] = '\0';
+
+		for (char *l = strtok(buf, "\r\n"); l; l = strtok(NULL, "\r\n")) {
+			/* the prompt and the connect banner aren't news */
+			if (!*l ||
+			    str_starts_with(l, "(qemu)") ||
+			    str_starts_with(l, "QEMU ") ||
+			    str_starts_with(l, "Type 'help'"))
+				continue;
+
+			log_line("qemu monitor: %s", l);
+		}
+	}
+}
+
+static void monitor_send(const char *cmd)
+{
+	static int fd = -1;
+	static bool failed = false;
+
+	if (failed)
+		return;
+
+	if (fd < 0) {
+		fd = monitor_connect();
+		if (fd < 0) {
+			failed = true;
+			return;
+		}
+
+		monitor_drain(fd);
+	}
+
+	if (dprintf(fd, "%s\n", cmd) < 0)
+		fprintf(stderr, "writing to monitor: %m\n");
+
+	monitor_drain(fd);
+}
+
+static void read_monitor_cmd(const char *line)
+{
+	const char *cmd = str_starts_with(line, "QEMU_MONITOR ");
+	if (cmd)
+		monitor_send(cmd);
+}
+
 static void write_test_file(const char *file, const char *fmt, ...)
 {
 	va_list args;
@@ -310,7 +454,6 @@ int main(int argc, char *argv[])
 	bool exit_on_success = false;
 	bool exit_on_failure = false;
 	int opt, ret = EXIT_FAILURE;
-	struct timespec start;
 
 	setlinebuf(stdin);
 	setlinebuf(stdout);
@@ -367,7 +510,7 @@ int main(int argc, char *argv[])
 
 	FILE *childf = popen_with_pid(argv + optind, &child);
 
-	FILE *logfile = log_open();
+	logfile = log_open();
 
 	size_t n = 0;
 	ssize_t len;
@@ -388,8 +531,6 @@ again:
 
 		strim(line);
 
-		char *output = mprintf("%.5lu %s\n", now.tv_sec - start.tv_sec, line);
-
 		read_watchdog(line);
 
 		char *new_test = test_is_starting(line);
@@ -401,10 +542,10 @@ again:
 		if (new_test)
 			test_start(new_test, now);
 
-		if (current_test_log)
-			fputs(output, current_test_log);
-		fputs(output, logfile);
-		fputs(output, stdout);
+		log_line("%s", line);
+
+		/* after logging the line, so a reply follows its command: */
+		read_monitor_cmd(line);
 
 		if (current_test_log && test_is_ending(line)) {
 			write_test_file("status", "%s\n", line);
@@ -433,8 +574,6 @@ again:
 		     strstr(line, "BUG:") ||
 		     strstr(line, "kernel BUG at")))
 			alarm(5);
-
-		free(output);
 	}
 
 	if (len == -1 && errno == EINTR) {
