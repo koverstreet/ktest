@@ -474,14 +474,10 @@ start_vm()
 
     local kernelargs=()
 
-    case $ktest_storage_bus in
-	virtio-blk)
-	    ktest_root_dev="/dev/vda"
-	    ;;
-	*)
-	    ktest_root_dev="/dev/sda"
-	    ;;
-    esac
+    # Always virtio-blk, whatever bus the scratch devices asked for: see
+    # qemu_disk(). virtio-blk names come from PCI enumeration, which is
+    # deterministic, so the root disk is /dev/vda every time.
+    ktest_root_dev="/dev/vda"
 
     kernelargs+=(root=$ktest_root_dev rw log_buf_len=8M)
     kernelargs+=(mitigations=off)
@@ -626,17 +622,37 @@ start_vm()
 	local dev
 	local drive="if=none,format=raw,id=disk$disknr,$1"
 
-	case $ktest_storage_bus in
+	# The root disk is virtio-blk on every bus, and root= names /dev/vda.
+	#
+	# Not a preference: sd letters are handed out in probe-completion
+	# order, not target order, and every scsi-hd here shares one HBA. With
+	# a 16G root image and one 4G scratch device, /dev/sda was the SCRATCH
+	# disk on 5 of 20 boots (measured, qemu 11.0.1) - and those boots die
+	# with "Unable to mount root fs on /dev/sda", because it is blank.
+	#
+	# That is the "virtio-scsi randomly returns zeroes reading the root
+	# superblock" fault this tree has worked around for years by defaulting
+	# to virtio-blk. The read was always correct; the name was wrong.
+	#
+	# Root is never unplugged, so it gains nothing from the hotpluggable
+	# bus, and virtio-blk names follow PCI enumeration, which is stable.
+	local bus=$ktest_storage_bus
+	(( disknr == 0 )) && bus=root
+
+	case $bus in
+	    root)
+		dev=virtio-blk-pci,drive=disk0,id=dev0
+		;;
 	    ahci|piix4-ide)
-		dev=ide-hd,bus=hba.$disknr,drive=disk$disknr,id=dev$disknr
+		# One port per disk, and the root disk isn't on this
+		# controller any more - so count from the first non-root disk,
+		# or an AHCI's six ports would only hold five.
+		dev=ide-hd,bus=hba.$((disknr - 1)),drive=disk$disknr,id=dev$disknr
 		;;
 	    virtio-blk)
-		# Disk 0 is the root disk and is never unplugged, so it stays
-		# on the root complex - the boot path we know works.
-		#
-		# Everything after it goes behind a PCIe-to-PCI bridge,
-		# because qemu refuses to hotplug on the root complex ("Bus
-		# 'pcie.0' does not support hotplugging") and a test that
+		# Everything past the root disk goes behind a PCIe-to-PCI
+		# bridge, because qemu refuses to hotplug on the root complex
+		# ("Bus 'pcie.0' does not support hotplugging") and a test that
 		# takes a disk away needs somewhere it can be taken from. The
 		# guest side is acpiphp, which registers the bridge's slots.
 		#
@@ -644,18 +660,14 @@ start_vm()
 		# a root port to hang it off) every 31 disks. That replaces
 		# the old disknr<20 split, which put the overflow on a single
 		# fixed bridge and left the rest unpluggable.
-		if (( disknr == 0 )); then
-		    dev=virtio-blk-pci,drive=disk$disknr,id=dev$disknr
-		else
-		    local br=$(( (disknr - 1) / 31 ))
+		local br=$(( (disknr - 1) / 31 ))
 
-		    if (( (disknr - 1) % 31 == 0 )); then
-			qemu_cmd+=(-device pcie-root-port,id=rp.blk$br,bus=pcie.0,slot=$((8 + br)),chassis=$((8 + br)))
-			qemu_cmd+=(-device pcie-pci-bridge,id=pci.blk$br,bus=rp.blk$br)
-		    fi
-
-		    dev=virtio-blk-pci,drive=disk$disknr,bus=pci.blk$br,id=dev$disknr
+		if (( (disknr - 1) % 31 == 0 )); then
+		    qemu_cmd+=(-device pcie-root-port,id=rp.blk$br,bus=pcie.0,slot=$((8 + br)),chassis=$((8 + br)))
+		    qemu_cmd+=(-device pcie-pci-bridge,id=pci.blk$br,bus=rp.blk$br)
 		fi
+
+		dev=virtio-blk-pci,drive=disk$disknr,bus=pci.blk$br,id=dev$disknr
 		;;
 	    *)
 		dev=scsi-hd,bus=hba.0,drive=disk$disknr,id=dev$disknr

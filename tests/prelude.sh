@@ -199,7 +199,14 @@ require-gcov()
 
 config-scratch-devs()
 {
-    local chars=( {b..z} )
+    # The root disk is virtio-blk on every bus (see libktest.sh qemu_disk), so
+    # it only consumes a letter when the scratch devices are virtio-blk too.
+    # On any other bus the first scratch device is sda, not sdb.
+    local chars
+    case $ktest_storage_bus in
+	virtio-blk)	chars=( {b..z} ) ;;
+	*)		chars=( {a..z} ) ;;
+    esac
 
     ktest_scratch_dev+=("/dev/${ktest_dev_prefix}${chars[$ktest_scratch_dev_count]}")
     ktest_scratch_dev_count=$((ktest_scratch_dev_count + 1))
