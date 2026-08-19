@@ -323,6 +323,30 @@ set_watchdog()
     echo WATCHDOG $ktest_timeout
 }
 
+# qemu_monitor <command>...
+#
+# Run a qemu monitor command against the VM we are running inside. The monitor
+# socket is on the host, so we ask the supervisor to do it, over the console,
+# the same way set_watchdog asks for a timeout.
+#
+# Mostly for making devices come and go:
+#
+#	qemu_monitor device_del dev3
+#	qemu_monitor device_add virtio-blk-pci,drive=disk3,id=dev3
+#
+# The device ids are dev$N, numbered in the order start_vm attaches them, and
+# match the vm/dev-$N backing files.
+#
+# Fire and forget - there is no reply, by design. To know a command took
+# effect, watch for it in the guest (/sys/block, or a udev event); that is a
+# stronger check than the monitor's acknowledgement, and it is what a test
+# actually cares about. Nothing arrives if the supervisor could not reach the
+# socket, so a test must never treat "I asked" as "it happened".
+qemu_monitor()
+{
+    echo QEMU_MONITOR "$@"
+}
+
 # assert_output_lacks PATTERN CMD...
 # assert_output_has   PATTERN CMD...
 #
