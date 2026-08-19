@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+#
+# Devices coming and going underneath a filesystem.
+#
+# The guest asks the supervisor to run device_del/device_add on the VM it is
+# itself running inside (prelude.sh qemu_monitor), so a disk really does leave
+# the PCI bus and really does come back - the block device disappears from the
+# guest along with everything udev built on top of it, exactly the way it does
+# when someone pulls a cable.
+#
+# This is the substrate for the multi-device problems: a filesystem whose
+# members show up one at a time at boot, a mount that has to decide how long
+# to wait, one that has to go degraded because a member is never coming. None
+# of those are testable without being able to make a device not be there yet.
+#
+# What this file starts with is the round trip on its own, one device, no
+# filesystem-level cleverness: if a disk cannot leave and come back with its
+# contents intact, nothing built on top of that is worth debugging.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+# SCSI rather than the default virtio-blk, because virtio-blk disks are
+# attached to qemu's root complex and qemu will not hotplug there:
+#
+#	Error: Bus 'pcie.0' does not support hotplugging
+#
+# The alternatives are a PCIe root port per disk or the pcie-pci-bridge, and
+# both cap out around 32 devices, which is not enough - ktest runs have needed
+# more scratch devices than that. A SCSI unplug isn't a PCI operation at all:
+# one HBA carries hundreds of targets, it needs no PCI hotplug driver in the
+# guest, and qemu performs it synchronously.
+ktest_storage_bus=virtio-scsi-pci
+
+config-scratch-devs 4G
+
+test_unplug_replug()
+{
+    set_watchdog 120
+
+    local dev=${ktest_scratch_dev[0]}
+    local sum
+
+    run_quiet "" bcachefs format -f $dev
+
+    mount -t bcachefs $dev /mnt
+    dd if=/dev/urandom of=/mnt/foo bs=1M count=16 oflag=direct
+    sum=$(md5sum < /mnt/foo)
+    umount /mnt
+
+    scratch_dev_unplug 0
+    scratch_dev_plug 0
+
+    mount -t bcachefs $dev /mnt
+    if [[ $(md5sum < /mnt/foo) != $sum ]]; then
+	echo "contents of /mnt/foo changed across the unplug"
+	exit 1
+    fi
+    umount /mnt
+
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+main "$@"
