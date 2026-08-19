@@ -52,4 +52,29 @@ parse_test_deps()
 
 	ktest_tests="$ktest_testargs"
     fi
+
+    # supervisor writes per-subtest status/log/duration into
+    # $ktest_out/out/<basename>.<subtest>/, and does not create those
+    # directories itself - test_file_open() fopen()s and die()s.
+    #
+    # Deliberately idempotent rather than a clean slate: the CI creates the
+    # same directories and symlinks full_log.br into them *before* invoking
+    # supervisor, so the rm -rf this used to do (removed in 0b3b971c528b)
+    # would delete what the caller just set up. mkdir -p costs nothing to
+    # repeat, and seeding status only when absent leaves an existing one alone.
+    #
+    # Cost of not clearing: locally, a subtest that never starts shows last
+    # run's status rather than NOT STARTED. Any subtest that does start has
+    # its status rewritten by supervisor at test_start.
+    ktest_basename=$(basename -s .ktest "$ktest_test")
+
+    mkdir -p "$ktest_out/out"
+
+    local t
+    for t in $ktest_tests; do
+	t=$(echo "$t"|tr / .)
+	mkdir -p "$ktest_out/out/$ktest_basename.$t"
+	[[ -e $ktest_out/out/$ktest_basename.$t/status ]] ||
+	    echo "========= NOT STARTED" > "$ktest_out/out/$ktest_basename.$t/status"
+    done
 }

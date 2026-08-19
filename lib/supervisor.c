@@ -221,6 +221,17 @@ static FILE *popen_with_pid(char *argv[], pid_t *child)
 			die("dup2 error: %m");
 		close(devnull);
 
+		/*
+		 * Tell anything downstream that it is already supervised, so
+		 * it does not wrap a second supervisor around itself. The CI
+		 * runs us around build-test-kernel, which calls start_vm,
+		 * which would otherwise start its own around qemu: two
+		 * processes parsing the same console, two copies of every
+		 * log, two watchdogs, two sets of result directories.
+		 */
+		if (setenv("KTEST_SUPERVISOR", "1", 1))
+			die("setenv error: %m");
+
 		execvp(argv[0], argv);
 		die("error execing %s: %m", argv[0]);
 	}

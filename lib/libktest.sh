@@ -229,6 +229,60 @@ ktest_usage_post()
     echo "For kgdb to be enabled, either -I or -S must be specified"
 }
 
+# Re-exec the whole run under the supervisor, which reads our output a line at
+# a time, enforces the watchdog the guest sets with set_watchdog (WATCHDOG
+# lines) and records per-subtest status/log/duration under $ktest_out/out.
+#
+# Called from an entry point's run command rather than from start_vm, because
+# what wants supervising is the whole job, not qemu. build-test-kernel compiles
+# the kernel before it ever reaches start_vm, and the CI's supervisor around
+# build-test-kernel is the only thing bounding that build - ci-daemon has no
+# job timeout of its own. A supervisor started inside start_vm could not see
+# it, and would merely nest a second one inside the CI's.
+#
+# Placement is pinned on both sides: after option parsing, because -o sets
+# $ktest_out and that is where the supervisor writes; and after
+# parse_test_deps, because $ktest_timeout does not exist until the test's deps
+# have been eval'd.
+#
+# KTEST_SUPERVISOR is set by a supervisor for its child, so a job the CI has
+# already wrapped does not get a second one nested inside it.
+ktest_supervise_self()
+{
+    [[ -n ${KTEST_SUPERVISOR:-} ]] && return 0
+
+    local supervisor="$ktest_dir/lib/supervisor"
+
+    [[ -x $supervisor ]] || make -s -C "$ktest_dir/lib" supervisor
+    if [[ ! -x $supervisor ]]; then
+	echo "$supervisor missing and could not be built" >&2
+	echo "TEST FAILED"
+	exit 1
+    fi
+
+    local base=$(basename -s .ktest "$ktest_test")
+    local cmd=("$supervisor"
+	       -b "$base"
+	       -o "$ktest_out/out"
+	       -f "$base.$(hostname).$(date -Iseconds).log")
+
+    # No -T and no -S/-F when interactive: the timeout is not advisory, the
+    # alarm handler SIGTERMs and then SIGKILLs whether or not -F is set, so -T
+    # would shoot a debugging session in the head at $ktest_timeout. That is
+    # what ktest_interactive's "timeout is ignored completely" means.
+    if ! $ktest_interactive; then
+	cmd+=(-T "$ktest_timeout")
+
+	if [[ $ktest_exit_on_success = 1 ]]; then
+	    cmd+=(-S)
+	else
+	    cmd+=(-S -F)
+	fi
+    fi
+
+    exec "${cmd[@]}" -- "$0" "${ktest_argv[@]}"
+}
+
 # subcommands:
 
 ktest_run()

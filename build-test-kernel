@@ -61,6 +61,10 @@ if [[ $# = 0 ]]; then
     exit 1
 fi
 
+# Saved before the command and options are consumed, so ktest_supervise_self
+# can re-exec us with exactly what we were invoked with.
+ktest_argv=("$@")
+
 #parse command and shift for rest of arg parsing
 CMD="$1"
 shift
@@ -164,6 +168,7 @@ cmd_run()
 
     echo Running test $(basename "$ktest_test") on $(uname -n) at $(pwd)
     parse_test_deps "$ktest_test"
+    ktest_supervise_self
 
     if [[ -n $COVERAGE ]]; then
 	ktest_kernel_config_require+=(GCOV_KERNEL)
