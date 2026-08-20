@@ -1206,6 +1206,115 @@ test_rereplicate_file()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# An IO path option change must re-replicate existing data no matter how the
+# effective option changed - set directly on the file, set on an ancestor
+# directory (set-file-option propagates recursively via BCHFS_IOC_REINHERIT_ATTRS),
+# or an override *removed* so the file falls back to the filesystem-wide
+# option. And it must reach all of the file's extents, including those written
+# before a snapshot was taken.
+#
+# Parametrized matrix; each test_* wrapper is one point:
+#   $1 where:  file  - change the option directly on the file
+#              dir   - change it on the subvolume root, reaching the file
+#                      through a subdirectory
+#   $2 change: set   - fs-wide data_replicas=1, set an explicit =2 override
+#              unset - fs-wide data_replicas=2, file written under an
+#                      explicit =1 override, then the override is removed
+#   $3 snap:   snap|nosnap - snapshot the subvolume before the change
+rereplicate_opt_change_test()
+{
+    local where=$1 change=$2 snap=$3
+    local md5 f
+
+    set_watchdog 120
+
+    # metadata_replicas=2 so the fs itself survives the degraded mount below;
+    # the file's data is then the only single-replica thing, which is the
+    # variable under test.
+    local base_replicas=1
+    [[ $change == unset ]] && base_replicas=2
+
+    run_quiet "" bcachefs format -f		\
+	--block_size=4k				\
+	--metadata_replicas=2			\
+	--data_replicas=$base_replicas		\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+
+    bcachefs subvolume create /mnt/subvol
+    mkdir /mnt/subvol/dir
+    touch /mnt/subvol/dir/foo
+
+    local target=/mnt/subvol/dir/foo
+    [[ $where == dir ]] && target=/mnt/subvol
+
+    # the unset variants write under an explicit replicas=1 override:
+    [[ $change == unset ]] && bcachefs set-file-option --data_replicas=1 $target
+
+    # effective data_replicas=1 either way, so extents land durability 1:
+    dd if=/dev/urandom of=/mnt/subvol/dir/foo bs=1M count=64 conv=fsync
+    md5=$(md5sum < /mnt/subvol/dir/foo)
+
+    [[ $snap == snap ]] && bcachefs subvolume snapshot /mnt/subvol /mnt/snap
+
+    user_durability_1()
+    {
+	bcachefs fs usage -h --all /mnt |
+	    grep -E '^user:' | awk '$3 == "1" { n = 1 } END { print n + 0 }'
+    }
+
+    if [[ $(user_durability_1) != 1 ]]; then
+	echo "FAIL: precondition - no durability=1 user data after a replicas=1 write"
+	bcachefs fs usage -h --all /mnt
+	return 1
+    fi
+
+    case $change in
+	set)	bcachefs set-file-option --data_replicas=2 $target ;;
+	unset)	bcachefs set-file-option --data_replicas=- $target ;;
+    esac
+    bcachefs reconcile wait -t replicas /mnt
+
+    bcachefs fs usage -h --all /mnt
+
+    if [[ $(user_durability_1) != 0 ]]; then
+	echo "FAIL: durability=1 data remains after '$change' on $where + reconcile"
+	[[ $snap == snap ]] &&
+	    echo "(the option change did not propagate to extents predating the snapshot)"
+	return 1
+    fi
+
+    # the second copy must be real: lose a device, every copy must read back
+    umount /mnt
+    mount -t bcachefs -o degraded ${ktest_scratch_dev[0]} /mnt
+
+    local files=(/mnt/subvol/dir/foo)
+    [[ $snap == snap ]] && files+=(/mnt/snap/dir/foo)
+
+    for f in "${files[@]}"; do
+	if [[ $(md5sum < $f) != "$md5" ]]; then
+	    echo "FAIL: $f corrupt after device loss"
+	    return 1
+	fi
+    done
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_rereplicate_snapshot()		{ rereplicate_opt_change_test file set	 snap;	 }
+test_rereplicate_snapshot_dir()		{ rereplicate_opt_change_test dir  set	 snap;	 }
+test_rereplicate_snapshot_unset()	{ rereplicate_opt_change_test file unset snap;	 }
+test_rereplicate_snapshot_unset_dir()	{ rereplicate_opt_change_test dir  unset snap;	 }
+
+# no-snapshot controls (file/set is test_rereplicate_file):
+test_rereplicate_dir()			{ rereplicate_opt_change_test dir  set	 nosnap; }
+test_rereplicate_unset()		{ rereplicate_opt_change_test file unset nosnap; }
+test_rereplicate_unset_dir()		{ rereplicate_opt_change_test dir  unset nosnap; }
+
 # fsck given a member *device* (not just the mountpoint) of a mounted fs must
 # select online fsck: bcachefs holds its devices exclusively, so the offline
 # path fails reading the superblock with EBUSY. The device has to be recognized
