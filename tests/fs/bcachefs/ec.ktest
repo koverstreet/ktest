@@ -341,6 +341,42 @@ test_device_evacuate_online()
     do_remove_test 0 1
 }
 
+test_ec_degraded_continued_writes()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--data_replicas=3			\
+	--metadata_replicas=3			\
+	"${ktest_scratch_dev[@]}"
+
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+
+    dd if=/dev/zero of=/mnt/pre-degraded bs=1M count=256 oflag=direct conv=fsync status=progress
+
+    echo -n "offlining ${ktest_scratch_dev[0]}... "
+    bcachefs device offline --force ${ktest_scratch_dev[0]}
+    echo "done"
+
+    timeout 120 bash -c '
+	for i in $(seq 1 16); do
+	    dd if=/dev/zero of=/mnt/degraded-write-$i bs=1M count=64 oflag=direct conv=fsync status=progress
+	done
+	sync
+    '
+
+    bcachefs fs usage -h /mnt
+    bcachefs scrub /mnt
+    umount /mnt
+
+    mount -t bcachefs -o degraded "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+    umount /mnt
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[1]}
+}
+
 test_device_failed()
 {
     set_watchdog 240
