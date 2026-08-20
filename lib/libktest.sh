@@ -667,7 +667,18 @@ start_vm()
 		    qemu_cmd+=(-device pcie-pci-bridge,id=pci.blk$br,bus=rp.blk$br)
 		fi
 
-		dev=virtio-blk-pci,drive=disk$disknr,bus=pci.blk$br,id=dev$disknr
+		# Place it explicitly, and count from 1: a pcie-pci-bridge is a
+		# standard hotplug controller, and SHPC reserves slot 0. Left to
+		# qemu the first disk on each bridge auto-assigns to devfn 0 and
+		# the VM refuses to start - "Unsupported PCI slot 0 for standard
+		# hotplug controller. Valid slots are between 1 and 31."
+		#
+		# In hex, because qemu parses addr with sscanf("%x"): addr=10
+		# would silently be slot 16, and by disk 22 the slot numbers run
+		# off the end of the bus and it stops booting again.
+		local slot=$(printf '0x%x' $(( (disknr - 1) % 31 + 1 )))
+
+		dev=virtio-blk-pci,drive=disk$disknr,bus=pci.blk$br,addr=$slot,id=dev$disknr
 		;;
 	    *)
 		dev=scsi-hd,bus=hba.0,drive=disk$disknr,id=dev$disknr
