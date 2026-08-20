@@ -1,0 +1,323 @@
+#!/usr/bin/env bash
+#
+# The per-snapshot accounting key aliases onto its own predecessor, so the
+# first read-write open of an older filesystem silently corrupts its
+# accounting. See bcachefs-tools#803.
+#
+# WHY THIS EXISTS
+# ---------------
+# BCH_DISK_ACCOUNTING_snapshot changed from
+#
+#     {id}         -> [sectors]
+#     {id, btree}  -> [nr_keys, key_bytes, external_sectors]
+#
+# The new key aliases exactly onto the old one: `btree` reads back as 0
+# (BTREE_ID_extents) out of the old key's zero padding, so the bpos is
+# unchanged and an existing key is silently reinterpreted. The old `sectors`
+# value is inherited as `nr_keys`, while `key_bytes` and `external_sectors`
+# start from zero rather than from the truth. Every subsequent delta is
+# therefore applied to a base that was never established, and because the
+# counters start below their true values ordinary activity drives them
+# negative -- and the negative values are persisted.
+#
+# Concretely, before and after one read-write open, same bpos:
+#
+#   u64s 6 ... 432345564210790400:0:0 : snapshot id=4294967295 btree=extents 13528
+#   u64s 8 ... 432345564210790400:0:0 : snapshot id=4294967295 btree=extents 13528 -160 0
+#
+# No user IO is needed to get there. Draining reconcile work queued by the
+# old code is enough: each extent that has its background compression applied
+# drops an 8-byte `reconcile:` entry, and that correct -8 per key is applied
+# to a key_bytes base of 0.
+#
+# NOT A VERSION UPGRADE
+# ---------------------
+# This test rides the same two-stage image as version-upgrade-138-to-139.ktest
+# because the kernel that writes stage 1 is also the kernel that predates the
+# accounting change -- but the on-disk version is not what discriminates. A
+# filesystem formatted at 1.38 by *current* code never shows this; one written
+# by old code does, even mounted with -o version_upgrade=none. What matters is
+# the code that last wrote the key, not the number in the superblock. The test
+# therefore asserts on the accounting key itself rather than on the version.
+#
+# The mount says nothing. Note that nothing in the upgrade dmesg mentions
+# accounting at all: the corruption is silent at mount time and only surfaces
+# later, when something runs check_allocations and reports
+# accounting_key_underflow. That silence is why this test reads the key out of
+# the btree directly instead of trusting the log.
+#
+# WHAT IT ASSERTS
+# ---------------
+#   precondition  the supplied image really is in the old key layout (one
+#                 counter on the per-snapshot key). If it is in the new
+#                 layout there is nothing to alias and the test would pass
+#                 for the wrong reason, so that is a failure, not a skip.
+#   1  after the first read-write open, no per-snapshot accounting counter
+#      is negative                                      (fails until fixed)
+#   2  a read-only fsck of that device reports no accounting_key_underflow
+#                                                       (fails until fixed)
+#   3  the in-kernel and userspace fsck implementations agree about it --
+#      a divergence would be a separate bug in its own right
+#   4  a repairing fsck -y makes it stick: the following fsck -n is clean
+#
+# Assertions 1 and 2 fail today; that is the point of the test.
+#
+# USAGE
+#   # stage 1 (shared with version-upgrade-138-to-139.ktest), against a
+#   # kernel predating the accounting key change:
+#   build-test-kernel run -k <old-tree> -o <out1> \
+#       tests/fs/bcachefs/version-upgrade-138-to-139.ktest populate_138
+#
+#   # then, against a current kernel:
+#   ktest_138_image=<out1>/upgrade-138/fs-1.38.img \
+#   build-test-kernel run -k <new-tree> -o <out2> \
+#       tests/fs/bcachefs/accounting-key-underflow.ktest accounting_underflow
+#
+# The image is attached with qemu snapshot=on, so the host copy is never
+# modified and the test can be re-run as many times as needed.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-mem 2G
+config-timeout 1800
+
+# Declared only when supplied: this file is parsed with `set -o nounset`, so
+# an unguarded expansion would stop ktest from even listing the test. The
+# test function fails with an explanation when the image is missing.
+if [[ -n ${ktest_138_image:-} ]]; then
+    config-image	"$ktest_138_image"
+fi
+
+acct_dev=/dev/vdb
+
+# Per-snapshot accounting keys, one line each: "<nr counters> <counters...>".
+#
+# The arity is the tell. bch2_accounting_to_text() derives the number of
+# counters from the key's u64s, so old-layout keys print one counter and
+# new-layout keys print three -- current tools reading an un-migrated key
+# print the single inherited value, which is exactly the aliasing this test
+# is about.
+snapshot_acct_counters()
+{
+    local dev=$1 dump=$2
+
+    if ! bcachefs list --btree accounting "$dev" > "$dump" 2>"$dump.err"; then
+	echo "FAIL: 'bcachefs list --btree accounting $dev' failed:" >&2
+	cat "$dump.err" >&2
+	return 1
+    fi
+
+    # Anchor on ": snapshot id=", not on "snapshot": the btree-level keys
+    # print as "btree btree=snapshots ..." and would otherwise match.
+    gawk '
+	/: snapshot id=/ {
+	    sub(/.*btree=[a-z_]+[[:space:]]*/, "")
+	    print NF, $0
+	}' "$dump"
+}
+
+# Whether an fsck log reports the underflow. Both spellings: the error name
+# from the "errors this recovery" tally and the message that names the key.
+log_has_underflow()
+{
+    grep --quiet --extended-regexp 'accounting_key_underflow|Accounting underflow for' "$1"
+}
+
+report_fsck()
+{
+    local tag=$1 log=$2 rc=$3
+
+    echo "--- $tag: exit $rc ---"
+    grep --extended-regexp 'Running (in-kernel|userspace) offline fsck' "$log" ||
+	echo "  (no fsck implementation banner -- check the log)"
+    grep --after-context=2 'Accounting underflow for' "$log" ||
+	echo "  (no accounting underflow)"
+    grep --after-context=8 'errors this recovery' "$log" ||
+	echo "  (no errors this recovery)"
+}
+
+test_accounting_underflow()
+{
+    set_watchdog 900
+
+    if ! command -v gawk > /dev/null; then
+	echo "FAIL: precondition -- gawk is not installed in the test VM"
+	return 1
+    fi
+
+    if [[ -z ${ktest_138_image:-} ]]; then
+	echo "FAIL: ktest_138_image is not set, so there is no device to test."
+	echo "      This test cannot synthesise its own input: it needs a"
+	echo "      filesystem whose per-snapshot accounting key was written"
+	echo "      by code predating the key layout change, which by"
+	echo "      definition the kernel under test cannot produce. Build one"
+	echo "      with version-upgrade-138-to-139.ktest populate_138 against"
+	echo "      an older kernel first -- see USAGE at the top of this file."
+	return 1
+    fi
+
+    local out=${ktest_out:-/ktest-out}/accounting-underflow
+    mkdir --parents "$out"
+
+    local failed=0
+
+    echo "=== before the first read-write open ==="
+    bcachefs show-super "$acct_dev" | grep --max-count=1 '^Version:'
+
+    snapshot_acct_counters "$acct_dev" "$out/accounting-before.txt" \
+	> "$out/snapshot-keys-before.txt"
+    echo "per-snapshot accounting keys before:"
+    cat "$out/snapshot-keys-before.txt"
+
+    # PRECONDITION: the image must be in the OLD key layout. If it is already
+    # in the new one there is no aliasing to observe and every assertion below
+    # would pass without having tested anything.
+    local nr_keys nr_old
+    nr_keys=$(wc --lines < "$out/snapshot-keys-before.txt")
+    nr_old=$(awk '$1 == 1 { n++ } END { print n + 0 }' "$out/snapshot-keys-before.txt")
+    if (( nr_keys == 0 )); then
+	echo "FAIL: precondition -- the image has no per-snapshot accounting"
+	echo "      key at all, so there is nothing for the new key to alias"
+	echo "      onto. Wrong image, or 'bcachefs list --btree accounting'"
+	echo "      changed its output format."
+	return 1
+    fi
+    if (( nr_old == 0 )); then
+	echo "FAIL: precondition -- every per-snapshot accounting key in the"
+	echo "      image already carries $(awk 'NR==1 { print $1 }' "$out/snapshot-keys-before.txt") counters, i.e. the new"
+	echo "      layout. The image was written by code that already has the"
+	echo "      per-(snapshot, btree) key, so the aliasing this test is"
+	echo "      about cannot happen. Rebuild stage 1 against a kernel"
+	echo "      predating the accounting key change."
+	return 1
+    fi
+    echo "precondition ok: $nr_old of $nr_keys per-snapshot keys are old-layout"
+
+    # ---- the trigger: one ordinary read-write mount ---------------------
+    # Nothing else. No user IO, no fsck, no repair: just opening the
+    # filesystem read-write with current code.
+    #
+    # Slice the log at a marker rather than `dmesg -C`. Clearing the ring
+    # buffer also removes the "========= TEST" line that prelude's
+    # check_dmesg anchors on, and check_dmesg prints nothing at all when that
+    # anchor is gone -- so a clear here would quietly disable the splat check
+    # for the rest of the run.
+    echo KTEST_ACCOUNTING_UNDERFLOW_RW_OPEN > /dev/kmsg
+    mount -t bcachefs "$acct_dev" /mnt
+    umount /mnt
+    dmesg |
+	awk '/KTEST_ACCOUNTING_UNDERFLOW_RW_OPEN/ { seen = 1; next } seen' \
+	> "$out/mount-dmesg.txt"
+
+    echo "=== mount dmesg ==="
+    cat "$out/mount-dmesg.txt"
+
+    echo "=== after the first read-write open ==="
+    bcachefs show-super "$acct_dev" | grep --max-count=1 '^Version:'
+
+    snapshot_acct_counters "$acct_dev" "$out/accounting-after.txt" \
+	> "$out/snapshot-keys-after.txt"
+    echo "per-snapshot accounting keys after:"
+    cat "$out/snapshot-keys-after.txt"
+
+    # ---- assertion 1: no counter went negative --------------------------
+    # The direct, log-independent statement of the bug. Counters are printed
+    # as signed decimals, so a leading '-' on any of them is the corruption.
+    # NB: set a flag and decide in END. `exit 0` from a main rule still runs
+    # END, and an exit there would override the status.
+    if awk '{ for (i = 2; i <= NF; i++) if ($i ~ /^-/) neg = 1 }
+	    END { exit neg ? 0 : 1 }' "$out/snapshot-keys-after.txt"; then
+	echo "FAIL: a per-snapshot accounting counter is negative after the"
+	echo "      first read-write open. The new key inherited the old key's"
+	echo "      single value and started key_bytes/external_sectors from"
+	echo "      zero, so correct deltas were applied to a base that was"
+	echo "      never established. See bcachefs-tools#803."
+	failed=1
+    else
+	echo "OK: no negative per-snapshot accounting counter"
+    fi
+
+    # ---- assertions 2 and 3: what the two checkers say -------------------
+    # Read-only (-n) throughout, so the device is unchanged between them and
+    # any disagreement is genuinely about the checker, not about the state.
+    #
+    # bcachefs-test-libs.sh exports BCACHEFS_KERNEL_ONLY=1, and
+    # src/commands/fsck.rs consults that env var BEFORE cli.no_kernel, so -K
+    # alone cannot force userspace here; `env --unset` can. report_fsck()
+    # prints the implementation banner so this is checked, not assumed.
+    local rc=0
+    bcachefs fsck -n "$acct_dev" > "$out/fsck-kernel.log" 2>&1 || rc=$?
+    report_fsck "IN-KERNEL fsck -n" "$out/fsck-kernel.log" $rc
+
+    rc=0
+    env --unset=BCACHEFS_KERNEL_ONLY \
+	bcachefs fsck --no-kernel -n "$acct_dev" > "$out/fsck-userspace.log" 2>&1 || rc=$?
+    report_fsck "USERSPACE fsck -n" "$out/fsck-userspace.log" $rc
+
+    local kernel_underflow=0 userspace_underflow=0
+    log_has_underflow "$out/fsck-kernel.log"    && kernel_underflow=1
+    log_has_underflow "$out/fsck-userspace.log" && userspace_underflow=1
+
+    if (( kernel_underflow )); then
+	echo "FAIL: the in-kernel fsck reports accounting_key_underflow on a"
+	echo "      filesystem that was merely opened read-write once. See"
+	echo "      bcachefs-tools#803."
+	failed=1
+    else
+	echo "OK: in-kernel fsck reports no accounting_key_underflow"
+    fi
+
+    if (( kernel_underflow != userspace_underflow )); then
+	echo "FAIL: the two fsck implementations disagree about the same"
+	echo "      unmodified device (in-kernel: $kernel_underflow, userspace:"
+	echo "      $userspace_underflow). Both ran read-only, so the on-disk"
+	echo "      state was identical for both; a divergence is a bug in one"
+	echo "      of the two checkers, independent of the underflow itself."
+	failed=1
+    else
+	echo "OK: both fsck implementations agree (underflow reported: $kernel_underflow)"
+    fi
+
+    # ---- assertion 4: repair sticks --------------------------------------
+    # accounting_key_underflow is FSCK_AUTOFIX and force-runs
+    # check_allocations, so a repairing fsck should rebuild the counters for
+    # good. If a second read-only check still reports it, the filesystem
+    # cannot be repaired at all, which is far worse than the underflow.
+    rc=0
+    bcachefs fsck -y "$acct_dev" > "$out/fsck-repair.log" 2>&1 || rc=$?
+    report_fsck "repairing fsck -y" "$out/fsck-repair.log" $rc
+
+    rc=0
+    bcachefs fsck -n "$acct_dev" > "$out/fsck-after-repair.log" 2>&1 || rc=$?
+    report_fsck "fsck -n after repair" "$out/fsck-after-repair.log" $rc
+
+    if log_has_underflow "$out/fsck-after-repair.log"; then
+	echo "FAIL: accounting_key_underflow is still reported after a"
+	echo "      repairing fsck -y, so it does not self-heal."
+	failed=1
+    else
+	echo "OK: the underflow does not survive a repairing fsck"
+    fi
+    if (( rc != 0 )); then
+	echo "FAIL: fsck -n after repair exited $rc"
+	failed=1
+    fi
+
+    snapshot_acct_counters "$acct_dev" "$out/accounting-repaired.txt" \
+	> "$out/snapshot-keys-repaired.txt"
+    echo "per-snapshot accounting keys after repair:"
+    cat "$out/snapshot-keys-repaired.txt"
+
+    check_bcachefs_leaks
+    check_bcachefs_device_errors "$acct_dev"
+
+    if (( failed )); then
+	echo "FAIL: the per-snapshot accounting key did not survive the first"
+	echo "      read-write open by current code"
+	return 1
+    fi
+
+    echo "PASS: per-snapshot accounting intact across the first read-write open"
+}
+
+main "$@"
