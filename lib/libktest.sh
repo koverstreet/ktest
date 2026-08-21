@@ -28,6 +28,8 @@ ktest_nice=0
 ktest_no_kbuild=false
 ktest_no_vm=false
 
+. "$ktest_dir/lib/test-result.sh"
+
 # config files:
 [[ -f $ktest_dir/ktestrc ]]	&& . "$ktest_dir/ktestrc"
 [[ -f /etc/ktestrc ]]		&& . /etc/ktestrc
@@ -463,6 +465,11 @@ start_vm()
 
     get_tmpdir
 
+    # Default to failure before starting the guest. This makes failures before
+    # testrunner starts (or during crashdump/reboot handling) unambiguously
+    # fail instead of being mistaken for qemu's normal poweroff status.
+    ktest_write_result "TEST FAILED"
+
     rm -f "$ktest_out/core.*"
     rm -f "$ktest_out/vmcore"
     rm -f "$ktest_out/vm"
@@ -822,8 +829,12 @@ start_vm()
     log_verbose "qemu: ${qemu_cmd[*]}"
 
     ( echo 800 > /proc/self/oom_score_adj 2>/dev/null; exec "${qemu_cmd[@]}" )
+    local qemu_ret=$?
 
-    kill "${virtiofsd_pids[@]}" 2>/dev/null
+    kill "${virtiofsd_pids[@]}" 2>/dev/null || true
+    wait "${virtiofsd_pids[@]}" 2>/dev/null || true
+
+    ktest_finish_vm "$qemu_ret"
 }
 
 map_clang_version() {
