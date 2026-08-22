@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+#
+# Dedup pending-terminal: regression test for the dedup_pending
+# never-cleared livelock (crafted-collision local DoS).
+#
+# On a byte-verify MISMATCH the dedup worker used to leave dedup_pending
+# set, so every subsequent reconcile pass re-attempted the same doomed
+# dedup forever (fs-wide journal freeze / read livelock; triggerable by an
+# unprivileged writer via a checksum collision).  The fix routes the
+# terminal paths through dedup_skip_terminal(), which clears pending.
+#
+# The dedup_force_byte_verify_mismatch debug knob makes the byte-verify
+# report a mismatch deterministically, so two identical files drive the
+# mismatch path on every dedup attempt.  Verdict by counter slope:
+#   RED  (unfixed): dedup_byte_verify_mismatch keeps climbing every pass
+#   GREEN (fixed):  bumps once, then stays flat while reconcile keeps
+#                   running (pending cleared, nothing left to reprocess)
+#
+# In-tree variant of dedup_mismatch.ktest: no dkms, no userspace dedup
+# dependency (options are set via sysfs after mount).  Run THROUGH
+# lib/supervisor.
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+config-mem 1G
+config-cpus 2
+config-scratch-devs 4G
+config-timeout 600
+
+# Reuse a prebuilt kernel for matrix runs.
+[[ -n ${DEDUP_TEST_NO_KBUILD:-} ]] && config-no-kbuild
+
+# Give the slope window time to complete before the livelock detector
+# considers panicking the VM (red kernels are SUPPOSED to livelock here,
+# but we want the counter evidence first).
+export BCACHEFS_LIVELOCK_STALL=180
+
+counter_since_mount()
+{
+    awk '/^since mount:/ { print $NF }' "$1"
+}
+
+test_dedup_pending_terminal()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # No userspace dedup support needed: enable at runtime via sysfs.
+    echo 1 > /sys/fs/bcachefs/*/options/background_dedup
+    echo 1 > /sys/fs/bcachefs/*/options/dedup_force_byte_verify_mismatch
+
+    # File a first, ALONE: its index entry must be visible before the
+    # twin is written.  Index inserts land via the write buffer, so two
+    # identical extents processed in the same reconcile batch BOTH get
+    # indexed (neither lookup sees the other's insert) and nothing ever
+    # collides.  Sequencing a's indexing before b's write makes b's
+    # dedup attempt hit the entry deterministically.
+    dd if=/dev/urandom of=/mnt/a bs=64k count=1 status=none
+    cp /mnt/a /tmp/reference
+    sync
+
+    # Advance the io_clock so reconcile schedules a pass at all (tiny
+    # writes don't move it enough), then kick both triggers.  MUST be
+    # unique content: identical (e.g. zero) extents all collide in the
+    # dedup index and each bumps the mismatch counter once even on a
+    # fixed kernel, drowning the a/b signal in ~128 legitimate bumps.
+    dd if=/dev/urandom of=/mnt/clock bs=1M count=64 status=none
+    sync
+    rm -f /mnt/clock
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_wakeup
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_pending_wakeup
+
+    # Wait for indexing to settle (a is in the index once the counter
+    # stops moving).
+    local idx=0 prev_idx=-1 i
+    for i in $(seq 1 30); do
+	idx=$(counter_since_mount \
+	    /sys/fs/bcachefs/*/counters/dedup_extent_indexed)
+	(( idx > 0 && idx == prev_idx )) && break
+	prev_idx=$idx
+	sleep 2
+    done
+    (( idx > 0 )) || { echo "FAIL: nothing indexed after 60s"; return 1; }
+
+    # Now the twin: same checksum, hits a's index entry.  NOT plain cp —
+    # coreutils cp reflinks by default on bcachefs, and a reflink_p never
+    # enters the dedup path.  dd forces a genuine second extent.
+    dd if=/mnt/a of=/mnt/b bs=64k status=none
+    sync
+
+    # Wait for the mismatch path to run (each iteration advances the
+    # io_clock with fresh unique data — bare trigger kicks are no-ops
+    # once the clock is caught up).
+    local mismatches=0
+    for i in $(seq 1 30); do
+	mismatches=$(counter_since_mount \
+	    /sys/fs/bcachefs/*/counters/dedup_byte_verify_mismatch)
+	(( mismatches > 0 )) && break
+	dd if=/dev/urandom of=/mnt/kick$i bs=1M count=4 status=none
+	sync
+	rm -f /mnt/kick$i
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_wakeup
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_pending_wakeup
+	sleep 2
+    done
+
+    if (( mismatches == 0 )); then
+	echo "FAIL: mismatch path never ran (counter still 0)"
+	for c in dedup_extent_indexed dedup_extent_deduped \
+		 dedup_byte_verify_mismatch dedup_stale_entry; do
+	    echo "  $c = $(counter_since_mount /sys/fs/bcachefs/*/counters/$c 2>/dev/null)"
+	done
+	return 1
+    fi
+
+    # Let the initial pending-work churn settle before opening the
+    # window, so leftover first-pass bumps don't masquerade as slope.
+    local prev=$mismatches i
+    for i in $(seq 1 10); do
+	sleep 2
+	mismatches=$(counter_since_mount \
+	    /sys/fs/bcachefs/*/counters/dedup_byte_verify_mismatch)
+	(( mismatches == prev )) && break
+	prev=$mismatches
+    done
+
+    # Slope window: a bare trigger write is a no-op unless the io_clock
+    # has advanced since the last pass, so each iteration writes fresh
+    # UNIQUE data (unique => indexed, not mismatch-bumped) to advance the
+    # clock, then kicks reconcile.  A rescan re-attempts any extent still
+    # carrying dedup_pending: on an unfixed kernel the collided extent is
+    # re-processed every pass and the counter climbs; on a fixed kernel
+    # its pending bit was cleared at the first mismatch and the counter
+    # stays flat.
+    local start=$mismatches cur=$mismatches
+    for i in $(seq 1 10); do
+	dd if=/dev/urandom of=/mnt/clock$i bs=1M count=16 status=none
+	sync
+	rm -f /mnt/clock$i
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_wakeup
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_pending_wakeup
+	sleep 2
+	cur=$(counter_since_mount \
+	    /sys/fs/bcachefs/*/counters/dedup_byte_verify_mismatch)
+    done
+    echo "mismatch counter: $start at window start, $cur after 10 clock-advancing reconcile passes"
+
+    # Quiesce: clear the force knob and dedup so umount/fsck behave.
+    echo 0 > /sys/fs/bcachefs/*/options/dedup_force_byte_verify_mismatch
+    echo 0 > /sys/fs/bcachefs/*/options/background_dedup
+    sleep 3
+
+    # Data must be intact and nothing may have been deduped.
+    cmp /mnt/a /tmp/reference || { echo "FAIL: file a corrupted"; return 1; }
+    cmp /mnt/b /tmp/reference || { echo "FAIL: file b corrupted"; return 1; }
+
+    local deduped=$(counter_since_mount \
+	/sys/fs/bcachefs/*/counters/dedup_extent_deduped)
+    (( deduped == 0 )) ||
+	{ echo "FAIL: $deduped extents deduped despite forced mismatch"; return 1; }
+
+    # The verdict: still reprocessing after 20s of kicks = pending never
+    # cleared = red.  Allow a couple of transient retries on green.
+    if (( cur > start + 2 )); then
+	echo "FAIL: mismatch counter still climbing (+$((cur - start)) over 10 rescans) — dedup_pending never cleared"
+	return 1
+    fi
+    echo "GREEN: mismatch counter flat after terminal skip (pending cleared)"
+
+    umount /mnt
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+main "$@"

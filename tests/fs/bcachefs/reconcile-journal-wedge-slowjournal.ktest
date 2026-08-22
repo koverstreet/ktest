@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+#
+# Reproduce the journal_max_open wedge seen on a production desktop twice
+# (2026-07-25 and 2026-07-26), both times fatal.
+#
+# Prod shape and sequence, which this mirrors:
+#  - 5 devices in two labelled groups, foreground_target=ssd,
+#    background_target=hdd, data_replicas=2, erasure_code=1,
+#    background_compression=zstd, data_checksum=xxhash.
+#  - A large backlog of extents whose cached io_opts were never set, so they
+#    were never enqueued for reconcile.  A check_reconcile_work pass finally
+#    enumerated them, and reconcile started rewriting ~1.1T.
+#  - Recovery completed cleanly.  ~5 minutes later, under sustained reconcile
+#    write load, the journal wedged: one reservation held on an already-closed
+#    buffer stopped bch2_journal_do_writes_locked() from ever starting its
+#    write, seq_write_started froze, the 4-deep ring filled, and every
+#    journal_entry_open() returned journal_max_open forever.
+#
+# Not swap: reproduced on prod with zero swap-on-bcachefs active.
+# Not recovery: both wedges happened well after recovery finished.
+# The trigger is sustained reconcile/move load on a replicated, EC'd fs.
+#
+# SLOW-JOURNAL VARIANT. Generated from reconcile-journal-wedge.ktest.
+#
+# Why: the base test never reaches the wedge -- depth stayed 0 for its whole
+# 639s run. On uniformly fast virtio, a journal write completes before the next
+# entry opens, so unwritten entries never accumulate and a held reservation can
+# never fill the 4-deep ring. Prod is not like that: sdd1 is Rotational: 1 with
+# "Data allowed: journal,btree,user", so journal writes land on spinning rust.
+# What matters is per-IO LATENCY, not bandwidth.
+#
+# So the hdd tier here sits on dm-delay (same idiom as swapfile_deadlock.ktest's
+# SWAPFILE_TEST_DELAY_MS). Journal writes to those devices then take long enough
+# for depth to sit above 0, which is the precondition for a stuck reservation to
+# be fatal rather than merely slow.
+#
+#   JWEDGE_DELAY_MS=8   per-IO latency on the hdd tier
+#
+# The failure is detected by bcachefs-journal-wedge-detect.sh, which watches
+# depth = (journal head seq - oldest unwritten seq) and fires while the fs is
+# still healthy — deliberately, so a wedge does not have to be reached to get
+# the evidence.  See that file for why "refcount != 0" alone is not the signal.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-journal-wedge-detect.sh
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 8G
+config-scratch-devs 8G
+
+require-kernel-config BLK_DEV_DM
+require-kernel-config DM_DELAY
+
+config-mem 6G
+config-timeout 2400
+
+reconcile_work_remaining()
+{
+    bcachefs fs usage -f rebalance_work /mnt | awk '
+	$1 ~ /^(replicas|checksum|erasure_code|compression|target|high_priority|stripes):$/ { sum += $2 + $3 }
+	END { print sum + 0 }'
+}
+
+journal_depth()
+{
+    awk '
+	!inu && /^seq:/       { head = $2; next }
+	/^unwritten entries:/ { inu = 1; next }
+	inu && /^seq:/        { if (!got) { print head - $2; got = 1 } ; next }
+	END { if (!got) print 0 }
+    ' /sys/fs/bcachefs/*/internal/journal_debug 2>/dev/null
+}
+
+data_update_sectors()
+{
+    awk '/since mount/ { print $3 }' /sys/fs/bcachefs/*/counters/data_update
+}
+
+# Build the backlog the way prod got there: write everything at the WRONG
+# checksum and WITHOUT the second replica, then flip the filesystem options so
+# every extent needs both a rechecksum and a replica add. That is exactly the
+# prod need_rb set (data_replicas,data_checksum,erasure_code,background_target).
+test_reconcile_backlog_journal_wedge_slowjournal()
+{
+    set_watchdog 1800
+
+    # Fake spinning rust for the hdd tier: bcachefs allows journal on every
+    # device, so this is what puts journal writes behind real latency.
+    local delay_ms=${JWEDGE_DELAY_MS:-8}
+    local hdd1 hdd2 i=0
+    for d in "${ktest_scratch_dev[2]}" "${ktest_scratch_dev[3]}"; do
+	local sectors=$(blockdev --getsz "$d")
+	dmsetup create "slowhdd$i" --table "0 $sectors delay $d 0 $delay_ms"
+	i=$((i + 1))
+    done
+    hdd1=/dev/mapper/slowhdd0
+    hdd2=/dev/mapper/slowhdd1
+    echo "=== hdd tier on dm-delay ${delay_ms}ms ==="
+
+    run_quiet "" bcachefs format -f				\
+	--block_size=4k						\
+	--label=ssd.ssd1 ${ktest_scratch_dev[0]}		\
+	--label=ssd.ssd2 ${ktest_scratch_dev[1]}		\
+	--label=hdd.hdd1 $hdd1					\
+	--label=hdd.hdd2 $hdd2					\
+	--foreground_target=ssd					\
+	--background_target=hdd					\
+	--data_checksum=crc32c					\
+	--data_replicas=1					\
+	--compression=zstd					\
+	--background_compression=zstd
+
+    # Prod mount options, verbatim from the failing box's fstab. These are not
+    # incidental: with flushes disabled and a 10s flush delay, journal entries
+    # stay unwritten far longer, so the fs runs permanently close to the 4-deep
+    # JOURNAL_STATE_BUF_NR limit -- which is what makes a single held
+    # reservation fatal rather than merely slow. The failing boot's dump shows
+    # the ratio this produces: nr noflush writes 1362 vs nr flush writes 46.
+    local mntopts=${JWEDGE_MOUNT_OPTS:-journal_flush_disabled=1,journal_flush_delay=10000}
+
+    # Space-separated for the CLI (fsck/list/set-fs-option take <devices>...),
+    # colon-joined for mount(8).
+    local devs="${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} $hdd1 $hdd2"
+    local devs_joined="${devs// /:}"
+
+    mount -t bcachefs -o "$mntopts" "$devs_joined" /mnt
+
+    # INCOMPRESSIBLE data on purpose. /dev/zero would be the obvious choice, but
+    # with background_compression=zstd a 2G file of zeros collapses to ~37M of
+    # extents -- measured, first run of this test -- which is no backlog at all.
+    # urandom gives real extent count, and matches prod, whose extent dumps show
+    # "compress incompressible" throughout.
+    local i
+    for i in $(seq 0 7); do
+	dd if=/dev/urandom of=/mnt/data.$i bs=1M count=256 conv=fsync status=none
+    done
+    sync
+
+    echo "=== before flip ==="
+    bcachefs fs usage -h /mnt | grep -A4 undegraded || true
+
+    # Now make every extent need rewriting, on several axes at once.
+    # set-fs-option takes DEVICE paths, not a mountpoint ("error reading
+    # superblock: Is a directory" otherwise), and all members must be named.
+    bcachefs set-fs-option --data_checksum=xxhash	$devs
+    bcachefs set-fs-option --data_replicas=2		$devs
+    bcachefs set-fs-option --erasure_code=1		$devs
+
+    # Keep foreground write pressure on while reconcile churns: prod was a
+    # running desktop, not an idle box, and the wedge wants concurrency
+    # between the move path and ordinary transactions.
+    #
+    # Deliberately MANY SMALL fsync'd transactions rather than a few large
+    # writes: the ring is only 4 buffers deep, so what matters is journal entry
+    # TURNOVER, not bytes. The faster buffers close and rotate, the more likely
+    # a reservation held across one of them spans all four and wedges.
+    local churn_pids=()
+    local w
+    for w in 0 1 2 3; do
+	(
+	    trap - ERR
+	    set +e
+	    local j=0
+	    while [[ -d /mnt ]]; do
+		# small write + fsync == one journal entry, as fast as possible
+		dd if=/dev/urandom of=/mnt/churn.$w.$((j % 64)) bs=4k count=4 \
+		    conv=fsync status=none 2>/dev/null
+		(( j % 64 == 63 )) && rm -f /mnt/churn.$w.* 2>/dev/null
+		j=$((j + 1))
+	    done
+	) &
+	churn_pids+=($!)
+    done
+
+    # Drive reconcile and watch both progress and journal depth. The
+    # journal-wedge watchdog is armed independently and will panic the VM with
+    # a full btree_transactions dump the moment depth sticks; this loop is the
+    # human-readable log of the run.
+    local zeros=0 settled=0
+    for ((i = 0; i < 120; i++)); do
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_wakeup
+	sleep 5
+	local work=$(reconcile_work_remaining)
+	echo "t=$((i * 5))s	work: $work	depth: $(journal_depth)	data_update: $(data_update_sectors)"
+	if (( work )); then
+	    zeros=0
+	elif (( ++zeros >= 3 )); then
+	    settled=1
+	    break
+	fi
+    done
+
+    kill "${churn_pids[@]}" 2>/dev/null || true
+    wait "${churn_pids[@]}" 2>/dev/null || true
+
+    echo "=== after reconcile ==="
+    bcachefs fs usage -h /mnt | grep -A4 undegraded || true
+
+    if (( ! settled )); then
+	echo "reconcile did not settle; final journal state:"
+	cat /sys/fs/bcachefs/*/internal/journal_debug || true
+    fi
+
+    umount /mnt
+
+    # A clean run must both settle and leave nothing at the old checksum.
+    local keys=$(bcachefs list -b extents $devs 2>/dev/null)
+    local stale=$(echo "$keys" | grep -c "csum crc32c" || true)
+    echo "extents still crc32c: $stale"
+
+    if (( ! settled )); then
+	echo "FAIL: reconcile backlog did not drain"
+	return 1
+    fi
+
+    bcachefs fsck -ny $devs
+
+    dmsetup remove slowhdd0 slowhdd1
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+main "$@"
