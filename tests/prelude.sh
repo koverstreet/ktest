@@ -550,12 +550,23 @@ scratch_dev_plug()
     spec=${spec/drive=disk$nr,/drive=disk${nr}p$gen,}
     spec=${spec/id=dev$nr/id=dev${nr}p$gen}
 
+    # Record the generation before asking, and the success after. Two separate
+    # facts, and writing them together is how one failed test became three: a
+    # plug that qemu did not carry out left "present" behind, so
+    # scratch_dev_replug_all() skipped a device that was gone, and every test
+    # after it failed on a disk nobody would put back.
+    #
+    # The generation has to be banked either way. A half-done plug - drive
+    # created, device not - has consumed both ids, and the next attempt must
+    # take fresh ones rather than collide with what is already there.
+    echo "gone dev${nr}p$gen $gen" > "$(scratch_dev_state_file $1)"
+
     qemu_monitor drive_add 0 "$drive"
     qemu_monitor device_add "$spec"
 
-    echo "present dev${nr}p$gen $gen" > "$(scratch_dev_state_file $1)"
-
     wait_for_dev "$dev" present "device_add $spec"
+
+    echo "present dev${nr}p$gen $gen" > "$(scratch_dev_state_file $1)"
 }
 
 # wait_for_dev <dev> gone|present <what we asked qemu for>
