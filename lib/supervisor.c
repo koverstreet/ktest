@@ -288,6 +288,14 @@ static void read_watchdog(const char *line)
 /*
  * QEMU_MONITOR <command>: forward <command> to the VM's monitor socket.
  *
+ * Anchored at the start of the line, and it has to stay that way: the console
+ * carries everything the guest prints, so a substring match would let a test
+ * that merely mentions the word drive the VM. The guest side keeps its end of
+ * that bargain in tests/prelude.sh's ktest_control(), which begins every
+ * control message on a fresh line - a test that left the console mid-line
+ * would otherwise have this one welded onto the end of that line and dropped
+ * here without a word.
+ *
  * Tests need to manipulate the VM from the outside - detach a disk, attach it
  * again - to exercise anything that depends on device timing. The monitor
  * socket is on the host, but a test runs in the guest, so it asks us instead,

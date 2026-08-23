@@ -350,12 +350,30 @@ set_as_user()
     fi
 }
 
+# Say something to the supervisor.
+#
+# It matches these at the start of a line (str_starts_with, lib/supervisor.c),
+# so one has to begin one - hence the leading newline, unconditionally. A test
+# that has left the console mid-line, which anything drawing a prompt or a
+# progress display does, would otherwise have its next control message welded
+# onto the end of that line and silently dropped: logged, matched by nothing,
+# acted on by no one.
+#
+# Measured, and it cost an afternoon: a degraded-mount prompt ending in
+# "[y / r=read-only / N] " swallowed a drive_add, and the device_add on the
+# next line then failed looking for a drive that was never created. The failure
+# named the wrong half, twice removed from the cause.
+ktest_control()
+{
+    printf '\n%s\n' "$*"
+}
+
 set_watchdog()
 {
     ktest_timeout=$1
     ktest_timeout=$((ktest_timeout * ktest_timeout_multiplier))
 
-    echo WATCHDOG $ktest_timeout
+    ktest_control "WATCHDOG $ktest_timeout"
 }
 
 # qemu_monitor <command>...
@@ -382,7 +400,7 @@ set_watchdog()
 # scratch devices, and are what a test wants instead of this.
 qemu_monitor()
 {
-    echo QEMU_MONITOR "$@"
+    ktest_control "QEMU_MONITOR $*"
 }
 
 # What qemu currently calls a scratch device, and whether the guest has it.
