@@ -1,0 +1,1435 @@
+#!/usr/bin/env bash
+#
+# Mounting a bcachefs filesystem, and what the person waiting is told.
+#
+# Devices absent, late, or disagreeing; paths that won't open at all; and
+# the boot path where systemd rather than a person runs the mount. One file
+# because splitting it by mechanism is what put tests in the wrong place
+# three times - the mechanisms overlap. The hot-add test mounts degraded and
+# then plugs a disk in, which is both halves of one split that used to exist
+# here; and "does the status display work" was in a file of its own next to
+# a test in this one asking whether the same progress reaches dmesg.
+#
+# scratch_dev_unplug/plug take a device off the PCI bus for real (see
+# prelude.sh), so these are pulled cables rather than simulated ones. The
+# split-brain tests build their divergence on files and loop devices
+# instead, because they need two histories rather than one absence.
+#
+# Mounting by UUID rather than by path throughout the mount tests,
+# deliberately: naming the paths tells mount.bcachefs the answer, and it is
+# the search that has to cope. That is also what fstab does at boot.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+
+# Did the filesystem at $1 come up a member short?
+#
+# `bcachefs fs usage` prints the State column as "offline" for a member it has
+# no usage for, and that is the only thing in the output that says it - the
+# member states themselves are rw/ro/failed/spare.
+#
+# A measurement we could not take is not a "no". Callers ask this negated as
+# well as positively, and a negated caller cannot tell "every member is here"
+# from "fs usage printed nothing" - so check the table is there at all, and
+# fail the test rather than answer, the way subvol.ktest asserts its setup
+# before asserting the behaviour.
+mounted_a_device_short()
+{
+    local out
+    out=$(bcachefs fs usage "$1") || {
+	echo "bcachefs fs usage $1 failed - cannot tell whether a member is missing"
+	exit 1
+    }
+
+    if ! grep -q "^Device label" <<<"$out"; then
+	echo "no device table in fs usage output for $1:"
+	echo "$out"
+	exit 1
+    fi
+
+    grep -qw offline <<<"$out"
+}
+
+# ---------------------------------------------------------------- mount-degraded
+
+format_3dev()
+{
+    run_quiet "" bcachefs format -f		\
+	--replicas=2				\
+	"$@"					\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}			\
+	${ktest_scratch_dev[2]}
+
+    fs_uuid=$(bcachefs show-super ${ktest_scratch_dev[0]} |
+	      awk '$1 == "External" { print $3 }')
+
+    if [[ -z $fs_uuid ]]; then
+	echo "could not read the filesystem UUID back"
+	bcachefs show-super ${ktest_scratch_dev[0]}
+	exit 1
+    fi
+}
+
+# A device that turns up part way through the wait: the mount should finish on
+# its own, without going degraded, as soon as the last member appears.
+test_device_arrives_during_wait()
+{
+    set_watchdog 180
+
+    format_3dev
+    scratch_dev_unplug 2
+
+    # Long timeout: the mount returns as soon as every member is present, so
+    # this bounds how long we'd wait on failure, not how long the test takes.
+    mount -t bcachefs -o missing_dev_timeout=120 UUID=$fs_uuid /mnt &
+    local mount_pid=$!
+
+    sleep 5
+    scratch_dev_plug 2
+
+    if ! wait $mount_pid; then
+	echo "mount failed even though the device came back"
+	exit 1
+    fi
+
+    # Degraded would also have "succeeded" here, so check we got the whole
+    # filesystem: with all three present nothing should be offline.
+    if mounted_a_device_short /mnt; then
+	echo "mounted, but a device is still missing - it went degraded rather than waiting"
+	bcachefs fs usage /mnt
+	exit 1
+    fi
+
+    umount /mnt
+}
+
+# The timeout expiring with the policy set to yes: mount, degraded.
+test_degraded_yes()
+{
+    set_watchdog 120
+
+    format_3dev
+    scratch_dev_unplug 2
+
+    mount -t bcachefs -o degraded=yes,missing_dev_timeout=5 UUID=$fs_uuid /mnt
+
+    # replicas=2, one device gone: the data is still all readable.
+    dd if=/dev/urandom of=/mnt/foo bs=1M count=16 oflag=direct
+    umount /mnt
+
+    scratch_dev_plug 2
+}
+
+# ...and with it set to no: refuse.
+#
+# Asserting on what the mount command says, which is the errcode. The kernel
+# says more - "Cannot mount without device 2", with the member's state and
+# whether it holds data - but that goes to dmesg, and fsconfig(2) hands back a
+# code rather than prose. assert_fails_with only sees the command's own output.
+test_degraded_no()
+{
+    set_watchdog 120
+
+    format_3dev
+    scratch_dev_unplug 2
+
+    # The specific code, not the class it derives from: replicas=2 with one of
+    # three devices gone still has every copy readable, and saying which of the
+    # two refusals this is is what lets mount.bcachefs put one question rather
+    # than two.
+    assert_fails_with "insufficient_devices_data_intact"			\
+	mount -t bcachefs -o degraded=no,missing_dev_timeout=5 UUID=$fs_uuid /mnt
+
+    scratch_dev_plug 2
+}
+
+# degraded=ask with nothing to ask on. The safe answer is no: mounting
+# degraded is a decision about data, and making it by default because nobody
+# happened to be listening is how a filesystem quietly loses redundancy.
+#
+# stdin is redirected from /dev/zero so it is neither a terminal nor /dev/null
+# (stdin_is_dev_null() checks for 1:3 exactly, and /dev/zero is 1:5), which is
+# the case that refuses immediately rather than going to systemd-ask-password
+# and waiting out its own timeout.
+test_ask_with_nobody_to_ask()
+{
+    set_watchdog 120
+
+    format_3dev
+    scratch_dev_unplug 2
+
+    assert_fails_with "no terminal to ask on"				\
+	sh -c "mount -t bcachefs -o missing_dev_timeout=5 UUID=$fs_uuid /mnt < /dev/zero"
+
+    scratch_dev_plug 2
+}
+
+# ---- degraded=ask with somebody to ask
+#
+# Prompt::detect() wants a terminal, and neither of the easy ways of driving a
+# command from a script is one: a pipe on stdin is a script and gets refused
+# outright, /dev/null is a boot and sends the question to systemd's password
+# agents, which are not running. So the mount is given a pty of its own, and
+# the pty is what the question is read back from.
+#
+# fd 9 is the pty's input side, a fifo held open read-write so it never reaches
+# EOF. EOF at a prompt reads as an empty answer, and an empty answer is no - so
+# without this every test below would "pass" by the mount refusing.
+#
+# script -e for the same reason from the other direction: without it $? is
+# script's own, which is zero however the mount went.
+
+ASK_FIFO=/run/degraded-ask.fifo
+ASK_OUT=/run/degraded-ask.out
+
+ask_mount_start()
+{
+    if ! command -v script > /dev/null; then
+	echo "script(1) is not installed - the question cannot be put to a terminal"
+	exit 1
+    fi
+
+    rm -f "$ASK_FIFO" "$ASK_OUT"
+    mkfifo "$ASK_FIFO"
+    exec 9<>"$ASK_FIFO"
+
+    script -qefc "bcachefs mount $* /mnt" "$ASK_OUT" <&9 &
+    ask_mount_pid=$!
+}
+
+# Block until the question is on screen. Everything below it is about what
+# happens to a question that was asked, so if it was not, say that rather than
+# testing nothing quietly.
+ask_mount_wait_for_question()
+{
+    local i
+    for i in $(seq 30); do
+	if grep -q "is missing 1 of its 3 devices" "$ASK_OUT" 2> /dev/null; then
+	    return 0
+	fi
+	sleep 1
+    done
+
+    echo "no question on the terminal after 30s:"
+    cat "$ASK_OUT"
+    kill $ask_mount_pid 2> /dev/null
+    exit 1
+}
+
+ask_mount_finish()
+{
+    local ret=0
+
+    wait $ask_mount_pid || ret=$?
+    exec 9>&-
+    rm -f "$ASK_FIFO"
+    return $ret
+}
+
+# A device that turns up while the question is on screen.
+#
+# The question stops being one, so the mount withdraws it - and then has to
+# scan again before mounting. Withdrawing alone is not enough: the device list
+# it was about to mount with is the one from before the device arrived, and
+# mounting with that is refused for exactly the reason we just stopped asking
+# about.
+#
+# missing_dev_timeout=1 so the wait is long over before the device comes back.
+# A device that arrives during the wait never reaches the question at all -
+# that is test_device_arrives_during_wait above - and from the outside the two
+# are identical, both mounting the whole filesystem. So the withdrawal is
+# checked, not just the outcome.
+test_device_arrives_while_asking()
+{
+    set_watchdog 240
+
+    format_3dev
+    scratch_dev_unplug 2
+
+    ask_mount_start -o missing_dev_timeout=1 UUID=$fs_uuid
+    ask_mount_wait_for_question
+
+    scratch_dev_plug 2
+
+    if ! ask_mount_finish; then
+	echo "mount failed even though the device came back while we were asking:"
+	cat "$ASK_OUT"
+	exit 1
+    fi
+
+    if ! grep -q "device turned up while asking" "$ASK_OUT"; then
+	echo "the question was not withdrawn - the mount was settled some other way:"
+	cat "$ASK_OUT"
+	umount /mnt
+	exit 1
+    fi
+
+    if mounted_a_device_short /mnt; then
+	echo "mounted degraded rather than picking up the device that arrived"
+	bcachefs fs usage /mnt
+	umount /mnt
+	exit 1
+    fi
+
+    umount /mnt
+}
+
+# The answer reaches the mount.
+#
+# With replicas=2 and one of three devices gone everything is still readable,
+# so this is the question's quiet half, and `y` mounts degraded.
+test_degraded_question_is_answered()
+{
+    set_watchdog 240
+
+    format_3dev
+    scratch_dev_unplug 2
+
+    ask_mount_start -o missing_dev_timeout=1 UUID=$fs_uuid
+    ask_mount_wait_for_question
+
+    # The question's own words. What is being agreed to is the whole point of
+    # it, so a reword that changes that should show up here rather than in a
+    # bug report.
+    if ! grep -q "All your data is still readable" "$ASK_OUT"; then
+	echo "the question did not say the data is still readable, which with"
+	echo "replicas=2 and one device gone is the situation:"
+	cat "$ASK_OUT"
+	kill $ask_mount_pid 2> /dev/null
+	exit 1
+    fi
+
+    echo y >&9
+
+    if ! ask_mount_finish; then
+	echo "mount failed after being told to mount:"
+	cat "$ASK_OUT"
+	exit 1
+    fi
+
+    if ! mounted_a_device_short /mnt; then
+	echo "mounted with every device present - the unplug did not take, so"
+	echo "nothing here tested a degraded mount"
+	bcachefs fs usage /mnt
+	umount /mnt
+	exit 1
+    fi
+
+    umount /mnt
+    scratch_dev_plug 2
+}
+
+# `r` is the same mount, read-only.
+#
+# Worth its own test because the two halves of that answer travel separately:
+# the degraded= value goes in the option string, read-only is a mount flag. So
+# read-only is the half that can be dropped without the options looking any
+# different, and a filesystem somebody asked to leave untouched would come up
+# writable - which is why this asks /proc/mounts rather than taking the mount's
+# word for it.
+test_degraded_question_answered_read_only()
+{
+    set_watchdog 240
+
+    format_3dev
+    scratch_dev_unplug 2
+
+    ask_mount_start -o missing_dev_timeout=1 UUID=$fs_uuid
+    ask_mount_wait_for_question
+
+    echo r >&9
+
+    if ! ask_mount_finish; then
+	echo "mount failed after being told to mount read-only:"
+	cat "$ASK_OUT"
+	exit 1
+    fi
+
+    local opts=$(awk '$2 == "/mnt" { print $4 }' /proc/mounts)
+
+    if [[ -z $opts ]]; then
+	echo "nothing mounted on /mnt, so there is nothing to check ro against"
+	cat /proc/mounts
+	exit 1
+    fi
+
+    if [[ ,$opts, != *,ro,* ]]; then
+	echo "answered read-only, mounted $opts"
+	exit 1
+    fi
+
+    umount /mnt
+    scratch_dev_plug 2
+}
+
+# The status channel carries what a person has to act on, and nothing else.
+#
+# Setting c->stdio sends every bch_info()/bch_err() the filesystem emits down
+# the channel. That is what online fsck wants - somebody ran the command and is
+# reading the output - and wrong for a boot, where recovery commentary would
+# bury the one line that mattered under a splash screen.
+# bch_fs.stdio_user_only holds it back, and this is the test of that: the kernel
+# talks at length to dmesg while mount.bcachefs is holding a channel, and none
+# of it comes back out of mount.
+#
+# Two things have to be true before that assertion means anything, so both are
+# checked first:
+#
+#   - A channel was really created. Empty mount output is also exactly what a
+#     kernel with no status_fd parameter produces, so mount is made to say which
+#     happened, and we require the affirmative.
+#   - The kernel really said something in the window. If it logged nothing,
+#     "none of it came out of mount" is true and worthless.
+#
+# The lines required to be absent are taken from dmesg at runtime rather than
+# written down here. An expectation typed into this file would be a guess about
+# kernel wording, and would go on passing for the wrong reason the day that
+# wording changed.
+#
+# Two mounts, because mount.bcachefs's own -v logging shares stderr with the
+# channel: the first establishes that the mechanism is live in this kernel, the
+# second - mount quiet, but the *filesystem* verbose - is the one whose stderr
+# has to stay clear of kernel log traffic.
+test_status_fd_leaves_the_log_in_dmesg()
+{
+    set_watchdog 120
+
+    format_3dev
+
+    local out=/run/status-fd.out
+    local err=/run/status-fd.err
+
+    # 1: is there a channel at all?
+    if ! bcachefs mount -v UUID=$fs_uuid /mnt >"$out" 2>"$err"; then
+	echo "mount failed:"
+	cat "$out" "$err"
+	exit 1
+    fi
+    umount /mnt
+
+    if ! grep -q "status channel on fd" "$out" "$err"; then
+	echo "mount got no status channel, so nothing below tests the routing:"
+	cat "$out" "$err"
+	exit 1
+    fi
+
+    # 2: filesystem told to be verbose, mount.bcachefs not.
+    local marker="ktest-status-fd-window-$$"
+    echo "$marker" > /dev/kmsg
+
+    if ! bcachefs mount -o verbose UUID=$fs_uuid /mnt >"$out" 2>"$err"; then
+	echo "verbose mount failed:"
+	cat "$out" "$err"
+	exit 1
+    fi
+
+    local said=/run/status-fd.dmesg
+    dmesg | sed -n "/$marker/,\$p" | sed -n 's/^\[[^]]*\] //p' > "$said"
+
+    local n=$(grep -c . "$said" || true)
+    if [[ $n -lt 5 ]]; then
+	echo "the kernel logged $n lines for this mount - too few to tell whether"
+	echo "anything was held back from the status channel:"
+	cat "$said"
+	exit 1
+    fi
+
+    local leaked=0
+    while IFS= read -r line; do
+	[[ -z $line ]] && continue
+	if grep -qF -- "$line" "$err"; then
+	    echo "came down the status channel: $line"
+	    leaked=$((leaked + 1))
+	fi
+    done < "$said"
+
+    if [[ $leaked != 0 ]]; then
+	echo "$leaked of $n kernel log lines reached mount.bcachefs;"
+	echo "stdio_user_only is not holding the log back"
+	exit 1
+    fi
+
+    umount /mnt
+}
+
+# The channel's other direction: a question reaches the user, and the answer
+# reaches the filesystem.
+#
+# Deleting an inode key while its extents stay behind is what check_extents
+# calls key_in_missing_inode. The repair deletes the orphaned keys - it destroys
+# data - which is why that error is not FSCK_AUTOFIX and fix_errors=ask really
+# does stop and ask about it. Nearly every error cheap enough to produce on
+# purpose is autofix, and an autofix error under fix_errors=ask is repaired
+# without a word (init/error.c, FSCK_FIX_ask), so it has to be this kind.
+#
+# What's asserted is the y/n prompt itself, from bch2_fsck_ask_yn(). It is
+# written with bch2_print_str_user(), so mount.bcachefs's stderr is the one
+# place it can appear - with no channel it goes to dmesg instead. And the mount
+# only completes if the "y" travelled the other way: the readline behind that
+# prompt has no timeout on the mount path, so an unanswered question hangs
+# until the watchdog fires.
+test_status_fd_carries_a_question()
+{
+    set_watchdog 120
+
+    format_3dev
+
+    mount -t bcachefs UUID=$fs_uuid /mnt
+    dd if=/dev/urandom of=/mnt/victim bs=4k count=64 status=none
+    local inum=$(stat -c %i /mnt/victim)
+    umount /mnt
+
+    # Inode keys live at (0, inum, snapshot); a filesystem with no snapshots
+    # keeps the root subvolume's keys at U32_MAX.
+    bcachefs kvdb --rw ${ktest_scratch_dev[0]} \
+	-c "set inodes 0:$inum:U32_MAX deleted"
+
+    local err=/run/status-fd-question.err
+
+    ktest_expect_sb_errors="key_in_missing_inode|inode_i_sectors_wrong"
+
+    if ! echo y | bcachefs mount -o fsck,fix_errors=ask UUID=$fs_uuid /mnt 2>"$err"; then
+	echo "mount failed - if it timed out, the answer never reached the kernel:"
+	cat "$err"
+	exit 1
+    fi
+
+    if ! grep -q "y,n, or Y,N for all errors of this type" "$err"; then
+	echo "no question came out of mount.bcachefs; fsck asked nobody, or asked dmesg:"
+	cat "$err"
+	umount /mnt
+	exit 1
+    fi
+
+    umount /mnt
+}
+
+# The timeout is a filesystem property, not just a mount option: formatted in,
+# it applies with no -o at all.
+test_timeout_from_the_superblock()
+{
+    set_watchdog 120
+
+    format_3dev --missing_dev_timeout=5
+
+    if [[ $(bcachefs show-super ${ktest_scratch_dev[0]} |
+	    awk '$1 == "missing_dev_timeout:" { print $2 }') != 5 ]]; then
+	echo "missing_dev_timeout did not survive format"
+	exit 1
+    fi
+
+    scratch_dev_unplug 2
+
+    # No -o missing_dev_timeout here: if the superblock value isn't being read
+    # this waits the 30s built-in instead, so time it.
+    local start=$(date '+%s')
+    assert_fails_with "no terminal to ask on"				\
+	sh -c "mount -t bcachefs UUID=$fs_uuid /mnt < /dev/zero"
+    local elapsed=$(($(date '+%s') - start))
+
+    if (( elapsed > 20 )); then
+	echo "waited ${elapsed}s; the superblock's 5s timeout was not used"
+	exit 1
+    fi
+
+    scratch_dev_plug 2
+}
+
+# What systemd needs in order to start the mount at all.
+#
+# An fstab UUID= entry becomes a dependency on /dev/disk/by-uuid/<fs-uuid>,
+# and the mount unit starts when that device unit appears. Every member of a
+# bcachefs filesystem reports the same ID_FS_UUID, so they all claim that one
+# link and udev hands it to whichever it saw last - the owner is arbitrary.
+# Losing that particular member must not take the link with it.
+#
+# If it does, the boot fails somewhere mount.bcachefs never reaches: no device
+# unit, so no mount job, so nothing runs to wait for the absent member or to
+# ask about going degraded. Every case the tests above cover would be
+# unreachable in exactly the situation they exist for.
+test_by_uuid_link_survives_losing_its_owner()
+{
+    set_watchdog 120
+
+    format_3dev
+    udevadm settle
+
+    local link=/dev/disk/by-uuid/$fs_uuid
+
+    if [[ ! -e $link ]]; then
+	echo "no $link with every device present"
+	ls -l /dev/disk/by-uuid/
+	exit 1
+    fi
+
+    # Which member is holding it, as a scratch index.
+    local owner=$(readlink -f $link) owner_idx= i
+
+    for i in 0 1 2; do
+	[[ $(readlink -f ${ktest_scratch_dev[$i]}) = $owner ]] && owner_idx=$i
+    done
+
+    if [[ -z $owner_idx ]]; then
+	echo "$link points at $owner, which is not one of the scratch devices"
+	ls -l /dev/disk/by-uuid/
+	exit 1
+    fi
+
+    echo "by-uuid link is held by scratch device $owner_idx ($owner)"
+    scratch_dev_unplug $owner_idx
+    udevadm settle
+
+    if [[ ! -e $link ]]; then
+	echo "$link went away with scratch device $owner_idx, and two members remain"
+	echo "systemd would never start the mount, so mount.bcachefs never gets to wait"
+	ls -l /dev/disk/by-uuid/
+	exit 1
+    fi
+
+    # Surviving is not enough - it has to point at something still here.
+    if [[ ! -b $(readlink -f $link) ]]; then
+	echo "$link survived but points at $(readlink -f $link), which is gone"
+	exit 1
+    fi
+
+    scratch_dev_plug $owner_idx
+}
+
+
+# ---------------------------------------------------------------- device-hotplug
+
+test_unplug_replug()
+{
+    set_watchdog 120
+
+    local dev=${ktest_scratch_dev[0]}
+    local sum
+
+    run_quiet "" bcachefs format -f $dev
+
+    mount -t bcachefs $dev /mnt
+    dd if=/dev/urandom of=/mnt/foo bs=1M count=16 oflag=direct
+    sum=$(md5sum < /mnt/foo)
+    umount /mnt
+
+    scratch_dev_unplug 0
+    scratch_dev_plug 0
+
+    mount -t bcachefs $dev /mnt
+    if [[ $(md5sum < /mnt/foo) != $sum ]]; then
+	echo "contents of /mnt/foo changed across the unplug"
+	exit 1
+    fi
+    umount /mnt
+
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+# A device that turns up after the mount already gave up on it.
+#
+# This is the other half of the degraded story, and the only half nothing was
+# testing. mount.bcachefs waits missing_dev_timeout and then goes on without
+# the member; when the disk does appear, 64-bcachefs.rules notices it belongs
+# to a filesystem that is already online - the TEST on /sys/fs/bcachefs/<uuid>
+# - and runs `bcachefs device online` so it rejoins with nobody typing
+# anything. Two tests already call `device online` by hand, which exercises
+# the command but not the rule that is supposed to call it.
+test_late_device_rejoins_a_degraded_mount()
+{
+    set_watchdog 180
+
+    # The rule ships with bcachefs-tools and lands here via `make install`.
+    # Check for it rather than letting an install problem come back as an
+    # apparent kernel or tools bug.
+    local rules=$(ls /usr/lib/udev/rules.d/*bcachefs* \
+		     /lib/udev/rules.d/*bcachefs* 2>/dev/null | head -1)
+
+    if [[ -z $rules ]]; then
+	echo "no bcachefs udev rule installed - there is nothing here to test"
+	ls /usr/lib/udev/rules.d/ /lib/udev/rules.d/ 2>/dev/null
+	exit 1
+    fi
+    echo "using $rules"
+    udevadm control --reload
+
+    # replicas=2 so the filesystem is readable with one member gone; without
+    # it the mount would be refused for lack of data rather than going
+    # degraded, and there would be nothing for the device to rejoin.
+    run_quiet "" bcachefs format -f --replicas=2	\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}
+
+    local fs_uuid=$(bcachefs show-super ${ktest_scratch_dev[0]} |
+		    awk '$1 == "External" { print $3 }')
+
+    scratch_dev_unplug 1
+    mount -t bcachefs -o degraded=yes,missing_dev_timeout=1 UUID=$fs_uuid /mnt
+
+    # Precondition: it really did come up a device short. Without this the
+    # test passes whenever the unplug quietly failed to take.
+    if ! mounted_a_device_short /mnt; then
+	echo "mounted with both devices present - the unplug did not take"
+	bcachefs fs usage /mnt
+	exit 1
+    fi
+
+    scratch_dev_plug 1
+    udevadm settle
+
+    # settle waits for the udev worker to finish, but `device online` hands
+    # the device to the kernel and the attach completes on its own schedule.
+    local i
+    for i in $(seq 30); do
+	mounted_a_device_short /mnt || break
+	sleep 1
+    done
+
+    if mounted_a_device_short /mnt; then
+	echo "the device came back but never rejoined the filesystem"
+	echo "--- fs usage ---"
+	bcachefs fs usage /mnt
+	echo "--- udev on the returning device ---"
+	udevadm test $(udevadm info -q path -n ${ktest_scratch_dev[1]}) 2>&1 | tail -20
+	exit 1
+    fi
+
+    umount /mnt
+}
+
+
+# ---------------------------------------------------------------- splitbrain
+
+OURS="Both sides hold real data"
+
+# Sets DEV_A and DEV_B to two members whose histories have diverged.
+#
+# Globals, not an echoed pair: everything this runs writes to stdout too, so
+# a caller doing dev=($(setup_diverged_pair)) captures the entire build log
+# and indexes into the wrong end of it.
+#
+# The divergence is built entirely on image FILES, with no loop devices, and
+# that is the whole trick. set-fs-option bumps every member it can find, so
+# the two sides have to be separated while each is bumped - and a file in
+# another directory is genuinely unreachable, where a detached loop device is
+# not. /dev/loopN survives losetup -d, so bcachefs still has a path for the
+# absent member, writes to it, takes EIO, and refuses the whole superblock
+# write for want of enough devices ("insufficient devices online").
+#
+# Both sides end at the same seq having recorded different things, which is
+# bch2_dev_in_fs()'s collision case: the disagreement is between the
+# superblocks themselves rather than one being behind.
+setup_diverged_pair()
+{
+    teardown_pair
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    mkdir -p /mnt2 /mnt/A /mnt/B
+
+    truncate -s 512M /mnt/A/a.img
+    truncate -s 512M /mnt/B/b.img
+
+    run_quiet "" bcachefs format -f --label=sbtest /mnt/A/a.img /mnt/B/b.img
+
+    # set-fs-option refuses a filesystem that has never been started
+    # ("superblock not initialized"), and fsck starts one without a mount.
+    #
+    # It does attach loop devices to do it (cmd_fsck loopdev_alloc), and frees
+    # them again, which is why the members' recorded device names come out as
+    # loopN. That is cosmetic here - what matters is that they are detached
+    # again before the divergence, so each side is bumped alone.
+    run_quiet "" bcachefs fsck -y /mnt/A/a.img /mnt/B/b.img
+
+    diverge_one_side /mnt/A/a.img --errors=continue
+    diverge_one_side /mnt/B/b.img --errors=panic
+
+    DEV_A=$(losetup -f --show /mnt/A/a.img)
+    DEV_B=$(losetup -f --show /mnt/B/b.img)
+}
+
+# Only our own loop devices - `losetup -D` would detach every one on the
+# machine, and this test does not get to assume it is the only user.
+#
+# Loops before /mnt: they are backed by files on it, so umount says "target is
+# busy" while any are still attached. Runs at the head of setup as well as the
+# tail of a test, because a failing assertion exits without reaching teardown
+# and would otherwise wedge every test after it.
+teardown_pair()
+{
+    umount /mnt2 2>/dev/null || true
+
+    local l
+    for l in $(losetup -j /mnt/A/a.img -O NAME -n 2>/dev/null) \
+	     $(losetup -j /mnt/B/b.img -O NAME -n 2>/dev/null); do
+	losetup -d $l || true
+    done
+
+    umount /mnt 2>/dev/null || true
+}
+
+sb_seq()
+{
+    bcachefs show-super "$1" | awk '/Sequence number/ {print $3}'
+}
+
+# Advance one side's superblock and nothing else.
+#
+# set-fs-option cannot reach the other member, so it writes the one superblock
+# it has and then exits NON-ZERO: it refuses to report success for a write that
+# did not reach enough devices to mount with ("insufficient devices online").
+# The refusal is about the filesystem; the write is real, and the write is what
+# builds the divergence.
+#
+# So the exit status is expected, but the write is not assumed - if bcachefs
+# ever stops writing what it can reach, this says so here instead of failing
+# incomprehensibly three steps later.
+# Captured, not printed: the refusal comes with ~30 lines of "Error writing
+# superblock ... emergency read only" per call, six calls per run, and a
+# passing test that prints that fifteen times teaches whoever reads the log
+# next to skim past exactly those words. Kept, and printed, if the write did
+# not land - which is the case where it is worth reading.
+#
+# Not run_quiet: that exits 1 on failure, and failure is what we expect here.
+diverge_one_side()
+{
+    local dev=$1 opt=$2 before after out
+
+    before=$(sb_seq $dev)
+    out=$(bcachefs set-fs-option $opt $dev 2>&1) || true
+    after=$(sb_seq $dev)
+
+    if (( after <= before )); then
+	echo "$out"
+	echo "TEST BROKEN: $dev seq did not advance ($before -> $after);"
+	echo "  set-fs-option no longer writes the superblocks it can reach"
+	exit 1
+    fi
+}
+
+# Fail here rather than downstream. A $(...) that dies inside an argument list
+# substitutes its own error text into the command line, so the caller runs
+# `bcachefs mount UUID=Error 1 at ...` and reports a missing pattern - which
+# says nothing about the thing under test.
+fs_uuid()
+{
+    local uuid
+    uuid=$(bcachefs show-super "$1" | awk '/^External UUID/ {print $3}')
+
+    if [[ -z $uuid ]]; then
+	echo "TEST BROKEN: no UUID from show-super $1" >&2
+	exit 1
+    fi
+
+    echo "$uuid"
+}
+
+# ── the report says what happened ───────────────────────────────────────
+#
+# Both device names, both seqs and both write times, because "that is the
+# rescue boot I did on Tuesday" is how someone actually identifies which half
+# is which. Refusing without showing the histories would leave them nothing to
+# act on.
+test_splitbrain_is_reported()
+{
+    set_watchdog 180
+
+    setup_diverged_pair
+    local uuid=$(fs_uuid $DEV_A)
+
+    assert_fails_with "$OURS" bcachefs mount UUID=$uuid /mnt2
+
+    teardown_pair
+}
+
+# ── and does not ask the degraded question ──────────────────────────────
+#
+# The regression this series exists to prevent. A diverged filesystem looks
+# like a short device count, so the degraded path will happily ask "mount
+# without the missing devices?" - and yes to that is a silent choice of side.
+#
+# Requiring the split-brain report as well as the absence of the degraded
+# question is not belt and braces: a mount that failed for some unrelated
+# reason also has no degraded question in it, and would pass an absence test
+# while proving nothing. The first version of this did exactly that.
+test_splitbrain_does_not_ask_about_degraded()
+{
+    set_watchdog 180
+
+    setup_diverged_pair
+    local uuid=$(fs_uuid $DEV_A)
+
+    local out rc=0
+    out=$(bcachefs mount UUID=$uuid /mnt2 2>&1) || rc=$?
+    echo "$out"
+    teardown_pair
+
+    if ! grep -q "$OURS" <<<"$out"; then
+	echo "TEST FAILED: no split brain report, so this proves nothing"
+	exit 1
+    fi
+
+    if grep -q "devices are present" <<<"$out"; then
+	echo "TEST FAILED: asked the degraded question about a split brain"
+	exit 1
+    fi
+
+    if (( rc == 0 )); then
+	echo "TEST FAILED: mounted a split brain without being told to"
+	exit 1
+    fi
+}
+
+# ── naming the devices skips the check ──────────────────────────────────
+#
+# Someone who spells out which devices to use has already chosen a side, and
+# the check would be second-guessing them. Verified on the host against the
+# poc-sb fixture: the colon path goes straight to fsopen with no report.
+#
+# Pinned because it is a deliberate hole rather than an oversight - if the
+# check ever moves somewhere that covers this path too, that is a decision
+# someone should make on purpose.
+# Not assert_output_lacks: it treats a non-zero exit as "never tested", and
+# this mount is supposed to fail - the kernel gets two superblocks that
+# disagree. What is being pinned is that OUR check stayed out of it, which is
+# a statement about the output either way.
+test_named_devices_skip_the_check()
+{
+    set_watchdog 180
+
+    setup_diverged_pair
+
+    local out
+    out=$(bcachefs mount -o ro $DEV_A:$DEV_B /mnt2 2>&1) || true
+    echo "$out"
+    teardown_pair
+
+    if grep -q "$OURS" <<<"$out"; then
+	echo "TEST FAILED: checked devices the user named explicitly"
+	exit 1
+    fi
+}
+
+
+# ---------------------------------------------------------------- device-open-errors
+
+test_open_missing_device()
+{
+    set_watchdog 60
+
+    assert_fails_with "requested read-write, exclusive" \
+	bcachefs set-fs-option --errors=ro /dev/no-such-device
+}
+
+# ── a failed superblock write must not report success ───────────────────
+#
+# blockdev --setro does NOT make the open fail: in the tools
+# bdev_file_open_by_path() is a plain open(2) (linux/blkdev.c), and Linux
+# permits O_RDWR on a BLKROSET device - only the writes fail. So this lands
+# somewhere more interesting than the open: every superblock write returns
+# BLK_STS_IOERR, __bch2_write_super() reports "Unable to write superblock to
+# sufficient devices" and forces the filesystem read-only...
+#
+#   Error writing superblock, wrote to 0/1 devices:
+#      8=BLK_STS_IOERR 2056=BLK_STS_IOERR 2095104=BLK_STS_IOERR (all failed)
+#     emergency read only at seq 0
+#
+# ...and it used to then return 0, so set-fs-option exited 0 having persisted
+# nothing. A configuration command that reports success while changing nothing
+# is the one failure a script cannot detect. This test is what found that; the
+# fatal branch now returns erofs_sb_err, like the two other paths in that
+# function that go emergency read-only.
+test_write_failure_is_not_success()
+{
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+
+    # Mount once and drop it: a freshly formatted filesystem has
+    # sb_initialized == 0, and set-fs-option refuses those up front
+    # ("superblock not initialized... mount it once first") - so without this
+    # the command never gets as far as writing anything.
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    umount /mnt
+
+    # Capture, then restore the device BEFORE asserting. An assertion that
+    # exits leaves the device write protected for every test after this one,
+    # and they fail at format with "Failed to wipe preexisting metadata" -
+    # a thoroughly confusing way to be told that this test broke.
+    blockdev --setro ${ktest_scratch_dev[0]}
+    local out rc=0
+    out=$(bcachefs set-fs-option --errors=ro ${ktest_scratch_dev[0]} 2>&1) || rc=$?
+    blockdev --setrw ${ktest_scratch_dev[0]}
+
+    echo "$out"
+    echo "set-fs-option exited $rc"
+
+    if (( rc == 0 )); then
+	echo "TEST FAILED: exited 0 after failing to write the superblock"
+	exit 1
+    fi
+
+    # ...and with the write protection gone it works, so this pins the
+    # failure reporting and not just a permanently broken device:
+    bcachefs set-fs-option --errors=ro ${ktest_scratch_dev[0]}
+}
+
+# ── separate messages stay on separate lines ────────────────────────────
+#
+# bch2_read_super() embeds its detail printbuf mid-format, and the validate
+# helpers that fill it append a reason with no trailing newline - correct for
+# them, since the caller frames it. Unterminated, the next message ran onto
+# the end of ours:
+#
+#   Not a bcachefs superblock layouterror starting filesystem: invalid_sb_layout
+#
+# which is how the field report arrived, and is why it took a while to see
+# there were two separate errors in it.
+test_open_bad_superblock()
+{
+    set_watchdog 60
+
+    dd if=/dev/urandom of=${ktest_scratch_dev[0]} bs=1M count=4 oflag=direct
+
+    assert_fails_with "Not a bcachefs superblock" \
+	bcachefs set-fs-option --errors=ro ${ktest_scratch_dev[0]}
+
+    # Anchored at BOTH ends, which is the whole point: with the reason
+    # unterminated the line reads "...superblock layouterror starting
+    # filesystem: invalid_sb_layout", and a pattern anchored only at the end
+    # still matches that - it ends in "invalid_sb_layout". Requiring the line
+    # to both start and stop where the reason does is what distinguishes them.
+    assert_fails_with "^Not a bcachefs superblock layout$" \
+	bcachefs set-fs-option --errors=ro ${ktest_scratch_dev[0]}
+}
+
+# ── fsck on a mounted filesystem must go online ─────────────────────────
+#
+# The safety property, and it is not "fsck refuses". Pointing fsck at a member
+# block device of a mounted filesystem is supported and routes to online fsck
+# by design (cmd_fsck: "If any path resolves to a mounted filesystem - mount
+# point, member block device, or UUID - fsck online").
+#
+# What must never happen is fsck taking the OFFLINE path against a filesystem
+# the kernel has mounted: two writers on one device, unbounded corruption.
+# That is reachable, because the routing rests on open_if_mounted_any()
+# noticing the mount, and open_if_mounted() opens the path O_RDONLY and
+# returns Ok(None) - indistinguishable from "not mounted" - on ANY open error.
+# The comment on its own UUID branch warns about exactly this: an error there
+# "must not be mistaken for 'not mounted', or callers fall back to offline
+# superblock access on a live filesystem."
+#
+# So assert the routing, by its banner. If this ever regresses to the offline
+# path the banner disappears, and the only thing left between us and the
+# corruption is O_EXCL on the real open - which the scan phase deliberately
+# does not use (device_scan.rs read_super_silent opens noexcl|nochanges,
+# correctly: probing shouldn't claim anything).
+test_fsck_mounted_goes_online()
+{
+    set_watchdog 120
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    echo hello > /mnt/file
+
+    assert_output_has "Running fsck online" \
+	bcachefs fsck -y ${ktest_scratch_dev[0]}
+
+    umount /mnt
+
+    # Unmounted, the same command takes the offline path - so the banner above
+    # was the mount being noticed, not something that prints unconditionally:
+    assert_output_lacks "Running fsck online" \
+	bcachefs fsck -y ${ktest_scratch_dev[0]}
+}
+
+# ── a mounted filesystem is still configurable ──────────────────────────
+#
+# The other half of the field report: pointing set-fs-option at a member
+# device of a mounted filesystem is supposed to work - open_online_or_offline()
+# finds it via open_if_mounted_any() and takes the online sysfs path. Only if
+# that probe comes back "not mounted" do we fall through to opening the device
+# offline, which is where the O_EXCL refusal lives.
+#
+# So this must NOT be refused, and the runtime option must actually change.
+test_set_option_on_mounted_member()
+{
+    set_watchdog 120
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    bcachefs set-fs-option --errors=ro ${ktest_scratch_dev[0]}
+
+    # Resolve the filesystem's sysfs directory through the block device's
+    # own "bcachefs" symlink (dev.c: sysfs_create_link(block, &ca->kobj,
+    # "bcachefs")), which lands on <fs>/dev-N.
+    #
+    # Not by UUID: a single device filesystem is registered under c->name,
+    # not the UUID - fs.c only uses "%pU" when c->sb.multi_device. Building
+    # /sys/fs/bcachefs/$uuid/... looks right and cannot exist here.
+    local dev=$(basename ${ktest_scratch_dev[0]})
+    local fs_sysfs=$(dirname $(readlink -f /sys/block/$dev/bcachefs))
+    echo "filesystem sysfs dir: $fs_sysfs"
+
+    # sysfs prints the whole choice list with the live one bracketed
+    # ("continue fix_safe panic [ro]"), not a bare value - so match [ro],
+    # not the string "ro", which also appears unbracketed as a choice.
+    local got=$(cat $fs_sysfs/options/errors)
+    echo "errors option now: $got"
+
+    if [[ $got != *"[ro]"* ]]; then
+	echo "TEST FAILED: errors option did not take effect (got '$got')"
+	umount /mnt
+	exit 1
+    fi
+
+    umount /mnt
+}
+
+
+# ---------------------------------------------------------------- mount-systemd
+
+# Mounting the way a machine actually boots: fstab, a generated .mount unit,
+# and systemctl - not a mount(8) we invoked ourselves. The devices are fine
+# here; the question is whether anything reaches the user while they wait.
+
+MNT=/mnt/bch
+UNIT=mnt-bch.mount
+DROPIN=/run/systemd/generator/$UNIT.d/10-bcachefs-timeout.conf
+
+# Milliseconds of sleep per progress update. The point is a mount long enough
+# to watch, so tune this rather than the filesystem: how many btree nodes a
+# given pass walks is not something you can predict from the format command.
+# The test prints what it actually took.
+DELAY_MS=${DELAY_MS:-1}
+
+# fsck is what makes this a demonstration rather than a no-op. A cleanly
+# unmounted filesystem runs accounting_read, alloc_read and snapshots_read and
+# stops - none of which have a progress indicator, so there is nothing for the
+# delay to multiply and nothing to draw. The check_* passes that do have
+# indicators only run under fsck.
+#
+# fix_errors=yes because the alternative is a question, and a question during
+# the mount would block behind TimeoutSec=infinity until the watchdog. There
+# should be nothing to ask about on a filesystem we formatted a moment ago;
+# this is so that "should" failing is a visible wrong answer rather than a
+# hang nobody can read.
+MOUNT_OPTS=fsck,fix_errors=yes
+
+# DO NOT run this with -v if you want to see the line rewrite itself.
+#
+# The status line is \r-bracketed with no newline, which only holds a single row
+# for as long as nothing else writes one. Kernel messages go to /dev/console
+# too, and each ends in \n - so every pass announcement lands on top of the
+# line and shoves it down, and what you see is one copy per kernel message
+# scrolling rather than one line updating. systemd-fsck has exactly this
+# problem and simply lives with it (src/fsck/fsck.c:229).
+#
+# -v drops `quiet`, which puts console_loglevel at 7 and prints every
+# announcement - the worst case. Without -v, `quiet` holds the kernel to
+# KERN_ERR and the line has the row to itself; the test asks PID 1 to turn
+# status back on separately, so systemd's own job line still shows. That
+# combination - quiet kernel, systemd status on - is what a stock distro boot
+# actually looks like, and is the thing worth judging.
+#
+# Set the console loglevel by hand if you want the kernel's messages back:
+#   dmesg -n 7
+
+# Enough btree nodes that the progress indicators have something to walk, and
+# so that the per-node delay adds up to a visible mount.
+format_with_data()
+{
+    bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+
+    mkdir -p $MNT
+    # Deliberately NOT $MOUNT_OPTS: this is the prep mount, filling a
+    # filesystem we formatted a second ago. Checking it costs a full fsck
+    # before every run and finds nothing.
+    mount -t bcachefs ${ktest_scratch_dev[0]} $MNT
+
+    local i
+    for i in $(seq 0 63); do
+	dd if=/dev/urandom of=$MNT/f$i bs=1M count=4 status=none
+    done
+    mkdir -p $MNT/d
+    for i in $(seq 0 255); do
+	echo $i > $MNT/d/$i
+    done
+    sync
+
+    umount $MNT
+
+    fs_uuid=$(bcachefs show-super ${ktest_scratch_dev[0]} |
+	      sed -n 's/^External UUID:[[:space:]]*//p')
+
+    if [[ -z $fs_uuid ]]; then
+	echo "could not read the filesystem UUID back"
+	exit 1
+    fi
+}
+
+# Progress lines only reach dmesg when nobody is drawing them: the kernel
+# stops printing as soon as anything issues BCH_IOCTL_RECOVERY_STATUS, on the
+# grounds that whoever asked is showing it (fs/init/progress.c,
+# progress_maybe_print). So their absence is how we detect, from inside the
+# VM, that the display was running - we cannot read /dev/console back.
+#
+# That makes the whole test turn on telling "suppressed" apart from "the
+# indicator never fired", which is why there is a control below.
+progress_lines_in_dmesg()
+{
+    dmesg | grep -cE '[0-9]+%, done [0-9]+/[0-9]+ (nodes|keys)'
+}
+
+pass_lines_in_dmesg()
+{
+    dmesg | grep -cE 'check_[a-z_]+\.\.\.'
+}
+
+set_delay()
+{
+    local knob=/sys/module/bcachefs/parameters/recovery_progress_delay_ms
+
+    # Absent means the loaded module predates the knob - i.e. the module under
+    # test is not the one we built. Silently doing nothing here is the failure
+    # that looks exactly like "the display doesn't work".
+    if [[ ! -e $knob ]]; then
+	echo "$knob does not exist - the loaded bcachefs is not this build"
+	modinfo bcachefs 2>&1 | head -5
+	exit 1
+    fi
+
+    echo $1 > $knob
+
+    local got=$(cat $knob)
+    if [[ $got != $1 ]]; then
+	echo "asked for a ${1}ms progress delay, knob reads $got"
+	exit 1
+    fi
+}
+
+# Everything that has to be true before the display can appear, checked out
+# loud so a blank console says which one wasn't.
+preflight()
+{
+    echo "--- preflight ---"
+
+    if [[ ! -e /sbin/mount.bcachefs && ! -e /usr/sbin/mount.bcachefs ]]; then
+	echo "NO mount.bcachefs helper installed."
+	echo "systemd's mount unit will go straight to the kernel, none of our"
+	echo "userspace runs, and nothing can draw anything."
+	ls -l /sbin/*.bcachefs /usr/sbin/*.bcachefs 2>&1 | head
+	exit 1
+    fi
+    echo "mount helper: $(command -v mount.bcachefs || echo /sbin/mount.bcachefs)"
+
+    echo "show-status marker: $(ls /run/systemd/show-status 2>&1)"
+    echo "console loglevel:   $(cut -d'	' -f1 /proc/sys/kernel/printk)"
+    echo "  (kernel messages above this level land on /dev/console and will"
+    echo "   push a \\r-held status line down a row each time)"
+    echo "--- end preflight ---"
+}
+
+# First, and on its own: does the display work at all, with nothing to fight?
+#
+# A mount run from here has stderr on the console, so it takes the terminal
+# path - the full multi-line block, redrawn in place with \x1b[{n}F\x1b[J - and
+# no systemd job line is competing for the rows. If this looks right and the
+# systemd case doesn't, the difference is systemd. If this looks wrong too,
+# then systemd was never the story and the display is broken on its own.
+#
+# Run this before caring about anything below it.
+test_commandline_mount_shows_status()
+{
+    set_watchdog 480
+
+    format_with_data
+    preflight
+    set_delay $DELAY_MS
+
+    # Which of the two display paths this exercises depends on whether ktest
+    # gave the test script a terminal. Say so rather than leave it ambiguous -
+    # they render completely differently and are different code.
+    if [[ -t 2 ]]; then
+	echo "stderr is a terminal: expect the multi-line block, redrawn in place"
+    else
+	echo "stderr is NOT a terminal: expect the single console line instead,"
+	echo "which is the same path the systemd case takes"
+    fi
+
+    echo
+    echo "=============== watch this: plain mount ================"
+    echo
+
+    local start=$(date '+%s')
+    mount -t bcachefs -o $MOUNT_OPTS ${ktest_scratch_dev[0]} $MNT
+    local elapsed=$(($(date '+%s') - start))
+
+    echo
+    echo "======================= done ==========================="
+    echo
+
+    set_delay 0
+
+    if ! mountpoint -q $MNT; then
+	echo "the mount did not succeed"
+	exit 1
+    fi
+    echo "commandline mount took ${elapsed}s"
+
+    if (( elapsed < 5 )); then
+	echo "too fast to have displayed anything - the delay did not take."
+	exit 1
+    fi
+
+    umount $MNT
+}
+
+# The control: with nowhere to draw, the kernel must print progress itself.
+#
+# Without this the real test below is unfalsifiable - "no progress lines in
+# dmesg" is also what a recovery too fast to ever fire the 10s indicator
+# looks like, and that is the failure this test would otherwise report as a
+# pass forever.
+test_progress_reaches_dmesg_when_nobody_draws()
+{
+    set_watchdog 480
+
+    format_with_data
+    set_delay $DELAY_MS
+
+    # Both display routes shut off: no console gate, and stderr redirected so
+    # it isn't a terminal either.
+    local saved=
+    if [[ -e /run/systemd/show-status ]]; then
+	saved=yes
+	rm -f /run/systemd/show-status
+    fi
+
+    dmesg -C
+    mount -t bcachefs -o $MOUNT_OPTS ${ktest_scratch_dev[0]} $MNT 2>/dev/null
+    umount $MNT
+
+    [[ -n $saved ]] && touch /run/systemd/show-status
+    set_delay 0
+
+    local progress=$(progress_lines_in_dmesg)
+    echo "progress lines in dmesg with no display: $progress"
+
+    if (( progress == 0 )); then
+	echo "the slowed mount never printed a progress line at all."
+	echo "the delay knob or the indicators are not doing anything, and the"
+	echo "systemd test below would pass without proving anything."
+	dmesg | tail -40
+	exit 1
+    fi
+}
+
+# The real one: fstab -> generator -> .mount unit -> mount.bcachefs.
+test_systemd_mount_shows_status()
+{
+    set_watchdog 480
+
+    format_with_data
+
+    # ktest boots with systemd.show_status=0 unless verbose, which removes the
+    # marker file mount.bcachefs gates the console on. Turn it back on rather
+    # than depending on how the run was invoked - SIGRTMIN+20 is
+    # manager_override_show_status(SHOW_STATUS_YES) (src/core/manager.c).
+    kill -s RTMIN+20 1
+    sleep 1
+
+    if [[ ! -e /run/systemd/show-status ]]; then
+	echo "no /run/systemd/show-status after asking PID 1 for it"
+	echo "mount.bcachefs will decline the console and draw nothing"
+	exit 1
+    fi
+
+    mkdir -p $MNT
+    echo "UUID=$fs_uuid $MNT bcachefs $MOUNT_OPTS 0 0" >> /etc/fstab
+
+    systemctl daemon-reload
+
+    # Our generator should have run as part of that reload.
+    if [[ ! -e $DROPIN ]]; then
+	echo "no $DROPIN after daemon-reload"
+	echo "the generator did not run, or named the unit something else:"
+	ls -R /run/systemd/generator/ 2>&1 | head -40
+	exit 1
+    fi
+
+    if ! grep -q 'TimeoutSec=infinity' $DROPIN; then
+	echo "$DROPIN exists but does not raise the timeout:"
+	cat $DROPIN
+	exit 1
+    fi
+    echo "generator wrote $DROPIN"
+
+    preflight
+    set_delay $DELAY_MS
+    dmesg -C
+
+    echo
+    echo "==================== watch this bit ===================="
+    echo "systemctl start $UNIT, ${DELAY_MS}ms per progress update."
+    echo "Expect systemd's own job line and ours to share the console,"
+    echo "each rewriting itself in place. Whether that is legible or a"
+    echo "mess is the thing being looked at."
+    echo "========================================================"
+    echo
+
+    local start=$(date '+%s')
+    systemctl start $UNIT
+    local elapsed=$(($(date '+%s') - start))
+
+    echo
+    echo "==================== end of the bit ===================="
+    echo
+
+    set_delay 0
+
+    if ! mountpoint -q $MNT; then
+	echo "$UNIT started but nothing is mounted at $MNT"
+	systemctl status $UNIT --no-pager || true
+	exit 1
+    fi
+    echo "mounted via $UNIT in ${elapsed}s"
+
+    # It has to have been slow, or the display had nothing to display and the
+    # rest of this proves nothing.
+    if (( elapsed < 5 )); then
+	echo "the mount took ${elapsed}s - too fast to have shown anything."
+	echo "the delay knob did not take effect for the systemd mount."
+	exit 1
+    fi
+
+    local passes=$(pass_lines_in_dmesg)
+    local progress=$(progress_lines_in_dmesg)
+    echo "dmesg during the systemd mount: $passes pass lines, $progress progress lines"
+
+    if (( passes == 0 )); then
+	echo "recovery did not announce any passes - did it run at all?"
+	dmesg | tail -40
+	exit 1
+    fi
+
+    # The point: the control above proved a slowed mount with no display fills
+    # dmesg with progress. If they are still there now, nothing polled the
+    # ioctl, which means mount.bcachefs never opened the console.
+    if (( progress != 0 )); then
+	echo "progress still went to dmesg during a systemd mount, so nothing"
+	echo "was drawing it - mount.bcachefs did not take the console."
+	dmesg | grep -E '[0-9]+%, done' | head -5
+	exit 1
+    fi
+
+    systemctl stop $UNIT
+}
+
+
+main "$@"
