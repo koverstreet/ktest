@@ -1431,5 +1431,120 @@ test_systemd_mount_shows_status()
     systemctl stop $UNIT
 }
 
+# ------------------------------------------------------------------ remote unlock
+
+PASSPHRASE=correct-horse-battery-staple
+
+# Talk to the unlock socket and print what it says back.
+#
+# socat is not in the image; python3 is, so use that rather than adding a
+# package for two lines. The real article is `socat - UNIX-CONNECT:...`, which
+# is what an initramfs will have.
+unlock_socket_say()
+{
+    python3 -c '
+import socket, sys
+s = socket.socket(socket.AF_UNIX)
+s.connect(sys.argv[1])
+s.sendall(sys.argv[2].encode() + b"\n")
+sys.stdout.write(s.recv(64).decode())
+' "$1" "$2"
+}
+
+# The passphrase prompt takes an answer from a socket as well as the terminal.
+#
+# Both halves matter and only one of them is what a fifo could do. A wrong
+# passphrase has to come back *said so* and leave the prompt standing - that is
+# the whole reason this is a socket and not the fifo people build by hand - and
+# then the right one has to complete a mount that nobody ever typed at.
+test_unlock_over_the_socket()
+{
+    # --passphrase_file rather than feeding stdin: format's prompt only falls
+    # back to reading stdin when stdin is not a terminal, and what run_quiet
+    # leaves there is not this test's business to know. The file's trailing
+    # newline is trimmed, so this is the same string the socket sends below.
+    echo "$PASSPHRASE" > /run/unlock-passphrase
+
+    run_quiet "" bcachefs format -f --encrypted			\
+	--passphrase_file=/run/unlock-passphrase		\
+	${ktest_scratch_dev[0]}
+
+    # show-super opens the filesystem - nostart, but bch2_fs_init() unwraps the
+    # superblock key on every open - so on an encrypted one it asks for the
+    # passphrase before it will print a UUID that is not even secret. Long
+    # standing: 1.38.8 does it too. Hand it the file rather than work around it
+    # here, so this test breaks if that ever changes rather than hiding it.
+    fs_uuid=$(bcachefs show-super ${ktest_scratch_dev[0]} < /run/unlock-passphrase |
+	      awk '$1 == "External" { print $3 }')
+    local sock=/run/bcachefs/unlock/$fs_uuid
+
+    ask_mount_start -o verbose UUID=$fs_uuid
+
+    # The socket is created as the prompt goes up, so its existence is also how
+    # we know we are being asked. Waiting on it rather than on prompt text keeps
+    # this from breaking every time the wording changes.
+    local i
+    for i in $(seq 30); do
+	[[ -S $sock ]] && break
+	sleep 1
+    done
+
+    if [[ ! -S $sock ]]; then
+	echo "no unlock socket after 30s:"
+	cat "$ASK_OUT"
+	kill $ask_mount_pid 2> /dev/null
+	exit 1
+    fi
+
+    # 0700, because anyone who can reach it can guess at the passphrase.
+    local mode=$(stat -c %a /run/bcachefs/unlock)
+    if [[ $mode != 700 ]]; then
+	echo "/run/bcachefs/unlock is mode $mode, expected 700"
+	exit 1
+    fi
+
+    local reply=$(unlock_socket_say "$sock" wrong-passphrase)
+    if [[ $reply != "incorrect passphrase" ]]; then
+	echo "a wrong passphrase got \"$reply\", expected \"incorrect passphrase\""
+	exit 1
+    fi
+
+    # Still listening, and still asking: a fifo would have swallowed that and
+    # left the boot to fail later with nothing said.
+    if [[ ! -S $sock ]]; then
+	echo "the socket went away after one wrong passphrase"
+	exit 1
+    fi
+
+    reply=$(unlock_socket_say "$sock" "$PASSPHRASE")
+    if [[ $reply != "ok" ]]; then
+	echo "the right passphrase got \"$reply\", expected \"ok\""
+	exit 1
+    fi
+
+    if ! ask_mount_finish; then
+	echo "the socket said ok and the mount failed anyway:"
+	cat "$ASK_OUT"
+	exit 1
+    fi
+
+    # Nothing was ever typed at the terminal, so a mount here is the socket's
+    # doing and nothing else's.
+    if ! mountpoint -q /mnt; then
+	echo "the socket took the passphrase but the filesystem is not mounted:"
+	cat "$ASK_OUT"
+	exit 1
+    fi
+
+    # Up for the prompt, and gone with it.
+    if [[ -e $sock ]]; then
+	echo "$sock outlived the mount it belonged to"
+	exit 1
+    fi
+
+    umount /mnt
+    rm -f /run/unlock-passphrase
+}
+
 
 main "$@"
