@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-mem 4G
+config-scratch-devs 4G
+config-timeout 180
+
+require-kernel-config BCACHEFS_FS
+require-kernel-config PROVE_LOCKING
+require-kernel-config LOCKDEP_BITS=20
+require-kernel-config LOCKDEP_CHAINS_BITS=20
+require-kernel-config DEBUG_ATOMIC_SLEEP
+require-kernel-config PREEMPT
+require-kernel-config DEBUG_PREEMPT
+require-kernel-config DMABUF_HEAPS
+
+test_lockdep_lookup_confd_dstate()
+{
+    set_watchdog 180
+
+    run_quiet "" bcachefs format -f "${ktest_scratch_dev[0]}"
+    mount -t bcachefs "${ktest_scratch_dev[0]}" /mnt
+
+    mkdir -p /mnt/.config/fontconfig/conf.d
+    bcachefs set-file-option --casefold /mnt/.config/fontconfig/conf.d
+    sync
+    echo 3 > /proc/sys/vm/drop_caches
+
+    cat > /tmp/repro-confd.c <<'EOF'
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+#define ITERATIONS 2000
+#define THREADS 12
+
+static const char *const kBase = "/mnt/.config/fontconfig/conf.d";
+static const char *const kTarget = "/mnt/.config/fontconfig/conf.d/MiSsInG";
+static const char *const kAlias = "/mnt/.config/fontconfig/conf.d/MISSING";
+static const char *const kTmp = "/mnt/.config/fontconfig/conf.d/.ktest-confd";
+
+static inline void clear_err(void)
+{
+    errno = 0;
+}
+
+static void *lookup_worker(void *arg)
+{
+    (void)arg;
+
+    for (unsigned int i = 0; i < ITERATIONS; i++) {
+        struct stat st;
+        (void)stat(kTarget, &st);
+
+        int fd = open(kTarget, O_RDONLY);
+        if (fd >= 0) {
+            close(fd);
+        }
+    }
+
+    return NULL;
+}
+
+static void *create_rename_worker(void *arg)
+{
+    unsigned long tid = (unsigned long)arg;
+    char tmp[PATH_MAX];
+    char alias[PATH_MAX];
+
+    for (unsigned int i = 0; i < ITERATIONS; i++) {
+        snprintf(tmp, sizeof(tmp), "%s.%lu.%u", kTmp, tid, i);
+        snprintf(alias, sizeof(alias), "%s.%lu.%u", kAlias, tid, i);
+
+        int fd = open(tmp, O_CREAT | O_WRONLY | O_TRUNC, 0600);
+        if (fd < 0) {
+            clear_err();
+            continue;
+        }
+
+        (void)write(fd, "x", 1);
+        close(fd);
+
+        if (rename(tmp, kTarget) < 0)
+            unlink(tmp);
+
+        if (rename(kTarget, kAlias) < 0 && errno != ENOENT)
+            clear_err();
+
+        if (rename(kAlias, alias) < 0 && errno != ENOENT)
+            clear_err();
+
+        if (unlink(alias) < 0 && errno != ENOENT)
+            clear_err();
+
+        if (unlink(kAlias) < 0 && errno != ENOENT)
+            clear_err();
+    }
+
+    return NULL;
+}
+
+static void *unlink_worker(void *arg)
+{
+    (void)arg;
+
+    for (unsigned int i = 0; i < ITERATIONS; i++) {
+        unlink(kTarget);
+        unlink(kAlias);
+        clear_err();
+    }
+
+    return NULL;
+}
+
+int main(void)
+{
+    pthread_t threads[THREADS];
+
+    for (unsigned long i = 0; i < 4; i++) {
+        if (pthread_create(&threads[i], NULL, lookup_worker, (void *)i))
+            return 1;
+    }
+
+    for (unsigned long i = 4; i < 8; i++) {
+        if (pthread_create(&threads[i], NULL, create_rename_worker, (void *)i))
+            return 1;
+    }
+
+    for (unsigned long i = 8; i < THREADS; i++) {
+        if (pthread_create(&threads[i], NULL, unlink_worker, (void *)i))
+            return 1;
+    }
+
+    for (unsigned long i = 0; i < THREADS; i++) {
+        if (pthread_join(threads[i], NULL))
+            return 1;
+    }
+
+    return 0;
+}
+EOF
+
+    gcc -O2 -Wall -pthread /tmp/repro-confd.c -o /tmp/repro-confd
+
+    local dmesg_before=$(dmesg | wc -l)
+    /tmp/repro-confd
+    dmesg | tail -n +$((dmesg_before + 1)) | grep -Ei 'blocked for|d_alloc_parallel|possible circular locking dependency|WARNING:|BUG:|Oops:' && exit 1
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[0]}"
+}
+
+main "$@"
