@@ -167,6 +167,189 @@ test_ec_mixed_tiers()
     mount -t bcachefs -o fsck $devs /mnt
     umount /mnt
 
+    # background_target=tri, so every stripe should carry the tri label
+    check_bcachefs_stripe_labels "${ktest_scratch_dev[@]}"
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+# The same labelling question as test_ec_mixed_tiers, but asked of copygc
+# rather than of reconcile.
+#
+# It has to be asked separately because the two form stripes by different
+# routes and only reconcile was ever getting it right: reconcile sets
+# data_opts->target from the extent's background_target, copygc left it at 0,
+# and a stripe created under target 0 gets disk_label 0 - no label, i.e. every
+# device in the filesystem, stamped into the stripe key for good. Reported by
+# i7920c0, whose unlabelled stripes kept widening back onto his flash tier.
+#
+# A short fio run doesn't reach this at all. test_ec_mixed_tiers finishes with
+# thousands of stripes and every one of them labelled, because none of them
+# came from copygc - so this churns the tri tier until copygc has real work,
+# and checks that it did some before believing the result.
+test_ec_copygc_labels()
+{
+    set_watchdog 1800
+
+    # Deliberately NOT filling the device, which is how the single-tier
+    # copygc tests generate fragmentation. copygc frees a bucket by moving
+    # what's still live in it somewhere else, so at ENOSPC it has nowhere to
+    # go and the run turns into a test of the allocator under pressure
+    # instead of a test of what copygc stamps on a stripe. Churn gives the
+    # same fragmentation with somewhere to move to.
+    #
+    # 256k buckets rather than the small ones copygc_torture uses: partial
+    # death is what puts a bucket on the fragmentation LRU, and a bucket only
+    # dies partially if it holds several extents.
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	--bucket_size=256k			\
+	--label dup				\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}			\
+	--label tri				\
+	${ktest_scratch_dev[2]}			\
+	${ktest_scratch_dev[3]}			\
+	${ktest_scratch_dev[4]}			\
+	--foreground_target=dup			\
+	--promote_target=dup			\
+	--background_target=tri
+
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
+    mount -t bcachefs $devs /mnt
+
+    # ~4G against a 12G tri tier: enough stripes to be worth checking, and
+    # room left over for copygc to evacuate into.
+    dd if=/dev/urandom of=/mnt/fiotest bs=16M count=256 oflag=direct
+    sync
+
+    # Now orphan it, repeatedly. Every rewritten extent lands on dup and gets
+    # reconciled down to tri as a new stripe block, while the copy it replaced
+    # dies where it already sat on tri - so tri buckets go part-live and onto
+    # the fragmentation LRU, which is exactly the state that has copygc
+    # forming stripes. Truncating as well keeps the file from being rewritten
+    # in place forever.
+    local i
+    for i in $(seq 0 $((($ktest_priority + 1) * 3))); do
+	run_fio_base				\
+	    --buffer_compress_percentage=50	\
+						\
+	    --name=randwrite			\
+	    --stonewall				\
+	    --rw=randwrite			\
+	    --bsrange=4k-128k			\
+	    --runtime=30			\
+	    --time_based
+
+	truncate --size=$(($(stat -c '%s' /mnt/fiotest) - 16777216)) /mnt/fiotest
+
+	# Per round, so that a run which ends at zero shows whether copygc
+	# never started or stalled partway - and no grep, because grep exits 1
+	# on no match and everything here is under set -e.
+	echo "round $i: evacuate_bucket $(awk '/since mount/ {print $3}' \
+		/sys/fs/bcachefs/*/counters/evacuate_bucket)"
+    done
+
+    sync
+    bcachefs fs usage -h /mnt
+
+    # The denominator. Zero unlabelled stripes means nothing if copygc never
+    # created one - which is exactly how this bug survived the existing EC
+    # tests - so establish that it moved something before reading the result.
+    #
+    # The counter is read via a path that has to be checked rather than
+    # assumed: an unexpanded glob makes awk print nothing, `local` swallows
+    # its exit status, and an empty $moved then reads as 0 in the arithmetic
+    # below - so "copygc did nothing" and "I couldn't measure copygc" would
+    # come out as the same failure with the same wrong message.
+    local counter=$(echo /sys/fs/bcachefs/*/counters/evacuate_bucket)
+    if [[ ! -r $counter ]]; then
+	echo "no evacuate_bucket counter at $counter - can't tell whether"
+	echo "copygc ran, so this run proves nothing either way."
+	false
+    fi
+
+    local moved=$(awk '/since mount/ {print $3}' "$counter")
+    if (( moved == 0 )); then
+	echo "copygc never evacuated a bucket - the fs didn't get fragmented,"
+	echo "so this run says nothing about the stripes copygc creates."
+	false
+    fi
+    echo "copygc evacuated $moved buckets"
+
+    umount /mnt
+
+    check_bcachefs_stripe_labels "${ktest_scratch_dev[@]}"
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+# EC + tiering + evacuate: does taking a device out of the background tier
+# produce stripes with no label?
+#
+# This is the case the field report was actually about, and it has a sharp
+# expected outcome because of the device counts. tri holds three devices and
+# redundancy is 1, so a stripe needs three failure domains. Evacuate one tri
+# device and only two are left:
+#
+#   asking for the tri label  -> insufficient devs, no stripe head, the write
+#                                falls back to replicas inside tri. Correct.
+#   asking for target 0       -> disk_label 0, whose device set is every rw
+#                                device in the filesystem - so a stripe CAN
+#                                form, by spanning tri AND the flash.
+#
+# The second is i7920c0's report almost verbatim ("label=none stripes widened
+# into the flash again"), which makes this a positive control rather than only
+# a regression test: it should go red on a kernel without the movers-set-target
+# fix and green with it.
+#
+# The labels are checked on both sides of the evacuate with the same
+# instrument. Without the before-check, an unlabelled stripe at the end has
+# two explanations - the evacuate made it, or the workload did - and no way to
+# tell them apart.
+test_ec_evacuate_tiered()
+{
+    set_watchdog 900
+
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	--label dup				\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}			\
+	--label tri				\
+	${ktest_scratch_dev[2]}			\
+	${ktest_scratch_dev[3]}			\
+	${ktest_scratch_dev[4]}			\
+	--foreground_target=dup			\
+	--promote_target=dup			\
+	--background_target=tri
+
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
+    mount -t bcachefs $devs /mnt
+
+    dd if=/dev/urandom of=/mnt/fiotest bs=16M count=128 oflag=direct
+    sync
+    bcachefs fs usage -h /mnt
+    umount /mnt
+
+    echo "=== before the evacuate: reconcile's stripes should all be labelled"
+    check_bcachefs_stripe_labels "${ktest_scratch_dev[@]}"
+
+    mount -t bcachefs $devs /mnt
+
+    echo "=== evacuating ${ktest_scratch_dev[2]}, a tri device"
+    bcachefs device evacuate ${ktest_scratch_dev[2]}
+
+    bcachefs fs usage -h /mnt
+    umount /mnt
+
+    echo "=== after the evacuate: anything unlabelled here came from it"
+    check_bcachefs_stripe_labels "${ktest_scratch_dev[@]}"
+
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }

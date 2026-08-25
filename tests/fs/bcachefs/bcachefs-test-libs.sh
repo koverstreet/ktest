@@ -297,6 +297,76 @@ check_bcachefs_leaks()
     done
 }
 
+# Every stripe on a filesystem with a background_target must carry a label
+# that RESOLVES - the property being checked is "is this stripe constrained to
+# a set of devices", not "is the label field non-zero".
+#
+# Both ways of failing that end at the same place, target_rw_devs():
+#
+#	struct bch_devs_mask devs = c->allocator.rw_devs[data_type];
+#	const struct bch_devs_mask *t = bch2_target_to_mask(c, target);
+#	if (t)
+#		bitmap_and(devs.d, devs.d, t->d, BCH_SB_MEMBERS_MAX);
+#	return devs;
+#
+# A NULL mask isn't an error there, it's "no filter" - so the stripe gets
+# every rw device in the filesystem, and can be allocated onto and later
+# widened onto anything. The two ways to get NULL print differently:
+#
+#   label=(none)		disk_label 0. bch2_disk_label_ec_devs() maps it
+#				to target 0 and bch2_target_to_mask() returns
+#				NULL for TARGET_NULL.
+#   label=invalid label N	disk_label N+1, but group N is deleted or past
+#				the end of the disk_groups table, so
+#				bch2_target_to_mask()'s TARGET_GROUP arm
+#				returns NULL too.
+#
+# Only the first is what copygc used to produce; the second is what a stripe
+# looks like after its label's disk group is removed. Checking only for
+# "(none)" passes the second silently, which is the whole failure mode being
+# tested for, just arrived at differently.
+#
+# Either way it is stamped into the stripe key, so it stays unconstrained for
+# the life of the stripe - there is no fixing it after the fact.
+#
+# Takes the devices of an unmounted filesystem.
+check_bcachefs_stripe_labels()
+{
+    local out
+    if ! out=$(bcachefs list -b stripes "$@" 2>&1); then
+	echo "check_bcachefs_stripe_labels: listing the stripes btree failed:"
+	echo "$out"
+	return 1
+    fi
+
+    # grep -c prints 0 and exits 1 when it matches nothing, and these run
+    # under set -e - so the healthy case (no unlabelled stripes) kills the
+    # test rather than passing it. Take the count and swallow the status.
+    local nr unresolved
+    nr=$(grep -c 'label=' <<< "$out")			|| nr=0
+    unresolved=$(grep -cE 'label=(\(none\)|invalid label)' <<< "$out") || unresolved=0
+
+    # A denominator, because the unresolved count is 0 both when every stripe
+    # is correctly labelled and when there are no stripes at all. Callers run
+    # an erasure_code workload first, so zero stripes means the workload
+    # didn't do what the test assumes - a failure of the test rather than a
+    # pass of the filesystem.
+    if [[ $nr = 0 ]]; then
+	echo "check_bcachefs_stripe_labels: no stripes found - nothing was checked"
+	return 1
+    fi
+
+    if [[ $unresolved != 0 ]]; then
+	echo "check_bcachefs_stripe_labels: $unresolved of $nr stripes have a label"
+	echo "  that doesn't resolve, so they're spread over every rw device rather"
+	echo "  than the background target:"
+	grep -E 'label=(\(none\)|invalid label)' <<< "$out" | head -20 || true
+	return 1
+    fi
+
+    echo "check_bcachefs_stripe_labels: $nr stripes, all labelled and resolving"
+}
+
 # Superblock error counters after a test mean something went wrong - except
 # when losing or corrupting data was the point. Tests that deliberately
 # trigger data errors declare the counters they expect as a regex
