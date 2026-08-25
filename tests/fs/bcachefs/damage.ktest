@@ -382,4 +382,62 @@ test_unknown_error_id()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# `damage ls` on a big directory, which is a btree path leak.
+#
+# Every other test here lists a directory with a handful of entries, so the
+# feature is covered but its scale never is - and the cost is per entry.
+# BCH_READDIR_damaged calls bch2_inode_has_damage() once per dirent, each
+# opening an iterator on the damage btree at SPOS(0, that inode, snapshot).
+# The iterator is cleaned up, but the PATH isn't: bch2_path_put() only frees
+# a ref-0 path when neither preserve nor should_be_locked is set, and
+# otherwise keeps it unless it can find a duplicate at the same position.
+# Every call is at a different inode, so there is never a duplicate, and the
+# only other reclaim is in bch2_trans_begin(), which this loop never reaches.
+#
+# So paths accumulate one per directory entry until BTREE_ITER_MAX (1024).
+# btree_paths_realloc() then returns index 0 rather than an error, and the
+# caller takes refs on path 0 until it hits U8_MAX - so the failure surfaces
+# 255 entries later as "path 0 refcount overflow", naming a path that had
+# nothing to do with it.
+#
+# No damage is injected: the lookup happens for every entry whether or not a
+# damage key exists, so an ordinary large directory is enough. Reported by
+# verat99 on a 7.1.9 kernel doing exactly this.
+test_damage_ls_large_dir()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # Control: the same command on a small directory, so a failure below is
+    # about the entry count and not about `damage ls` being broken outright.
+    mkdir /mnt/small
+    touch /mnt/small/f{1..10}
+    echo "=== damage ls on 10 entries"
+    bcachefs damage ls /mnt/small
+    echo "=== ok"
+
+    # 1024 paths to exhaust + 255 refs to overflow = ~1279 entries. 2000 for
+    # margin, and -R as well since it walks the same filter.
+    mkdir /mnt/big
+    touch /mnt/big/f{1..2000}
+
+    # -R FIRST, deliberately. The recursive mode iterates its filter's
+    # candidate set - the damage btree - rather than scanning dirents, so its
+    # cost is proportional to recorded damage rather than to directory size,
+    # and it may well survive where the dirent scan doesn't. Running it second
+    # would mean the non-recursive panic ate the answer.
+    echo "=== damage ls -R on $(ls /mnt/big | wc -l) entries"
+    bcachefs damage ls -R /mnt/big
+    echo "=== survived recursive"
+
+    echo "=== damage ls (non-recursive) on the same directory"
+    bcachefs damage ls /mnt/big
+    echo "=== survived non-recursive"
+
+    umount /mnt
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 main "$@"
