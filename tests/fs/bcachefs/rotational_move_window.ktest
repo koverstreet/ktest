@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+require-kernel-config BCACHEFS_FS=y
+
+config-mem 4G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+
+devs()
+{
+    join_by : "${ktest_scratch_dev[@]}"
+}
+
+dump_move_window_debug()
+{
+    bcachefs fs usage -h --all /mnt || true
+    bcachefs reconcile status /mnt || true
+    cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
+}
+
+src_has_user_data()
+{
+    awk '$1 == "user" { found = $2 > 0 } END { exit !found }' \
+	/sys/fs/bcachefs/*/dev-0/alloc_debug
+}
+
+# The mover reports its live counter and limit pairs as current/max.  Do not
+# turn this into a throughput assertion: the invariant is that no in-flight
+# counter exceeds the limit selected for this context.  The explicit dst
+# target makes this a background reconcile context, so a rotational target
+# must not report a window above min(global, 8 ios/1 MiB).
+check_rotational_reconcile_window()
+{
+    local snapshot=$1
+
+    awk '
+function pair(s, v) {
+    n = split(s, v, "/")
+    return n == 2 && v[1] ~ /^[0-9]+$/ && v[2] ~ /^[0-9]+$/
+}
+function bad_pair(kind, cur, max) {
+    printf "invalid %s window: %s/%s\n", kind, cur, max > "/dev/stderr"
+    bad = 1
+}
+function check_context() {
+    if (!reads || !writes) {
+        print "reconcile target dst context omitted a move window" > "/dev/stderr"
+        bad = 1
+        return
+    }
+    seen = 1
+    if (read_ios > read_ios_max)
+        bad_pair("read ios", read_ios, read_ios_max)
+    if (read_sectors > read_sectors_max)
+        bad_pair("read sectors", read_sectors, read_sectors_max)
+    if (write_ios > write_ios_max)
+        bad_pair("write ios", write_ios, write_ios_max)
+    if (write_sectors > write_sectors_max)
+        bad_pair("write sectors", write_sectors, write_sectors_max)
+
+    # The test sets global limits above these values. These are upper bounds,
+    # not floors: a lower global setting remains valid by design.
+    if (read_ios_max > 8 || write_ios_max > 8)
+        bad_pair("rotational ios maximum", read_ios_max, 8)
+    if (read_sectors_max > 2048 || write_sectors_max > 2048)
+        bad_pair("rotational sector maximum", read_sectors_max, 2048)
+}
+/^[^[:space:]]/ {
+    reads = writes = 0
+}
+$1 == "reads:" && $2 == "ios" && $4 == "sectors" {
+    if (!pair($3, p))
+        bad_pair("read ios", $3, "?")
+    else {
+        read_ios = p[1] + 0
+        read_ios_max = p[2] + 0
+    }
+    if (!pair($5, p))
+        bad_pair("read sectors", $5, "?")
+    else {
+        read_sectors = p[1] + 0
+        read_sectors_max = p[2] + 0
+    }
+    reads = 1
+}
+$1 == "writes:" && $2 == "ios" && $4 == "sectors" {
+    if (!pair($3, p))
+        bad_pair("write ios", $3, "?")
+    else {
+        write_ios = p[1] + 0
+        write_ios_max = p[2] + 0
+    }
+    if (!pair($5, p))
+        bad_pair("write sectors", $5, "?")
+    else {
+        write_sectors = p[1] + 0
+        write_sectors_max = p[2] + 0
+    }
+    writes = 1
+}
+$1 == "limit" && $2 == "source:" && $3 == "reconcile" &&
+    $4 == "target" && $5 == "dst" {
+    check_context()
+}
+END {
+    if (bad)
+        exit 1
+    exit seen ? 0 : 2
+}
+' "$snapshot"
+}
+
+observe_rotational_reconcile_window()
+{
+    local i snapshot status observed=0
+
+    for i in $(seq 1 1200); do
+        snapshot="$ktest_out/moving_ctxts.$i"
+        cat /sys/fs/bcachefs/*/internal/moving_ctxts > "$snapshot"
+
+        if check_rotational_reconcile_window "$snapshot"; then
+            observed=1
+        else
+            status=$?
+            if (( status == 1 )); then
+                echo "rotational reconcile window exceeded its reported limit"
+                cat "$snapshot"
+                return 1
+            fi
+        fi
+
+	if (( observed )) && ! src_has_user_data; then
+	    return 0
+	fi
+	if (( !observed )) && ! src_has_user_data; then
+	    echo "target reconcile completed without reporting rotational limits"
+	    dump_move_window_debug
+	    return 1
+	fi
+	sleep .1
+    done
+
+    echo "did not observe a rotational reconcile target move window"
+    dump_move_window_debug
+    return 1
+}
+
+test_rotational_target_move_window()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f			\
+	--data_checksum=none				\
+	--bucket_size=256k				\
+	--replicas=1					\
+	--foreground_target=src				\
+	--background_target=src				\
+	--metadata_target=dst				\
+	--rotational=1 --label=src "${ktest_scratch_dev[0]}" \
+	--rotational=1 --label=dst "${ktest_scratch_dev[1]}" \
+	--rotational=1 --label=dst "${ktest_scratch_dev[2]}"
+
+    mount -t bcachefs "$(devs)" /mnt
+
+    # Keep each written extent at or below the 1 MiB rotational window, so
+    # this test exercises concurrency accounting rather than an unavoidable
+    # single-extent oversize reservation.
+    dd if=/dev/zero of=/mnt/src-data bs=1M count=512 oflag=direct status=none
+    sync
+
+    if ! src_has_user_data; then
+	echo "test setup failed: source device has no user data"
+	dump_move_window_debug
+	return 1
+    fi
+
+    # Lift global limits above the rotational limits. The asserted maxima are
+    # intentionally upper bounds, because the kernel policy is min(global,
+    # rotational cap), not a promise to increase a lower global limit.
+    echo 64 > /sys/fs/bcachefs/*/options/move_ios_in_flight
+    echo 64M > /sys/fs/bcachefs/*/options/move_bytes_in_flight
+    echo dst > /sys/fs/bcachefs/*/options/background_target
+
+    observe_rotational_reconcile_window
+
+    # Completion is semantic: the target work is drained and source user data
+    # really moved, rather than merely observing a transient diagnostic line.
+    timeout 120 bcachefs reconcile wait --types target /mnt
+    if src_has_user_data; then
+	echo "source device still has user data after target reconcile"
+	dump_move_window_debug
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+main "$@"
