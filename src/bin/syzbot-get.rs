@@ -5,9 +5,9 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    #[arg(short, long)]
+    #[arg(long)]
     id: String,
-    #[arg(short, long)]
+    #[arg(long)]
     idx: Option<usize>,
     #[arg(short, long)]
     output: PathBuf,
