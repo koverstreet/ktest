@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-timeout $(stress_timeout)
+
+#
+# The journal scrub on a degraded filesystem.
+#
+# Separate from scrub-journal.ktest because it currently PANICS, and a panic
+# takes the VM down with every subtest that would have run after it. That is
+# how the single-device tests in that file sat green for weeks while asserting
+# nothing: the one subtest that would have gone red was timing out first.
+#
+# WHAT IT REPRODUCES (open as of 2026-08-27):
+#
+#   data read error at /fiotest offset 1048576 (internal move) : no_device_to_read_from
+#   Kernel panic: trans->restart_count 144, should be 143,
+#     last restarted by bch2_inum_offset_err_msg_trans
+#     bch2_trans_restart_error / bch2_scrub_journal
+#
+# bch2_read_err_msg_trans() (fs/data/read.c:449) takes the *caller's*
+# transaction and passes it to bch2_inum_offset_err_msg_trans(), which is a
+# lockrestart_do() - it restarts the caller's transaction in order to resolve
+# the inode number to a path for the message. The synchronous failure sites at
+# read.c:1479 and :1497 hand it the scrub's own ctxt.trans, so formatting the
+# error message restarts the transaction bch2_scrub_journal() is mid-loop on.
+#
+# It needs no_device_to_read_from, i.e. a genuinely absent device - a
+# single-device test takes the retry path instead, which is why nothing has hit
+# this. Same configuration a reporter with a dead drive is in.
+#
+# Once that is fixed this should fold back into scrub-journal.ktest.
+#
+
+#
+# See the long comment in scrub-journal.ktest: recovery messages only reach
+# dmesg when the mount has a terminal, so run it on a pty and read dmesg.
+#
+mount_capture()
+{
+    local ret
+
+    dmesg -C
+    script -qefc "mount $*" /dev/null < /dev/null && ret=0 || ret=$?
+
+    mount_output=$(dmesg)
+    return $ret
+}
+
+test_scrub_journal_degraded()
+{
+    ktest_expect_device_errors=1
+    set_watchdog 300
+
+    local dev0=${ktest_scratch_dev[0]}
+    local dev1=${ktest_scratch_dev[1]}
+
+    # Metadata mirrored, data not: the filesystem has to survive losing a
+    # device well enough to mount and run recovery, while the extents that
+    # landed on the missing one have nowhere else to be read from. With
+    # metadata at 1 replica too, the root inode goes down with the device and
+    # the mount fails with ENOENT_bkey_type_mismatch before the scrub is the
+    # interesting part.
+    run_quiet "" bcachefs format -f --errors=continue --no_initialize	\
+	--metadata_replicas=2 --data_replicas=1				\
+	"$dev0" "$dev1"
+    local fs_uuid=$(bcachefs show-super "$dev0" | \
+	sed -n 's/^External UUID:[[:space:]]*//p')
+
+    mount -t bcachefs "$dev0:$dev1" /mnt
+
+    run_fio_base			\
+	--filesize=50M			\
+	--name=randrw			\
+	--rw=randrw			\
+	--bsrange=4k-256k
+
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+    umount /mnt
+
+    scratch_dev_unplug 1
+
+    echo "Mounting degraded with scrub_recent_journal_entries=always..."
+    mount_capture -t bcachefs -o degraded=very,scrub_recent_journal_entries=always,verbose,fix_errors=yes \
+	UUID=$fs_uuid /mnt
+
+    if ! grep -q 'journal scrub: checking' <<< "$mount_output"; then
+	echo "ERROR: scrub did not run on the degraded mount"
+	exit 1
+    fi
+
+    # Reads against the absent device have to have been attempted, or the
+    # interesting path was never entered and everything below is vacuous.
+    if ! grep -qE 'no_device_to_read_from|device_offline|data read error' <<< "$mount_output"; then
+	echo "ERROR: no failed reads against the absent device - path not exercised"
+	exit 1
+    fi
+
+    umount /mnt
+    scratch_dev_plug 1
+
+    echo "Test passed: scrub survives a degraded mount"
+}
+
+main "$@"

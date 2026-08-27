@@ -104,6 +104,74 @@ test_scrub_journal_clean()
 }
 
 #
+# Leave an unclean filesystem behind on $1, with data in the journal.
+#
+unclean_shutdown_with_data()
+{
+    local dev=$1
+
+    run_quiet "" bcachefs format -f --errors=ro --no_initialize "$dev"
+    mount -t bcachefs "$dev" /mnt
+
+    run_fio_base			\
+	--filesize=50M			\
+	--name=randrw			\
+	--rw=randrw			\
+	--bsrange=4k-256k
+
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+    umount /mnt
+}
+
+#
+# The three values of scrub_recent_journal_entries do what their names say.
+#
+# unclean is 0 deliberately, so that it is the default and existing filesystems
+# get the scrub without being told to. Which makes 0 an *enabled* value - and
+# recovery.c:930 and journal/read.c:132 both used to test this option for
+# truthiness, so the default never scrubbed and "no" scrubbed on every unclean
+# mount. The one that matters is a user writing =no to turn the feature off and
+# getting it turned on.
+#
+# Asserted on an unclean filesystem, which is the case that distinguishes all
+# three. On a clean one, no and unclean agree.
+#
+test_scrub_journal_option_values()
+{
+    set_watchdog 300
+
+    local dev=${ktest_scratch_dev[0]}
+
+    unclean_shutdown_with_data "$dev"
+    mount_capture -t bcachefs -o scrub_recent_journal_entries=no,verbose "$dev" /mnt
+    umount /mnt
+    if grep -q 'journal scrub: checking' <<< "$mount_output"; then
+	echo "ERROR: =no scrubbed"
+	exit 1
+    fi
+
+    unclean_shutdown_with_data "$dev"
+    mount_capture -t bcachefs -o scrub_recent_journal_entries=unclean,verbose "$dev" /mnt
+    umount /mnt
+    if ! grep -q 'journal scrub: checking' <<< "$mount_output"; then
+	echo "ERROR: =unclean did not scrub an unclean filesystem"
+	exit 1
+    fi
+
+    unclean_shutdown_with_data "$dev"
+    mount_capture -t bcachefs -o scrub_recent_journal_entries=always,verbose "$dev" /mnt
+    umount /mnt
+    if ! grep -q 'journal scrub: checking' <<< "$mount_output"; then
+	echo "ERROR: =always did not scrub an unclean filesystem"
+	exit 1
+    fi
+
+    bcachefs fsck -ny "$dev"
+
+    echo "Test passed: no/unclean/always mean what they say"
+}
+
+#
 # Negative control for test_scrub_journal(): same unclean shutdown, same
 # =always mount, but nothing corrupted. The scrub must find nothing and must
 # not rewind.
