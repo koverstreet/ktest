@@ -4,6 +4,159 @@
 config-scratch-devs 4G
 config-timeout $(stress_timeout)
 
+#
+# Whether recovery messages reach dmesg depends on the mount having a terminal.
+#
+# RecoveryDisplay::new() (src/recovery_display.rs) picks its sink in order:
+# stderr if stderr is a terminal, else plymouth, else /dev/console opened
+# directly. Measured in a VM: with a terminal, the scrub's messages are in dmesg;
+# run from a plain non-interactive shell they are not - they go to the console,
+# which the ktest log shows and dmesg never sees.
+#
+# So the pty is load-bearing, not cosmetic. Without it every assertion below
+# reads an empty dmesg, which is silent for the absent-string ones and only
+# visible because test_scrub_journal asserts the same string positively.
+#
+# The pty's own output is not the place to look - it is the redrawing progress
+# display, about a screenful. dmesg is, so clear it first and read it after.
+#
+mount_capture()
+{
+    local ret
+
+    dmesg -C
+    script -qefc "mount $*" /dev/null < /dev/null && ret=0 || ret=$?
+
+    mount_output=$(dmesg)
+    return $ret
+}
+
+#
+# Mount with =always on a CLEANLY unmounted filesystem.
+#
+# This is the only thing that distinguishes always from unclean: it reads the
+# journal on a filesystem the superblock says is clean, which no other mount
+# path does. test_scrub_journal() below cannot reach it - it does an emergency
+# shutdown first, so c->sb.clean is false and both gates pass on the unclean
+# half of the ||. The default would take exactly the same path there.
+#
+# Regression test for ChH's report: journal_start.clean is only assigned once
+# bch2_journal_read() reaches a usable flush entry, so finding none left it
+# false from the initializer, and recovery reported "filesystem marked clean
+# but journal not empty" - the exact opposite of what happened - then went
+# emergency read-only at seq 0.
+#
+test_scrub_journal_clean()
+{
+    set_watchdog 120
+
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f --errors=ro "$dev"
+
+    mount -t bcachefs "$dev" /mnt
+    dd if=/dev/urandom of=/mnt/data bs=1M count=32 status=none
+    sync
+
+    # Clean unmount: superblock gets marked clean.
+    umount /mnt
+
+    if ! bcachefs show-super "$dev" | grep -qi 'clean.*1\|^ *clean'; then
+	echo "NOTE: could not confirm clean flag in show-super; continuing"
+    fi
+
+    echo "Mounting cleanly-unmounted fs with scrub_recent_journal_entries=always..."
+    if ! mount_capture -t bcachefs -o scrub_recent_journal_entries=always,verbose "$dev" /mnt; then
+	echo "ERROR: mount failed on a clean filesystem with =always"
+	exit 1
+    fi
+
+    # Every check here is a check for absence, so first establish that the scrub
+    # ran at all - on a clean fs it may legitimately find no flush entries to
+    # check, but it must have looked.
+    if ! grep -qE 'journal scrub: checking|scrub_journal.*No journal flushes' <<< "$mount_output"; then
+	echo "ERROR: scrub did not run - the checks below would be vacuous"
+	exit 1
+    fi
+
+    if grep -q 'marked clean but journal not empty' <<< "$mount_output"; then
+	echo "ERROR: spurious clean_but_journal_not_empty on a clean filesystem"
+	exit 1
+    fi
+
+    if grep -qi 'emergency read only' <<< "$mount_output"; then
+	echo "ERROR: went emergency read-only mounting a clean filesystem"
+	exit 1
+    fi
+
+    # Nothing was corrupted, so nothing should have rewound.
+    if grep -q 'not honoring flush/FUA' <<< "$mount_output"; then
+	echo "ERROR: rewound a clean, uncorrupted filesystem"
+	exit 1
+    fi
+
+    echo hello > /mnt/still-writable
+    umount /mnt
+
+    bcachefs fsck -ny "$dev"
+
+    echo "Test passed: clean fs mounts with =always, no spurious rewind"
+}
+
+#
+# Negative control for test_scrub_journal(): same unclean shutdown, same
+# =always mount, but nothing corrupted. The scrub must find nothing and must
+# not rewind.
+#
+# Without this, "the scrub always rewinds" and "the scrub always reports
+# flush/FUA errors" both pass the corruption test, because that test only
+# asserts the positive.
+#
+test_scrub_journal_no_corruption()
+{
+    set_watchdog 300
+
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f --errors=ro --no_initialize "$dev"
+
+    mount -t bcachefs "$dev" /mnt
+
+    run_fio_base			\
+	--filesize=50M			\
+	--name=randrw			\
+	--rw=randrw			\
+	--bsrange=4k-256k
+
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+    umount /mnt
+
+    echo "Mounting uncorrupted unclean fs with scrub_recent_journal_entries=always..."
+    mount_capture -t bcachefs -o scrub_recent_journal_entries=always,verbose "$dev" /mnt
+
+    # The scrub has to have actually run, or the two checks below pass for the
+    # wrong reason:
+    if ! grep -q 'journal scrub: checking' <<< "$mount_output"; then
+	echo "ERROR: scrub did not run - the checks below would be vacuous"
+	exit 1
+    fi
+
+    if grep -q 'not honoring flush/FUA' <<< "$mount_output"; then
+	echo "ERROR: scrub reported flush/FUA errors with nothing corrupted"
+	exit 1
+    fi
+
+    if grep -qi 'rewinding from seq' <<< "$mount_output"; then
+	echo "ERROR: scrub rewound with nothing corrupted"
+	exit 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "$dev"
+
+    echo "Test passed: no corruption, no rewind"
+}
+
 test_scrub_journal()
 {
     ktest_expect_device_errors=1
@@ -71,11 +224,16 @@ test_scrub_journal()
     # Mount with scrub_recent_journal_entries — should detect corruption
     # and automatically rewind
     echo "Mounting with scrub_recent_journal_entries=always..."
-    mount -t bcachefs -o scrub_recent_journal_entries=always,verbose "$dev" /mnt
+    mount_capture -t bcachefs -o scrub_recent_journal_entries=always,verbose "$dev" /mnt
 
     # Verify scrub detected the corruption
-    if ! (dmesg | grep -q 'not honoring flush/FUA'); then
+    if ! grep -q 'not honoring flush/FUA' <<< "$mount_output"; then
 	echo "ERROR: Scrub did not detect flush/FUA corruption"
+	exit 1
+    fi
+
+    if ! grep -q 'rewinding from seq' <<< "$mount_output"; then
+	echo "ERROR: Scrub detected corruption but did not rewind"
 	exit 1
     fi
 
