@@ -451,8 +451,21 @@ test_ec_gc()
 # full-stripe allocation fails (__stripe_alloc_or_reuse), i.e. when there is no
 # room left for a fresh stripe, and every other EC test in this file has space
 # to spare. test_ec_gc does get there, but by filling 4G a device for tens of
-# minutes; --fs_size reaches the same corner in a couple, at 128k buckets and
-# 2048 of them a device.
+# minutes; --fs_size reaches the same corner in half a minute.
+#
+# The churn has to actually starve the allocator, not merely leave the
+# filesystem full: reuse is what happens when the nowait full-stripe attempt at
+# BCH_WATERMARK_stripe can't get a bucket on every failure domain. A gentler
+# version of this loop - 512M a device, 64M freed and 32M written a round -
+# kept the filesystem at 90-odd percent and got zero reuses in ten rounds,
+# which is a green light for the allocator and a useless test.
+#
+# That is uncomfortably close to the corner where a small full EC filesystem
+# wedges on journal_full (see the ktest task); this geometry hits that maybe
+# one run in two. Fixing that properly means finding a way to fail the
+# full-stripe attempt without starving everything else - taking a device
+# read-only after the data is laid down looks like the answer, since a stripe
+# needs a distinct domain per block.
 #
 # Reuse happening is the whole point, so a run where the counter stays at zero
 # fails loudly rather than passing green - green would mean an empty path was
@@ -515,6 +528,66 @@ test_ec_stripe_reuse()
     fi
 
     sync
+
+    # "622 reuses and fsck is clean" only says the fold ran without erroring.
+    # What it can't see is whether the fold swapped in the RIGHT data: parity is
+    # generated at create over new_stripe.data[], and for a carried-forward
+    # block that buffer is whatever ec_old_stripe_fold() put there. Wrong data
+    # gives parity that doesn't describe the stripe, and parity is only ever
+    # consulted for a block that can't be read directly - which nothing here
+    # does.
+    #
+    # force_reconstruct_read makes every read of an ec extent take the
+    # reconstruct path instead (bch2_bkey_pick_read_device()), so the same bytes
+    # come back a second time through the parity the fold's data produced. No
+    # device has to be removed and no oracle has to be authored: the direct read
+    # is the oracle.
+    #
+    # It's a BCH_DEBUG_PARAMS_DEBUG() knob, so it only exists on a debug build.
+    # Without it this arm would compare two identical direct reads, so skip it
+    # and say so rather than pass green.
+    local frr=/sys/module/bcachefs/parameters/force_reconstruct_read
+    local retries=$(echo /sys/fs/bcachefs/*/counters/data_read_retry)
+    if [[ -w $frr ]]; then
+	local direct reconstructed before after
+	if ! direct=$(set -o pipefail
+		      dd if=/mnt/fiotest bs=1M count=64 iflag=direct status=none |
+		      md5sum); then
+	    echo "reading /mnt/fiotest failed before the reconstruct read even started"
+	    false
+	fi
+
+	before=$(awk '/since mount/ {print $3}' "$retries")
+	echo 1 > $frr
+	reconstructed=$(set -o pipefail
+			dd if=/mnt/fiotest bs=1M count=64 iflag=direct status=none |
+			md5sum) || reconstructed="READ FAILED"
+	echo 0 > $frr
+	after=$(awk '/since mount/ {print $3}' "$retries")
+
+	# Forced reconstruct is punted through bch2_rbio_retry(), which is what
+	# bumps data_read_retry. If it didn't move, no read took the reconstruct
+	# path - the flag didn't apply, or none of what we read was erasure
+	# coded - and the comparison below is between two identical direct reads.
+	if (( after == before )); then
+	    echo "force_reconstruct_read was set but data_read_retry didn't move:"
+	    echo "nothing was read through parity, so this arm proves nothing."
+	    false
+	fi
+
+	if [[ $direct != $reconstructed ]]; then
+	    echo "ERROR: reading through erasure coding parity does not return"
+	    echo "the data that is on disk:"
+	    echo "  direct:        $direct"
+	    echo "  reconstructed: $reconstructed"
+	    false
+	fi
+
+	echo "reconstruct read matches direct read, $((after - before)) reconstructs"
+    else
+	echo "no $frr - not a debug build, skipping the reconstruct-read check"
+    fi
+
     bcachefs fs usage -h /mnt
     bcachefs scrub /mnt
     umount /mnt
