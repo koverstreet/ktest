@@ -607,6 +607,154 @@ test_ec_bucket_mismatch()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# GH #1182 (rkjnsn): the allocator wedges once ec_stripe_buf_limit binds, and
+# stays wedged - drives idle, stripes on the in-flight list with no IO
+# outstanding, copygc and the writeback flusher parked in the allocator with
+# stripe_buf_mem_blocked.
+#
+# The cap can only be released by a stripe closing; a stripe closes when its
+# data blocks fill; filling them needs writes; and the cap blocks writes. So
+# waiting on it isn't a throttle, it's a cycle that can only be broken by the
+# thing it prevents. The one-deep floor in bch2_ec_stripe_buf_init() (the
+# `c->ec.stripe_buf_bytes &&` term, which always lets a stripe through from
+# zero) doesn't help once every open stripe is half-filled.
+#
+# Whether that cycle closes is arithmetic, not timing, which is why he hit it
+# and almost nobody else does. The budget is
+#
+#	cap / (bucket_size * nr_blocks * 2)
+#
+# stripes for the whole filesystem - 26 on his box (2 MiB buckets, 5+2, 16 GB
+# of RAM), and ~650 on a machine with smaller buckets and more memory. Here:
+# 4 GB * 1% = 40 MB against 2 MiB buckets and five blocks = 20 MB a stripe, so
+# two. That is the same corner reached in minutes rather than hours.
+#
+# The workload has to keep more than two stripes open at once, so it churns
+# rather than writing once: rewriting and truncating leaves stripes partially
+# empty, which puts them back on the LRU for reuse, and a reused stripe carries
+# an old buffer as well as a new one. That is the doubling in the divisor.
+#
+# Both outcomes need checking. A wedge is stripe_create standing still while
+# the buffer memory sits at the cap - stalling with the cap NOT pinned is some
+# other bug and shouldn't be reported as this one. And a run where the cap
+# never binds at all proves nothing whatsoever, so it fails loudly rather than
+# passing green.
+test_ec_stripe_buf_limit()
+{
+    set_watchdog 900
+
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	--bucket_size=2M			\
+	"${ktest_scratch_dev[@]}"
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
+
+    mount -t bcachefs -o ec_stripe_buf_limit=1 $devs /mnt
+
+    local new_stripes=$(echo /sys/fs/bcachefs/*/internal/new_stripes)
+    local creates=$(echo /sys/fs/bcachefs/*/counters/stripe_create)
+    if [[ ! -r $new_stripes || ! -r $creates ]]; then
+	echo "missing $new_stripes or $creates - can't tell a wedge from a"
+	echo "slow run, so this test can't say anything."
+	false
+    fi
+
+    dd if=/dev/urandom of=/mnt/fiotest bs=16M count=64 oflag=direct
+    sync
+
+    # The wedge lands mid-fio, so the round loop below never reaches its own
+    # sampling point once it hits - the first run of this test had to be poked
+    # at over ssh, and the evidence died with the VM. This watcher samples
+    # independently and captures the state to the log, which ktest copies out.
+    #
+    # It holds no fio child, so it can be reaped normally, and it exits on its
+    # own after dumping.
+    #
+    # The three files are one join: new_stripes gives each stripe's outstanding
+    # ref count and its bucket indices, open_buckets maps a bucket to its stripe
+    # (ec idx) and says whether it's on the partial list, and write_op gives the
+    # ops still holding buckets, with their age and error. That chain is what
+    # answers "why isn't this stripe completing" - which is otherwise only
+    # reachable by elimination.
+    local async=$(echo /sys/kernel/debug/bcachefs/*/async_objs/write_op)
+    (
+	while :; do
+	    local u=$(awk '/stripe buf memory/ {print $4}' "$new_stripes" 2>/dev/null)
+	    if [[ $u = */* ]] &&
+	       (( $(numfmt --from=iec ${u%/*}) * 100 >=
+		  $(numfmt --from=iec ${u#*/}) * 90 )); then
+		echo "=== stripe buf memory pinned at $u - capturing ==="
+		echo "--- new_stripes ---";	cat "$new_stripes"	2>&1 || true
+		echo "--- open_buckets ---";	cat /sys/fs/bcachefs/*/internal/open_buckets 2>&1 || true
+		echo "--- write_op ---";	cat "$async"		2>&1 || true
+		echo "=== end capture ==="
+		break
+	    fi
+	    sleep 5
+	done
+    ) &
+    local watcher=$!
+
+    # "pinned" is at-or-above the cap, not equal to it: the limit is only tested
+    # on entry and the second buffer of each pair is charged unconditionally, so
+    # the wedged value overshoots.
+    local pinned=0 stalled=0 prev=0 i
+    for i in $(seq 1 20); do
+	run_fio_base				\
+	    --name=randwrite			\
+	    --stonewall				\
+	    --rw=randwrite			\
+	    --bsrange=4k-128k			\
+	    --runtime=30			\
+	    --time_based || true
+
+	truncate --size=$(($(stat -c '%s' /mnt/fiotest) - 16777216)) /mnt/fiotest
+
+	local used=$(awk '/stripe buf memory/ {print $4}' "$new_stripes")
+	local now=$(awk '/since mount/ {print $3}' "$creates")
+
+	echo "round $i: stripe buf memory $used, stripe_create $now"
+
+	[[ $used = */* ]] || continue
+	if (( $(numfmt --from=iec ${used%/*}) * 100 >=
+	      $(numfmt --from=iec ${used#*/}) * 90 )); then
+	    pinned=1
+	    if (( now == prev )); then
+		stalled=$((stalled + 1))
+	    else
+		stalled=0
+	    fi
+	fi
+	prev=$now
+
+	(( stalled < 3 )) || break
+    done
+
+    kill $watcher 2>/dev/null || true
+    wait $watcher 2>/dev/null || true
+
+    if (( ! pinned )); then
+	echo "stripe buffer memory never reached the cap - the workload never"
+	echo "asked for more concurrent stripes than the limit allows, so this"
+	echo "run says nothing about what happens when it binds."
+	false
+    fi
+
+    if (( stalled >= 3 )); then
+	echo "WEDGED: stripe_create stopped advancing with buffer memory at the cap"
+	cat "$new_stripes"
+	false
+    fi
+
+    sync
+    bcachefs fs usage -h /mnt
+    umount /mnt
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_ec_crash_recovery()
 {
     [[ -f /sys/module/bcachefs/parameters/journal_replay_slowpath_ratio ]] || exit 0
