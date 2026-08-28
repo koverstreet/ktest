@@ -443,6 +443,86 @@ test_ec_gc()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# Stripe reuse, and with it ec_old_stripe_fold() - the continuation that folds
+# a reused stripe's carried-forward blocks into the new stripe's buffers so
+# parity at create covers them.
+#
+# Nothing else here reaches that path on purpose. Reuse only fires when a
+# full-stripe allocation fails (__stripe_alloc_or_reuse), i.e. when there is no
+# room left for a fresh stripe, and every other EC test in this file has space
+# to spare. test_ec_gc does get there, but by filling 4G a device for tens of
+# minutes; --fs_size reaches the same corner in a couple, at 128k buckets and
+# 2048 of them a device.
+#
+# Reuse happening is the whole point, so a run where the counter stays at zero
+# fails loudly rather than passing green - green would mean an empty path was
+# exercised successfully.
+test_ec_stripe_reuse()
+{
+    set_watchdog 600
+
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	--fs_size=256M				\
+	"${ktest_scratch_dev[@]}"
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
+
+    mount -t bcachefs $devs /mnt
+
+    # Read it once up front: a zero at the end has to mean "no reuse", not "the
+    # counter moved or changed format", and those are the same empty string to
+    # the awk below.
+    local reuses=$(echo /sys/fs/bcachefs/*/counters/stripe_reuse)
+    if [[ ! -r $reuses ]] ||
+       [[ ! $(awk '/since mount/ {print $3}' "$reuses") =~ ^[0-9]+$ ]]; then
+	echo "can't read a number out of $reuses - no way to tell whether a"
+	echo "stripe was ever reused, so this test can't say anything."
+	false
+    fi
+
+    fill_device /mnt/fiotest
+
+    # Overwrites on a full COW filesystem need free space, so each round hands
+    # some back first. Truncating is also what fragments the stripes: it frees
+    # blocks out from under them, which is what puts them on the fragmentation
+    # LRU that stripe_reuse() reads.
+    local i nr=0
+    for i in $(seq 1 10); do
+	truncate --size=$(($(stat -c '%s' /mnt/fiotest) - 33554432)) /mnt/fiotest
+
+	run_fio_base				\
+	    --name=randwrite			\
+	    --stonewall				\
+	    --rw=randwrite			\
+	    --bsrange=4k-128k			\
+	    --runtime=15			\
+	    --time_based || true
+
+	nr=$(awk '/since mount/ {print $3}' "$reuses")
+	echo "round $i: stripe_reuse $nr"
+
+	if (( nr )); then
+	    break
+	fi
+    done
+
+    if (( ! nr )); then
+	echo "no stripe was ever reused: the filesystem never got full enough"
+	echo "for a full-stripe allocation to fail, so ec_old_stripe_fold()"
+	echo "never ran and this run says nothing about it."
+	false
+    fi
+
+    sync
+    bcachefs fs usage -h /mnt
+    bcachefs scrub /mnt
+    umount /mnt
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 do_remove_test()
 {
     offline=$1
@@ -620,19 +700,23 @@ test_ec_bucket_mismatch()
 # zero) doesn't help once every open stripe is half-filled.
 #
 # Whether that cycle closes is arithmetic, not timing, which is why he hit it
-# and almost nobody else does. The budget is
+# and almost nobody else does. A stripe buffer costs bucket_size * nr_blocks -
+# parity included - charged against totalram * ec_stripe_buf_limit%, so the
+# budget is
 #
-#	cap / (bucket_size * nr_blocks * 2)
+#	cap / (bucket_size * nr_blocks)
 #
-# stripes for the whole filesystem - 26 on his box (2 MiB buckets, 5+2, 16 GB
-# of RAM), and ~650 on a machine with smaller buckets and more memory. Here:
-# 4 GB * 1% = 40 MB against 2 MiB buckets and five blocks = 20 MB a stripe, so
-# two. That is the same corner reached in minutes rather than hours.
+# stripes for the whole filesystem. His 2 MiB buckets and 5+2 stripes are 14
+# MiB apiece against 5% of 16 GB, so tens; smaller buckets and more memory give
+# hundreds. Here, measured: 10 MiB a stripe (2 MiB buckets, 4+1) against a
+# 38.9 MB cap, and the run wedges with three open and the fourth blocked. Same
+# corner, reached in minutes rather than hours.
 #
-# The workload has to keep more than two stripes open at once, so it churns
-# rather than writing once: rewriting and truncating leaves stripes partially
-# empty, which puts them back on the LRU for reuse, and a reused stripe carries
-# an old buffer as well as a new one. That is the doubling in the divisor.
+# The workload has to keep more than a couple of stripes open at once, so it
+# churns rather than writing once. Reused stripes cost double - they carry an
+# old buffer as well as a new one - but that is not what this test measures:
+# nothing here was reused when it wedged (no old_stripe.cl line on any of the
+# three), so the numbers above are the single-buffer floor.
 #
 # Both outcomes need checking. A wedge is stripe_create standing still while
 # the buffer memory sits at the cap - stalling with the cap NOT pinned is some
