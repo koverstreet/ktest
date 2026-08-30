@@ -1398,6 +1398,50 @@ test_generator_sets_the_mount_timeout()
     systemctl daemon-reload
 }
 
+# A bcachefs root is mounted by the initramfs's own systemd, so the generator
+# above has to be inside the initramfs too - installed on the real root is too
+# late. That was the bug: a root needing more than 90s to recover got killed.
+test_generator_is_in_the_initramfs()
+{
+    set_watchdog 120
+
+    local hook=/usr/share/initramfs-tools/hooks/bcachefs
+    if [[ ! -e $hook ]]; then
+	echo "no initramfs hook at $hook - mkinitramfs would build an image"
+	echo "with none of our files and the check below would find nothing"
+	exit 1
+    fi
+
+    local img=/root/initrd.test
+    mkinitramfs -o $img || exit 1
+
+    local contents=$(lsinitramfs $img)
+    if ! grep -q 'system-generators/bcachefs-mount-generator$' <<< "$contents"; then
+	echo "no generator in the initramfs. system-generators entries:"
+	grep system-generators <<< "$contents"
+	exit 1
+    fi
+
+    # The generator is a symlink to the bcachefs binary, which copy_exec places
+    # by its own canonicalised path - /sbin/bcachefs is written as usr/sbin -
+    # so being listed is not the same as resolving. Resolve it in the extracted
+    # image, which is only meaningful while the usrmerge symlinks are relative:
+    # an absolute one would escape to the host's /sbin and pass for free.
+    local d=$(mktemp -d)
+    unmkinitramfs $img $d
+    local gen=$(find $d -name bcachefs-mount-generator -print -quit)
+    local target=$(readlink $gen)
+
+    if [[ $(readlink $d/sbin) = /* ]] || [[ ! -e $d/$target ]]; then
+	echo "the generator points at $target, which the initramfs cannot reach:"
+	ls -ld $gen $d/sbin
+	grep 'bin/bcachefs$' <<< "$contents"
+	exit 1
+    fi
+
+    rm -rf $d $img
+}
+
 # The real one: fstab -> generator -> .mount unit -> mount.bcachefs.
 test_systemd_mount_shows_status()
 {
