@@ -1330,6 +1330,74 @@ test_progress_reaches_dmesg_when_nobody_draws()
     fi
 }
 
+# The generator on its own. A generator that never ran writes no drop-in; one
+# whose drop-in systemd ignores writes a good file and changes nothing - so
+# check the loaded unit, not just the file.
+test_generator_sets_the_mount_timeout()
+{
+    set_watchdog 120
+
+    local gen=/usr/lib/systemd/system-generators/bcachefs-mount-generator
+    [[ -e $gen ]] || gen=/lib/systemd/system-generators/bcachefs-mount-generator
+    if [[ ! -e $gen ]]; then
+	echo "no bcachefs-mount-generator installed - every check below would"
+	echo "pass by finding nothing where nothing was written"
+	exit 1
+    fi
+
+    bcachefs format -f --errors=panic ${ktest_scratch_dev[0]}
+    local fs_uuid=$(bcachefs show-super ${ktest_scratch_dev[0]} |
+		    sed -n 's/^External UUID:[[:space:]]*//p')
+    [[ -n $fs_uuid ]] || { echo "could not read the filesystem UUID back"; exit 1; }
+
+    # noauto: this is about what the unit is configured with, not mounting.
+    local saved=$(mktemp)
+    cp /etc/fstab $saved
+    mkdir -p $MNT
+    echo "UUID=$fs_uuid $MNT bcachefs noauto 0 0" >> /etc/fstab
+    systemctl daemon-reload
+
+    if ! grep -q 'TimeoutSec=infinity' $DROPIN 2>/dev/null; then
+	echo "no usable $DROPIN after daemon-reload:"
+	ls -R /run/systemd/generator/ 2>&1 | head -20
+	cat $DROPIN 2>/dev/null
+	exit 1
+    fi
+
+    # TimeoutUSec, not TimeoutStartUSec - that one is empty for mount units,
+    # which reads as "the drop-in was ignored" and isn't.
+    local t=$(systemctl show -p TimeoutUSec --value $UNIT)
+    if [[ $t != infinity ]]; then
+	echo "drop-in written but $UNIT has TimeoutUSec=$t"
+	systemctl show $UNIT | grep -i timeout
+	systemctl cat $UNIT --no-pager 2>&1 | head -30
+	exit 1
+    fi
+
+    # An entry that sets its own timeout is left alone: it is the only knob the
+    # user has, and infinity would take it away.
+    cp $saved /etc/fstab
+    echo "UUID=$fs_uuid $MNT bcachefs noauto,x-systemd.mount-timeout=90 0 0" >> /etc/fstab
+    rm -rf /run/systemd/generator/$UNIT.d
+    systemctl daemon-reload
+
+    if [[ -e $DROPIN ]]; then
+	echo "wrote $DROPIN for an entry that already set x-systemd.mount-timeout"
+	exit 1
+    fi
+
+    t=$(systemctl show -p TimeoutUSec --value $UNIT)
+    if [[ $t == infinity ]]; then
+	echo "fstab asked for 90s, unit says infinity"
+	systemctl cat $UNIT --no-pager 2>&1 | head -30
+	exit 1
+    fi
+
+    cp $saved /etc/fstab
+    rm -f $saved
+    systemctl daemon-reload
+}
+
 # The real one: fstab -> generator -> .mount unit -> mount.bcachefs.
 test_systemd_mount_shows_status()
 {
