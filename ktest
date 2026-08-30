@@ -43,7 +43,13 @@ cmd_run()
 	exit 1
     fi
 
-    ktest_test=$1
+    # The guest runs /host/$ktest_test, so a relative path resolves against
+    # the guest's root and isn't there. Resolving it here also means a bad
+    # path fails now instead of after a full VM boot.
+    if ! ktest_test=$(readlink -e "$1"); then
+	echo "ktest: no such test: $1"
+	exit 1
+    fi
     shift
     ktest_testargs="$@"
 
