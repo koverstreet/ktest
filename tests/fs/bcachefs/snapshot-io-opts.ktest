@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+#
+# Setting an io path option on a file has to reach the data, including data
+# written before the file was snapshotted.
+#
+# An extent is keyed at the snapshot it was written at, and its options come
+# from the inode version at the nearest ancestor of that snapshot. So a
+# background_compression set in a branch doesn't reach older data: the snapshot
+# preserved an inode version with the old options, and reconcile reads those.
+# Reported by nephyrin - reconcile refused to compress a snapshotted file, and
+# deleting the snapshot made it start working.
+#
+# Tests run simple to complicated: no snapshots, one snapshot, a chain, then
+# two writable branches that disagree.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+config-mem 4G
+
+reconcile_work_remaining()
+{
+    bcachefs fs usage -f rebalance_work /mnt | awk '
+	$1 ~ /^(replicas|checksum|erasure_code|compression|target|high_priority|stripes):$/ { sum += $2 + $3 }
+	END { print sum + 0 }'
+}
+
+# Kick reconcile until it has nothing left, or fail.
+reconcile_settle()
+{
+    for i in $(seq 1 60); do
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_wakeup
+	(( $(reconcile_work_remaining) == 0 )) && return 0
+	sleep 2
+    done
+
+    echo "reconcile did not settle; work remaining: $(reconcile_work_remaining)"
+    bcachefs reconcile status /mnt || true
+    return 1
+}
+
+# Extents are inspected offline, so the filesystem must be unmounted.
+compressed_extents()
+{
+    bcachefs list -b extents ${ktest_scratch_dev[0]} | grep -c "compress zstd" || true
+}
+
+uncompressed_extents()
+{
+    bcachefs list -b extents ${ktest_scratch_dev[0]} |
+	grep -c "compress none" || true
+}
+
+# Options that disagree with the extent they govern are an error unless a scan
+# cookie says a change is in flight - so a propagation that lands after the
+# cookie has gone produces this, with nothing left to rewrite the data.
+assert_no_opts_mismatch()
+{
+    if dmesg | grep -q "incorrect/missing reconcile opts"; then
+	echo "FAIL: extents disagree with their inode's options:"
+	dmesg | grep "incorrect/missing reconcile opts" | head -5
+	return 1
+    fi
+}
+
+# Compressible data, written with compression off so it lands uncompressed and
+# reconcile has something to do.
+setup_fs()
+{
+    run_quiet "" bcachefs format -f		\
+	--block_size=4k				\
+	--compression=none			\
+	--background_compression=none		\
+	${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+}
+
+write_data()
+{
+    dd if=/dev/zero of=$1 bs=1M count=16 conv=fsync 2>/dev/null
+}
+
+# The simplest case, and the control for every test below: with no snapshots at
+# all, setting the option must compress the data. If this fails the rest prove
+# nothing, because "no compressed extents" would be the harness, not the bug.
+test_no_snapshots()
+{
+    set_watchdog 300
+
+    setup_fs
+    write_data /mnt/file
+    sync
+
+    bcachefs set-file-option --background_compression=zstd /mnt/file
+    reconcile_settle || return 1
+    assert_no_opts_mismatch || return 1
+
+    umount /mnt
+
+    local n=$(compressed_extents)
+    if (( n == 0 )); then
+	echo "FAIL: no compressed extents after setting background_compression"
+	bcachefs list -b extents ${ktest_scratch_dev[0]} | head -5
+	return 1
+    fi
+    echo "compressed extents: $n"
+}
+
+# The reported bug: the data predates the snapshot, so it lives at the ancestor
+# and takes its options from the inode version preserved there.
+test_one_snapshot()
+{
+    set_watchdog 300
+
+    setup_fs
+    bcachefs subvolume create /mnt/sub
+    write_data /mnt/sub/file
+    sync
+
+    bcachefs subvolume snapshot /mnt/sub /mnt/snap
+
+    bcachefs set-file-option --background_compression=zstd /mnt/sub/file
+    reconcile_settle || return 1
+    assert_no_opts_mismatch || return 1
+
+    umount /mnt
+
+    local n=$(compressed_extents)
+    if (( n == 0 )); then
+	echo "FAIL: snapshotted file's data was not compressed"
+	bcachefs list -b extents ${ktest_scratch_dev[0]} | head -10
+	return 1
+    fi
+    echo "compressed extents: $n"
+}
+
+# A chain, so the option has to climb more than one level. Propagation that
+# stops after the first ancestor passes the test above and fails this one.
+test_nested_snapshots()
+{
+    set_watchdog 300
+
+    setup_fs
+    bcachefs subvolume create /mnt/sub
+    write_data /mnt/sub/file
+    sync
+
+    bcachefs subvolume snapshot /mnt/sub /mnt/snap1
+    bcachefs subvolume snapshot /mnt/sub /mnt/snap2
+    bcachefs subvolume snapshot /mnt/sub /mnt/snap3
+
+    bcachefs set-file-option --background_compression=zstd /mnt/sub/file
+    reconcile_settle || return 1
+    assert_no_opts_mismatch || return 1
+
+    umount /mnt
+
+    local n=$(compressed_extents)
+    if (( n == 0 )); then
+	echo "FAIL: data under a chain of snapshots was not compressed"
+	bcachefs list -b extents ${ktest_scratch_dev[0]} | head -10
+	return 1
+    fi
+    echo "compressed extents: $n"
+}
+
+# Two writable branches sharing the data, each asking for something different.
+#
+# This pins current behaviour rather than desired behaviour, and the two are
+# not known to be the same: propagation is first-come-first-served. The first
+# set-file-option runs when the other branch has no inode key yet, so nothing
+# claims the field and it propagates; the second is blocked by the value the
+# first left behind. So one branch's choice ends up governing the other's view
+# of the same bytes, decided by ordering.
+#
+# Blocking both would mean either taking the claim decision before propagating
+# (and having no way to know a claim is coming), or being able to withdraw a
+# propagation. Open - see the discussion around bch2_inode_opt_propagate().
+test_rw_siblings_disagree_first_wins()
+{
+    set_watchdog 300
+
+    setup_fs
+    bcachefs subvolume create /mnt/sub
+    write_data /mnt/sub/file
+    sync
+
+    bcachefs subvolume snapshot /mnt/sub /mnt/a
+    bcachefs subvolume snapshot /mnt/sub /mnt/b
+
+    bcachefs set-file-option --background_compression=zstd /mnt/a/file
+    bcachefs set-file-option --background_compression=lz4  /mnt/b/file
+    reconcile_settle || return 1
+    assert_no_opts_mismatch || return 1
+
+    umount /mnt
+
+    local zstd=$(compressed_extents)
+    local lz4=$(bcachefs list -b extents ${ktest_scratch_dev[0]} |
+		grep -c "compress lz4" || true)
+
+    # zstd went first. If this ever flips, the ordering rule changed.
+    if (( zstd == 0 || lz4 != 0 )); then
+	echo "FAIL: expected the first setter (zstd) to win, got zstd=$zstd lz4=$lz4"
+	bcachefs list -b extents ${ktest_scratch_dev[0]} | head -10
+	return 1
+    fi
+    echo "first setter won: zstd=$zstd lz4=$lz4"
+}
+
+# Same shape, but the branches set different options - which is not a conflict,
+# so both should reach the shared data.
+test_rw_siblings_different_options()
+{
+    set_watchdog 300
+
+    setup_fs
+    bcachefs subvolume create /mnt/sub
+    write_data /mnt/sub/file
+    sync
+
+    bcachefs subvolume snapshot /mnt/sub /mnt/a
+    bcachefs subvolume snapshot /mnt/sub /mnt/b
+
+    bcachefs set-file-option --background_compression=zstd /mnt/a/file
+    bcachefs set-file-option --data_replicas=1            /mnt/b/file
+    reconcile_settle || return 1
+    assert_no_opts_mismatch || return 1
+
+    umount /mnt
+
+    local n=$(compressed_extents)
+    if (( n == 0 )); then
+	echo "FAIL: compression blocked by a sibling that set a different option"
+	bcachefs list -b extents ${ktest_scratch_dev[0]} | head -10
+	return 1
+    fi
+    echo "compressed extents: $n"
+}
+
+main "$@"
