@@ -222,6 +222,7 @@ ktest_usage_cmds()
     echo "  kgdb                Connect to kgdb"
     echo "  mon                 Connect to qemu monitor"
     echo "  sysrq <key>         Send magic sysrq key via monitor"
+    echo "  screendump [file]   Capture the VM's screen (works headless)"
 }
 
 ktest_usage_post()
@@ -410,6 +411,29 @@ ktest_sysrq()
     echo sendkey alt-sysrq-$key | socat - "UNIX-CONNECT:$ktest_out/vm/mon"
 }
 
+# What is on the VM's screen, as an image, from here.
+#
+# qemu renders the display whether or not anyone is looking at it, so this works
+# on a headless run - which is what makes "does the boot splash look right" a
+# question with an answer, rather than one that needs a person in front of a gtk
+# window at the right moment. The monitor writes PPM; converted to PNG when
+# something here can, because very little else reads PPM.
+ktest_screendump()
+{
+    local out=${1:-$ktest_out/screen.png}
+    local ppm=${out%.png}.ppm
+
+    echo "screendump $ppm" | socat - "UNIX-CONNECT:$ktest_out/vm/mon" > /dev/null
+
+    if [[ $out != "$ppm" ]] && command -v ffmpeg > /dev/null; then
+	ffmpeg -y -loglevel error -i "$ppm" "$out" && rm -f "$ppm"
+    else
+	out=$ppm
+    fi
+
+    echo "$out"
+}
+
 save_env()
 {
     set |grep -v "^PATH=" > "$ktest_out/vm/env_tmp"
@@ -497,7 +521,25 @@ start_vm()
 
     kernelargs+=("${ktest_kernel_append[@]}")
 
-    local qemu_cmd=("$QEMU_BIN" -nodefaults -nographic)
+    # KTEST_GUI=1 to look at something a person is meant to look at - the
+    # plymouth splash. Ad-hoc, not a feature: the alternative is doing it by
+    # hand on a laptop with real reboots.
+    #
+    # The console does not ride -nographic here - it is the explicit virtconsole
+    # on stdio below - so this only turns the display on. -vga std rather than
+    # virtio-gpu because bochs-drm gives both a framebuffer and a real vt, which
+    # is what plymouth draws on.
+    local qemu_cmd=("$QEMU_BIN" -nodefaults)
+    if [[ -n ${KTEST_GUI:-} ]]; then
+	echo "KTEST_GUI set: qemu gets a display (-display gtk -vga std)"
+	qemu_cmd+=(-display gtk -vga std)
+    else
+	# Said out loud because forgetting the variable and the variable not
+	# working look identical from outside - both are "no window".
+	echo "KTEST_GUI unset: qemu is headless (-nographic)"
+	qemu_cmd+=(-nographic)
+    fi
+
     case $ktest_arch in
 	x86|x86_64)
 	    qemu_cmd+=(-cpu host -machine type=q35,accel=kvm,nvdimm=on)

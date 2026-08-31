@@ -25,6 +25,24 @@ config-scratch-devs 4G
 config-scratch-devs 4G
 config-scratch-devs 4G
 
+# For plymouth_shows_status, and file-scope because the kernel command line is
+# built once per file - which is also why this does not belong in a committed
+# mount.ktest: "splash" changes what the boot-time plymouth does for every test
+# here, and the console tests care about the console.
+#
+# splash: without it plymouth_should_show_default_splash() says no, which sets
+# SKIP_RENDERERS, which means plymouth never looks at a renderer and draws with
+# the text plugin on tty1 no matter what graphics hardware is present. DRM in
+# the kernel cannot change that; this word can.
+#
+# plymouth.debug=stream: is the only thing that routes the live trace to a file.
+# plymouthd's own --debug-file only says where the buffer is dumped when it
+# exits or crashes - and it *also* enables tracing, so passing it alone turns
+# the trace on and then sends it to default_tty, i.e. over the splash we are
+# trying to read. See plymouthd-diagnostics.c:100-115.
+require-kernel-append splash
+require-kernel-append plymouth.debug=stream:/run/plymouthd-trace.log
+
 # Did the filesystem at $1 come up a member short?
 #
 # `bcachefs fs usage` prints the State column as "offline" for a member it has
@@ -1228,7 +1246,9 @@ preflight()
     fi
     echo "mount helper: $(command -v mount.bcachefs || echo /sbin/mount.bcachefs)"
 
-    echo "show-status marker: $(ls /run/systemd/show-status 2>&1)"
+    # || not 2>&1: ls exits 1 when the marker is absent, and absent is the
+    # normal case here - reporting it must not be what ends the run.
+    echo "show-status marker: $(ls /run/systemd/show-status 2>/dev/null || echo absent)"
     echo "console loglevel:   $(cut -d'	' -f1 /proc/sys/kernel/printk)"
     echo "  (kernel messages above this level land on /dev/console and will"
     echo "   push a \\r-held status line down a row each time)"
@@ -1541,6 +1561,219 @@ test_systemd_mount_shows_status()
     fi
 
     systemctl stop $UNIT
+}
+
+# What is actually on tty1, as text.
+#
+# /dev/vcsa1 is the VT layer's own character buffer for tty1: a four byte header
+# - rows, columns, cursor x, cursor y - then one character and one attribute
+# byte per cell. The VT code maintains it whether or not anything is scanning it
+# out, so this reads the same with DRM, with vgacon, or headless with neither,
+# and "what does the person booting see" becomes a question with an answer in
+# the test log.
+#
+# Only for the text plugin. The graphical plugins put the VT in KD_GRAPHICS and
+# draw pixels; the character buffer then holds whatever was there before and
+# says nothing about the splash.
+screen_dump()
+{
+    echo "---------------------------- tty1 ----------------------------"
+    python3 -c '
+d = open("/dev/vcsa1", "rb").read()
+rows, cols, cx, cy = d[0], d[1], d[2], d[3]
+cells = d[4:]
+lines = ["".join(chr(cells[(r * cols + c) * 2]) for c in range(cols)).rstrip()
+         for r in range(rows)]
+while lines and not lines[-1]:
+    lines.pop()
+print("\n".join(lines) if lines else "(blank)")
+print("[%dx%d, cursor at %d,%d, %d non-blank lines]"
+      % (cols, rows, cx, cy, sum(1 for l in lines if l)))
+' || echo "(could not read /dev/vcsa1 - see the traceback above)"
+    echo "--------------------------------------------------------------"
+}
+
+# The same block, on the boot splash instead of the console.
+#
+# For the text plugin this is a real test: screen() above prints tty1 into the
+# log, so whether the last message replaced the previous one or piled on top of
+# it is visible here, headless, without a screenshot. For the graphical plugins
+# it is not - there the screen is pixels and there is no substitute for looking:
+#
+#     KTEST_GUI=1 ktest run -I tests/fs/bcachefs/mount.ktest plymouth_shows_status
+#
+# KTEST_GUI drops qemu's -nographic (see lib/libktest.sh); -I leaves the VM up
+# afterwards so the splash is still there to look at, and to try other things
+# against by hand.
+#
+# --ignore-serial-consoles is what makes this workable at all, and it took an
+# hour to find. plymouth reads console= off the kernel command line and attaches
+# to what it finds there as a terminal to draw on. ktest boots with
+# console=hvc0, so without the flag plymouthd holds *both* /dev/tty1 and
+# /dev/hvc0 - checked, in /proc/<pid>/fd - and the splash goes down ktest's own
+# console stream into the test log instead of onto the screen. Every plymouth
+# command returns 0 while nothing appears, which is as misleading as it sounds.
+#
+# MOUNTED FROM A UNIT, not from this shell, and that is not incidental.
+# RecoveryDisplay::new() picks its sink in this order:
+#
+#     if io::stderr().is_terminal()   -> Terminal
+#     else if plymouth::connect()     -> Plymouth
+#
+# so a mount run from here, where stderr is a tty, draws to the terminal and
+# leaves the splash blank however well plymouth is running. Going through
+# systemd puts stderr on the journal, which is both what makes Plymouth
+# reachable and what a real boot actually does.
+test_plymouth_shows_status()
+{
+    set_watchdog 480
+
+    local PLY_LOG=/run/plymouthd-trace.log
+
+    if ! command -v plymouthd > /dev/null; then
+	echo "plymouthd is not installed - the root image predates plymouth"
+	echo "being added to it, so there is nothing here to draw on."
+	exit 1
+    fi
+
+    # Which of the two cases this run is. qemu is started with -nodefaults, so
+    # without KTEST_GUI there is no display adapter at all - and that is the
+    # condition that actually matters, unlike the variable, which cannot reach
+    # us here (the host sets KTEST_GUI, and nothing in the tree reads the
+    # ktest.env file that would have carried it in).
+    if lspci | grep -qiE 'vga|display controller'; then
+	echo "display adapter present: expect a graphical plugin, and tty1 in"
+	echo "KD_GRAPHICS with nothing readable in its character buffer."
+    else
+	echo "headless: expect the text plugin on tty1, which screen() can read."
+    fi
+
+    # Without this there is no splash plugin at all, and the screen is grey.
+    #
+    # The image ships the themes but nothing selects one: plymouthd.conf has its
+    # Theme line commented out, and the distro default it falls back to names
+    # ceratopsian, which is not installed. Plymouth then opens the DRM renderer,
+    # creates a 1280x800 head, and adds only a *text* display - so DRM owns the
+    # console and nothing draws on it.
+    #
+    # spinner rather than bgrt: both are ModuleName=two-step, which is the
+    # plugin real machines use and the one whose message handling is in
+    # question, but bgrt wants a firmware logo that a VM does not have.
+    plymouth-set-default-theme spinner
+
+    format_with_data
+
+    plymouthd --ignore-serial-consoles --mode=boot --tty=/dev/tty1
+    plymouth show-splash
+
+    # plymouthd forks; --ping is the only thing that says it is up and
+    # answering rather than merely started. Without it a blank screen has two
+    # explanations and no way to tell them apart.
+    if ! plymouth --ping; then
+	echo "plymouthd did not come up - nothing would be drawn on, and a"
+	echo "blank splash below would say nothing about mount.bcachefs."
+	exit 1
+    fi
+    echo "plymouth is up"
+
+    # And is it drawing where we can see it? Every plymouth command returns 0
+    # whether the splash is on the VGA console or being written down ktest's
+    # own hvc0, so success proves nothing here - the open descriptors do.
+    local ply_pid=$(pgrep -x plymouthd | head -1)
+    if ls -l /proc/$ply_pid/fd 2>/dev/null | grep -q /dev/hvc0; then
+	echo "plymouthd has /dev/hvc0 open despite --ignore-serial-consoles:"
+	ls -l /proc/$ply_pid/fd | grep -E 'tty|hvc'
+	echo
+	echo "it is drawing into the test log rather than onto the screen, so"
+	echo "there would be nothing to look at. Not continuing."
+	exit 1
+    fi
+    echo "plymouth has the screen and not our console"
+
+    # The same question again, answered by plymouth rather than deduced from its
+    # descriptors. --debug makes ply_trace() live, and these are the lines that
+    # decide it:
+    #
+    #   "ignoring all consoles but default console"  the flag took
+    #   "console <dev> found!"                       it did not, and that is the
+    #                                                serial console it took
+    #   "adding text display for terminal <dev>"     text plugin, and where
+    #   "adding NxN text display"                    text plugin
+    #   "adding NxN pixel display"                   a graphical plugin
+    #
+    # Two witnesses rather than one because they fail differently: the
+    # descriptor check cannot tell a text display from a pixel one, and the
+    # trace is plymouth's account of its own intent rather than of the outcome.
+    echo "------------------ plymouth's own decisions ------------------"
+    grep -aE 'ignoring all consoles|console .* found!|adding .*(text|pixel) display' \
+	 $PLY_LOG || echo "(no device-selection traces in $PLY_LOG at all)"
+    echo "--------------------------------------------------------------"
+
+    plymouth display-message --text="waiting for the mount"
+    screen_dump
+
+    # The no-clear question on its own, before a mount complicates it.
+    # display-message is supposed to replace the message, not add one, and a
+    # short message after a tall one is the case that tells the two apart: if
+    # the tail of the tall one is still on the screen underneath the short one,
+    # the erase was sized to the message being drawn rather than to the one
+    # being replaced. Our recovery block is several lines, so that is exactly
+    # the shape it hits every time it redraws.
+    plymouth display-message --text="$(printf 'TALL line %d\n' 1 2 3 4 5)"
+    screen_dump
+    plymouth display-message --text="SHORT"
+    screen_dump
+
+    mkdir -p $MNT
+    echo "UUID=$fs_uuid $MNT bcachefs $MOUNT_OPTS 0 0" >> /etc/fstab
+    systemctl daemon-reload
+
+    preflight
+    set_delay $DELAY_MS
+
+    echo
+    echo "==================== watch the OTHER screen ===================="
+    echo "The qemu window, not this one. ${DELAY_MS}ms per progress update."
+    echo
+    echo "Expect our block to replace \"waiting for the mount\" and then"
+    echo "redraw in place as recovery runs: passes done, elapsed, the bar,"
+    echo "and the device line. What is being judged is whether that is"
+    echo "legible - wrapping, truncation, the theme restyling or clipping"
+    echo "it, updates too fast to read."
+    echo
+    echo "If the block appears HERE instead, the sink went to Terminal or"
+    echo "Console and the splash was never written to - that is the bug,"
+    echo "not the display."
+    echo "==============================================================="
+    echo
+
+    systemctl start $UNIT
+
+    if ! mountpoint -q $MNT; then
+	echo "the unit did not mount:"
+	systemctl status $UNIT --no-pager | head -20
+	exit 1
+    fi
+
+    # What the last frame of the mount left behind.
+    screen_dump
+
+    # The longest message we can ever put on the splash, so the last frame is
+    # the worst case rather than the comfortable one.
+    #
+    # 254 and not more: the length is one byte, and plymouth's *client* asserts
+    # on it rather than checking (ply-boot-client.c:464), so 300 here aborts the
+    # plymouth command and takes the test with it. That assert is also why
+    # src/plymouth.rs truncates before sending - mount.bcachefs cannot reach it.
+    # Whether the cut lands somewhere legible is the part only a person can say.
+    echo
+    echo "and now the longest message that can be sent at all:"
+    plymouth display-message --text="$(printf 'x%.0s' $(seq 254))"
+    screen_dump
+
+    echo
+    echo "leaving the splash up. plymouth quit --retain-splash to drop it,"
+    echo "or just look. The VM stays if you passed -I."
 }
 
 # ------------------------------------------------------------------ remote unlock

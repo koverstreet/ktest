@@ -101,6 +101,11 @@ PACKAGES+=(libkeyutils-dev liburcu-dev libudev-dev zlib1g-dev libattr1-dev syste
 PACKAGES+=(libaio-dev libzstd-dev liblz4-dev libfuse3-dev valgrind)
 PACKAGES+=(llvm libclang-dev libunwind-dev libelf-dev)
 
+# The boot splash, so that what mount.bcachefs draws on it can be looked at:
+# plymouth-label is not optional here, it is the plugin that renders text, and
+# text is the entire thing we want to see.
+PACKAGES+=(plymouth plymouth-themes plymouth-label)
+
 # quota tools:
 PACKAGES+=(libudev-dev libldap2-dev)
 

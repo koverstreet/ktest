@@ -402,3 +402,28 @@ require-kernel-config SECCOMP
 require-kernel-config SECCOMP_FILTER
 
 require-kernel-config RUST
+
+# A framebuffer, so plymouth loads a graphical splash plugin.
+#
+# Not for the graphics: it decides which plymouth *renders with*, and the two
+# render very differently. With no DRM and no fbdev, plymouth falls back to the
+# text plugin, whose message erase is one hardcoded line
+# (view_show_message: clear_line, one cursor position) - so mount.bcachefs's
+# multi-line status block scrolls forever instead of redrawing. The graphical
+# plugins put the message in a label that knows its own width and height and
+# redraw exactly that area, which is what the block was written for and what
+# anyone with a GPU actually boots.
+#
+# So without this, the only splash we can look at is the one almost nobody sees.
+#
+# DRM_BOCHS is qemu's stdvga, which is what KTEST_GUI asks for (-vga std in
+# lib/libktest.sh); DRM_VIRTIO_GPU so -device virtio-gpu also works if we
+# switch. The rest of the chain comes for free: DRM_BOCHS selects
+# DRM_CLIENT_SELECTION which DRM_FBDEV_EMULATION depends on, and
+# drivers/gpu/drm/Kconfig has `select FB_CORE if DRM_FBDEV_EMULATION`, which is
+# what lets FRAMEBUFFER_CONSOLE turn on.
+require-kernel-config DRM
+require-kernel-config DRM_BOCHS
+require-kernel-config DRM_VIRTIO_GPU
+require-kernel-config DRM_FBDEV_EMULATION
+require-kernel-config FRAMEBUFFER_CONSOLE
