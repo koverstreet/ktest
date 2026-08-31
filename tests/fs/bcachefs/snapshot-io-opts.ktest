@@ -378,6 +378,79 @@ test_fsck_propagates_after_snapshot_delete()
     echo "fsck propagated the survivor's option: lz4=$lz4"
 }
 
+# The logged op exists so a climb that has begun finishes across a crash, and
+# nothing exercised that: bch2_inode_opt_propagate() resumes the op inline, so
+# recovery had never actually run one.
+#
+# logged_op_fail_next stands in for the crash - the next cursor update for an op
+# of that type fails, and the op is left on disk at a cursor the real code
+# produced rather than one built by hand.
+test_logged_op_resume_inode_opts()
+{
+    set_watchdog 300
+
+    setup_fs
+    bcachefs subvolume create /mnt/sub
+    write_data /mnt/sub/file
+    sync
+    bcachefs subvolume snapshot /mnt/sub /mnt/snap
+
+    echo inode_opt_propagate > /sys/fs/bcachefs/*/internal/logged_op_fail_next
+
+    if bcachefs set-file-option --background_compression=zstd /mnt/sub/file; then
+	echo "FAIL: set-file-option succeeded - the injection didn't fire"
+	return 1
+    fi
+
+    # one shot: nothing to disarm, so it can't leak into the next test
+    local armed=$(cat /sys/fs/bcachefs/*/internal/logged_op_fail_next)
+    if [[ "$armed" != "(none)" ]]; then
+	echo "FAIL: knob still armed after firing: $armed"
+	return 1
+    fi
+
+    # The op is only in the in-memory journal until something flushes it;
+    # emergency read-only stops journal writes, so without this it never
+    # reaches disk and there is nothing for recovery to find.
+    sync
+
+    # An outstanding logged op on a cleanly unmounted filesystem is a state a
+    # real crash can't produce, and bcachefs says so (logged_op_but_clean). Go
+    # read-only without marking clean, which is also what makes the next mount
+    # replay the journal before resuming.
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+    umount /mnt
+
+    # Confirms the injection produced durable state at all - if the op never
+    # reached the journal, the mount below would resume nothing and the failure
+    # would look like a propagation bug rather than a harness one.
+    #
+    # The journal and not the btree: going read-only stops btree writes, so the
+    # op key is only ever a journal entry here and "bcachefs list" reports zero
+    # either way. Note this counts entries mentioning the type, so a run that
+    # also deleted the op counts higher, not lower - it's a floor, not proof
+    # the op survived. That is what the compression check at the end is for.
+    local ops=$(bcachefs list_journal ${ktest_scratch_dev[0]} |
+		grep -c logged_op_inode_opt_propagate || true)
+    echo "journal entries for the interrupted op: $ops"
+    if (( ops == 0 )); then
+	echo "FAIL: the injected failure left nothing on disk"
+	return 1
+    fi
+
+    # resume_logged_ops is PASS_ALWAYS, so a plain mount finishes the climb
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    reconcile_settle || return 1
+    umount /mnt
+
+    local n=$(compressed_extents)
+    if (( n == 0 )); then
+	echo "FAIL: the resumed op didn't finish the climb - data uncompressed"
+	return 1
+    fi
+    echo "recovery finished the interrupted climb: $n compressed extents"
+}
+
 # The master subvolume - the one in the tree that isn't itself a snapshot -
 # breaks the tie. Its set-file-option runs second here, so under the rule above
 # it would have been refused.
