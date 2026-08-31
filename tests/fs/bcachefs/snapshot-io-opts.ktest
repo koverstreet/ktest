@@ -545,4 +545,40 @@ test_rw_siblings_different_options()
     echo "compressed extents: $n"
 }
 
+# The third bch2_reinherit_attrs() caller, and the one that never propagates:
+# bch2_link_trans() uses it as a predicate and returns EXDEV before the
+# bch2_inode_write(), so a hard link can't change a file's options at all.
+test_link_across_different_options()
+{
+    set_watchdog 300
+
+    setup_fs
+    mkdir /mnt/plain /mnt/zstd
+    bcachefs set-file-option --background_compression=zstd /mnt/zstd
+    touch /mnt/plain/file
+
+    # Control: a link that inherits nothing new has to work, or the refusal
+    # below would just be "hard links are broken".
+    if ! ln /mnt/plain/file /mnt/plain/file2; then
+	echo "FAIL: link within one directory failed; the refusal proves nothing"
+	return 1
+    fi
+
+    # local masks the exit status, so a failing ln doesn't trip set -e; the
+    # message is the assertion, since any other errno would pass a bare check
+    local err=$(ln /mnt/plain/file /mnt/zstd/file 2>&1 >/dev/null)
+    if [[ -z "$err" ]]; then
+	echo "FAIL: link into a directory with different options was allowed"
+	bcachefs get-file-option --background_compression /mnt/zstd/file || true
+	return 1
+    fi
+    if [[ "$err" != *"Invalid cross-device link"* ]]; then
+	echo "FAIL: link refused, but not with EXDEV: $err"
+	return 1
+    fi
+
+    umount /mnt
+    echo "hard link across differing options refused"
+}
+
 main "$@"
