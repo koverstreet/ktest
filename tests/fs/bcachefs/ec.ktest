@@ -460,12 +460,19 @@ test_ec_gc()
 # kept the filesystem at 90-odd percent and got zero reuses in ten rounds,
 # which is a green light for the allocator and a useless test.
 #
-# That is uncomfortably close to the corner where a small full EC filesystem
-# wedges on journal_full (see the ktest task); this geometry hits that maybe
-# one run in two. Fixing that properly means finding a way to fail the
-# full-stripe attempt without starving everything else - taking a device
-# read-only after the data is laid down looks like the answer, since a stripe
-# needs a distinct domain per block.
+# And space starvation is the ONLY way in. The obvious alternative - take a
+# device read-only so a stripe can't get a block in every failure domain -
+# doesn't work: __bch2_ec_stripe_head_get() recomputes the width from the live
+# rw set on every call (it watches rw_devs_change_count), so losing a domain
+# just makes the next stripe narrower. The full-stripe attempt can fail for
+# want of space; it can't fail for want of domains.
+#
+# That puts this test in the same corner where a small full EC filesystem
+# wedges on journal_full (see the ktest task). Seen once, in one of three runs
+# of this test; a probe running the same workload four times as hard saw it
+# zero times in seven. So it's rare and not reproducible on demand - if this
+# test times out, check the log for "Journal stuck" before assuming the fold
+# broke.
 #
 # Reuse happening is the whole point, so a run where the counter stays at zero
 # fails loudly rather than passing green - green would mean an empty path was
