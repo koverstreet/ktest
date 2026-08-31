@@ -304,6 +304,80 @@ test_lower_replicas_on_snapshotted_file()
     echo "shared data dropped to one copy: $one extents"
 }
 
+# Propagation is an invariant, not just something done at set time: a conflict
+# blocks both branches, and then deleting one of them leaves the survivor's
+# value uncontested but never propagated. Nothing re-runs the climb on snapshot
+# deletion, so fsck is what notices.
+test_fsck_propagates_after_snapshot_delete()
+{
+    set_watchdog 300
+
+    setup_fs
+    bcachefs subvolume create /mnt/sub
+    write_data /mnt/sub/file
+    sync
+
+    bcachefs subvolume snapshot /mnt/sub /mnt/a
+    bcachefs subvolume snapshot /mnt/sub /mnt/b
+
+    # zstd is uncontested and reaches the ancestor; lz4 is then blocked by it
+    bcachefs set-file-option --background_compression=zstd /mnt/a/file
+    bcachefs set-file-option --background_compression=lz4  /mnt/b/file
+    reconcile_settle || return 1
+
+    local inum=$(stat -c %i /mnt/b/file)
+
+    bcachefs subvolume delete /mnt/a
+    sync
+    # synchronous, unlike the background deletion job
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_delete_dead_snapshots
+    umount /mnt
+
+    # Without this the fsck below would have nothing to find, and a passing
+    # test would mean the deletion hadn't happened rather than the check working
+    local versions=$(bcachefs list -b inodes ${ktest_scratch_dev[0]} |
+		     grep -c ":$inum:" || true)
+    echo "inode $inum versions after deleting the snapshot: $versions"
+    if (( versions != 2 )); then
+	echo "FAIL: expected 2 inode versions (ancestor + b), got $versions"
+	bcachefs list -b inodes ${ktest_scratch_dev[0]} | grep ":$inum:"
+	return 1
+    fi
+
+    # The repair is only reported because the fs carries the compat bit, set at
+    # first mount. Without it the same repair is silent - which is what an
+    # upgraded filesystem gets - so the grep below would prove nothing.
+    if ! bcachefs show-super ${ktest_scratch_dev[0]} |
+	 grep -q "^Compat features:.*inode_opts_propagated"; then
+	echo "FAIL: compat bit not set, so a silent repair is indistinguishable"
+	bcachefs show-super ${ktest_scratch_dev[0]} | grep -i "^Compat features:"
+	return 1
+    fi
+
+    local fsck_out=$(bcachefs fsck -y ${ktest_scratch_dev[0]} 2>&1 || true)
+    if ! grep -q "inode options not propagated" <<< "$fsck_out"; then
+	echo "FAIL: fsck did not report the un-propagated option"
+	echo "$fsck_out" | tail -20
+	return 1
+    fi
+
+    # and the repair has to actually reach the data
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    reconcile_settle || return 1
+    assert_no_opts_mismatch || return 1
+    umount /mnt
+
+    local zstd=$(compressed_extents)
+    local lz4=$(bcachefs list -b extents ${ktest_scratch_dev[0]} |
+		grep -c "compress lz4" || true)
+
+    if (( lz4 == 0 || zstd != 0 )); then
+	echo "FAIL: expected the surviving branch (lz4) to govern, got zstd=$zstd lz4=$lz4"
+	return 1
+    fi
+    echo "fsck propagated the survivor's option: lz4=$lz4"
+}
+
 # The master subvolume - the one in the tree that isn't itself a snapshot -
 # breaks the tie. Its set-file-option runs second here, so under the rule above
 # it would have been refused.
