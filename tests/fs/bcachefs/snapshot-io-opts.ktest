@@ -164,6 +164,37 @@ test_one_snapshot()
     echo "compressed extents: $n"
 }
 
+# Same bug, entered the way people actually hit it: the option is set on a
+# directory, and set-file-option then walks the children through
+# BCHFS_IOC_REINHERIT_ATTRS rather than setxattr. Two different inode writes,
+# and only the file's governs data.
+test_one_snapshot_set_on_dir()
+{
+    set_watchdog 300
+
+    setup_fs
+    bcachefs subvolume create /mnt/sub
+    mkdir /mnt/sub/dir
+    write_data /mnt/sub/dir/file
+    sync
+
+    bcachefs subvolume snapshot /mnt/sub /mnt/snap
+
+    bcachefs set-file-option --background_compression=zstd /mnt/sub/dir
+    reconcile_settle || return 1
+    assert_no_opts_mismatch || return 1
+
+    umount /mnt
+
+    local n=$(compressed_extents)
+    if (( n == 0 )); then
+	echo "FAIL: option inherited from the directory didn't reach the old data"
+	bcachefs list -b extents ${ktest_scratch_dev[0]} | head -10
+	return 1
+    fi
+    echo "compressed extents: $n"
+}
+
 # A chain, so the option has to climb more than one level. Propagation that
 # stops after the first ancestor passes the test above and fails this one.
 test_nested_snapshots()
