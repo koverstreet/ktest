@@ -27,7 +27,16 @@ _ktest()
 
     [[ ${COMP_WORDS[1]} = run ]] || return
 
-    ktest_dir=$(dirname "$(readlink -f "${COMP_WORDS[0]}")")
+    # How ktest was invoked tells us where its tests/ is - but only if we
+    # resolve it the way the shell did. readlink -f resolves a bare "ktest"
+    # against the cwd, not $PATH, so it happily returns $PWD/ktest for a
+    # command that actually lives elsewhere: tests_dir then points at some
+    # unrelated directory, or nowhere, and we silently complete nothing.
+    local self=${COMP_WORDS[0]}
+    [[ $self = */* ]] || self=$(type -P -- "$self")
+    [[ -n $self ]] || return
+
+    ktest_dir=$(dirname "$(readlink -f -- "$self")")
     tests_dir=$ktest_dir/tests
     [[ -d $tests_dir ]] || return
 
