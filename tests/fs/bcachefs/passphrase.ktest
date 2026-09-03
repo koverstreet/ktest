@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+#
+# The passphrase lifecycle on an existing filesystem: adding one, changing
+# one, and taking one off.
+#
+# Prompted by noradtux (IRC, 2026-09-03): formatted --encrypted
+# --no_passphrase, later tried to set a passphrase on the unmounted fs, got
+# an error he couldn't read. That path - encryption enabled with the master
+# key stored in the clear - is the one with no coverage anywhere, and it is
+# a different branch in open_and_verify() from the passphrase-protected
+# case: it reads the raw key out of the superblock instead of prompting.
+#
+# set-passphrase has no --passphrase_file, unlike format and unlock, so the
+# only way to drive it is stdin. ask_for_new_passphrase() falls back to
+# read_from_stdin() when stdin is not a terminal, and in that mode it takes
+# one line and does not ask for confirmation.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-mem	    4G
+config-scratch-devs 4G
+
+PASS_A="correct-horse-battery-staple"
+PASS_B="second-passphrase-entirely"
+
+dev() { echo "${ktest_scratch_dev[0]}"; }
+
+format_no_passphrase()
+{
+    run_quiet "" bcachefs format -f --encrypted --no_passphrase $(dev)
+}
+
+format_with_passphrase()
+{
+    echo "$1" > /run/pass-in
+    run_quiet "" bcachefs format -f --encrypted --passphrase_file=/run/pass-in $(dev)
+    rm -f /run/pass-in
+}
+
+# Does this passphrase actually open the filesystem? unlock is the check that
+# doesn't depend on set-passphrase having told the truth about itself.
+unlock_succeeds()
+{
+    echo "$1" > /run/pass-check
+    local rc=0
+    bcachefs unlock --file=/run/pass-check $(dev) > /run/unlock-out 2>&1 || rc=$?
+    rm -f /run/pass-check
+    return $rc
+}
+
+# --- noradtux's case ------------------------------------------------------
+
+test_set_passphrase_on_no_passphrase_fs()
+{
+    format_no_passphrase
+
+    if ! echo "$PASS_A" | bcachefs set-passphrase $(dev) > /run/set-out 2>&1; then
+	echo "set-passphrase failed on a --no_passphrase filesystem:"
+	cat /run/set-out
+	return 1
+    fi
+
+    if ! unlock_succeeds "$PASS_A"; then
+	echo "set-passphrase reported success but the passphrase does not unlock:"
+	cat /run/unlock-out
+	return 1
+    fi
+}
+
+test_no_passphrase_roundtrip()
+{
+    format_no_passphrase
+
+    echo "$PASS_A" | bcachefs set-passphrase $(dev) > /run/set-out 2>&1 || {
+	echo "set-passphrase failed:"; cat /run/set-out; return 1; }
+
+    if ! bcachefs remove-passphrase $(dev) > /run/rm-out 2>&1 < <(echo "$PASS_A"); then
+	echo "remove-passphrase failed after set-passphrase:"
+	cat /run/rm-out
+	return 1
+    fi
+
+    # Back to where we started: encrypted, key in the clear. unlock should now
+    # say so rather than prompt.
+    bcachefs unlock --check $(dev) > /run/check-out 2>&1
+    cat /run/check-out
+}
+
+# set-passphrase differs from the working unlock --file path in TWO ways, not
+# one: the reader (stdin vs file) and the superblock (Fs::open(nostart) vs
+# sb_io::read_super). unlock without --file reads stdin against a read_super
+# superblock, which holds the sb constant and varies only the reader.
+#
+# Passing here means the stdin reader is fine and the superblock source is
+# what differs. Failing means read_from_stdin() is the problem and it is
+# nothing to do with set-passphrase at all.
+test_unlock_from_stdin_isolates_the_reader()
+{
+    format_with_passphrase "$PASS_A"
+
+    if ! echo "$PASS_A" | bcachefs unlock $(dev) > /run/unlock-stdin 2>&1; then
+	echo "unlock from stdin rejected the correct passphrase:"
+	cat /run/unlock-stdin
+	echo "--- so the stdin READER is at fault, not the superblock source"
+	return 1
+    fi
+    echo "stdin reader is fine; set-passphrase differs by superblock source"
+}
+
+# Control for change_existing_passphrase: isolates the fixture from the command
+# under test. If this fails, --passphrase_file is not putting the passphrase we
+# think it is on the filesystem, and the other test's "incorrect passphrase" is
+# the setup rather than set-passphrase.
+test_format_with_passphrase_then_unlock()
+{
+    format_with_passphrase "$PASS_A"
+
+    if ! unlock_succeeds "$PASS_A"; then
+	echo "the passphrase given to format does not unlock the filesystem:"
+	cat /run/unlock-out
+	return 1
+    fi
+}
+
+test_change_existing_passphrase()
+{
+    format_with_passphrase "$PASS_A"
+
+    # FAILS with "incorrect passphrase" on the CURRENT passphrase, before any
+    # of the new-passphrase work. Three candidate causes are eliminated by the
+    # two tests above plus a probe:
+    #
+    #   fixture      - format_with_passphrase_then_unlock passes, so PASS_A
+    #                  really is this filesystem's passphrase.
+    #   stdin reader - unlock_from_stdin_isolates_the_reader passes, so
+    #                  read_from_stdin() + check() accept PASS_A.
+    #   a swallowed  - feeding 2, 3 and 6 lines all fail identically, and the
+    #   prompt         failure never moves to the new-passphrase check. So
+    #                  #255's spurious nostart prompt is not eating input.
+    #
+    # What is left: unlock passes its sb from sb_io::read_super(), while
+    # set-passphrase passes one from Fs::open(nostart).sb_handle(). Same
+    # check(), same passphrase, different superblock - and check() reads only
+    # crypt.key() and sb.nonce(), so one of those two differs between them.
+    if ! bcachefs set-passphrase $(dev) > /run/set-out 2>&1 \
+	    < <(printf '%s\n%s\n' "$PASS_A" "$PASS_B"); then
+	echo "set-passphrase failed changing an existing passphrase:"
+	cat /run/set-out
+	return 1
+    fi
+
+    if ! unlock_succeeds "$PASS_B"; then
+	echo "the new passphrase does not unlock:"
+	cat /run/unlock-out
+	return 1
+    fi
+
+    if unlock_succeeds "$PASS_A"; then
+	echo "the OLD passphrase still unlocks after set-passphrase"
+	return 1
+    fi
+}
+
+# --- error quality --------------------------------------------------------
+#
+# The complaint was that the error was unreadable, so the message itself is
+# the assertion here, not just the exit status.
+
+test_set_passphrase_on_unencrypted_fs_says_so()
+{
+    run_quiet "" bcachefs format -f $(dev)
+
+    if echo "$PASS_A" | bcachefs set-passphrase $(dev) > /run/set-out 2>&1; then
+	echo "set-passphrase succeeded on an unencrypted filesystem"
+	return 1
+    fi
+
+    cat /run/set-out
+    if ! grep -qi "encryption" /run/set-out; then
+	echo "error does not mention encryption - this is the unreadable case"
+	return 1
+    fi
+}
+
+main "$@"
