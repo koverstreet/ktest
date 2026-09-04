@@ -228,6 +228,36 @@ test_migrate_from_xfs()
     migrate_from_fs xfs
 }
 
+free_bytes()
+{
+    echo $(( $(stat -f -c '%a * %S' "$1") ))
+}
+
+# A migrate that can't get its reservation has to leave the source filesystem
+# alone: fallocate() keeps whatever it allocated before running out of space,
+# so a failed attempt that doesn't clean up eats the remaining free space.
+test_migrate_out_of_space()
+{
+    set_watchdog 60
+
+    run_quiet "" mkfs.ext4 -F ${ktest_scratch_dev[0]}
+    mount -t ext4 ${ktest_scratch_dev[0]} /mnt
+
+    # Leave less free than the tenth of the device migrate asks for:
+    fallocate -l $(( $(free_bytes /mnt) - (64 << 20) )) /mnt/filler
+
+    before=$(free_bytes /mnt)
+    ! bcachefs migrate -f /mnt
+    after=$(free_bytes /mnt)
+
+    echo "free space: $before before migrate, $after after"
+
+    [[ ! -e /mnt/bcachefs ]]
+    (( after >= before - (16 << 20) ))
+
+    umount /mnt
+}
+
 #require-kernel-config BTRFS_FS
 # requires FIEMAP improvements
 d_test_migrate_from_btrfs()
