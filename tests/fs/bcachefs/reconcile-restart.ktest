@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+#
+# Does the reconcile thread survive a read-only round trip?
+#
+# Field report (wak, #bcache 2026-08-04): root filesystem showed 12.1G of
+# compression work queued in `bcachefs reconcile status` and "Reconcile thread
+# not running", while a second filesystem on the same machine had a healthy idle
+# thread. Reconcile was noticing the work correctly; there was nobody left to do
+# it, so background_compression never made progress.
+#
+# The suspected mechanism is that the thread is stopped on the way to read-only
+# and not restarted on the way back:
+#
+#   bch2_fs_read_only()      fs/init/fs.c:401 -> bch2_reconcile_stop() at :426
+#   bch2_fs_init_rw()        fs/init/fs.c:843, starts it unconditionally at :863,
+#                            but early-returns at :845 on BCH_FS_rw_init_done,
+#                            which it sets itself at :865 - so it only ever runs
+#                            for the first read-write transition
+#   __bch2_fs_read_write()   fs/init/fs.c:538; at :610-612 journal reclaim, write
+#                            buffer and copygc all start unconditionally, but
+#                            :613 gates reconcile on !c->opts.read_only
+#   bch2_fs_reconfigure()    fs/vfs/fs.c:2849 calls bch2_fs_read_write(c), then
+#                            only assigns c->opts.read_only at :2858 - after
+#
+# so on a remount the gate reads a flag that is stale at exactly the moment it is
+# read. Note this does NOT affect the ordinary initramfs boot (mount ro, remount
+# rw): there BCH_FS_rw_init_done is not set yet, so the unconditional path runs.
+# It needs a read-write period FIRST, then read-only, then read-write.
+#
+# This test deliberately needs no scale - it is about thread lifetime, not about
+# how much work there is - so it runs on a small device and finishes fast.
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+
+# "The thread is running" and "we couldn't tell" are different answers, and the
+# obvious spelling conflates them:
+#
+#	! bcachefs reconcile status /mnt | grep -q "Reconcile thread not running"
+#
+# pipefail isn't set, so only grep's status counts. A status command that
+# segfaults, exits nonzero, or has its wording changed prints nothing grep can
+# match; the negation turns that into "running", and require_reconcile_thread
+# then reports OK. That is the worst outcome available: a green test asserting
+# the very thing it has lost the ability to observe - in a test whose entire
+# subject is whether that thread exists.
+#
+# So capture, check the command actually ran, and only then look at the text.
+# Not a pipeline: `cmd | grep` runs cmd in a subshell, where an exit wouldn't
+# leave the test - it would just feed grep nothing, which is the same bug again.
+reconcile_thread_running()
+{
+    local out rc=0
+
+    out=$(bcachefs reconcile status /mnt 2>&1) || rc=$?
+    if [[ $rc != 0 ]]; then
+	echo "FAILED: 'bcachefs reconcile status' exited $rc - cannot tell whether the reconcile thread is running"
+	echo "$out"
+	exit 1
+    fi
+
+    ! grep -q "Reconcile thread not running" <<<"$out"
+}
+
+require_reconcile_thread()
+{
+    local when=$1
+
+    if reconcile_thread_running; then
+	echo "OK: reconcile thread running $when"
+	return 0
+    fi
+
+    echo "FAILED: reconcile thread not running $when"
+    bcachefs reconcile status /mnt
+    return 1
+}
+
+test_reconcile_survives_ro_roundtrip()
+{
+    set_watchdog 120
+
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f		\
+	--compression=lz4			\
+	--background_compression=zstd:5		\
+	"$dev"
+
+    mount -t bcachefs "$dev" /mnt
+
+    # Baseline: the first read-write transition takes the unconditional path, so
+    # this is expected to pass even with the bug present. If THIS fails the test
+    # is telling you something else entirely.
+    require_reconcile_thread "on first mount"
+
+    # Give it something to want to do, so a surviving thread has a reason to be
+    # awake and a missing one has a visible consequence.
+    dd if=/dev/urandom of=/mnt/testfile bs=1M count=64 oflag=direct
+    sync
+
+    mount -o remount,ro /mnt
+    mount -o remount,rw /mnt
+
+    # The assertion. BCH_FS_rw_init_done is set by now, so the unconditional
+    # restart path early-returns and the gated one at fs.c:613 is all that's left.
+    require_reconcile_thread "after remount ro -> rw"
+
+    umount /mnt
+    bcachefs fsck -ny "$dev"
+    bcachefs_test_end_checks "$dev"
+}
+
+# Second way to lose the thread, found while auditing #1209 (HondaRulez: two
+# arrays stalled, "Reconcile thread not running", and at boot
+# "do_reconcile(): error EPERM").
+#
+# EPERM is 1. The scan loops break out with a bare 1:
+#
+#	(kthread_should_stop() || !bch2_reconcile_enabled(c)) ? 1 : ...
+#
+# which for_each_btree_key() returns, do_reconcile_scan()'s try() propagates,
+# and do_reconcile_phase_iter() has no case for - it converts transaction_restart
+# and need_copygc, then falls into "if (ret) break". do_reconcile() prints it via
+# bch_err_fn() as EPERM and returns it, and its caller is
+#
+#	while (!kthread_should_stop() && !do_reconcile(&ctxt))
+#
+# so nonzero ends the loop and the thread exits. Turning reconcile off while a
+# scan is running therefore kills it until the next mount - which is why the
+# reporter's sysfs trigger did nothing: there was no thread left to trigger.
+#
+# do_reconcile() already parks and resumes on !bch2_reconcile_enabled(); the
+# signal just never reached it.
+#
+# The oracle is thread existence, not progress: after re-enabling, the thread may
+# legitimately still be parked, but it must be ALIVE. That is exactly what both
+# field reports show missing.
+test_reconcile_survives_disable_during_scan()
+{
+    set_watchdog 180
+
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f		\
+	--compression=lz4			\
+	--background_compression=zstd:5		\
+	"$dev"
+
+    mount -t bcachefs "$dev" /mnt
+
+    require_reconcile_thread "on first mount"
+
+    # Enough data that a full-filesystem scan has keys to walk - the bail is
+    # checked per key, so the window only exists while a scan is in flight.
+    dd if=/dev/urandom of=/mnt/testfile bs=1M count=256 oflag=direct
+    sync
+
+    # Changing an fs-wide io option sets the fs scan cookie, which is what puts
+    # do_reconcile_scan_fs() on the run list.
+    echo zstd:9 > /sys/fs/bcachefs/*/options/background_compression
+
+    # Toggle repeatedly rather than once: we need the disable to land inside the
+    # scan loop, and we can't see from here where it is. Every write is a fresh
+    # chance to hit the window; with the bug, the first one that lands is fatal
+    # and the rest are harmless no-ops.
+    local i
+    for i in $(seq 1 20); do
+	echo 0 > /sys/fs/bcachefs/*/options/reconcile_enabled
+	echo 1 > /sys/fs/bcachefs/*/options/reconcile_enabled
+    done
+
+    # Leave it enabled, and give a surviving thread a moment to come back round.
+    echo 1 > /sys/fs/bcachefs/*/options/reconcile_enabled
+    sleep 2
+
+    # NOT require_reconcile_thread: measured 2026-09-04, that oracle cannot see
+    # this failure. bch2_reconcile_status_to_text() reports liveness from
+    # rcu_dereference(c->reconcile.thread), and that pointer is only cleared by
+    # bch2_reconcile_stop(). When the threadfn returns on its own - which is
+    # exactly what this bug does - nobody clears it, so the status happily
+    # describes a task that has exited. A pre-fix run printed the EPERM and then
+    # reported the thread running, and the subtest passed. That is the worst
+    # kind of green.
+    #
+    # (The stale pointer is its own bug. It also means a field report saying
+    # "Reconcile thread not running" came through bch2_reconcile_stop(), i.e. a
+    # different path from this one - so #1209's two symptoms may be two bugs.)
+    #
+    # So assert on what the user actually sees, which is also the thing that
+    # provably discriminates: the leaked flow-control value being formatted as
+    # an error by bch_err_fn().
+    local dmesg_out
+    dmesg_out=$(dmesg 2>&1 || true)
+    if grep -q "do_reconcile(): error" <<<"$dmesg_out"; then
+	echo "FAILED: do_reconcile() reported an error after toggling reconcile_enabled:"
+	grep "do_reconcile(): error" <<<"$dmesg_out"
+	echo "  a flow-control value leaked out of the scan loop and ended the reconcile thread"
+	return 1
+    fi
+    echo "OK: no do_reconcile() error after toggling reconcile_enabled during a scan"
+
+    umount /mnt
+    bcachefs fsck -ny "$dev"
+    bcachefs_test_end_checks "$dev"
+}
+
+main "$@"
