@@ -182,4 +182,50 @@ test_set_passphrase_on_unencrypted_fs_says_so()
     fi
 }
 
+# read_line()'s byte count was being discarded, so a zero-length read - end of
+# file - became an empty passphrase and failed the check. Piping nothing and
+# piping the wrong thing produced the same message, on the path automation
+# uses: a script whose upstream produced no output was told its passphrase was
+# wrong, which sends whoever reads the log somewhere else entirely.
+#
+# All three states are asserted, because the interesting property is that they
+# are DISTINGUISHABLE. The wrong-passphrase leg is not decoration: without it
+# this passes for the boring reason that nothing says "incorrect passphrase"
+# any more.
+test_empty_stdin_is_not_a_wrong_passphrase()
+{
+    format_with_passphrase "$PASS_A"
+
+    if printf '' | bcachefs unlock $(dev) > /run/eof-out 2>&1; then
+	echo "unlock succeeded with nothing on stdin"
+	return 1
+    fi
+    cat /run/eof-out
+
+    if grep -qi "incorrect passphrase" /run/eof-out; then
+	echo "end of file on stdin is reported as an incorrect passphrase"
+	return 1
+    fi
+    if ! grep -qi "end of file" /run/eof-out; then
+	echo "error does not say what happened"
+	return 1
+    fi
+
+    if printf 'definitely-not-it\n' | bcachefs unlock $(dev) > /run/wrong-out 2>&1; then
+	echo "unlock succeeded with a wrong passphrase"
+	return 1
+    fi
+    if ! grep -qi "incorrect passphrase" /run/wrong-out; then
+	echo "a genuinely wrong passphrase no longer says so:"
+	cat /run/wrong-out
+	return 1
+    fi
+
+    if ! printf '%s\n' "$PASS_A" | bcachefs unlock $(dev) > /run/ok-out 2>&1; then
+	echo "the correct passphrase does not unlock:"
+	cat /run/ok-out
+	return 1
+    fi
+}
+
 main "$@"
