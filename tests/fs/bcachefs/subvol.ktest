@@ -1304,4 +1304,109 @@ test_insert_range()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# fsck must CONVERGE - not merely find errors - after a batch snapshot whose
+# sources are then all deleted at once.
+#
+# From TiCPU's filesystem (#bcache, https://tiky.ca/p/obligable-kandra.md,
+# 2026-09-03). On 2026-08-20 he batch-snapshotted 549 podman layer subvolumes
+# and deleted all 549 sources; in his words that "left interior snapshot nodes
+# empty-but-referenced, and stacked hundreds of versions onto shared layer
+# extents". Two weeks later fsck stopped converging: seven consecutive runs
+# all ended "errors fixed" and never "clean", 204 inode numbers flagged in
+# every run, odd runs resembling odd and even resembling even - a 2-cycle.
+#
+# Suspected mechanism: an inode has ONE bi_dir, but several snapshot views
+# disagree about what it should point at. check_inodes clears it, correct for
+# the view whose dirent is gone; check_dirents then sees older live dirent
+# versions whose backpointer no longer matches and re-points it, correct for
+# THEIR views. Both repairs are right and they sum to zero.
+#
+# This is deliberately NOT subvol_snapshot_delete_repeat, which interleaves -
+# snapshot i, delete i, snapshot i+1 - so only one deletion is ever in flight.
+# Here every snapshot is taken first and only then is every source deleted,
+# which is what puts many pending deletions over shared extents at once.
+#
+# The oracle has to be repeated REPAIR. `fsck -n` cannot show this: a dry run
+# reports the same errors forever and never oscillates, because it never
+# writes. Only `fsck -y` in a loop can expose repairs that undo each other.
+#
+# MEASURED 2026-09-03, and it does NOT reproduce the field case at nr=48:
+# the emergency-read-only lands ("filesystem not clean", unclean shutdown at
+# journal seq 75), fsck finds 2 repair lines, and converges on pass 1. So this
+# shape and scale is not sufficient - the field filesystem had 549 subvolumes
+# and two weeks of further use between the batch operation and the livelock.
+# Kept because it asserts a property we want, on a setup verified to produce
+# repairable damage rather than nothing.
+test_subvol_batch_snapshot_delete_all_sources()
+{
+    set_watchdog 600
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    local nr=48 i pass
+
+    # A common ancestor, so the snapshot versions below stack on the SAME
+    # extents rather than on private copies. That sharing is what the field
+    # case had (podman layers) and is half the point of the setup.
+    bcachefs subvolume create /mnt/base
+    for i in $(seq 0 31); do
+	dd if=/dev/urandom of=/mnt/base/file-$i bs=64k count=1 2>/dev/null
+    done
+    mkdir /mnt/base/dir
+    echo shared > /mnt/base/dir/shared
+
+    for i in $(seq 1 $nr); do
+	bcachefs subvolume snapshot /mnt/base /mnt/src-$i
+	echo "layer-$i" > /mnt/src-$i/dir/layer
+    done
+
+    # Every snapshot first...
+    for i in $(seq 1 $nr); do
+	bcachefs subvolume snapshot /mnt/src-$i /mnt/snap-$i
+    done
+
+    # ...and only then every source. This ordering is the test.
+    for i in $(seq 1 $nr); do
+	bcachefs subvolume delete /mnt/src-$i
+    done
+
+    # A plain umount is NOT enough: measured 2026-09-03, the deletion worker
+    # drains all 48 and we get "clean shutdown complete", so the interrupted
+    # state the field case had is never created and the test passes vacuously.
+    # Cut the filesystem off underneath the sweep instead.
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+    umount /mnt
+
+    # Six passes is well past where a healthy filesystem is clean; a 2-cycle
+    # will still be going.
+    local found1=0
+    for pass in $(seq 1 6); do
+	bcachefs fsck -y ${ktest_scratch_dev[0]} > /run/fsck-$pass 2>&1 || true
+	[[ $pass = 1 ]] && found1=$(grep -ciE 'fixing|repair|error' /run/fsck-1 || true)
+
+	if bcachefs fsck -n ${ktest_scratch_dev[0]} > /run/fsck-check 2>&1; then
+	    echo "fsck converged after $pass repair pass(es); pass 1 had $found1 repair lines"
+	    # A converged run that had nothing to repair asserts nothing. Say so
+	    # rather than let a green tick stand in for coverage.
+	    [[ $found1 = 0 ]] && echo "NOTE: setup produced no repairable state - this run exercised nothing"
+	    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+	    return
+	fi
+    done
+
+    echo "TEST FAILED: fsck did not converge in 6 repair passes"
+    echo "--- per pass: a 2-cycle alternates, real progress descends ---"
+    # grep -c prints 0 and EXITS NONZERO when nothing matches, which under
+    # set -e would kill us in the one path where we need the diagnostics.
+    for pass in $(seq 1 6); do
+	printf 'pass %s: %s lines, %s of interest\n' "$pass" \
+	    "$(wc -l < /run/fsck-$pass)" \
+	    "$(grep -ciE 'inode_points_to_missing_dirent|inode_unreachable|backpointer' \
+		/run/fsck-$pass || true)"
+    done
+    echo "--- final dry run ---"
+    cat /run/fsck-check
+    return 1
+}
+
 main "$@"
