@@ -1462,6 +1462,100 @@ test_generator_is_in_the_initramfs()
     rm -rf $d $img
 }
 
+# Run the generator with the two inputs it reads for the initrd's root faked,
+# and say whether it wrote a drop-in for sysroot.mount. Neither /proc/cmdline
+# nor /etc/initrd-release is ours to edit on a running system, so both are bind
+# mounts in a private namespace, which also takes them away when it exits.
+#
+# /etc is replaced wholesale rather than added to, because a file that doesn't
+# exist can't be bind-mounted over. That leaves no /etc/fstab, which is exactly
+# what an initramfs has anyway.
+generator_wrote_sysroot_dropin() # $1 generator  $2 workdir  $3 cmdline  $4 initrd?
+{
+    rm -rf $2/out $2/etc; mkdir -p $2/out $2/etc
+    echo "$3" > $2/cmdline
+    [[ $4 = initrd ]] && : > $2/etc/initrd-release
+
+    # $1 must be the bcachefs-mount-generator symlink, not the binary: the
+    # generator arm is selected by argv[0], so the binary called directly reads
+    # the output directory as a subcommand and exits 1 having written nothing.
+    # That failure is invisible to the checks below - it makes every "should
+    # not write" case pass for the wrong reason - so insist on exit 0 here.
+    if ! unshare -m sh -c "
+	mount --bind $2/etc /etc
+	mount --bind $2/cmdline /proc/cmdline
+	$1 $2/out" >$2/log 2>&1
+    then
+	echo "the generator exited nonzero - every 'no drop-in' case below"
+	echo "would pass by finding nothing where nothing could be written:"
+	cat $2/log
+	exit 1
+    fi
+
+    [[ -e $2/out/sysroot.mount.d/10-bcachefs-timeout.conf ]]
+}
+
+# The initrd's root has no fstab line to hang a drop-in on: systemd-fstab-
+# generator synthesizes sysroot.mount from root=, rootfstype= and rootflags=,
+# and an initramfs ships an empty /etc/fstab - so the fstab walk reads a file,
+# finds nothing, and returns happily. The root then kept the 90s default, which
+# is the one mount where a long recovery actually stops the boot.
+#
+# Deliberately weaker than test_generator_sets_the_mount_timeout: that one
+# checks the loaded unit, which is the right standard, and this one can't -
+# there is no sysroot.mount on a booted system to load. So it checks the file
+# and, more to the point, the conditions under which it is and isn't written.
+test_generator_root_timeout_in_the_initrd()
+{
+    set_watchdog 120
+
+    local gen=/usr/lib/systemd/system-generators/bcachefs-mount-generator
+    [[ -e $gen ]] || gen=/lib/systemd/system-generators/bcachefs-mount-generator
+    if [[ ! -e $gen ]]; then
+	echo "no bcachefs-mount-generator installed - every check below would"
+	echo "pass by finding nothing where nothing was written"
+	exit 1
+    fi
+
+    local d=$(mktemp -d)
+    local fail=0
+
+    check() # $1 want(yes/no)  $2 cmdline  $3 initrd?  $4 why
+    {
+	local got=no
+	generator_wrote_sysroot_dropin $gen $d "$2" "$3" && got=yes
+	[[ $got = $1 ]] && return
+	echo "FAIL: expected $1, got $got - $4"
+	echo "      cmdline: $2"
+	echo "      context: $3"
+	fail=1
+    }
+
+    check yes "root=/dev/sda1 rootfstype=bcachefs rw" initrd \
+	  "an explicit bcachefs root is ours"
+
+    # No rootfstype= is the common case, and we take it: we are only in an
+    # initrd because somebody built us into one to boot bcachefs. See the
+    # commit - this arm is an inference, and it is the one to revisit if a
+    # non-bcachefs root ever turns up hanging instead of failing at 90s.
+    check yes "root=UUID=deadbeef rw" initrd \
+	  "no rootfstype= in an initrd is assumed to be ours"
+
+    check no  "root=/dev/sda1 rootfstype=ext4 rw" initrd \
+	  "rootfstype= naming another filesystem is not ours to touch"
+
+    # The only knob the user has; infinity would take it away.
+    check no  "rootfstype=bcachefs rootflags=x-systemd.mount-timeout=90" initrd \
+	  "rootflags= setting its own timeout wins"
+
+    # On a real root there is no sysroot.mount, and the fstab walk covers /.
+    check no  "root=/dev/sda1 rootfstype=bcachefs rw" real \
+	  "outside an initrd the cmdline root is not ours to touch"
+
+    rm -rf $d
+    [[ $fail = 0 ]] || exit 1
+}
+
 # The real one: fstab -> generator -> .mount unit -> mount.bcachefs.
 test_systemd_mount_shows_status()
 {
