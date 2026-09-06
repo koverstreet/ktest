@@ -29,6 +29,64 @@ test_data_read_basic()
     umount /mnt
 }
 
+# Asking for more than the file holds. Reported by ChH, who passed a --len
+# larger than his file to get "the whole file plus some" and got something that
+# wouldn't open.
+#
+# Every other subtest here reads --len 4096 from a 4096-byte file, so the read
+# is never short and this path has never been exercised.
+test_data_read_past_eof()
+{
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    dd if=/dev/urandom of=/mnt/testfile bs=4k count=1 oflag=direct
+
+    # 64K requested, 4K in the file. The output must be what was read, not the
+    # buffer we asked for - a tool for recovering damaged files must not invent
+    # zeros, because zeros are indistinguishable from recovered data.
+    bcachefs data-read /mnt/testfile --len 65536 --output /tmp/past_eof
+
+    local got=$(stat -c %s /tmp/past_eof)
+    if [[ $got != 4096 ]]; then
+	echo "ERROR: data-read wrote $got bytes for a 4096-byte file"
+	echo "       $((got - 4096)) bytes of that is zero padding it never read"
+	exit 1
+    fi
+
+    cmp /mnt/testfile /tmp/past_eof
+
+    umount /mnt
+}
+
+# More than one chunk. data-read issues the read in CHUNK-sized calls, so a
+# file bigger than that is the only thing that exercises the loop - the offset
+# arithmetic, the per-chunk error buffer, and the running total.
+test_data_read_multichunk()
+{
+    set_watchdog 120
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # 160M against a 64M chunk: three calls, the last one partial.
+    dd if=/dev/urandom of=/mnt/big bs=1M count=160 oflag=direct
+
+    bcachefs data-read /mnt/big --len $((160 * 1024 * 1024)) --output /tmp/big_out
+
+    local got=$(stat -c %s /tmp/big_out)
+    if [[ $got != $((160 * 1024 * 1024)) ]]; then
+	echo "ERROR: read back $got bytes of a $((160 * 1024 * 1024))-byte file"
+	exit 1
+    fi
+
+    cmp /mnt/big /tmp/big_out
+
+    umount /mnt
+}
+
 test_data_read_poison()
 {
     ktest_expect_device_errors=1
