@@ -1027,4 +1027,100 @@ test_ec_repair_stripe_ptr()
     check_bcachefs_counters ${ktest_scratch_dev[0]}
 }
 
+# Reported by ChH on IRC (2026-09-06): a stripe with one csum-bad block and
+# another on an offline device.
+#
+# Two failures against one parity block means reconstruct cannot run, and
+# bch2_ec_read_extent() only hands the wanted block back on success - so the
+# read fails outright. But that block *was* read; it only failed its checksum,
+# so the bytes exist, and --no-poison-check is the caller saying "give me
+# whatever is physically there". Returning EIO throws away the only copy left.
+#
+# The corruption has to be on disk, not read_corrupt_ratio: that injects in
+# __bch2_read_endio() on the rbio path, which sits above EC. The stripe buf
+# does its own IO and would read the block back clean, so reconstruct would
+# find nothing wrong with it and the case would never arise - which is exactly
+# what an earlier version of this test did, and it proved nothing.
+#
+# The assertion is that the read succeeds, not that the data matches: the
+# bytes are damaged by construction. Returning them faithfully is the product.
+test_ec_read_no_reconstruct_returns_raw()
+{
+    ktest_expect_device_errors=1
+    set_watchdog 300
+
+    # Explicit bucket size so bcachefs_first_stripe_blocks has a real one to
+    # convert block offsets with.
+    local bucket_kb=512
+
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	--bucket_size=${bucket_kb}k		\
+	"${ktest_scratch_dev[@]}"
+    local devs="$(join_by : "${ktest_scratch_dev[@]}")"
+
+    mount -t bcachefs "$devs" /mnt
+    dd if=/dev/urandom of=/mnt/victim bs=1M count=64 oflag=direct
+    sync
+    umount /mnt
+
+    # Geometry from the stripe itself - which devices hold which blocks, and
+    # how much redundancy there is - rather than assumed.
+    local info=$(bcachefs list -b stripes "${ktest_scratch_dev[@]}" |
+		 bcachefs_first_stripe_blocks $((bucket_kb * 2)))
+    echo "$info"
+
+    local nr_red=$(awk '/^meta/ {print $3}' <<<"$info")
+    if [[ -z $nr_red ]]; then
+	echo "ERROR: no stripe found - the data never got erasure coded, so"
+	echo "       the reconstruct path is never reached and this test"
+	echo "       would pass without testing anything"
+	exit 1
+    fi
+
+    # Block 0 gets corrupted on disk; block 1's device goes offline. That is
+    # nr_redundant + 1 failures for nr_redundant = 1.
+    local b0_dev=$(awk '/^block 0 /{print $3}' <<<"$info")
+    local b0_sector=$(awk '/^block 0 /{print $4}' <<<"$info")
+    local b1_dev=$(awk '/^block 1 /{print $3}' <<<"$info")
+
+    if [[ $nr_red != 1 ]]; then
+	echo "ERROR: expected 1 parity block, stripe has $nr_red - the"
+	echo "       one-corrupt-one-offline setup below assumes it"
+	exit 1
+    fi
+
+    echo "corrupting block 0 on device $b0_dev at sector $b0_sector"
+    echo "$b0_sector" | bcachefs_corrupt_sectors "${ktest_scratch_dev[$b0_dev]}"
+
+    mount -t bcachefs "$devs" /mnt
+
+    echo "offlining device $b1_dev (block 1)"
+    bcachefs device offline --force "${ktest_scratch_dev[$b1_dev]}"
+
+    # A normal read of the damaged region must fail: reconstruct can't run.
+    if dd if=/mnt/victim of=/dev/null bs=1M iflag=direct 2>/dev/null; then
+	echo "ERROR: read of an unreconstructable extent should have failed"
+	echo "       the corruption or the offline device didn't take"
+	exit 1
+    fi
+
+    # The assertion.
+    if ! bcachefs data-read /mnt/victim --len $((64 * 1024 * 1024))	\
+	    --no-poison-check --output /tmp/victim.salvaged; then
+	echo "ERROR: --no-poison-check read failed"
+	echo "       reconstruct couldn't run, but the block we wanted was"
+	echo "       read - it only failed its checksum, so the bytes exist"
+	exit 1
+    fi
+
+    local got=$(stat -c %s /tmp/victim.salvaged 2>/dev/null || echo 0)
+    if [[ $got != $((64 * 1024 * 1024)) ]]; then
+	echo "ERROR: read succeeded but wrote $got of $((64 * 1024 * 1024)) bytes"
+	exit 1
+    fi
+
+    umount /mnt
+}
 main "$@"
