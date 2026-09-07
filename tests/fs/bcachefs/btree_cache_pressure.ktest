@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+
+NO_BCACHEFS_DEBUG=1
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-git http://evilpiepirate.org/git/xfstests.git ../xfstests
+
+config-mem 2G
+config-cpus 8
+config-scratch-devs 8G
+config-timeout $(stress_timeout)
+
+btree_cache_internal_dir()
+{
+    local p
+
+    for p in /sys/fs/bcachefs/*/internal/btree_cache; do
+	if [[ -e "$p" ]]; then
+	    dirname "$p"
+	    return 0
+	fi
+    done
+
+    return 1
+}
+
+dump_btree_cache()
+{
+    local dir
+
+    dir=$(btree_cache_internal_dir) || return 0
+    cat "$dir/btree_cache" || true
+}
+
+check_btree_cache_pressure()
+{
+    local dir write_in_flight
+
+    dir=$(btree_cache_internal_dir) || {
+	echo "bcachefs btree_cache sysfs file not found"
+	return 1
+    }
+
+    echo 4096 > "$dir/trigger_btree_cache_shrink"
+    dump_btree_cache
+
+    write_in_flight=$(awk '$1 == "write_in_flight" { print $2; exit }' "$dir/btree_cache")
+    if [[ -z "$write_in_flight" ]]; then
+	echo "failed to read btree_cache write_in_flight counter"
+	return 1
+    fi
+
+    if (( write_in_flight > 250000 )); then
+	echo "btree_cache write_in_flight reclaim attempts runaway: $write_in_flight"
+	return 1
+    fi
+}
+
+test_btree_cache_reclaim_pressure()
+{
+    set_watchdog 600
+
+    run_quiet "building xfstests" make -j $ktest_cpus -C "$ktest_dir/tests/xfstests"
+
+    run_quiet "" bcachefs format -f		\
+	--btree_node_size=64k			\
+	${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    mkdir -p /mnt/fsstress
+
+    "$ktest_dir/tests/xfstests/ltp/fsstress" -d /mnt/fsstress -n 30000 -p 8
+
+    for i in $(seq 1 8); do
+	sync
+	echo 3 > /proc/sys/vm/drop_caches
+	check_btree_cache_pressure
+    done
+
+    "$ktest_dir/tests/xfstests/ltp/fsstress" -d /mnt/fsstress -n 10000 -p 8
+    sync
+    check_btree_cache_pressure
+
+    umount /mnt
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+main "$@"
