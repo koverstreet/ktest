@@ -848,6 +848,79 @@ run_test()
     fi
 }
 
+# Only reaches jobs still parented under $1 - a job whose intermediate shell has
+# exited was reparented away and is invisible here. Hence the fallback, not the
+# mechanism.
+kill_descendants()
+{
+    local p
+
+    for p in $(pgrep -P "$1" 2>/dev/null || true); do
+	kill_descendants "$p"
+	kill -TERM "$p" 2>/dev/null || true
+    done
+}
+
+# Run one subtest so that nothing it started outlives it.
+#
+# A subtest runs in a subshell, so what it backgrounds - the antagonists,
+# run_fio_randrw - is a child of THAT, not of the runner, and run_tests'
+# `pkill -P $$` never reached them. They accumulated: three concurrent
+# antagonist_sync loops by the sixth subtest of a single_device run. Later
+# subtests then ran under more background load than earlier ones, so timings
+# were confounded by position in the list.
+#
+# Reparenting erases the parent pointer, which is the only place "belongs to
+# this subtest" was recorded - so no walk of the process tree is reliable.
+# Cgroup membership is inherited at fork and survives the parent exiting, which
+# is the property we need. The runner never joins, so cgroup.kill can't reach
+# it. Needs v2 and >= 5.14; older kernels get the descendant walk, which covers
+# every background job currently in the tree.
+run_test_isolated()
+{
+    local name=$1
+    local cg=/sys/fs/cgroup/ktest.$$.$name
+    local ret=0
+
+    mkdir "$cg" 2>/dev/null || cg=""
+
+    # Which mechanism we got - the two are otherwise indistinguishable in the
+    # log, so a failed mkdir would read as working isolation.
+    if [[ -z ${ktest_isolation_reported:-} ]]; then
+	ktest_isolation_reported=1
+	if [[ -n $cg ]]; then
+	    echo "test isolation: cgroup"
+	else
+	    echo "test isolation: descendant kill (no cgroup v2) - jobs that"
+	    echo "outlive their parent shell will not be reaped"
+	fi
+    fi
+
+    # Both armed: the trap is free, and covers us if joining the cgroup failed.
+    (
+	set -e
+	if [[ -n $cg ]]; then
+	    echo $BASHPID > "$cg/cgroup.procs" 2>/dev/null || true
+	fi
+	trap 'kill_descendants $BASHPID' EXIT
+	run_test "$name"
+    )
+    ret=$?
+
+    if [[ -n $cg ]]; then
+	echo 1 > "$cg/cgroup.kill" 2>/dev/null || true
+
+	# cgroup.kill is asynchronous - rmdir gives EBUSY until it drains.
+	local i
+	for ((i = 0; i < 50; i++)); do
+	    rmdir "$cg" 2>/dev/null && break
+	    sleep 0.1
+	done
+    fi
+
+    return $ret
+}
+
 run_tests()
 {
     local tests_passed=()
@@ -869,7 +942,7 @@ run_tests()
 
 	local start=$(date '+%s')
 	local ret=0
-	(set -e; run_test $i)
+	run_test_isolated $i
 	ret=$?
 	local finish=$(date '+%s')
 
