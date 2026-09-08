@@ -1,0 +1,341 @@
+#!/usr/bin/env bash
+#
+# Full-width EC stripes: does copygc converge, and does stripe reuse engage?
+#
+# WHY THIS FILE EXISTS, since it looks like a duplicate of ec.ktest:
+#
+# Stripe width is derived from the device count, not set as an option.
+# fs/data/ec/create.c:2196:
+#
+#     active  = min(h->nr_active_devs, BCH_BKEY_PTRS_MAX);
+#     nr_data = min(active - h->redundancy, req->ec_max_data_blocks ?: ~0U);
+#     nr_data = min(nr_data, nr_domains - h->redundancy);
+#
+# Every existing EC test declares five scratch devices, so they all get a
+# narrow stripe. That is not merely less coverage - it cannot reach the bug
+# fixed by "ec: reuse a stripe before allocating out of space copygc wants",
+# whose argument is:
+#
+#     With nr_blocks == nr_devices a full-width stripe has nowhere else to go,
+#     so one device over its allowance is enough to switch to packing.
+#
+# The bug needs nr_blocks == nr_devices. Twelve devices with redundancy 2 gives
+# 10+2 = 12 blocks across 12 devices: full width, and the geometry the reporter
+# hit (GH #880, "a 12 device 10+2 array at 94% full").
+#
+# Devices are allocated per FILE, so widening ec.ktest would silently rewiden
+# test_ec_small, test_ec_mixed_tiers and test_ec_copygc_labels too. Hence a new
+# file.
+#
+# THE ORACLE IS DEVICE SPACE, NOT THE WEDGE. Measured 2026-09-08, 4 runs per
+# arm, 12 devices each - 96 observations, no variance within an arm:
+#
+#   fix present:  every device 87% full, holding 9.96-9.97G
+#   fix reverted: every device 94% full, holding 9.94-9.95G
+#
+# The same data, seven points more device space to hold it. The wedge the
+# reporter saw is what happens when a filesystem in that state is pushed the
+# rest of the way to full; the wasted space is the cause and is measurable long
+# before anything gets stuck, which makes it the better thing to assert on.
+#
+# This took three wrong oracles to find; they are documented at the assertion
+# below, because each was wrong in a way worth not repeating.
+#
+# WHY THE UNFIXED KERNEL WASTES THE SPACE. Reuse was only ever the fallback
+# after a full stripe allocation had already failed, and that attempt runs at
+# BCH_WATERMARK_stripe - so it did not engage until a device was down to its
+# last ~1/32nd. Above that line we keep cutting new full-width stripes while
+# copygc empties old ones; the half-empty stripes left behind are the seven
+# points. Push such a filesystem the rest of the way to full and allocation
+# blocks on copygc while copygc's own writes consume what it frees - the wedge
+# the reporter hit. Suggestively, his array was "12 device 10+2 at 94% full",
+# which is the number the unfixed kernel reaches here.
+#
+# So the filesystem must be full enough to make copygc want space, but NOT so
+# full that the old code reaches its watermark anyway - past that point reuse
+# engages for the wrong reason and both kernels look alike.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config BCACHEFS_ERASURE_CODING
+
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+
+NR_DEVS=12
+BUCKET_SIZE_SECTORS=512	# 256k
+
+ec_wide_counter()
+{
+    local f=$(echo /sys/fs/bcachefs/*/counters/$1)
+
+    # A missing counter and a counter reading zero are different answers and
+    # must not share one.
+    if [[ ! -r $f ]]; then
+	echo "no $1 counter at $f" >&2
+	echo "-1"
+	return
+    fi
+
+    awk '/since mount/ {print $3; found = 1} END {if (!found) print "-1"}' "$f"
+}
+
+# How full is the fullest device, as a percentage?
+#
+# This is the discriminator - see the oracle note at the assertion. The full
+# "fs usage" output is dumped to the log separately, so a run whose number
+# drifts can be read rather than guessed at.
+#
+# Reads the same output a user would. Use%'s denominator includes hidden
+# (superblock/journal), which does not matter here: both arms are measured the
+# same way on identically formatted devices.
+#
+# A device line looks like
+#   (no label) (device 0):   vdb     rw     1013M  847M   87%
+# so take the last %-suffixed field. Missing/unparseable reports -1 rather
+# than 0, because "no devices found" and "devices are empty" must not share an
+# answer.
+ec_wide_max_device_use_pct()
+{
+    bcachefs fs usage -h /mnt 2>/dev/null | awk '
+	/\(device [0-9]+\):/ {
+		for (i = NF; i >= 1; i--)
+			if ($i ~ /%$/) {
+				pct = $i
+				sub("%", "", pct)
+				if (pct + 0 > max)
+					max = pct + 0
+				n++
+				break
+			}
+	}
+	END { print (n ? max : -1) }'
+}
+
+# Assert the geometry we asked for is the geometry we got.
+#
+# Without this the test degrades silently into a narrow-stripe test the first
+# time a cap changes - and it would still PASS, which is the failure mode that
+# let this gap sit in the tree for years. Run with the fs unmounted.
+ec_wide_assert_geometry()
+{
+    local want_data=$1 want_red=$2
+
+    local blocks=$(bcachefs list -b stripes "${ktest_scratch_dev[@]}" |
+	bcachefs_first_stripe_blocks $BUCKET_SIZE_SECTORS)
+
+    local meta=$(echo "$blocks" | awk '$1 == "meta" {print $2, $3}')
+    if [[ -z $meta ]]; then
+	echo "ERROR: no stripe found on the scratch devices - the workload"
+	echo "did not create one, so this run says nothing about width."
+	return 1
+    fi
+
+    local got_data=$(echo "$meta" | awk '{print $1}')
+    local got_red=$(echo "$meta" | awk '{print $2}')
+
+    echo "stripe geometry: ${got_data}+${got_red} (wanted ${want_data}+${want_red})"
+    if (( got_data != want_data || got_red != want_red )); then
+	echo "ERROR: wrong stripe geometry - this is no longer a full-width"
+	echo "stripe (nr_blocks == nr_devices), which is what the bug needs."
+	return 1
+    fi
+}
+
+test_ec_wide_stripe_reuse()
+{
+    set_watchdog 1800
+
+    # No --ec_max_data_blocks: we want the width the device count gives us.
+    # data_replicas=3 => redundancy 2 => 10+2 across 12 devices.
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--data_replicas=3			\
+	--bucket_size=256k			\
+	"${ktest_scratch_dev[@]}"
+
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
+    mount -t bcachefs $devs /mnt
+
+    # Fill toward full. 12x1G raw, 10/12 usable under 10+2, so ~10G of data
+    # fills it. Write in chunks so we can stop at a target rather than ENOSPC:
+    # at ENOSPC copygc has nowhere to move and the run becomes a test of the
+    # allocator under pressure, which is a different test.
+    local i used_pct=0
+    for i in $(seq 1 200); do
+	dd if=/dev/urandom of=/mnt/fill.$i bs=1M count=64 oflag=direct \
+	    status=none 2>/dev/null || break
+	used_pct=$(df --output=pcent /mnt | tail -1 | tr -dc '0-9')
+	((used_pct >= 90)) && break
+    done
+    sync
+    echo "filled to ${used_pct}%"
+
+    if ((used_pct < 80)); then
+	echo "ERROR: only reached ${used_pct}% - copygc will not run below its"
+	echo "20%-free early return, so this run cannot say anything."
+	return 1
+    fi
+
+    # Wait for stripes rather than assuming they exist.
+    local created=0
+    for i in $(seq 1 60); do
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_wakeup || true
+	created=$(ec_wide_counter stripe_create)
+	((created > 0)) && break
+	sleep 1
+    done
+    if ((created <= 0)); then
+	echo "ERROR: no stripes created - nothing here tests EC."
+	return 1
+    fi
+    echo "stripes created: $created"
+
+    # Fragment, then refill, and repeat. Both halves matter and they pull in
+    # opposite directions, which is the whole difficulty:
+    #
+    #  - the holes must leave buckets PART live. A bucket only reaches the
+    #    fragmentation LRU if it dies partially; deleting whole files frees
+    #    whole buckets, which is clean and gives copygc nothing to do. (The
+    #    first version of this test deleted files and got evacuate_bucket == 0.)
+    #    On an EC filesystem these holes are empty stripe blocks, which is the
+    #    reporter's state exactly.
+    #
+    #  - but punching also frees space, and copygc returns early while more
+    #    than 20% of a device is free. So refill after each punch, or we
+    #    fragment our way back under the trigger and nothing runs.
+    #
+    # ⚠ THE PUNCH GEOMETRY IS DELIBERATELY MILD. Do not "improve" it.
+    #
+    # 256k punched at a 1M stride, with 256k buckets, frees WHOLE buckets - a
+    # clean free that leaves little fragmented. That looks like a mistake, and I
+    # "fixed" it once by punching 64k out of every 256k bucket so every bucket
+    # ended up 75% live. Measured result of that fix (2026-09-08): it wedges the
+    # FIXED kernel too - 1800s timeout, three allocator-stuck reports, identical
+    # to what the unfixed kernel does here. A workload that fails the good
+    # kernel is worthless as a regression test.
+    #
+    # The reason the mild version is right: what this test needs is not heavy
+    # fragmentation, it is a NEARLY FULL filesystem still being asked to
+    # allocate FULL-WIDTH stripes. That is the #880 precondition - "with
+    # nr_blocks == nr_devices a full-width stripe has nowhere else to go". The
+    # aggressive punch just drives everything into ENOSPC, where every kernel
+    # stalls and nothing is learned.
+    #
+    # (The heavy version was only ever introduced to satisfy an evacuate_bucket
+    # denominator that has since been deleted as wrong - see the oracle note
+    # below. It was solving a problem this test no longer has.)
+    local f off round
+    local punch=$((256*1024)) stride=$((1024*1024))
+    for round in 1 2; do
+	for f in /mnt/fill.*; do
+	    for ((off = 0; off < 64*1024*1024; off += stride)); do
+		fallocate -p -o $off -l $punch "$f" 2>/dev/null || true
+	    done
+	done
+	sync
+
+	for i in $(seq $((round * 300)) $((round * 300 + 200))); do
+	    dd if=/dev/urandom of=/mnt/refill.$i bs=1M count=32 oflag=direct \
+		status=none 2>/dev/null || break
+	    used_pct=$(df --output=pcent /mnt | tail -1 | tr -dc '0-9')
+	    ((used_pct >= 92)) && break
+	done
+	sync
+	echo "round $round: ${used_pct}% used, evacuate_bucket $(ec_wide_counter evacuate_bucket), stripe_reuse $(ec_wide_counter stripe_reuse)"
+    done
+
+    bcachefs fs usage -h /mnt || true
+    echo "completed all rounds: evacuate_bucket $(ec_wide_counter evacuate_bucket)," \
+	 "stripe_reuse $(ec_wide_counter stripe_reuse)"
+
+    # THE ORACLE: how much DEVICE space did it take to store the same data?
+    #
+    # Measured 2026-09-08, 4 runs per arm, 12 devices each - 96 observations
+    # with no variance at all within an arm:
+    #
+    #   fix present:  every device 87%, 9.96-9.97G stored
+    #   fix reverted: every device 94%, 9.94-9.95G stored
+    #
+    # Same bytes in, seven points more device space consumed to hold them. That
+    # IS the bug in GH #880, one step upstream of the wedge the reporter saw:
+    # cutting a new full-width stripe instead of packing into an existing one
+    # leaves partially-filled stripes behind, and that space is gone until
+    # copygc reclaims it. Run the filesystem closer to full and this is exactly
+    # what leaves the allocator with no bucket to hand out.
+    #
+    # Which is also why this test does not need to reproduce the wedge to be a
+    # regression test. 87% and 94% are both below the cliff where !avail starts
+    # blocking (fs/alloc/foreground.c:860); the unfixed kernel simply sits
+    # seven points nearer it. Asserting the wedge would mean tuning the
+    # workload to balance on that cliff, which is how the previous two attempts
+    # at this test ended up failing the FIXED kernel.
+    #
+    # Rejected oracles, each tried and each wrong in an instructive way:
+    #
+    #  - the wedge itself, via dmesg. Kept below as a second assertion because
+    #    it is the user-visible symptom, but it cannot be the primary: the
+    #    "Allocator stuck" print is fs-wide ratelimited to one per two minutes,
+    #    so a wedge shorter than that prints nothing and passes.
+    #  - stripe_reuse as a BOOLEAN. __stripe_alloc_or_reuse() calls
+    #    stripe_reuse() from BOTH the new ec_should_reuse_stripe() arm and the
+    #    old post-allocation-failure fallback, and they bump the same counter
+    #    (fs/data/ec/create.c:841), so "> 0" says nothing about which path ran:
+    #    the fixed runs showed ~2200 reuses via the OLD path with copygc idle.
+    #    Its magnitude does separate the arms (fixed ~2190, reverted ~880) and
+    #    is printed above, but a counter that cannot name its caller is a worse
+    #    thing to assert on than the space it costs.
+    #  - evacuate_bucket > 0 as a denominator. It FAILS THE FIXED KERNEL for
+    #    the wrong reason: the fix works by making copygc unnecessary, so
+    #    copygc not running is a symptom of success, not of a vacuous run.
+    local max_use
+    max_use=$(ec_wide_max_device_use_pct)
+    echo "fullest device: ${max_use}% (fix present: 87, fix reverted: 94)"
+
+    if ((max_use < 0)); then
+	echo "ERROR: could not read per-device usage from bcachefs fs usage."
+	echo "The oracle depends on it, so this run asserts nothing."
+	return 1
+    fi
+
+    if ((max_use > 90)); then
+	echo "ERROR: storing ${max_use}% of a device to hold ~10G that fits in"
+	echo "87% with the fix. Full-width stripes are being cut instead of"
+	echo "packed into existing ones, so partially-filled stripes are eating"
+	echo "device space - the GH #880 mechanism. Expect the allocator to"
+	echo "wedge on a fuller array."
+	return 1
+    fi
+
+    local stuck
+    stuck=$(dmesg | grep -cE "Allocator stuck|bucket_alloc_blocked" || true)
+    if ((stuck > 0)); then
+	echo "ERROR: allocator wedged ($stuck reports). That is the GH #880"
+	echo "signature: a full-width stripe has nowhere to go, so allocation"
+	echo "blocks on copygc while copygc's writes consume the space it is"
+	echo "freeing. NOTE these messages are fs-wide ratelimited to one per"
+	echo "two minutes, so a handful means CONTINUOUSLY stuck, not"
+	echo "intermittently."
+	dmesg | grep -A25 "Allocator stuck" | head -60
+	return 1
+    fi
+    echo "allocator never wedged"
+
+    umount /mnt
+
+    ec_wide_assert_geometry 10 2
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+main "$@"
