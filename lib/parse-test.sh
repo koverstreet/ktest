@@ -3,6 +3,11 @@ parse_test_deps()
 {
     export ktest_crashdump
     export ktest_out
+    # The test computes its kernel config requirements against the arch
+    # (kconfig.sh branches on it), so it has to be told - otherwise it defaults
+    # from uname -m and an -a i386 run requires 64BIT=y, UNWINDER_ORC and the
+    # x86_64 crypto, then builds a 64 bit kernel for a 32 bit root.
+    export ktest_arch
 
     eval $( "$ktest_test" deps $ktest_testargs )
 

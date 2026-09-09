@@ -18,6 +18,9 @@ fi
 # so a single-variable proxy guard would skip the defaults for the rest.
 : "${ktest_cpus:=$(nproc)}"
 : "${ktest_mem:=}"
+# Did the test ask for a specific architecture, via config-arch? Only then is
+# ktest_arch ours to report in `deps` - see the emitter below.
+: "${ktest_arch_set:=false}"
 : "${ktest_timeout:=}"
 : "${ktest_timeout_multiplier:=1}"
 : "${ktest_mem_multiplier:=1}"
@@ -282,6 +285,7 @@ config-timeout-multiplier()
 config-arch()
 {
     ktest_arch=$1
+    ktest_arch_set=true
 }
 
 config-compiler()
@@ -1018,7 +1022,14 @@ main()
 
     case $arg in
 	deps)
-	    echo "ktest_arch=$ktest_arch"
+	    # Only when the test actually asked for an architecture. ktest_arch
+	    # is an input to us, not something we decide: the harness doesn't
+	    # export it, so we default it from uname -m like any other invocation
+	    # and would otherwise echo that default back - which the caller evals
+	    # over its own value, silently beating -a on the command line.
+	    if $ktest_arch_set; then
+		echo "ktest_arch=$ktest_arch"
+	    fi
 	    echo "ktest_compiler=$ktest_compiler"
 	    echo "ktest_cpus=$ktest_cpus"
 	    echo "ktest_mem=$((ktest_mem * ktest_mem_multiplier))"
