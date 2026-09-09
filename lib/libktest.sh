@@ -542,7 +542,21 @@ start_vm()
 
     case $ktest_arch in
 	x86|x86_64)
-	    qemu_cmd+=(-cpu host -machine type=q35,accel=kvm,nvdimm=on)
+	    qemu_cmd+=(-machine type=q35,accel=kvm,nvdimm=on)
+
+	    # The firmware sizes the 64 bit PCI hole from the CPU's physical
+	    # address width - 48 bits with -cpu host, which puts modern virtio
+	    # BARs at 14TB. A 32 bit guest can't reach that, and virtio-fs has
+	    # no legacy interface to fall back to, so /host doesn't mount and
+	    # the VM drops to an emergency shell. Cap the guest at PAE's 36
+	    # bits (see X86_PAE in kconfig.sh); the empty hole is what makes
+	    # that fit, since a 32G hole above the 56G RAM window would not.
+	    if [[ $ktest_arch = x86 ]]; then
+		qemu_cmd+=(-cpu host,host-phys-bits=off,phys-bits=36
+			   -global q35-pcihost.pci-hole64-size=0)
+	    else
+		qemu_cmd+=(-cpu host)
+	    fi
 	    ;;
 	aarch64)
 	    qemu_cmd+=(-cpu host -machine type=virt,gic-version=max,accel=kvm)

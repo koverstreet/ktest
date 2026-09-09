@@ -9,9 +9,21 @@ case $ktest_arch in
 	require-kernel-config SMP
 	require-kernel-config IO_DELAY_0XED
 	require-kernel-config 64BIT=n
+	# glibc's futex_wake() calls __NR_futex, which on i386 is
+	# sys_futex_time32; we build from allnoconfig, so without this systemd
+	# gets ENOSYS on its first futex and calls that fatal.
+	require-kernel-config COMPAT_32BIT_TIME
+	# Without PAE, pci_bus_addr_t is 4 bytes and the kernel drops any BAR
+	# the firmware put above 4GB - which is where modern virtio BARs go.
+	# X86_HAVE_PAE needs a family 6 CPU; start_vm caps the guest's physical
+	# address width to match, so the hole lands inside PAE's 36 bits.
+	require-kernel-config M686
+	require-kernel-config X86_PAE
+	# ...and without HIGHMEM the guest only gets lowmem, so config-mem 4G
+	# came out as 825M of usable RAM and a kernel build thrashed.
+	require-kernel-config HIGHMEM4G
 	require-kernel-config ACPI	# way slower without it, do not know why
 	require-kernel-config HOTPLUG_PCI_ACPI	# acpiphp: hotpluggable disk slots
-	require-kernel-config UNWINDER_ORC
 	require-kernel-config HARDLOCKUP_DETECTOR
 	require-kernel-config RTC_DRV_CMOS
 
@@ -31,6 +43,9 @@ case $ktest_arch in
 	require-kernel-config UNWINDER_ORC
 	require-kernel-config HARDLOCKUP_DETECTOR
 	require-kernel-config RTC_DRV_CMOS
+
+	# for some reason, NR_CPUS=8 as syzbot sets breaks kgdb:
+	require-kernel-config NR_CPUS=64
 
 	have_kvmguest=1
 	have_virtio=1
@@ -382,9 +397,6 @@ require-kernel-config SCHED_STACK_END_CHECK
 
 require-kernel-config PANIC_TIMEOUT=0
 
-# for some reason, NR_CPUS=8 as syzbot sets breaks kgdb:
-require-kernel-config NR_CPUS=64
-
 # Syzbot:
 require-kernel-config BLK_DEV_LOOP
 require-kernel-config FAULT_INJECTION
@@ -401,7 +413,9 @@ require-kernel-config FAULT_INJECTION_CONFIGFS
 require-kernel-config SECCOMP
 require-kernel-config SECCOMP_FILTER
 
-require-kernel-config RUST
+if [[ $ktest_arch != x86 ]]; then
+    require-kernel-config RUST
+fi
 
 # A framebuffer, so plymouth loads a graphical splash plugin.
 #
