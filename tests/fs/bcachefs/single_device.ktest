@@ -1916,6 +1916,73 @@ test_kill_btree_root()
     check_bcachefs_counters ${ktest_scratch_dev[0]}
 }
 
+# An empty interior node is repaired by dropping it - but when the empty node
+# is the ROOT, the drop asserted:
+#
+#   bch2_btree_node_transition_state_locked:
+#     Assertion '!(btree_node_permanent(b))' failed
+#
+# permanent means "this node is the current root": set in
+# bch2_btree_set_root_inmem() alongside installing into roots_b[], cleared in
+# __btree_increase_depth() and in the free path. check_topology's root leg
+# transitioned the node to BTREE_NODE_CACHE_FREEABLE and cleared roots_b[]
+# without ever clearing the flag, so the code whose job is retiring a root
+# asserted that roots can't be retired. GH #903, ascendbeing, v1.39.4/.5.
+#
+# Getting there needs the root ITSELF to be the empty node - every child gone.
+# extents is depth 1 immediately after format (presplit_shard_boundaries), so
+# killing every level-0 node leaves a childless level-1 root.
+#
+# The harness fails the test if the BUG_ON fires, so what's asserted here is
+# the other half: that the repair succeeds and the second fsck is clean.
+test_kill_btree_root_children()
+{
+    set_watchdog 240
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    cp -rL /usr/bin /mnt
+    umount /mnt
+
+    # How many children to kill, discovered rather than assumed - the count
+    # comes from presplit and will change. "-l N" lists nodes from level N
+    # upwards, so the level-0 listing includes the root: subtract it.
+    local nr_all nr_root nr_child
+    nr_all=$(bcachefs list -b extents -m nodes -l 0 ${ktest_scratch_dev[0]} |
+	grep -c '^u64s')
+    nr_root=$(bcachefs list -b extents -m nodes -l 1 ${ktest_scratch_dev[0]} |
+	grep -c '^u64s')
+    nr_child=$((nr_all - nr_root))
+    echo "extents: $nr_all nodes, $nr_root root, killing $nr_child children"
+
+    # A depth-0 extents btree has no interior node, so there would be no
+    # empty-interior repair to exercise and the run would pass vacuously.
+    if ((nr_root != 1 || nr_child < 2)); then
+	echo "ERROR: extents is not depth 1 ($nr_root root, $nr_child children)."
+	echo "Without an interior root this run says nothing about the repair."
+	return 1
+    fi
+
+    local kill=() i
+    for ((i = 0; i < nr_child; i++)); do
+	kill+=(-nextents:0:$i)
+    done
+    bcachefs kill_btree_node "${kill[@]}" ${ktest_scratch_dev[0]}
+
+    echo "Running fsck - must repair the empty root, not abort"
+    bcachefs fsck -y ${ktest_scratch_dev[0]} || true
+
+    echo "Running fsck again; should be clean"
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    umount /mnt
+
+    ktest_expect_sb_errors="btree_node_read_error|btree_node_topology_interior_node_empty|btree_node_topology_bad_max_key|btree_root_read_error"
+    check_bcachefs_leaks
+    check_bcachefs_counters ${ktest_scratch_dev[0]}
+}
+
 test_multimount()
 {
     set_watchdog 60
