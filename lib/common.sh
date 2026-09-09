@@ -202,7 +202,13 @@ parse_arch()
 	    exit 1
     esac
 
-    if [[ $ktest_arch != $(uname -m) ]]; then
+    # 32 bit x86 on an x86_64 host is not a cross build: it's the same
+    # toolchain, and what makes the kernel 32 bit is kconfig.sh's 64BIT=n for
+    # ktest_arch=x86, not the compiler. ARCH_TRIPLE_X86 is the *64* bit triple,
+    # so CROSS_COMPILE would come out as x86_64-linux-gnu- - a prefix that is
+    # both wrong and, on most hosts, nonexistent.
+    if [[ $ktest_arch != $(uname -m) ]] &&
+       ! [[ $ktest_arch = x86 && $(uname -m) = x86_64 ]]; then
 	CROSS_COMPILE=1
     fi
 }
