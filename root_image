@@ -259,6 +259,16 @@ ZZ
     echo $(hostname)-kvm > "$MNT/etc/hostname"
 
     ln -sf /ktest-out/.bash_history "$MNT/root/.bash_history"
+
+    # Host tools built on a nix host - kbuild's fixdep, objtool and friends -
+    # have /nix/store/.../ld-linux baked in as their ELF interpreter. The guest
+    # reaches them through /host, so the binaries are there but the interpreter
+    # path isn't, and exec fails as a bare "not found" naming the binary rather
+    # than the loader.
+    #
+    # /host is the whole host root, so the store is already mounted; this just
+    # makes the absolute path resolve. Dangling and harmless on a non-nix host.
+    ln -sf /host/nix "$MNT/nix"
 }
 
 update_packages()
