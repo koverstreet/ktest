@@ -79,11 +79,29 @@ PACKAGES=(kexec-tools less psmisc openssh-server curl		\
     pciutils							\
     pkg-config libtool-bin					\
     gdb strace linux-perf trace-cmd blktrace sysstat iotop htop	\
-    bpfcc-tools bpftrace					\
     hdparm mdadm lvm2						\
     btrfs-progs jfsutils nilfs-tools f2fs-tools			\
     bc attr gawk acl rsync git python3-docutils			\
-    stress-ng lsof xxd zstd ripgrep bpfcc-tools)
+    stress-ng lsof xxd zstd ripgrep)
+
+# BPF tooling isn't usable on i386, and apt installs the list in one go, so
+# either name fails the whole install and no image is created:
+#
+#   bpftrace     not built for i386 at all
+#   bpfcc-tools  present, but uninstallable - python3-bpfcc needs libbpfcc,
+#                which isn't built for i386 either
+#
+# Those two are the only problems in this list, established by walking the
+# Depends closure of every package here against dists/sid/main/binary-i386
+# /Packages (and binary-amd64 as a control, which comes back clean). Checking
+# that the *names* exist is not enough - it's what missed bpfcc-tools, whose
+# name is present and whose dependency isn't.
+#
+# An `if`, not `[[ ]] && ...`: this file runs under errexit, so the && form
+# would exit 1 on i386 - the one arch it exists for.
+if [[ $DEBIAN_ARCH != i386 ]]; then
+    PACKAGES+=(bpftrace bpfcc-tools)
+fi
 
 # build tools:
 PACKAGES+=(build-essential make gcc g++ clang lld)
