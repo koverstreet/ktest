@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+#
+# Does background dedup defeat the metadata-only rechecksum fix?
+#
+# reconcile-csum.ktest (single device) and reconcile-csum-multidev.ktest
+# (4 devices, replicas=2, ssd/hdd targets, small files) both PASS on the
+# swap-files kernel: every extent converts. Yet production -- running that same
+# kernel -- livelocks on exactly this work, `checksum` pinned at 73.4G
+# byte-identical across hours while bytes-moved climbs ~10.4 GB per 2 minutes.
+#
+# The one thing production has that neither test had is background dedup:
+# background_dedup=1, ~230k extents indexed. And __do_reconcile_extent() has a
+# suspicious ordering:
+#
+#     const struct bch_extent_reconcile *r = bch2_bkey_reconcile_opts(c, k);
+#
+#     if (r && r->dedup_pending) {
+#             bch2_dedup_extent(ctxt, opts, iter, k);
+#             /* The key might have been modified by dedup, re-read */
+#             k = bkey_try(bch2_btree_iter_peek_slot(iter));
+#             ...
+#     }
+#     ...
+#     if (r && r->need_rb == BIT(BCH_RECONCILE_data_checksum)) {
+#
+# `r` is derived from the pre-dedup `k` and never recomputed, though the code
+# explicitly re-reads `k` and says so. After a dedup pass the checksum-only
+# dispatch therefore tests a stale need_rb -- and `r` points into a bkey buffer
+# that may since have been reused. If that is the bug, extents that went through
+# dedup miss the metadata-only path and fall into the full-rewrite livelock.
+#
+# This test is that experiment: the multidev shape plus background_dedup=1, and
+# deliberately duplicated file content so dedup has work to do.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 8G
+config-scratch-devs 8G
+
+config-mem 6G
+config-timeout 1800
+
+# Parse `bcachefs reconcile status`, which prints one row per reconcile class:
+#
+#                      data  metadata
+#     replicas:           0         0
+#     checksum:       73.4G         0
+#
+# Earlier versions of this test parsed `fs usage -f rebalance_work` with
+# `$1 == "checksum:"`, which silently produced EMPTY strings on a multi-device
+# fs -- so the settle loop never saw work and never detected a livelock. Print
+# the raw fields so a parse failure is visible rather than silent.
+reconcile_row_raw()
+{
+    bcachefs reconcile status /mnt | awk -v r="$1:" '$1 == r { print $2, $3; found = 1 }
+	END { if (!found) print "PARSE-FAILED" }'
+}
+
+reconcile_row_busy()
+{
+    local vals=$(reconcile_row_raw "$1")
+    [[ $vals == PARSE-FAILED ]] && return 2
+    [[ $vals == "0 0" ]] && return 1
+    return 0
+}
+
+data_update_sectors()
+{
+    awk '/since mount/ { print $3 }' /sys/fs/bcachefs/*/counters/data_update
+}
+
+dedup_counter()
+{
+    awk '/since mount/ { print $3 }' /sys/fs/bcachefs/*/counters/$1 2>/dev/null
+}
+
+# Many small, highly compressible files, each written TWICE under different
+# names so dedup has real work: the production population is source code and
+# JS/HTML of 4-18 KB compressing to the 4k floor (c_size 8).
+write_dedupable_files()
+{
+    local dir=$1 count=$2
+    mkdir -p "$dir/a" "$dir/b"
+    local block="the quick brown fox jumps over the lazy dog 0123456789 "
+    local unit="" i
+    for ((i = 0; i < 18; i++)); do unit="$unit$block"; done	# ~1 KB
+    for ((i = 0; i < count; i++)); do
+	local reps=$(( 8 + (i % 25) ))				# ~8-32 KB
+	local j out=""
+	for ((j = 0; j < reps; j++)); do out="$out$unit"; done
+	printf '%s' "$out" > "$dir/a/f$i"
+	printf '%s' "$out" > "$dir/b/f$i"			# identical copy
+    done
+    sync
+}
+
+reconcile_row_settle()
+{
+    local row=$1 iters=${2:-90} zeros=0 i
+    for ((i = 0; i < iters; i++)); do
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_wakeup
+	sleep 2
+	local raw=$(reconcile_row_raw $row)
+	echo "t=$((i * 2))s	$row: [$raw]	data_update: $(data_update_sectors)	deduped: $(dedup_counter dedup_extent_deduped)"
+	if [[ $raw == PARSE-FAILED ]]; then
+	    echo "FAIL: cannot parse the '$row' row out of reconcile status"
+	    bcachefs reconcile status /mnt || true
+	    return 2
+	fi
+	if [[ $raw == "0 0" ]]; then
+	    if (( ++zeros >= 3 )); then return 0; fi
+	else
+	    zeros=0
+	fi
+    done
+    echo "reconcile $row work did not settle"
+    bcachefs reconcile status /mnt || true
+    return 1
+}
+
+test_csum_change_with_dedup()
+{
+    set_watchdog 1500
+
+    run_quiet "" bcachefs format -f				\
+	--block_size=4k						\
+	--label=ssd.ssd1 ${ktest_scratch_dev[0]}		\
+	--label=ssd.ssd2 ${ktest_scratch_dev[1]}		\
+	--label=hdd.hdd1 ${ktest_scratch_dev[2]}		\
+	--label=hdd.hdd2 ${ktest_scratch_dev[3]}		\
+	--foreground_target=ssd					\
+	--background_target=hdd					\
+	--promote_target=ssd					\
+	--data_replicas=2					\
+	--data_checksum=crc32c					\
+	--compression=zstd					\
+	--background_compression=zstd:15
+
+    local devs=${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]}:${ktest_scratch_dev[3]}
+    mount -t bcachefs $devs /mnt
+
+    # NB: enable dedup via sysfs, not `format --background_dedup=1`. ktest builds
+    # and caches STOCK bcachefs-tools, which has no such option (dedup is
+    # out-of-tree) -- format rejects it with "unknown option". The option is
+    # OPT_RUNTIME, so the kernel under test can set it after mount.
+    echo 1 > /sys/fs/bcachefs/*/options/background_dedup
+    echo "background_dedup = $(cat /sys/fs/bcachefs/*/options/background_dedup)"
+    if [[ $(cat /sys/fs/bcachefs/*/options/background_dedup) != 1 ]]; then
+	echo "FAIL: could not enable background_dedup -- this kernel may not have it"
+	return 1
+    fi
+
+    write_dedupable_files /mnt/data 1200
+
+    echo "--- settling initial background work, and letting dedup index ---"
+    reconcile_row_settle compression 120 || echo "WARNING: compression row did not settle"
+    reconcile_row_settle target 120      || echo "WARNING: target row did not settle"
+
+    # Give dedup a chance to actually run over the duplicate copies.
+    local w
+    for ((w = 0; w < 30; w++)); do
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_wakeup
+	sleep 2
+    done
+    echo "dedup indexed: $(dedup_counter dedup_extent_indexed), deduped: $(dedup_counter dedup_extent_deduped)"
+
+    if [[ $(dedup_counter dedup_extent_indexed) == 0 ]]; then
+	echo "FAIL: precondition -- dedup never indexed anything, so this test" \
+	     "cannot say anything about dedup's effect on the rechecksum path"
+	return 1
+    fi
+
+    umount /mnt
+
+    local keys=$(bcachefs list -b extents ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]} ${ktest_scratch_dev[3]} 2>/dev/null)
+    local n_floor=$(awk '
+	$2 == "c_size" && $4 == "size" && $3 + 0 == 8 && $3 + 0 < $5 + 0 && $11 == "crc32c" { n++ }
+	END { print n + 0 }' <<<"$keys")
+    echo "precondition: c_size-8 crc32c extents=$n_floor"
+    if (( n_floor == 0 )); then
+	echo "FAIL: precondition -- no compressed crc32c extents at the 4k floor"
+	return 1
+    fi
+
+    mount -t bcachefs $devs /mnt
+
+    bcachefs set-fs-option --data_checksum=xxhash ${ktest_scratch_dev[0]}
+
+    local settled=0
+    reconcile_row_settle checksum 120 && settled=1
+
+    umount /mnt
+
+    keys=$(bcachefs list -b extents ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]} ${ktest_scratch_dev[3]} 2>/dev/null)
+    local stale=$(grep --count "csum crc32c" <<<"$keys" || true)
+    local converted=$(grep --count "csum xxhash" <<<"$keys" || true)
+    echo "extents still crc32c: $stale, converted to xxhash: $converted"
+
+    if (( ! settled )) || (( stale > 0 )); then
+	echo "FAIL: data_checksum change did not complete with background dedup on"
+	echo "--- sample of what is left ---"
+	grep --before-context=2 --after-context=6 "csum crc32c" <<<"$keys" | head --lines=30
+	return 1
+    fi
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]} ${ktest_scratch_dev[3]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]} ${ktest_scratch_dev[3]}
+}
+
+main "$@"

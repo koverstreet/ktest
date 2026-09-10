@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+#
+# Why this exists: reconcile-csum.ktest's test_csum_change_compressed PASSES on
+# the swap-files kernel (which carries 3529712a9b17, the metadata-only
+# rechecksum), yet the production desktop -- running that same fix -- livelocks
+# on exactly this work: `checksum` row pinned at 73.4G byte-identical across
+# hours while moving_ctxts bytes-moved climbs ~10.4 GB per 2 minutes.
+#
+# So something about the production shape defeats the fix, and the single-device
+# test does not capture it. Differences, mirrored here:
+#
+#   single-device test          production
+#   ------------------          ----------
+#   1 device                    5 devices, ssd/hdd groups
+#   data_replicas=1 (implicit)  data_replicas=2
+#   no targets                  foreground=ssd background=hdd promote=ssd
+#   compression=zstd (default)  background_compression=zstd:15
+#   one 64 MB file              many small files
+#   extents size 512, c_size 8  extents size 16..128, c_size 8
+#
+# The production extents seen pinned in moving_ctxts look like:
+#
+#   u64s 9 type extent 1275205062:16:U32_MAX len 16 : durability: 2
+#     reconcile: need_rb=data_checksum replicas=2 checksum=xxhash
+#                background_compression=zstd:15 background_target=hdd
+#                promote_target=ssd
+#     crc32: c_size 8 size 16 offset 0 nonce 0 csum crc32c  compress zstd
+#     ptr: sdd1 ...   ptr: sdc ...
+#
+# i.e. durability 2, both pointers on the background (hdd) target, compressed
+# to the 4k floor, pure need_rb=data_checksum.
+#
+# Leading hypothesis (untested): the fix dispatches only on
+#   r->need_rb == BIT(BCH_RECONCILE_data_checksum)
+# an exact-equality test. fsck -y on production reported large populations with
+# combined sets -- need_rb=data_replicas,data_checksum (60233) and
+# need_rb=data_replicas,data_checksum,background_target (12668) -- which fail
+# that test and fall through to the full-rewrite path that livelocks.
+# Against it: the extents actually observed pinned had a pure need_rb. This test
+# is meant to settle which.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 8G
+config-scratch-devs 8G
+
+config-mem 6G
+config-timeout 1800
+
+reconcile_row_bytes()
+{
+    bcachefs fs usage -f rebalance_work /mnt | awk -v r="$1:" '
+	$1 == r { print $2 + $3; exit }'
+}
+
+reconcile_work_remaining()
+{
+    bcachefs fs usage -f rebalance_work /mnt | awk '
+	$1 ~ /^(replicas|checksum|erasure_code|compression|target|high_priority|stripes):$/ { sum += $2 + $3 }
+	END { print sum + 0 }'
+}
+
+data_update_sectors()
+{
+    awk '/since mount/ { print $3 }' /sys/fs/bcachefs/*/counters/data_update
+}
+
+# Many small, highly compressible files -- the production population is source
+# code, headers, HTML docs and JS bundles of 4-18 KB, which compress to the 4k
+# floor (c_size 8). One big file does NOT produce that extent shape.
+write_small_compressible_files()
+{
+    local dir=$1 count=$2
+    mkdir -p "$dir"
+    # A compressible ~1 KB block; repeated to reach each file's size.
+    local block="the quick brown fox jumps over the lazy dog 0123456789 "
+    local unit=""
+    local i
+    for ((i = 0; i < 18; i++)); do unit="$unit$block"; done   # ~1 KB
+    for ((i = 0; i < count; i++)); do
+	local reps=$(( 8 + (i % 25) ))                        # ~8-32 KB
+	local j out=""
+	for ((j = 0; j < reps; j++)); do out="$out$unit"; done
+	printf '%s' "$out" > "$dir/f$i"
+    done
+    sync
+}
+
+# Poll a rebalance_work row to 0 (3 consecutive zeros), kicking reconcile each
+# round and printing data_update alongside, so a livelock (row pinned while
+# bytes moved climbs) is visible in the log. Returns 1 on timeout.
+reconcile_row_settle()
+{
+    local row=$1 iters=${2:-90} zeros=0 i
+    for ((i = 0; i < iters; i++)); do
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_wakeup
+	sleep 2
+	local work=$(reconcile_row_bytes $row)
+	echo "t=$((i * 2))s	$row remaining: $work	data_update: $(data_update_sectors)"
+	if (( work )); then
+	    zeros=0
+	elif (( ++zeros >= 3 )); then
+	    return 0
+	fi
+    done
+    echo "reconcile $row work did not settle"
+    bcachefs reconcile status /mnt || true
+    bcachefs fs usage -f rebalance_work /mnt || true
+    return 1
+}
+
+test_csum_change_multidev()
+{
+    set_watchdog 1500
+
+    run_quiet "" bcachefs format -f				\
+	--block_size=4k						\
+	--label=ssd.ssd1 ${ktest_scratch_dev[0]}		\
+	--label=ssd.ssd2 ${ktest_scratch_dev[1]}		\
+	--label=hdd.hdd1 ${ktest_scratch_dev[2]}		\
+	--label=hdd.hdd2 ${ktest_scratch_dev[3]}		\
+	--foreground_target=ssd					\
+	--background_target=hdd					\
+	--promote_target=ssd					\
+	--data_replicas=2					\
+	--data_checksum=crc32c					\
+	--compression=zstd					\
+	--background_compression=zstd:15
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]}:${ktest_scratch_dev[3]} /mnt
+
+    write_small_compressible_files /mnt/data 1500
+
+    # Let the initial background work (compression + move to hdd) settle, so the
+    # extents are in the production shape BEFORE the checksum change. If this
+    # does not settle we have a different bug and should stop here.
+    echo "--- settling initial background work (compression/target) ---"
+    if ! reconcile_row_settle compression 90; then
+	echo "FAIL: initial compression work never settled -- not the csum bug"
+	return 1
+    fi
+    reconcile_row_settle target 90 || echo "WARNING: target row did not settle"
+
+    umount /mnt
+
+    local keys=$(bcachefs list -b extents ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]} ${ktest_scratch_dev[3]} 2>/dev/null)
+
+    # Production shape: compressed to the floor, crc32c, durability 2.
+    local n_floor=$(awk '
+	$2 == "c_size" && $4 == "size" && $3 + 0 == 8 && $3 + 0 < $5 + 0 && $11 == "crc32c" { n++ }
+	END { print n + 0 }' <<<"$keys")
+    local n_dur2=$(grep --count "durability: 2" <<<"$keys" || true)
+    echo "precondition: c_size-8 crc32c extents=$n_floor, durability-2 keys=$n_dur2"
+
+    if (( n_floor == 0 )); then
+	echo "FAIL: precondition -- no compressed crc32c extents at the 4k floor"
+	grep --extended-regexp "type extent|crc[0-9]*:" <<<"$keys" | head --lines=20
+	return 1
+    fi
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]}:${ktest_scratch_dev[3]} /mnt
+
+    bcachefs set-fs-option --data_checksum=xxhash ${ktest_scratch_dev[0]}
+
+    local settled=0
+    reconcile_row_settle checksum 90 && settled=1
+
+    umount /mnt
+
+    keys=$(bcachefs list -b extents ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]} ${ktest_scratch_dev[3]} 2>/dev/null)
+    local stale=$(grep --count "csum crc32c" <<<"$keys" || true)
+    local converted=$(grep --count "csum xxhash" <<<"$keys" || true)
+    echo "extents still crc32c: $stale, converted to xxhash: $converted"
+
+    if (( ! settled )) || (( stale > 0 )); then
+	echo "FAIL: data_checksum change did not complete on a multi-device," \
+	     "replicas=2, targeted filesystem"
+	echo "--- a sample of what is left ---"
+	grep --before-context=2 --after-context=6 "csum crc32c" <<<"$keys" | head --lines=30
+	return 1
+    fi
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]} ${ktest_scratch_dev[3]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]} ${ktest_scratch_dev[3]}
+}
+
+main "$@"

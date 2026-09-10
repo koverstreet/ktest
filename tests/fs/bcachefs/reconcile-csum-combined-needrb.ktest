@@ -1,0 +1,271 @@
+#!/usr/bin/env bash
+#
+# Does a COMBINED need_rb set defeat the metadata-only rechecksum fix?
+#
+# The fix (3529712a9b17) dispatches on an exact-equality test,
+# data/reconcile/work.c:
+#
+#     if (r && r->need_rb == BIT(BCH_RECONCILE_data_checksum)) {
+#             unsigned csum_type = bch2_data_checksum_type_rb(c, *r);
+#             ret = reconcile_rechecksum_extent(trans, iter, k, csum_type);
+#
+# Any extent needing more than the checksum fails that test and falls through to
+# the full-rewrite path -- the path that livelocks on compressed extents, because
+# bch2_write_prep_encoded_data()'s "write the extent as is" fast path only
+# rechecksums UNCOMPRESSED data, so the rewrite lands still carrying the old
+# checksum type and set_needs_reconcile re-flags it.
+#
+# fsck -y on the production filesystem reported exactly that shape at scale:
+#
+#     60,233  need_rb=data_replicas,data_checksum
+#     12,668  need_rb=data_replicas,data_checksum,background_target
+#         5   need_rb=data_checksum                    <-- the only shape the fix catches
+#
+# Production runs a kernel carrying the fix and livelocks anyway, with `checksum`
+# pinned at 73.4G byte-identical across hours. reconcile-csum.ktest (1 device)
+# and reconcile-csum-multidev.ktest (4 devices, replicas=2, targets, 1500 small
+# files) both PASS -- and in both, every extent has a PURE need_rb=data_checksum,
+# because replicas were already satisfied before the checksum changed. Neither
+# test has ever exercised a combined set.
+#
+# This test creates one: format at data_replicas=1, write, settle, then raise
+# data_replicas AND change data_checksum together, so every extent needs both.
+#
+# NOT the dedup hypothesis. That one (stale `r` after bch2_dedup_extent()) does
+# not survive reading the code: dedup's terminal and index paths mutate only
+# dedup_pending, never need_rb; a successful dedup converts the extent to
+# reflink_p, which work.c:1028 catches before the checksum dispatch; and
+# bch2_dedup_extent() skips compressed extents outright (dedup.c, crc_is_compressed)
+# while 100% of the production extents seen pinned were `compress zstd`.
+# reconcile-csum-dedup.ktest cannot be made to work as written for that last
+# reason -- its two preconditions are mutually exclusive on the same extent.
+#
+# PRECONDITION DISCIPLINE: reconcile-csum-dedup.ktest burned a VM run discovering
+# at runtime that its precondition was unsatisfiable by construction. So this test
+# asserts the need_rb shape it depends on, and prints the full histogram on every
+# path -- pass or fail. A run that cannot show a combined need_rb says nothing
+# about the hypothesis and must report that rather than a verdict.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 8G
+config-scratch-devs 8G
+
+config-mem 6G
+config-timeout 1800
+
+devs()
+{
+    echo ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} \
+	 ${ktest_scratch_dev[2]} ${ktest_scratch_dev[3]}
+}
+
+devs_colon()
+{
+    echo ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}:${ktest_scratch_dev[2]}:${ktest_scratch_dev[3]}
+}
+
+# Parse `bcachefs reconcile status`, which prints one row per reconcile class:
+#
+#                      data  metadata
+#     replicas:           0         0
+#     checksum:       73.4G         0
+#
+# NB: NOT `fs usage -f rebalance_work` with `$1 == "checksum:"` -- that silently
+# yields EMPTY strings on a multi-device fs, so the settle loop never sees work
+# and never detects a livelock. Print the raw fields so a parse failure is loud.
+reconcile_row_raw()
+{
+    bcachefs reconcile status /mnt | awk -v r="$1:" '$1 == r { print $2, $3; found = 1 }
+	END { if (!found) print "PARSE-FAILED" }'
+}
+
+data_update_sectors()
+{
+    awk '/since mount/ { print $3 }' /sys/fs/bcachefs/*/counters/data_update
+}
+
+# Many small, highly compressible files. The production population is source
+# code, headers, HTML docs and JS bundles of 4-18 KB, which compress to the 4k
+# floor (c_size 8). One big file does NOT produce that extent shape.
+write_small_compressible_files()
+{
+    local dir=$1 count=$2
+    mkdir -p "$dir"
+    local block="the quick brown fox jumps over the lazy dog 0123456789 "
+    local unit="" i
+    for ((i = 0; i < 18; i++)); do unit="$unit$block"; done	# ~1 KB
+    for ((i = 0; i < count; i++)); do
+	local reps=$(( 8 + (i % 25) ))				# ~8-32 KB
+	local j out=""
+	for ((j = 0; j < reps; j++)); do out="$out$unit"; done
+	printf '%s' "$out" > "$dir/f$i"
+    done
+    sync
+}
+
+# Poll a reconcile row to 0 (3 consecutive zeros), kicking reconcile each round
+# and printing data_update alongside, so a livelock -- row pinned while bytes
+# moved climbs without bound -- is visible in the log rather than inferred.
+reconcile_row_settle()
+{
+    local row=$1 iters=${2:-90} zeros=0 i
+    for ((i = 0; i < iters; i++)); do
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_wakeup
+	sleep 2
+	local raw=$(reconcile_row_raw $row)
+	echo "t=$((i * 2))s	$row: [$raw]	data_update: $(data_update_sectors)"
+	if [[ $raw == PARSE-FAILED ]]; then
+	    echo "FAIL: cannot parse the '$row' row out of reconcile status"
+	    bcachefs reconcile status /mnt || true
+	    return 2
+	fi
+	if [[ $raw == "0 0" ]]; then
+	    if (( ++zeros >= 3 )); then return 0; fi
+	else
+	    zeros=0
+	fi
+    done
+    echo "reconcile $row work did not settle"
+    bcachefs reconcile status /mnt || true
+    return 1
+}
+
+# Histogram of the need_rb sets actually present on disk. This is the evidence
+# the whole test turns on, so it is printed on every path, not only on failure.
+print_needrb_histogram()
+{
+    local keys=$1 label=$2
+    echo "--- need_rb histogram ($label) ---"
+    grep --only-matching 'need_rb=[a-z_,]*' <<<"$keys" | sort | uniq -c | sort -rn ||
+	echo "(no need_rb entries found)"
+    echo "---"
+}
+
+# Shared body: build the production extent shape at data_replicas=1, then apply
+# whatever option change the caller wants and see whether checksum work drains.
+#
+# $1 = "combined" (raise data_replicas as well) or "csum-only" (control)
+run_csum_change()
+{
+    local mode=$1
+
+    set_watchdog 1500
+
+    # data_replicas=1 so that raising it later leaves every extent needing
+    # BOTH data_replicas and data_checksum. The multidev test formats at
+    # replicas=2, which is precisely why its need_rb stays pure.
+    run_quiet "" bcachefs format -f				\
+	--block_size=4k						\
+	--label=ssd.ssd1 ${ktest_scratch_dev[0]}		\
+	--label=ssd.ssd2 ${ktest_scratch_dev[1]}		\
+	--label=hdd.hdd1 ${ktest_scratch_dev[2]}		\
+	--label=hdd.hdd2 ${ktest_scratch_dev[3]}		\
+	--foreground_target=ssd					\
+	--background_target=hdd					\
+	--promote_target=ssd					\
+	--data_replicas=1					\
+	--data_checksum=crc32c					\
+	--compression=zstd					\
+	--background_compression=zstd:15
+
+    mount -t bcachefs $(devs_colon) /mnt
+
+    write_small_compressible_files /mnt/data 1500
+
+    # Settle compression and target FIRST, so the extents are in the production
+    # shape (compressed to the floor, on the hdd target) before anything else
+    # changes. If this never settles we have a different bug and must stop.
+    echo "--- settling initial background work (compression/target) ---"
+    if ! reconcile_row_settle compression 90; then
+	echo "FAIL: initial compression work never settled -- not the csum bug"
+	return 1
+    fi
+    reconcile_row_settle target 90 || echo "WARNING: target row did not settle"
+
+    umount /mnt
+
+    local keys=$(bcachefs list -b extents $(devs) 2>/dev/null)
+
+    # Precondition A: compressed to the 4k floor, crc32c, durability 1.
+    local n_floor=$(awk '
+	$2 == "c_size" && $4 == "size" && $3 + 0 == 8 && $3 + 0 < $5 + 0 && $11 == "crc32c" { n++ }
+	END { print n + 0 }' <<<"$keys")
+    local n_dur1=$(grep --count "durability: 1" <<<"$keys" || true)
+    echo "precondition A: c_size-8 crc32c extents=$n_floor, durability-1 keys=$n_dur1"
+
+    if (( n_floor == 0 )); then
+	echo "FAIL: precondition A -- no compressed crc32c extents at the 4k floor"
+	grep --extended-regexp "type extent|crc[0-9]*:" <<<"$keys" | head --lines=20
+	return 1
+    fi
+
+    mount -t bcachefs $(devs_colon) /mnt
+
+    # The option change(s). Order matters only in that both must be in force
+    # before reconcile evaluates the extents; the scan is queued by the hook on
+    # each set, and the second set re-queues it.
+    if [[ $mode == combined ]]; then
+	echo "--- raising data_replicas 1 -> 2 AND changing data_checksum crc32c -> xxhash ---"
+	bcachefs set-fs-option --data_replicas=2   ${ktest_scratch_dev[0]}
+	bcachefs set-fs-option --data_checksum=xxhash ${ktest_scratch_dev[0]}
+    else
+	echo "--- changing data_checksum crc32c -> xxhash ONLY (control) ---"
+	bcachefs set-fs-option --data_checksum=xxhash ${ktest_scratch_dev[0]}
+    fi
+
+    local settled=0
+    reconcile_row_settle checksum 90 && settled=1
+
+    umount /mnt
+
+    keys=$(bcachefs list -b extents $(devs) 2>/dev/null)
+    local stale=$(grep --count "csum crc32c" <<<"$keys" || true)
+    local converted=$(grep --count "csum xxhash" <<<"$keys" || true)
+    echo "extents still crc32c: $stale, converted to xxhash: $converted"
+
+    print_needrb_histogram "$keys" "after the change, mode=$mode"
+
+    # Precondition B, and it can only be checked here: the combined run is
+    # meaningless unless a combined need_rb set actually materialised. In the
+    # predicted (livelocked) outcome the extents are still on disk carrying it.
+    if [[ $mode == combined ]]; then
+	local n_combined=$(grep --count 'need_rb=[a-z_]*,[a-z_,]*' <<<"$keys" || true)
+	echo "precondition B: extents carrying a COMBINED need_rb set = $n_combined"
+	if (( n_combined == 0 )) && (( stale > 0 )); then
+	    echo "INCONCLUSIVE: extents did not convert, but none carries a combined"
+	    echo "need_rb either -- so this run does not test the exact-equality guard."
+	    return 1
+	fi
+    fi
+
+    if (( ! settled )) || (( stale > 0 )); then
+	echo "FAIL: data_checksum change did not complete (mode=$mode)"
+	echo "--- a sample of what is left ---"
+	grep --before-context=2 --after-context=6 "csum crc32c" <<<"$keys" | head --lines=30
+	return 1
+    fi
+
+    bcachefs fsck -ny $(devs)
+    bcachefs_test_end_checks $(devs)
+}
+
+# The experiment: every extent needs data_replicas AND data_checksum, so the
+# exact-equality guard misses all of them. If the hypothesis holds this
+# livelocks -- checksum row pinned, data_update climbing, nothing converted.
+test_csum_change_combined_needrb()
+{
+    run_csum_change combined
+}
+
+# The control: same filesystem shape, same data, same code path, but only the
+# checksum changes, so need_rb is pure and the guard matches. Expected to PASS.
+# A run where BOTH subtests fail indicts the shape, not the guard.
+test_csum_change_csum_only_control()
+{
+    run_csum_change csum-only
+}
+
+main "$@"

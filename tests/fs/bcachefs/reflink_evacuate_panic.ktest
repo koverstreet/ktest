@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+#
+# Reproducer for the 2026-07-13 copygc panic:
+#
+#   bcachefs (...): pointer to missing indirect extent in .../disk1.img
+#     ... missing reflink btree range ..., fixing
+#   Kernel panic - not syncing: in transaction restart: EPERM,
+#     last restarted by 0x800080000000a00
+#   Comm: bch-copygc/...
+#     __bch2_write <- bch2_moving_ctxt_do_pending_writes <- bch2_move_ratelimit
+#     <- __bch2_move_data_phys <- bch2_evacuate_bucket <- bch2_copygc
+#
+# The production fs had a dangling reflink_p -> missing reflink_v (a known
+# artifact of the dedup code + prior hard resets, self-healed on read).
+# copygc, evacuating a bucket during early recovery, panicked in the write
+# path with an INVALID trans restart state (restarted printed as "EPERM" = raw
+# 1, last_restarted_ip garbage) — values the restart machinery cannot
+# legitimately produce (btree/iter.h:498 BUG_ONs non-restart codes).
+#
+# This test builds that on-disk PRECONDITION deterministically with
+# `kill_btree_node reflink:0:N` (removes reflink_v leaves of a MULTI-LEVEL
+# reflink btree, leaving those reflink_p dangling but the topology intact so
+# the fs still mounts), then drives the copygc/evacuate move path over the
+# orphaned buckets while readers hammer the dangling reflink_p (the "fixing"
+# repair path) — the two threads that were racing at the panic.
+#
+# No dedup required: reflink + kill_btree_node + the move path are all stock.
+#
+# STATUS (2026-07-13): the PRECONDITION reproduces on demand (exact production
+# "pointer to missing indirect extent ... fixing" signature, lazy repair on
+# read).  The PANIC itself does NOT fire here — SURVIVED on both a plain debug
+# kernel and one with BCACHEFS_INJECT_TRANSACTION_RESTARTS=y.  The production
+# panic happened during EARLY POST-CRASH RECOVERY (journal replay + fsck repair
+# + copygc racing on a dirty-journal fs); this test does a CLEAN mount (offline
+# kill_btree_node preserves the clean state), so it can't recreate that
+# interleaving without a two-boot crash sequence.  See
+# artifacts/finding-copygc-reflink-trans-restart-panic-2026-07-13.md.
+#
+# So this serves as a REGRESSION GUARD for the hardening the panic calls for
+# (the move/write path must not crash on a corrupt-reflink source):
+#   PASS  = copygc/evacuate survives the dangling reflinks (current behaviour).
+#   PANIC = a regression reintroduced the crash on this simpler profile.
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+config-mem 4G   # debug-kernel mount + in-VM bcachefs-tools build need headroom
+config-scratch-devs 4G
+config-scratch-devs 4G
+
+# INJECT_TRANSACTION_RESTARTS hammers the exact machinery whose state was
+# found corrupt; keep it on when the config supports it (debug kernels do).
+require-kernel-config-soft BCACHEFS_INJECT_TRANSACTION_RESTARTS
+
+config-timeout $(stress_timeout)
+
+# For dkms runs (prebuilt bcachefs-less kernel), don't let ktest rebuild.
+[[ -n ${KTEST_NO_KBUILD:-} ]] && config-no-kbuild
+
+# Number of distinct reflink_v keys to create.  Tiny btree nodes ENOMEM the
+# btree-update trans pool (8k was unviable), so instead we force a MULTI-LEVEL
+# reflink btree with DEFAULT nodes by creating a large number of distinct
+# reflink_v keys.  Killing a level-0 leaf then leaves the interior root
+# (topology) intact so the fs still mounts and the orphaned reflink_p repair
+# lazily on read.  The test verifies the level count and warns if it's flat.
+REFLINK_EXTENTS=${REFLINK_EXTENTS:-12000}
+READERS=${READERS:-16}
+
+reflink_evacuate_body()
+{
+    local dev0=${ktest_scratch_dev[0]}
+    local dev1=${ktest_scratch_dev[1]}
+
+    # Small btree nodes: a modest number of reflink_v keys then builds a
+    # multi-LEVEL reflink btree.  Killing a level-0 leaf (below) drops only
+    # that leaf's keys; the interior root survives, recovery completes, and
+    # the orphaned reflink_p are "fixed" lazily on read — the production shape
+    # (vs iteration 2, where killing the single-node root was unrecoverable).
+    # Default btree node size (tiny nodes ENOMEM the btree-update trans pool).
+    # version_upgrade=none: the tools format at 1.39 and the kernel would
+    # otherwise upgrade to 1.40 on mount — irrelevant to the reflink repro.
+    run_quiet "" bcachefs format -f "$dev0" "$dev1"
+    mount -t bcachefs -o version_upgrade=none "$dev0":"$dev1" /mnt
+
+    # Many DISTINCT reflink_v keys: split a random file into 8k pieces and
+    # reflink each piece to its own file.
+    dd if=/dev/urandom of=/mnt/seed bs=8k count=$REFLINK_EXTENTS status=none
+    ( cd /mnt && split -b 8k -a 4 seed src. )
+    local f n=0
+    for f in /mnt/src.*; do
+	cp --reflink=always "$f" "/mnt/link.${f##*/}"
+	n=$((n+1))
+    done
+    # Bulk reflinked data so evacuate has real work to move off dev0.
+    dd if=/dev/urandom of=/mnt/big bs=1M count=32 status=none
+    cp --reflink=always /mnt/big /mnt/biglink
+    sync
+    echo "created $n reflinked extents"
+
+    # Verify the reflink btree is multi-level BEFORE killing a leaf.
+    cat /sys/kernel/debug/bcachefs/*/reflink/formats > /tmp/rf-formats.log 2>/dev/null || true
+    echo "=== reflink btree node levels (want a level >0) ==="
+    grep -o "l [0-9]*" /tmp/rf-formats.log | sort | uniq -c || true
+    echo "==="
+
+    umount /mnt
+
+    # Inject: kill a few level-0 leaves (NOT the interior root).
+    local idx
+    for idx in 1 2 3; do
+	bcachefs kill_btree_node -n reflink:0:$idx "$dev0" "$dev1" 2>/dev/null || true
+    done
+
+    # Confirm the dangling reflink_p (dry-run -n, NO repair — must survive to
+    # the kernel mount). Temp file, not `| head`, to avoid SIGPIPE under set -e.
+    bcachefs fsck -n "$dev0" "$dev1" > /tmp/fsck-confirm.log 2>&1 || true
+    echo "=== fsck -n (expect missing indirect extent) ==="
+    grep -i "missing indirect\|missing reflink\|reflink_p_to" /tmp/fsck-confirm.log | tail -6 || true
+    echo "==="
+
+    # Mount RW: topology intact (interior root survived), recovery completes,
+    # killed leaves' reflink_p dangle and are fixed lazily on read.
+    if ! mount -t bcachefs -o version_upgrade=none "$dev0":"$dev1" /mnt; then
+	echo "MOUNT FAILED after leaf kill — reflink btree was not multi-level?"
+	echo "  bump REFLINK_EXTENTS. formats dump:"; head -8 /tmp/rf-formats.log || true
+	return 1
+    fi
+
+    trap - ERR   # background loops must not die on the prelude ERR trap
+
+    # Racing thread A: readers hammer the dangling reflink_p -> "missing
+    # indirect extent, fixing".
+    local pids=() w
+    for w in $(seq 1 $READERS); do
+	( while true; do cat /mnt/link.* > /dev/null 2>&1 || true; done ) &
+	pids+=($!)
+    done
+
+    # Racing thread B: the copygc/evacuate move path over dev0 (the exact
+    # __bch2_move_data_phys / bch2_evacuate_bucket path that panicked).
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_gc 2>/dev/null || true
+    local round
+    for round in $(seq 1 15); do
+	echo "--- evacuate round $round ---"
+	bcachefs device evacuate "$dev0" > /tmp/evac.log 2>&1 || true
+	tail -2 /tmp/evac.log || true
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_gc 2>/dev/null || true
+	sleep 2
+    done
+
+    kill "${pids[@]}" 2>/dev/null || true
+    wait "${pids[@]}" 2>/dev/null || true
+
+    echo "SURVIVED: no panic through evacuate + repair"
+    umount /mnt
+    bcachefs fsck -ny "$dev0" "$dev1" || true
+    bcachefs_test_end_checks "$dev0" "$dev1"
+}
+
+test_reflink_evacuate_panic()
+{
+    set_watchdog $(stress_timeout)
+    reflink_evacuate_body
+}
+
+main "$@"

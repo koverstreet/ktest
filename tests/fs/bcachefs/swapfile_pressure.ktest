@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+#
+# Swapfile-under-reclaim pressure test, parametrized by VM memory.
+#
+# Based on the shape of koverstreet/ktest#63 (companion to
+# koverstreet/bcachefs-tools#646) so results are directly comparable,
+# with the memory size dialed down to probe the low-memory regime where
+# the original swap-files implementation needed PF_MEMALLOC propagation,
+# btree node pinning, cache pre-reserves and mempool sizing to survive.
+#
+#   SWAPFILE_TEST_MEM=768M (default) | 256M | 192M   VM memory
+#   SWAPFILE_TEST_DURATION=120                       seconds of pressure
+#
+# PASS = pressure workload completes and fsck is clean.
+# FAIL/watchdog timeout = reclaim hang or crash — the interesting result.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config SWAP
+# For the fake-spinning-rust variant (dm-delay under the fs holding swap):
+require-kernel-config BLK_DEV_DM
+require-kernel-config DM_DELAY
+
+config-mem ${SWAPFILE_TEST_MEM:-768M}
+config-scratch-devs 2G
+config-timeout 600
+
+# Parallel matrix runs reuse a prebuilt kernel (reflinked into the run's
+# output dir) — skip the kernel build for those.
+[[ -n ${SWAPFILE_TEST_NO_KBUILD:-} ]] && config-no-kbuild
+
+dump_swap_debug()
+{
+    cat /proc/swaps || true
+    grep -E "MemTotal|MemFree|MemAvailable|SwapTotal|SwapFree" /proc/meminfo || true
+    dmesg | tail -n 100 || true
+}
+
+disable_swapfile()
+{
+    swapoff /mnt/swapfile 2>/dev/null || true
+}
+
+test_swapfile_reclaim_pressure()
+{
+    set_watchdog 400
+
+    echo "=== VM memory: $(grep MemTotal /proc/meminfo) ==="
+
+    local dev=${ktest_scratch_dev[0]}
+
+    # Fake spinning rust: SWAPFILE_TEST_DELAY_MS adds that much latency to
+    # every I/O on the device under the filesystem holding the swapfile,
+    # so swap-out stalls while reclaim pressure keeps building.
+    if [[ -n ${SWAPFILE_TEST_DELAY_MS:-} ]]; then
+	local sectors=$(blockdev --getsz "$dev")
+	dmsetup create swapdelay --table \
+	    "0 $sectors delay $dev 0 ${SWAPFILE_TEST_DELAY_MS}"
+	dev=/dev/mapper/swapdelay
+	echo "=== swap fs on dm-delay ${SWAPFILE_TEST_DELAY_MS}ms ==="
+    fi
+
+    run_quiet "" bcachefs format -f "$dev"
+    mount -t bcachefs "$dev" /mnt
+
+    fallocate -l 512M /mnt/swapfile
+    chmod 600 /mnt/swapfile
+    mkswap /mnt/swapfile
+
+    if ! swapon /mnt/swapfile; then
+	echo "bcachefs swapfile swapon failed"
+	dump_swap_debug
+	return 1
+    fi
+    trap disable_swapfile EXIT
+
+    grep -q /mnt/swapfile /proc/swaps
+
+    # Two workers at SWAPFILE_TEST_VM_BYTES (percent of RAM) each:
+    # the default ~130% total forces sustained swap while staying within
+    # swapfile capacity at every memory size; crank it (e.g. 85) for the
+    # harsh variant.
+    stress-ng --vm 2 --vm-bytes ${SWAPFILE_TEST_VM_BYTES:-65}% --vm-keep \
+	      -t ${SWAPFILE_TEST_DURATION:-120} --metrics-brief || {
+	echo "swap pressure workload failed"
+	dump_swap_debug
+	return 1
+    }
+
+    dump_swap_debug
+
+    swapoff /mnt/swapfile
+    trap - EXIT
+
+    rm -f /mnt/swapfile
+    umount /mnt
+
+    # In-kernel fsck: the userspace fsck implementation OOMs in small VMs
+    # (it wants a large fraction of RAM up front); the kernel's works in
+    # the same footprint as a normal mount.
+    mount -t bcachefs -o fsck,ro "$dev" /mnt
+    umount /mnt
+
+    if [[ $dev = /dev/mapper/swapdelay ]]; then
+	dmsetup remove swapdelay
+    fi
+
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+main "$@"
