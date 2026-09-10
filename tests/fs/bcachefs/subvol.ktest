@@ -698,6 +698,38 @@ test_snapshot_whiteout_resurrection()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# A partial hole in a snapshot child must keep shadowing the ancestor extent
+# after the filesystem is remounted.
+test_snapshot_partial_hole_survives_remount()
+{
+    run_quiet "" bcachefs format -f --compression=none --replicas=1 \
+	${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    bcachefs subvolume create /mnt/work
+    dd if=/dev/urandom of=/mnt/work/file bs=1M count=4 conv=fsync status=none
+    cp --reflink=never /mnt/work/file /tmp/snapshot-hole-original
+    bcachefs subvolume snapshot --read-only /mnt/work /mnt/before
+
+    fallocate --punch-hole --keep-size --offset=1M --length=64K /mnt/work/file
+    sync -f /mnt/work
+
+    dd if=/dev/zero of=/tmp/snapshot-hole-zero bs=64K count=1 status=none
+    dd if=/mnt/work/file of=/tmp/snapshot-hole-live bs=64K skip=16 count=1 status=none
+    cmp /tmp/snapshot-hole-zero /tmp/snapshot-hole-live
+
+    umount /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    dd if=/mnt/work/file of=/tmp/snapshot-hole-live bs=64K skip=16 count=1 status=none
+    cmp /tmp/snapshot-hole-zero /tmp/snapshot-hole-live
+    cmp /tmp/snapshot-hole-original /mnt/before/file
+
+    umount /mnt
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_subvol_snapshot_delete_fio()
 {
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
