@@ -1,0 +1,657 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config BCACHEFS_FS=y
+
+config-scratch-devs 4G
+
+test_tmpdir_basic()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+    local inum
+
+    run_quiet "" bcachefs format -f $dev
+    mount $dev /mnt
+
+    mkdir /mnt/tmpdir
+    bcachefs set-file-option --tmpdir /mnt/tmpdir
+
+    echo "hello" > /mnt/tmpdir/testfile
+    dd if=/dev/zero of=/mnt/tmpdir/bigfile bs=1M count=4 2>/dev/null
+    inum=$(stat -c %i /mnt/tmpdir/bigfile)
+
+    umount /mnt
+    mount $dev /mnt
+
+    [[ -e /mnt/tmpdir ]]
+    [[ ! -e /mnt/tmpdir/testfile ]]
+    [[ ! -e /mnt/tmpdir/bigfile ]]
+
+    # The unlink above creates deleted_inodes entries while the
+    # filesystem was marked clean; that must not be reported as damage.
+    assert_output_lacks "filesystem marked as clean but have deleted inode" dmesg
+    assert_output_lacks "Fixed errors, running fsck a second time" dmesg
+
+    umount /mnt
+
+    # The inode reaper must have consumed the deleted_inodes entries...
+    assert_output_lacks "^u64s" bcachefs list -b deleted_inodes $dev
+
+    # ...and freed the wiped file's data, not just its dirent:
+    assert_output_lacks "type extent ${inum}:" bcachefs list -b extents $dev
+
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+# Only directories actually marked with the tmpdir option are wiped; ordinary
+# directories must be left alone.
+test_tmpdir_only_tmpdir_wiped()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount $dev /mnt
+
+    mkdir /mnt/normal /mnt/tmpdir
+    bcachefs set-file-option --tmpdir /mnt/tmpdir
+
+    echo "keep" > /mnt/normal/keep
+    echo "gone" > /mnt/tmpdir/gone
+
+    umount /mnt
+    mount $dev /mnt
+
+    [[ -e /mnt/normal/keep ]]
+    [[ ! -e /mnt/tmpdir/gone ]]
+
+    umount /mnt
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+# A tmpdir in a snapshotted subvolume: the live subvolume's tmpdir is wiped,
+# while a read-only snapshot keeps its point-in-time copy. (A plain `bcachefs
+# subvolume snapshot` is writable, so its tmpdir is wiped too.)
+test_tmpdir_snapshot()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount $dev /mnt
+
+    mkdir /mnt/tmpdir
+    bcachefs set-file-option --tmpdir /mnt/tmpdir
+    echo hi > /mnt/tmpdir/f
+
+    (cd /mnt && bcachefs subvolume snapshot --read-only snap)
+
+    umount /mnt
+    mount $dev /mnt
+
+    # the live tmpdir is wiped...
+    [[ -e /mnt/tmpdir ]]
+    [[ ! -e /mnt/tmpdir/f ]]
+
+    # ...the read-only snapshot keeps its history:
+    [[ -e /mnt/snap/tmpdir/f ]]
+
+    umount /mnt
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+# Unsetting the tmpdir option must take effect for the subvolume it was done in:
+# the directory is no longer a tmpdir there, so its contents must be kept, even
+# though the shared ancestor snapshot still has the option set. The option does
+# not propagate the way IO/reconcile options do, so a writable snapshot
+# subvolume still inherits it and gets wiped.
+test_tmpdir_unset()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount $dev /mnt
+
+    mkdir /mnt/tmpdir
+    bcachefs set-file-option --tmpdir /mnt/tmpdir
+
+    # Snapshot while it's still a tmpdir, so both subvolumes inherit the option
+    # from a shared ancestor.
+    (cd /mnt && bcachefs subvolume snapshot snap)
+    echo hi > /mnt/snap/tmpdir/f2
+
+    # Unset before creating f, so f inherits the cleared option in this
+    # subvolume; the shared ancestor keeps it.
+    bcachefs set-file-option --remove-all /mnt/tmpdir
+    echo hi > /mnt/tmpdir/f
+
+    umount /mnt
+    mount $dev /mnt
+
+    # live subvolume: the cleared option wins, contents kept
+    [[ -e /mnt/tmpdir/f ]]
+    # writable snapshot subvolume: still inherits tmpdir -> wiped
+    [[ ! -e /mnt/snap/tmpdir/f2 ]]
+
+    umount /mnt
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+# Nested directories: the wipe recurses. Files and directories at every level
+# go; the tmpdir itself stays, back to an empty directory.
+test_tmpdir_nested()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount $dev /mnt
+
+    mkdir /mnt/tmpdir
+    bcachefs set-file-option --tmpdir /mnt/tmpdir
+    mkdir -p /mnt/tmpdir/a/b/c /mnt/tmpdir/a/d /mnt/tmpdir/e
+
+    echo x > /mnt/tmpdir/f0
+    echo x > /mnt/tmpdir/a/f1
+    echo x > /mnt/tmpdir/a/b/f2
+    echo x > /mnt/tmpdir/a/b/c/f3
+    echo x > /mnt/tmpdir/a/d/f4
+    echo x > /mnt/tmpdir/e/f5
+
+    umount /mnt
+    mount $dev /mnt
+
+    [[ -e /mnt/tmpdir ]]
+    [[ ! -e /mnt/tmpdir/f0 ]]
+    [[ ! -e /mnt/tmpdir/a ]]
+    [[ ! -e /mnt/tmpdir/e ]]
+    [[ $(stat -c %h /mnt/tmpdir) == 2 ]]
+
+    umount /mnt
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+# Deep nesting: 200 levels, to show the wipe doesn't recurse on the kernel
+# stack.
+test_tmpdir_nested_deep()
+{
+    set_watchdog 120
+    local dev=${ktest_scratch_dev[0]}
+    local i p
+
+    run_quiet "" bcachefs format -f $dev
+    mount $dev /mnt
+
+    mkdir /mnt/tmpdir
+    bcachefs set-file-option --tmpdir /mnt/tmpdir
+
+    p=/mnt/tmpdir
+    for i in $(seq 1 200); do
+        p=$p/d
+        mkdir "$p"
+    done
+    echo x > "$p/f"
+
+    [[ $(stat -c %h /mnt/tmpdir) == 3 ]]
+
+    umount /mnt
+    mount $dev /mnt
+
+    [[ -e /mnt/tmpdir ]]
+    [[ ! -e /mnt/tmpdir/d ]]
+    [[ $(stat -c %h /mnt/tmpdir) == 2 ]]
+
+    umount /mnt
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+# Wide: 500 subdirectories under one directory
+test_tmpdir_nested_wide()
+{
+    set_watchdog 120
+    local dev=${ktest_scratch_dev[0]}
+    local i
+
+    run_quiet "" bcachefs format -f $dev
+    mount $dev /mnt
+
+    mkdir /mnt/tmpdir
+    bcachefs set-file-option --tmpdir /mnt/tmpdir
+
+    for i in $(seq 1 500); do
+        mkdir /mnt/tmpdir/d$i
+        echo x > /mnt/tmpdir/d$i/f
+    done
+
+    [[ $(stat -c %h /mnt/tmpdir) == 502 ]]
+
+    umount /mnt
+    mount $dev /mnt
+
+    [[ -e /mnt/tmpdir ]]
+    [[ ! -e /mnt/tmpdir/d1 ]]
+    [[ ! -e /mnt/tmpdir/d500 ]]
+    [[ $(stat -c %h /mnt/tmpdir) == 2 ]]
+
+    umount /mnt
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+# A symlink inside a nested tmpdir is unlinked; the target
+# outside the tmpdir must survive.
+test_tmpdir_nested_symlink()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount $dev /mnt
+
+    mkdir -p /mnt/tmpdir/a/b /mnt/outside
+    bcachefs set-file-option --tmpdir /mnt/tmpdir
+
+    echo keep > /mnt/outside/keep
+    ln -s /mnt/outside/keep /mnt/tmpdir/a/b/link
+    ln -s /mnt/outside       /mnt/tmpdir/a/dirlink
+
+    umount /mnt
+    mount $dev /mnt
+
+    [[ -e /mnt/tmpdir ]]
+    [[ ! -e /mnt/tmpdir/a ]]
+    [[ -e /mnt/outside/keep ]]
+
+    umount /mnt
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+# Setting tmpdir on a directory that already has contents (including nested
+# directories) must work, and those contents must be wiped on the next mount.
+test_tmpdir_set_nonempty()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount $dev /mnt
+
+    mkdir -p /mnt/tmpdir/a/b /mnt/tmpdir/c
+    echo x > /mnt/tmpdir/a/f
+    echo x > /mnt/tmpdir/a/b/f
+    echo x > /mnt/tmpdir/c/f
+
+    bcachefs set-file-option --tmpdir /mnt/tmpdir
+
+    umount /mnt
+    mount $dev /mnt
+
+    [[ -e /mnt/tmpdir ]]
+    [[ ! -e /mnt/tmpdir/a ]]
+    [[ ! -e /mnt/tmpdir/c ]]
+    [[ $(stat -c %h /mnt/tmpdir) == 2 ]]
+
+    assert_output_lacks "filesystem marked as clean but have deleted inode" dmesg
+    assert_output_lacks "Fixed errors, running fsck a second time" dmesg
+
+    umount /mnt
+    assert_output_lacks "^u64s" bcachefs list -b deleted_inodes $dev
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+# Nested contents in a snapshotted subvolume: the live subvolume's tmpdir is
+# wiped recursively, while a read-only snapshot keeps its nested history.
+test_tmpdir_nested_snapshot()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount $dev /mnt
+
+    mkdir -p /mnt/tmpdir/a/b
+    bcachefs set-file-option --tmpdir /mnt/tmpdir
+    echo x > /mnt/tmpdir/a/b/f
+
+    (cd /mnt && bcachefs subvolume snapshot --read-only snap)
+
+    umount /mnt
+    mount $dev /mnt
+
+    [[ -e /mnt/tmpdir ]]
+    [[ ! -e /mnt/tmpdir/a ]]
+    [[ -e /mnt/snap/tmpdir/a/b/f ]]
+
+    umount /mnt
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+# Several independent nested tmpdirs in one filesystem.
+test_tmpdir_nested_multiple()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount $dev /mnt
+
+    mkdir -p /mnt/t1/a/b /mnt/t2/x/y /mnt/keep
+    bcachefs set-file-option --tmpdir /mnt/t1
+    bcachefs set-file-option --tmpdir /mnt/t2
+
+    echo x > /mnt/t1/a/b/f
+    echo x > /mnt/t2/x/y/f
+    echo keep > /mnt/keep/f
+
+    umount /mnt
+    mount $dev /mnt
+
+    [[ ! -e /mnt/t1/a ]]
+    [[ ! -e /mnt/t2/x ]]
+    [[ -e /mnt/keep/f ]]
+
+    umount /mnt
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+# Many nodes across many nested directories
+test_tmpdir_nested_large()
+{
+    set_watchdog 180
+    local dev=${ktest_scratch_dev[0]}
+    local i j
+
+    run_quiet "" bcachefs format -f $dev
+    mount $dev /mnt
+
+    mkdir /mnt/tmpdir
+    bcachefs set-file-option --tmpdir /mnt/tmpdir
+
+    for i in $(seq 1 40); do
+        mkdir -p /mnt/tmpdir/d$i/sub
+        for j in $(seq 1 25); do
+            echo x > /mnt/tmpdir/d$i/f$j
+            echo x > /mnt/tmpdir/d$i/sub/f$j
+        done
+    done
+
+    umount /mnt
+    mount $dev /mnt
+
+    [[ -e /mnt/tmpdir ]]
+    [[ ! -e /mnt/tmpdir/d1 ]]
+    [[ ! -e /mnt/tmpdir/d40 ]]
+    [[ $(stat -c %h /mnt/tmpdir) == 2 ]]
+
+    assert_output_lacks "filesystem marked as clean but have deleted inode" dmesg
+
+    umount /mnt
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+# Children inherit the tmpdir option.
+test_tmpdir_inherited_option()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount $dev /mnt
+
+    mkdir /mnt/tmpdir
+    bcachefs set-file-option --tmpdir /mnt/tmpdir
+    echo hi > /mnt/tmpdir/f
+
+    assert_output_has "tmpdir[[:space:]]1" \
+        bcachefs get-file-option --effective /mnt/tmpdir/f
+
+    umount /mnt
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+# tmpdir is a directory option only.
+test_tmpdir_non_directory()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount $dev /mnt
+
+    echo hi > /mnt/file
+    assert_fails_with "Operation not supported" \
+        bcachefs set-file-option --tmpdir /mnt/file
+
+    umount /mnt
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+# The wipe removes the contents but leaves the option on the directory.
+test_tmpdir_option_survives_wipe()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount $dev /mnt
+
+    mkdir /mnt/tmpdir
+    bcachefs set-file-option --tmpdir /mnt/tmpdir
+    echo hi > /mnt/tmpdir/f
+
+    umount /mnt
+    mount $dev /mnt
+
+    [[ -e /mnt/tmpdir ]]
+    [[ ! -e /mnt/tmpdir/f ]]
+    assert_output_has "tmpdir[[:space:]]1" \
+        bcachefs get-file-option --effective /mnt/tmpdir
+
+    umount /mnt
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+# Renaming a file out of a tmpdir clears the inherited option, so it survives
+# the next mount.
+test_tmpdir_rename_out()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount $dev /mnt
+
+    mkdir /mnt/tmpdir /mnt/keep
+    bcachefs set-file-option --tmpdir /mnt/tmpdir
+    echo hi > /mnt/tmpdir/out
+
+    mv /mnt/tmpdir/out /mnt/keep/out
+    assert_output_lacks "tmpdir" \
+        bcachefs get-file-option --effective /mnt/keep/out
+
+    umount /mnt
+    mount $dev /mnt
+
+    [[ -e /mnt/keep/out ]]
+
+    umount /mnt
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+# Empty subdirectories are removed like any other, including nested ones.
+test_tmpdir_empty_subdir()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount $dev /mnt
+
+    mkdir /mnt/tmpdir
+    bcachefs set-file-option --tmpdir /mnt/tmpdir
+    mkdir -p /mnt/tmpdir/a/b /mnt/tmpdir/c
+
+    umount /mnt
+    mount $dev /mnt
+
+    [[ -e /mnt/tmpdir ]]
+    [[ ! -e /mnt/tmpdir/a ]]
+    [[ ! -e /mnt/tmpdir/c ]]
+    [[ $(stat -c %h /mnt/tmpdir) == 2 ]]
+
+    umount /mnt
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+# Two names to one inode inside a tmpdir: both are unlinked and the inode is
+# reaped exactly once.
+test_tmpdir_hardlinks()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount $dev /mnt
+
+    mkdir /mnt/tmpdir
+    bcachefs set-file-option --tmpdir /mnt/tmpdir
+    echo hi > /mnt/tmpdir/f
+    ln /mnt/tmpdir/f /mnt/tmpdir/g
+
+    [[ $(stat -c %h /mnt/tmpdir/f) == 2 ]]
+
+    umount /mnt
+    mount $dev /mnt
+
+    [[ ! -e /mnt/tmpdir/f ]]
+    [[ ! -e /mnt/tmpdir/g ]]
+
+    umount /mnt
+    assert_output_lacks "^u64s" bcachefs list -b deleted_inodes $dev
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+# Mounting with -o fsck runs the wipe too, and must not leave clean-recovery
+# errors behind.
+test_tmpdir_fsck_mount()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount $dev /mnt
+
+    mkdir -p /mnt/tmpdir/a
+    bcachefs set-file-option --tmpdir /mnt/tmpdir
+    echo x > /mnt/tmpdir/a/f
+
+    umount /mnt
+    mount -t bcachefs -o fsck,fix_errors $dev /mnt
+
+    [[ -e /mnt/tmpdir ]]
+    [[ ! -e /mnt/tmpdir/a ]]
+    assert_output_lacks "filesystem marked as clean but have deleted inode" dmesg
+
+    umount /mnt
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+# fsync() on a tmpdir file is a no-op, and renaming the file out of the
+# tmpdir must still work. Renaming a *directory* out is refused with EXDEV,
+# because reinheriting its options would change the whole subtree.
+test_tmpdir_rename_fsync()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount $dev /mnt
+
+    mkdir /mnt/tmpdir /mnt/keep
+    bcachefs set-file-option --tmpdir /mnt/tmpdir
+
+    cat > /root/tmpdir_rename.c <<'ZZ'
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+
+static void show(const char *what, int ret)
+{
+    printf("%s = %d, errno = %d (%s)\n", what, ret, ret ? errno : 0,
+           ret ? strerror(errno) : "ok");
+}
+
+int main(int argc, char **argv)
+{
+    int fd, ret;
+
+    /* file in a tmpdir: write, fsync (a no-op for tmpdirs), rename out */
+    fd = open(argv[1], O_CREAT|O_WRONLY, 0644);
+    if (fd < 0) { perror("open"); return 1; }
+    write(fd, "x", 1);
+    errno = 0;
+    show("fsync(tmpdir file)", fsync(fd));
+    close(fd);
+
+    errno = 0;
+    ret = rename(argv[1], argv[2]);
+    show("rename(file out of tmpdir)", ret);
+
+    /* directory in a tmpdir: rename out */
+    if (mkdir(argv[3], 0755) < 0) { perror("mkdir"); return 1; }
+    errno = 0;
+    ret = rename(argv[3], argv[4]);
+    show("rename(dir out of tmpdir)", ret);
+
+    return 0;
+}
+ZZ
+
+    gcc -o /root/tmpdir_rename /root/tmpdir_rename.c
+
+    /root/tmpdir_rename /mnt/tmpdir/f /mnt/keep/f \
+                        /mnt/tmpdir/sub /mnt/keep/sub > /tmp/out 2>&1
+    cat /tmp/out
+
+    grep -q "rename(file out of tmpdir) = 0" /tmp/out ||
+        { echo "FAILED: file rename out of tmpdir did not succeed"; exit 1; }
+    grep -q "rename(dir out of tmpdir) = -1, errno = 18" /tmp/out ||
+        { echo "FAILED: dir rename out of tmpdir did not return EXDEV"; exit 1; }
+
+    assert_output_has "rename: clearing tmpdir on inode" dmesg
+
+    umount /mnt
+    mount $dev /mnt
+
+    [[ -e /mnt/keep/f ]]
+
+    umount /mnt
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+}
+
+main "$@"
