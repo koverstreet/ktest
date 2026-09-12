@@ -75,6 +75,283 @@ test_ec_umount()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# GH #1212 (daniron26): 248 bcachefs_ec_create workers wedged in
+# bch2_journal_res_get_slowpath during unmount. The superblock is never
+# released, no subsequent mount is possible, and the only recovery is
+# trigger_emergency_read_only or a reboot.
+#
+# test_ec_umount() above cannot catch this, for two reasons: it syncs before
+# unmounting, so every stripe create has already completed, and dd has exited,
+# so nothing is still producing stripes. The reported hang needs a BACKGROUND
+# producer still running at shutdown - reconcile converting to EC.
+#
+# Candidate mechanism (from reading, not yet confirmed by a run):
+#   __bch2_fs_read_only() calls bch2_fs_ec_stop() then bch2_fs_ec_flush().
+#   ec_stop walks stripe_head_list and cancels h->s; flush waits on
+#   stripe_new_list. A stripe already detached from its head and handed to the
+#   create workqueue is on the second list and unreachable from the first, so
+#   flush waits for a create that stop could not cancel. The create commits at
+#   the bottom watermark with no_check_rw, so journal pressure refuses it with
+#   journal_full - operation_blocked class, which sustains an unbounded wait.
+#
+# The umount is bounded on purpose: if it really wedges, an unguarded umount
+# burns the watchdog and takes the rest of the run with it.
+
+# Locate the sysfs dir, and fail loudly if the files we gate on aren't there.
+# The first version globbed /sys/fs/bcachefs/*/new_stripes - new_stripes is in
+# the internal/ group, so that read a nonexistent path, returned empty, and was
+# indistinguishable from "no stripes in flight". A broken probe fails in the
+# direction that looks like a clean negative, so it has to be checked, not read.
+ec_sysfs_dir()
+{
+    local d
+
+    for d in /sys/fs/bcachefs/*/; do
+	if [[ -e $d/reconcile_status && -e $d/internal/new_stripes ]]; then
+	    echo "${d%/}"
+	    return 0
+	fi
+    done
+    return 1
+}
+
+# Two facts have to hold when umount starts, or an iteration proves nothing.
+# Neither is implied by "pending reconcile is nonzero", which is what the first
+# version of this test checked - that counts work QUEUED, not work IN FLIGHT.
+#
+#   reconcile_status  reconcile is running, rather than parked in the io_clock
+#                     wait. "waiting:" is that park, and is #347's symptom.
+#   new_stripes       something is listed under "in flight:", i.e. present on
+#                     stripe_new_list. That list is what bch2_fs_ec_flush()
+#                     waits on, and per #348 the wait is MAX_SCHEDULE_TIMEOUT
+#                     with no shutdown escape - so it is the state that wedges.
+ec_umount_armed()
+{
+    local sysfs status stripes
+
+    sysfs="$1"
+    status="$(cat "$sysfs/reconcile_status" 2>/dev/null || true)"
+    stripes="$(cat "$sysfs/internal/new_stripes" 2>/dev/null || true)"
+
+    if [[ -z $status ]]; then
+	return 1
+    fi
+    if [[ $status == waiting:* ]]; then
+	return 1
+    fi
+
+    [[ -n "$(sed -n '/^in flight:/,$p' <<<"$stripes" | tail -n +2)" ]]
+}
+
+# Everything we need to tell the two "reconcile is asleep" cases apart:
+# asleep with a backlog (#347) vs asleep because the conversion finished.
+ec_dump_state()
+{
+    local sysfs="$1"
+
+    echo "--- reconcile_status ---"
+    cat "$sysfs/reconcile_status" || true
+    echo "--- reconcile_scan_pending ---"
+    cat "$sysfs/reconcile_scan_pending" || true
+    echo "--- internal/new_stripes ---"
+    cat "$sysfs/internal/new_stripes" || true
+    echo "--- pending reconcile work ---"
+    bcachefs fs usage -h /mnt 2>&1 | grep -iE 'pending|stripe|erasure' || true
+}
+
+# Reconcile parks on the io clock, and the io clock only advances on write IO.
+# In the previous version the only writer was a dd that had already exited, so
+# once reconcile parked nothing could advance the clock except reconcile itself
+# - it ended up waiting on traffic only it would have generated. daniron26's
+# filesystem was taking GB of writes throughout. So the load has to be
+# sustained for the whole iteration, not a burst that finishes first.
+# setsid so the writer is a process group leader: killing the shell that runs
+# the loop does NOT kill the dd it is currently blocked in, and a surviving dd
+# holds /mnt open, so umount returns EBUSY at once. That looked exactly like a
+# wedge in the first run - "770 D dd balance_dirty_pages_ratelimited_flags" in
+# the D-state dump was the whole story. Kill the group, not the shell.
+# Sets $ec_writer_pid rather than echoing it, and sends the child's output to
+# /dev/null. Both matter: `writer="$(start)"` deadlocks, because the setsid'd
+# writer inherits the command substitution's stdout and the substitution blocks
+# until every holder of that pipe exits - which this loop never does. Cost me a
+# 40-minute run that sat on "=== iteration 1 ===" and burned the watchdog.
+ec_background_writer_start()
+{
+    setsid bash -c '
+	i=0
+	while true; do
+	    dd if=/dev/zero of="/mnt/bg.$((i % 4))" bs=1M count=256 2>/dev/null || break
+	    i=$((i + 1))
+	done' >/dev/null 2>&1 &
+    ec_writer_pid=$!
+}
+
+# Which processes hold a path under $1? Straight out of procfs, because fuser
+# and lsof are not guaranteed present in the test image - and a missing probe
+# reports "nothing holds it", which is the same shape of silent false negative
+# that made the previous run claim a wedge.
+ec_path_holders()
+{
+    local dir="$1" p link target
+
+    for p in /proc/[0-9]*; do
+	for link in "$p"/cwd "$p"/fd/*; do
+	    target="$(readlink "$link" 2>/dev/null)" || continue
+	    if [[ $target == "$dir" || $target == "$dir"/* ]]; then
+		echo "${p#/proc/} $(cat "$p/comm" 2>/dev/null) -> $target"
+		continue 2
+	    fi
+	done
+    done
+}
+
+ec_background_writer_stop()
+{
+    local writer="$1" waited=0 holders
+
+    kill -- -"$writer" 2>/dev/null || true
+    wait "$writer" 2>/dev/null || true
+
+    # Don't take the kill's word for it: anything still holding /mnt makes the
+    # umount below fail for a reason that has nothing to do with GH #1212.
+    while true; do
+	holders="$(ec_path_holders /mnt)"
+	if [[ -z $holders ]]; then
+	    return 0
+	fi
+	if (( waited >= 30 )); then
+	    echo "WARNING: /mnt still held after ${waited}s:"
+	    echo "$holders"
+	    return 1
+	fi
+	sleep 1
+	waited=$((waited + 1))
+    done
+}
+
+test_ec_umount_reconcile_inflight()
+{
+    set_watchdog 2700
+
+    local devs sysfs rc=0 armed=0 i waited
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
+
+    for i in $(seq 1 6); do
+	echo "=== iteration $i ==="
+
+	# Format every iteration: the conversion backlog is the whole point,
+	# and after the first pass the previous run's extents are already
+	# striped, so every later iteration would start with nothing to do.
+	run_quiet "" bcachefs format -f		\
+	    --replicas=2			\
+	    "${ktest_scratch_dev[@]}"
+	mount -t bcachefs $devs /mnt
+
+	if ! sysfs="$(ec_sysfs_dir)"; then
+	    echo "FAILED: no sysfs dir with both reconcile_status and"
+	    echo "internal/new_stripes - the test cannot observe its own"
+	    echo "precondition, so it cannot report a negative"
+	    umount /mnt
+	    return 1
+	fi
+
+	# A working set written WITHOUT erasure coding...
+	dd if=/dev/zero of=/mnt/bulk bs=1M count=2048 2>/dev/null
+	sync
+
+	# ...so turning EC on hands reconcile a whole-filesystem conversion
+	# backlog. This is the field condition - daniron26 was converting to
+	# EC 4+1 and evacuating a device.
+	# On the mountpoint, not the devices: set-fs-option opens devices
+	# exclusively, so passing them while mounted is EBUSY.
+	bcachefs set-fs-option --erasure_code /mnt
+
+	# Sustained load for the rest of the iteration: keeps the io clock
+	# advancing so reconcile can't park, and keeps stripes forming.
+	ec_background_writer_start
+
+	waited=0
+	while ! ec_umount_armed "$sysfs"; do
+	    if (( waited >= 120 )); then
+		break
+	    fi
+	    sleep 1
+	    waited=$((waited + 1))
+	done
+
+	echo "--- state with writer running, after ${waited}s ---"
+	ec_dump_state "$sysfs"
+
+	if ! ec_umount_armed "$sysfs"; then
+	    echo "NOT ARMED after ${waited}s: reconcile idle, or nothing on"
+	    echo "stripe_new_list. This iteration tests nothing."
+	    ec_background_writer_stop "$ec_writer_pid" || true
+	    umount /mnt
+	    continue
+	fi
+
+	armed=$((armed + 1))
+	echo "armed after ${waited}s (reconcile running, stripe in flight)"
+
+	# The writer holds files open, so it has to go before umount can
+	# proceed at all. Re-dump after: if stopping it drains stripe_new_list
+	# before umount starts, that's the thing to see, not to guess at.
+	if ! ec_background_writer_stop "$ec_writer_pid"; then
+	    echo "FAILED: writer outlived the kill and still holds /mnt - any"
+	    echo "umount failure below would be EBUSY, not GH #1212"
+	    return 1
+	fi
+
+	echo "--- state after writer stopped, entering umount ---"
+	ec_dump_state "$sysfs"
+
+	# timeout(1) returns 124 only when it actually timed out; any other
+	# nonzero is umount's own status. Conflating them is how the previous
+	# run reported "did not complete in 240s - candidate GH #1212 repro"
+	# for an EBUSY that came back in milliseconds.
+	urc=0
+	timeout 240 umount /mnt || urc=$?
+
+	if (( urc != 0 && urc != 124 )); then
+	    echo "FAILED: umount returned $urc, not a timeout - test bug, not a wedge"
+	    echo "holders of /mnt:"
+	    ec_path_holders /mnt
+	    return 1
+	fi
+
+	if (( urc == 124 )); then
+	    echo "ERROR: umount did not complete in 240s - candidate GH #1212 repro"
+	    echo "--- tasks in D state ---"
+	    ps -eo pid,stat,comm,wchan:32 | grep -E '^\s*[0-9]+\s+D' || true
+	    echo "--- bcachefs kernel threads/workers ---"
+	    ps -eo pid,stat,comm,wchan:32 | grep -iE 'bcachefs|ec_create' || true
+	    echo "--- did the journal complain? ---"
+	    dmesg | grep -i 'journal stuck' || echo "  (no 'Journal stuck?' in dmesg)"
+	    echo "--- stacks of blocked tasks ---"
+	    echo w > /proc/sysrq-trigger || true
+	    rc=1
+	    break
+	fi
+    done
+
+    if [[ $rc != 0 ]]; then
+	echo "FAILED: unmount wedged with reconcile EC work in flight"
+	return 1
+    fi
+
+    # Never arming means the workload is wrong, not that the bug is absent.
+    # Failing here is the point: a green result that tested nothing is worse
+    # than a red one.
+    if (( armed == 0 )); then
+	echo "FAILED: no iteration reached the precondition - workload does not"
+	echo "set up the state GH #1212 needs, so this run proves nothing"
+	return 1
+    fi
+
+    echo "umount completed on all $armed armed iteration(s) of $i - not reproduced"
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+}
+
 do_ec_test()
 {
     set_watchdog 240
@@ -682,6 +959,117 @@ test_device_evacuate_offline()
 test_device_evacuate_online()
 {
     do_remove_test 0 1
+}
+
+# Removing a device from a stripe doesn't delete the extents in its block:
+# their pointer becomes BCH_SB_MEMBER_INVALID and they keep the stripe
+# pointer, so reconstruct still serves them. Do it enough times and the
+# stripe drops below nr_data, at which point every one of those extents is
+# gone for good - and until "ec: record damage when forced removal kills a
+# stripe" nothing said so. The stripe key names no inode and the extents
+# aren't visited by that pass, so `damage ls` stayed empty and the user
+# found out by opening a file.
+#
+# The removals are aimed rather than arbitrary: the geometry and the
+# devices holding the blocks come from the stripe itself, so we take out
+# nr_redundant + 1 of THAT stripe's devices.
+#
+# Reading the file back is the control. If it still reads then nothing was
+# lost, an empty `damage ls` would be correct rather than a bug, and the
+# run has said nothing - so the test reports that instead of passing.
+test_ec_force_remove_records_damage()
+{
+    ktest_expect_sb_errors="data_lost_device_removed"
+    ktest_expect_device_errors=1
+    set_watchdog 300
+
+    # Explicit bucket size so bcachefs_first_stripe_blocks has a real one to
+    # convert block offsets with - ec.ktest doesn't otherwise define it.
+    local bucket_kb=512
+
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	--bucket_size=${bucket_kb}k		\
+	"${ktest_scratch_dev[@]}"
+    local devs="$(join_by : "${ktest_scratch_dev[@]}")"
+
+    mount -t bcachefs "$devs" /mnt
+    dd if=/dev/urandom of=/mnt/testfile bs=1M count=64 oflag=direct
+    sync
+    umount /mnt
+
+    local info=$(bcachefs list -b stripes "${ktest_scratch_dev[@]}" |
+		 bcachefs_first_stripe_blocks $((bucket_kb * 2)))
+    local nr_data=$(awk '/^meta/ {print $2}' <<<"$info")
+    local nr_red=$(awk '/^meta/ {print $3}' <<<"$info")
+
+    if [[ ! $nr_data =~ ^[0-9]+$ ]] || ((nr_red == 0)); then
+	echo "no usable stripe: the workload never formed one, so this run says"
+	echo "nothing about forced removal killing a stripe."
+	bcachefs list -b stripes "${ktest_scratch_dev[@]}" | head
+	return 1
+    fi
+    echo "stripe is ${nr_data}:${nr_red}; removing $((nr_red + 1)) of its devices"
+
+    # Member index -> path: ktest_scratch_dev is in format order, which is
+    # the order bcachefs assigned indices.
+    local -a victims=()
+    local idx
+    for idx in $(awk '/^block/ {print $3}' <<<"$info" | sort -un); do
+	victims+=("${ktest_scratch_dev[$idx]}")
+	((${#victims[@]} > nr_red)) && break
+    done
+
+    if ((${#victims[@]} < nr_red + 1)); then
+	echo "stripe spans only ${#victims[@]} devices, can't take it below nr_data"
+	return 1
+    fi
+
+    mount -t bcachefs "$devs" /mnt
+
+    if [[ -n $(bcachefs damage ls /mnt) ]]; then
+	echo "ERROR: damage recorded before anything was removed"
+	bcachefs damage ls /mnt
+	return 1
+    fi
+
+    local dev
+    for dev in "${victims[@]}"; do
+	echo "removing $dev"
+	bcachefs device remove --force "$dev"
+    done
+
+    echo "damage after the removals:"
+    bcachefs damage ls /mnt
+
+    # The control: the file has to actually be broken. cat succeeding means
+    # the removals cost us nothing and there is nothing to record.
+    if cat /mnt/testfile >/dev/null 2>&1; then
+	echo "testfile still reads after $((nr_red + 1)) forced removals: no data"
+	echo "was lost, so this run can't tell whether the loss gets recorded."
+	umount /mnt
+	return 1
+    fi
+
+    local ok=1
+    bcachefs damage ls /mnt | grep -qE "^testfile: .*data_lost_device_removed" || ok=0
+
+    umount /mnt
+
+    # Which half broke: an empty damage btree means nothing recorded, keys
+    # with no ioctl output means the surface over them is wrong, and the
+    # counters say whether the removal path saw the loss at all.
+    if ((!ok)); then
+	echo "ERROR: forced removal destroyed testfile and recorded no damage for it"
+	echo "--- damage btree:"
+	bcachefs kvdb "${ktest_scratch_dev[1]}" -c "list damage" || true
+	echo "--- sb error counters:"
+	bcachefs show-super -f errors "${ktest_scratch_dev[1]}" || true
+	return 1
+    fi
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[1]}
 }
 
 test_device_failed()
