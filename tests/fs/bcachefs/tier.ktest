@@ -1029,4 +1029,128 @@ test_reconcile_data_target_overfull()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# Disk reservations at replicas > 1 - GH #1221. Here for the devices, not the
+# tiering: raw sectors free say nothing about whether N copies fit on N
+# distinct devices, and this file already has four unequal ones.
+#
+# cehteh had 2x200G + 400G + 2T at replicas=3. When the 200G devices filled
+# there was nowhere for a third copy, but 2T of raw space remained, so bcachefs
+# kept writing at fewer copies than asked for. With per-device free space
+# d_1 >= ... >= d_m, the most storable at n replicas is
+#
+#	usable(n) = min over k in 0..n-1 of (sum of all but the k largest)/(n-k)
+#
+# On 1G+1G+16G+16G: usable(3) = min(34G/3, 18G/2, 2G/1) = 2G, against a naive
+# total/3 of 11.3G. Don't retarget this at replicas=2 - usable(2) is 17G, which
+# is the naive answer too, so it can't tell a fixed build from a broken one.
+test_disk_reservation()
+{
+    set_watchdog 600
+
+    local sectors_per_G=2097152
+
+    run_quiet "" bcachefs format -f		\
+	--block_size=4k				\
+	--bucket_size=128k			\
+	--replicas=3				\
+	"${ktest_scratch_dev[@]:0:4}"
+
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]:0:4}")" /mnt
+
+    # Resolve and check before parsing: an unmatched glob is passed through
+    # literally, and awk on a nonexistent file yields an empty array, which then
+    # dies as an unbound variable naming nothing. Say which assumption broke.
+    local sysfs=(/sys/fs/bcachefs/*/internal/)
+    [[ -r ${sysfs[0]}alloc_debug ]] || {
+	echo "FAIL: no readable alloc_debug under /sys/fs/bcachefs/*/internal - contents:"
+	ls -la /sys/fs/bcachefs/*/ /sys/fs/bcachefs/*/internal/ 2>&1
+	exit 1
+    }
+
+    # "slots", not "placeable": slots is the exclusive partition, which is what
+    # we want to check the structure of. alloc_debug's "placeable" rows are
+    # already the running sum of it, and summing those again is nonsense.
+    local avail=($(awk '
+	/^sectors_available slots/	{ n = 1; next }
+	/^[^ \t]/			{ n = 0 }
+	n && $1 ~ /^[0-9]x$/		{ print $2 }
+    ' "${sysfs[0]}alloc_debug"))
+    ((${#avail[@]} == 4)) || {
+	echo "FAIL: parsed ${#avail[@]} replica counts from ${sysfs[0]}alloc_debug, expected 4:"
+	cat "${sysfs[0]}alloc_debug"
+	exit 1
+    }
+    echo "slots: ${avail[0]} ${avail[1]} ${avail[2]} ${avail[3]}"
+
+    # The slots are exclusive - avail[n-1] is space placeable at n replicas and
+    # NOT at n+1 - so what's placeable at n replicas is the sum from n upwards.
+    local placeable=() n j s
+    for n in 1 2 3 4; do
+	s=0
+	for ((j = n; j <= 4; j++)); do
+	    s=$((s + avail[j - 1]))
+	done
+	placeable+=($s)
+    done
+    echo "placeable: 1x ${placeable[0]}, 3x ${placeable[2]}"
+
+    # 34G at one replica, 6G at three. Windows rather than equalities: sb and
+    # journal come off each device first, and it's the two 1G devices - the
+    # binding ones - that feel that most. Nothing can exceed the ideal, and a
+    # build answering total/n puts 3x up at 1x, far above its ceiling.
+    ((placeable[0] > 34 * sectors_per_G * 8 / 10 && placeable[0] <= 34 * sectors_per_G)) ||
+	{ echo "FAIL: 1 replica is ${placeable[0]}, expected ~34G of sectors"; exit 1; }
+    ((placeable[2] > 6 * sectors_per_G * 8 / 10 && placeable[2] <= 6 * sectors_per_G)) ||
+	{ echo "FAIL: 3 replicas is ${placeable[2]}, expected ~6G of sectors (GH #1221)"; exit 1; }
+
+    # Anything placeable at n+1 replicas is placeable at n - you just write one
+    # fewer copy - so this has to hold for any device shape. It doesn't if the
+    # count is computed as (placeable data) * n: that truncates, by more at
+    # higher n, and on uniform devices it puts 3 replicas below 4. It's also
+    # what keeps the partition above from going negative.
+    for n in 1 2 3; do
+	((placeable[n - 1] >= placeable[n])) ||
+	    { echo "FAIL: ${n}x placeable ${placeable[n-1]} < $((n+1))x placeable ${placeable[n]}"; exit 1; }
+    done
+
+    # The write path first, which is how cehteh met it, and while the
+    # filesystem is still empty - a failed fallocate leaves its file behind,
+    # and space from a deleted one doesn't necessarily come back by the next
+    # statement. bcachefs reserves in write(), so dd sees the ENOSPC itself
+    # rather than losing it at writeback.
+    #
+    # Two sided deliberately: ~2016M fits, so the upper bound is the assertion
+    # (the naive number would let all 3072M through) and the lower bound is the
+    # control. Without it "wrote 0M" passes, which is exactly what this did
+    # when the fallocates ran first.
+    dd if=/dev/urandom of=/mnt/fill bs=1M count=3072 2>&1 | tail -n3 || true
+    sync
+    local written=$(du -m --apparent-size /mnt/fill | cut -f1)
+    echo "wrote ${written}M before running out"
+    ((written > 1024 && written < 2560)) ||
+	{ echo "FAIL: wrote ${written}M, expected ~2016M - only ~2G can hold three copies, but it must hold that much"; exit 1; }
+    rm /mnt/fill
+    sync
+
+    # fallocate goes straight through bch2_disk_reservation_add(), no writeback
+    # in the way. 1G is under both the real limit (2G) and the naive one, so
+    # it's the control - and it doubles as proof the rm above gave the space
+    # back. 4G is over the real limit and under the naive one, so it's the
+    # assertion.
+    fallocate -l 1G /mnt/small ||
+	{ echo "FAIL: 1G fallocate failed, ~2G should be placeable three times"; exit 1; }
+    rm /mnt/small
+
+    if fallocate -l 4G /mnt/toobig; then
+	cat "${sysfs[0]}alloc_debug"
+	echo "FAIL: 4G fallocate succeeded at replicas=3, only ~2G can hold three copies"
+	exit 1
+    fi
+    rm -f /mnt/toobig
+
+    umount /mnt
+    # A write that placed fewer copies than it accounted for surfaces here.
+    bcachefs fsck -ny "${ktest_scratch_dev[@]:0:4}"
+}
+
 main $@
