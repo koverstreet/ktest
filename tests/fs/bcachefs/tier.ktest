@@ -1153,4 +1153,78 @@ test_disk_reservation()
     bcachefs fsck -ny "${ktest_scratch_dev[@]:0:4}"
 }
 
+# The slots have to be exclusive, or reservations at different replica counts
+# draw the same sectors twice. This is the case that catches it.
+#
+# The overlap was in the fs-wide pools, not just the percpu caches, so it
+# doesn't need a race: filling to 2G short of what's placeable at 1 replica
+# leaves the 1x pool with space, so nothing triggers a recalc, so the 3x pool
+# is still sitting there holding its own view of sectors the 1x reservation
+# already took.
+#
+#   34G of disk, placeable(1) ~30G, placeable(3) ~5G
+#   placeable(1) - 2G at 1 replica	->  2G of disk left
+#   1.5G at 3 replicas = 4.5G		->  must fail, and did not before the partition
+#
+# Sized from what fs usage says is placeable, not hardcoded: the copygc
+# reserve moved capacity once already, and a hardcoded 31G made the control
+# fail with nothing wrong.
+test_disk_reservation_exclusive()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f		\
+	--block_size=4k				\
+	--bucket_size=128k			\
+	--replicas=1				\
+	"${ktest_scratch_dev[@]:0:4}"
+
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]:0:4}")" /mnt
+
+    local usage=$(bcachefs fs usage /mnt)
+    local free1=$(awk '/^Free:/ { print $2; exit }' <<<"$usage")
+    local free3=$(awk '/at 3 replicas:/ { print $4; exit }' <<<"$usage")
+    local three=$((3 * 1536 << 20))
+    local fill=$(((free1 - (2 << 30)) >> 20 << 20))
+
+    echo "placeable at 1 replica: $free1, at 3: $free3, filling $fill at 1"
+
+    # The premise: 1.5G at 3 fits the 3x pool's view of an empty filesystem,
+    # so only exclusivity can refuse it below.
+    (( free3 > three )) ||
+	{ echo "FAIL: premise - 1.5G at 3 replicas ($three) doesn't fit in $free3 placeable"; exit 1; }
+
+    # Control: if this fails the test is measuring something other than what
+    # it thinks.
+    fallocate -l $fill /mnt/one ||
+	{ echo "FAIL: $fill at 1 replica failed, $free1 should be placeable"; exit 1; }
+
+    mkdir /mnt/three
+    bcachefs set-file-option --data_replicas=3 /mnt/three
+
+    # 4.5G of disk against the 2G left. Fits the 3x pool's stale view of the
+    # world, which is the bug.
+    if fallocate -l 1536M /mnt/three/big; then
+	cat /sys/fs/bcachefs/*/internal/alloc_debug
+	echo "FAIL: 1.5G at 3 replicas (4.5G of disk) granted after $fill of $free1"
+	echo "      was already reserved at 1 - the slots are double counting"
+	exit 1
+    fi
+
+    # And the reverse ordering, since the draw walks upwards from its own slot
+    # and the two directions aren't symmetric.
+    rm /mnt/one
+    sync
+    fallocate -l 1536M /mnt/three/big ||
+	{ echo "FAIL: 1.5G at 3 replicas failed on an empty filesystem"; exit 1; }
+    if fallocate -l $fill /mnt/one; then
+	cat /sys/fs/bcachefs/*/internal/alloc_debug
+	echo "FAIL: $fill at 1 replica granted after 4.5G of $free1 was reserved at 3"
+	exit 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]:0:4}"
+}
+
 main $@
