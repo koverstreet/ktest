@@ -47,6 +47,7 @@
             vde2
             virtiofsd
             rust-bindgen
+            openssl
           ];
         };
     });
