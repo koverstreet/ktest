@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# Regression test for write-buffer journal-pin publication.
+# Requires the test hook and a fresh bcachefs module load (one-shot hook).
+# Run in a disposable VM; no other filesystem may consume the hook first.
+
+here=$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")
+# shellcheck source=/dev/null
+. "$here/bcachefs-test-libs.sh"
+
+config-scratch-devs 1G
+config-timeout 90
+
+write_buffer_pin_cleanup()
+{
+    set +e
+    echo 0 > /sys/module/bcachefs/parameters/wb_pin_publication 2>/dev/null
+    umount /mnt >/dev/null 2>&1
+}
+
+test_write_buffer_pin_publication()
+{
+    # Populated by config-scratch-devs.
+    # shellcheck disable=SC2154
+    local dev=${ktest_scratch_dev[0]}
+    local param=/sys/module/bcachefs/parameters/wb_pin_publication
+    local marker="WB_PIN_TEST_BEGIN_${BASHPID}_${RANDOM}"
+    local ret=0
+
+    set_watchdog 75
+    trap 'write_buffer_pin_cleanup; kill_descendants $BASHPID' EXIT
+    [[ -w $param ]] || {
+	echo "missing write-buffer publication test hook: $param" >&2
+	return 1
+    }
+    run_quiet "" bcachefs format -f --compression=none --replicas=1 "$dev"
+    # Preserve ktest's TEST marker and ignore observations from earlier tests.
+    printf '%s\n' "$marker" > /dev/kmsg
+    echo 1 > "$param"
+    if ! mount -t bcachefs -o noreconcile_enabled,nocopygc_enabled "$dev" /mnt; then
+	echo 0 > "$param" || true
+	return 1
+    fi
+    # Do not leave the global one-shot hook enabled for later filesystems.
+    echo 0 > "$param"
+    [[ $(< "$param") == N ]]
+    dmesg > /tmp/write-buffer-pin-full.log
+    awk -v marker="$marker" 'index($0, marker) { seen = 1; next }
+	seen { print } END { if (!seen) exit 1 }' \
+	/tmp/write-buffer-pin-full.log > /tmp/write-buffer-pin.log || {
+	echo "write-buffer test marker missing; diagnostic coverage lost" >&2
+	ret=1
+    }
+
+    local observer_ret=0
+    awk '
+	/WB_PIN_REPRO staged flushing=[1-9][0-9]* fpin=0([^0-9]|$)/ {
+	    staged = 1
+	    saw_staged = 1
+	    next
+	}
+	/WB_PIN_REPRO observer (lock unavailable|drained; retrying)/ {
+	    staged = 0
+	    next
+	}
+	staged && /WB_PIN_REPRO observer flushing=[1-9][0-9]* fpin=0([^0-9]|$)/ {
+	    exposed = 1
+	    staged = 0
+	    next
+	}
+	staged && /WB_PIN_REPRO observer flushing=[1-9][0-9]* fpin=[1-9][0-9]*/ {
+	    protected = 1
+	    staged = 0
+	}
+	END {
+	    if (!saw_staged)
+		exit 3
+	    if (exposed)
+		exit 1
+	    if (protected)
+		exit 0
+	    exit 2
+	}' /tmp/write-buffer-pin.log || observer_ret=$?
+
+    case $observer_ret in
+	0) ;;
+	1)
+	    echo "write-buffer keys were visible without a journal pin" >&2
+	    ret=1
+	    ;;
+	2)
+	    echo "write-buffer observer did not complete a valid observation" >&2
+	    ret=1
+	    ;;
+	3)
+	    echo "write-buffer hook did not establish an initially unpinned buffer" >&2
+	    ret=1
+	    ;;
+	*)
+	    echo "write-buffer observer oracle failed: $observer_ret" >&2
+	    ret=1
+	    ;;
+    esac
+    grep 'WB_PIN_REPRO' /tmp/write-buffer-pin.log || true
+
+    umount /mnt
+    trap 'kill_descendants $BASHPID' EXIT
+    bcachefs fsck -ny "$dev"
+    bcachefs_test_end_checks "$dev"
+    return "$ret"
+}
+
+main "$@"
