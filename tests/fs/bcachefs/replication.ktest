@@ -545,6 +545,87 @@ test_device_set_state_capacity()
     umount /mnt
 }
 
+# 8M to /mnt/$2 via write path $1
+write_8m()
+{
+    case $1 in
+    buffered)	dd if=/dev/zero of=/mnt/$2 bs=1M count=8 conv=fsync ;;
+    direct)	dd if=/dev/zero of=/mnt/$2 bs=1M count=8 oflag=direct ;;
+    fallocate)	fallocate -l 8M /mnt/$2 ;;
+    esac
+}
+
+# write_degraded (bcachefs#1221): with fewer rw devices than replicas, the
+# default is to write at the replicas we can place rather than return ENOSPC -
+# the missing device will come back, and refusing writes until then is worse.
+# write_degraded=no refuses them.
+#
+# Two devices at replicas=2, one set ro: nothing is placeable at 2 replicas, so
+# every write path either falls back to 1 or fails. Each has its own
+# reservation: buffered writes reserve in write() via the pagecache, direct IO
+# and fallocate reserve directly. The disk_reservation_degraded counter says a
+# write actually took the fallback, as opposed to squeezing into stale capacity.
+#
+# All paths are checked and all failures reported, so one run says which paths
+# are broken.
+test_write_degraded()
+{
+    set_watchdog 120
+
+    run_quiet "" bcachefs format -f		\
+	--replicas=2				\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+    bcachefs device set-state --force ro ${ktest_scratch_dev[1]}
+
+    local counter=$(echo /sys/fs/bcachefs/*/counters/disk_reservation_degraded)
+    local opt=$(echo /sys/fs/bcachefs/*/options/write_degraded)
+    local failed=0 kind
+
+    degraded_since_mount() { awk '/since mount/ { print $3 }' $counter; }
+
+    for kind in buffered direct fallocate; do
+	local before=$(degraded_since_mount) ret=0
+
+	write_8m $kind $kind || ret=$?
+
+	local size=$(stat -c %s /mnt/$kind 2>/dev/null || echo 0)
+	echo "$kind: exit $ret, size $size, degraded since mount: $before -> $(degraded_since_mount)"
+
+	if (( ret || size != 8 << 20 )); then
+	    echo "FAIL: $kind write failed on a degraded fs with write_degraded=degraded"
+	    failed=1
+	elif [[ $(degraded_since_mount) == "$before" ]]; then
+	    echo "FAIL: $kind write succeeded without taking the degraded fallback"
+	    failed=1
+	fi
+    done
+
+    echo no > $opt
+    for kind in buffered direct fallocate; do
+	local ret=0 err=$ktest_out/$kind-no.err
+
+	write_8m $kind $kind-no 2>$err || ret=$?
+
+	local size=$(stat -c %s /mnt/$kind-no 2>/dev/null || echo 0)
+	echo "$kind, write_degraded=no: exit $ret, size $size: $(grep -m1 -i "error\|failed" $err)"
+
+	if (( ! ret )) || ! grep -q "No space left on device" $err; then
+	    echo "FAIL: $kind write with write_degraded=no should fail with ENOSPC"
+	    failed=1
+	fi
+    done
+    echo degraded > $opt
+
+    bcachefs device set-state rw 1 /mnt
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    (( ! failed ))
+}
+
 test_device_set_state_offline()
 {
     set_watchdog 120
