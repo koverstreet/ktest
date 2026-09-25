@@ -505,6 +505,46 @@ test_device_ro()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# bcachefs#1157: capacity has to follow device state. bch2_recalc_capacity()
+# used to decide from ca->mi.state, which a state change writes only after it
+# has recalculated - so a device set ro kept counting towards capacity
+# indefinitely.
+test_device_set_state_capacity()
+{
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f		\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+
+    local both=$(stat -f -c '%b' /mnt)
+    echo "capacity, both devices rw: $both"
+
+    for state in ro spare evacuating; do
+	bcachefs device set-state --force $state ${ktest_scratch_dev[1]}
+
+	local one=$(stat -f -c '%b' /mnt)
+	echo "capacity, dev 1 $state: $one"
+	if (( one * 4 > both * 3 )); then
+	    echo "capacity didn't drop with dev 1 $state"
+	    return 1
+	fi
+
+	bcachefs device set-state rw 1 /mnt
+
+	local again=$(stat -f -c '%b' /mnt)
+	echo "capacity, dev 1 rw again: $again"
+	if (( again != both )); then
+	    echo "capacity didn't come back with dev 1 rw"
+	    return 1
+	fi
+    done
+
+    umount /mnt
+}
+
 test_device_set_state_offline()
 {
     set_watchdog 120
