@@ -2197,4 +2197,48 @@ test_device_model_stored_partition()
     [[ -n $stored ]] || { echo "FAIL: device model not stored for partition $part (#595)"; return 1; }
 }
 
+# Replace-in-place via O_TRUNC (`date | tee f`, editors, config writers): the
+# truncate commits with the next journal write, the new data sits dirty for
+# dirty_expire (30s), so a crash in between leaves an empty file. bcachefs
+# starts writeback on close of a file that was truncated to 0 - the same
+# workaround as ext4's auto_da_alloc - see DOC(replace-in-place) in
+# fs/vfs/fs.c.
+#
+# The crash comes a few seconds after close: long enough for the writeback we
+# start and a journal commit, well short of dirty_expire, so without the
+# flush every file comes back empty. The old contents are on disk beforehand,
+# so an empty file can only be the truncate winning the race.
+test_truncate_rewrite_flush_on_close()
+{
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    local i
+    for i in {0..9}; do echo "old $i" > /mnt/$i; done
+    umount /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    for i in {0..9}; do echo "new $i" > /mnt/$i; done
+    sleep 5
+
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+    umount /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    local bad=0
+    for i in {0..9}; do
+	local got=$(cat /mnt/$i)
+	echo "$i: size $(stat -c %s /mnt/$i): $got"
+	[[ $got == "new $i" ]] || bad=1
+    done
+    umount /mnt
+
+    if (( bad )); then
+	echo "FAIL: truncated and rewritten files lost their new contents across a crash"
+	return 1
+    fi
+}
+
 main "$@"
