@@ -1557,4 +1557,74 @@ test_ec_encrypted_degraded_read()
 
     umount /mnt
 }
+
+# Stripe reconcile work, as printed - "MISSING" if there's no row, which must
+# not read as "none".
+ec_reconcile_stripes()
+{
+    bcachefs reconcile status /mnt 2>/dev/null |
+	awk '/^[[:space:]]*stripes:/	{ print $2; found = 1 }
+	     END			{ if (!found) print "MISSING" }'
+}
+
+# tools#929: evacuating marks every stripe with a block on the device
+# needs_reconcile and queues it in reconcile_hipri. Set the device back to rw
+# before those are rebuilt, and nothing cleared the bit: stripe repair found the
+# stripe not degraded and returned without touching it, so reconcile revisited
+# the whole queue forever, doing no IO.
+test_ec_evacuate_cancelled()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	"${ktest_scratch_dev[@]}"
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+    local sysfs=$(echo /sys/fs/bcachefs/*/)
+
+    dd if=/dev/urandom of=/mnt/data bs=1M count=2048 status=none
+    sync
+    local want=$(md5sum < /mnt/data)
+
+    bcachefs device set-state -f evacuating ${ktest_scratch_dev[0]}
+
+    # Wait for the device scan to mark stripes, then pause reconcile before
+    # it rebuilds them all:
+    local stripes waited=0
+    while stripes=$(ec_reconcile_stripes); [[ $stripes == 0 ]] && (( waited < 60 )); do
+	sleep 1
+	waited=$((waited + 1))
+    done
+    echo 0 > $sysfs/options/reconcile_enabled
+
+    stripes=$(ec_reconcile_stripes)
+    echo "stripe reconcile work queued by the evacuate: $stripes"
+    if [[ $stripes == 0 || $stripes == MISSING ]]; then
+	echo "ERROR: no stripes queued ($stripes) - this run tests nothing"
+	return 1
+    fi
+
+    bcachefs device set-state rw ${ktest_scratch_dev[0]}
+    echo 1 > $sysfs/options/reconcile_enabled
+
+    timeout 60 bcachefs reconcile wait /mnt || true
+    bcachefs reconcile status /mnt
+
+    stripes=$(ec_reconcile_stripes)
+    if [[ $stripes != 0 ]]; then
+	echo "ERROR: $stripes of stripe reconcile work still queued after the"
+	echo "       evacuation was cancelled - reconcile will revisit it forever"
+	return 1
+    fi
+
+    if [[ $(md5sum < /mnt/data) != "$want" ]]; then
+	echo "ERROR: data changed"
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
 main "$@"
