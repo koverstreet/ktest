@@ -512,8 +512,13 @@ start_vm()
     # =y, so the kernel has no console at early boot unless we point it at
     # the right one explicitly. Built-from-source ktest kernels have it =y
     # and pick it automatically, so we only inject this for -k <name> mode.
+    #
+    # They also have CONFIG_PRINTK_TIME=y: the test markers go through
+    # /dev/kmsg, so they'd come out as "[   25.18] ========= TEST ..." and
+    # the supervisor, which matches them at the start of the line, would
+    # never see a test start or finish.
     if [[ -n ${ktest_kernel_name:-} ]]; then
-	kernelargs+=(console=hvc0)
+	kernelargs+=(console=hvc0 printk.time=0)
     fi
     $ktest_kgdb		&& kernelargs+=(kgdboc=ttyS0,115200 nokaslr)
     $ktest_verbose	|| kernelargs+=(quiet systemd.show_status=0 systemd.log-target=null)
