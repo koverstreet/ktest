@@ -428,13 +428,19 @@ async fn run_ktest_job_inner(
     //    a status for the supervisor to scan. Once: the resume loop
     //    re-runs only not-completed subtests and must not wipe the
     //    rest's results.
-    let mark = remaining.iter()
-        .map(|st| {
-            let d = subtest_result_key(&p.test, st, &p.kernel, &p.env);
-            format!("mkdir -p ktest-out/out/{d}; echo 'IN PROGRESS' > ktest-out/out/{d}/status")
-        })
-        .collect::<Vec<_>>()
-        .join("; ");
+    //    A loop, not a command per subtest: the whole script is one ssh
+    //    argument, and one argument can't exceed MAX_ARG_STRLEN (128k) -
+    //    a full fstests batch spelled out went over, the spawn failed
+    //    with E2BIG, and the batch retried whole, forever.
+    let mark = format!(
+        "for s in {subtests}; do d=ktest-out/out/{basename}.$s; \
+             mkdir -p $d; echo 'IN PROGRESS' > $d/status; done",
+        subtests = remaining.iter()
+            .map(|st| st.replace('/', "."))
+            .collect::<Vec<_>>()
+            .join(" "),
+        basename = basename,
+    );
     let prepare = format!(
         "set -e; cd {ws}; \
          if [ -d ktest-out ]; then \
