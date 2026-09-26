@@ -1581,6 +1581,94 @@ test_replace_replica()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]} 4
 }
 
+# Any "Pending reconcile" counter that has wrapped negative, from fs usage's
+# raw byte counts. Empty if none.
+reconcile_counters_wrapped()
+{
+    bcachefs fs usage /mnt | awk '
+	/^Pending reconcile/	{ in_rb = 1; next }
+	in_rb && NF == 0	{ in_rb = 0 }
+	in_rb {
+		for (i = 2; i <= NF; i++)
+			if ($i ~ /^[0-9]+$/ && length($i) >= 19 && $i > 9000000000000000000)
+				print $0
+	}'
+}
+
+reconcile_stage_status()
+{
+    echo "=== reconcile counters $1:"
+    bcachefs fs usage /mnt | sed -n '/^Pending reconcile/,/^$/p'
+    local wrapped=$(reconcile_counters_wrapped)
+    [[ -n $wrapped ]] && echo "=== WRAPPED $1: $wrapped"
+    true
+}
+
+# tools#977 (fenio): replacing a failed member of a replicas=3 filesystem left
+# the metadata reconcile counters negative, so reconcile wait never returned.
+# A new btree node whose first write failed got need_rb in its key while still
+# unreachable; if it was freed before its interior update completed, the add
+# and the subtract saw different keys. Timing dependent: about half of runs
+# hit it without the fix.
+test_replicas3_replace_failed_member()
+{
+    set_watchdog 1800
+
+    local i sectors
+    for i in 0 1 2 3; do
+	sectors=$(blockdev --getsz ${ktest_scratch_dev[$i]})
+	dmsetup create m$i --table "0 $sectors linear ${ktest_scratch_dev[$i]} 0"
+    done
+
+    run_quiet "" bcachefs format -f --replicas=3 /dev/mapper/m0 /dev/mapper/m1 /dev/mapper/m2
+    mount -t bcachefs /dev/mapper/m0:/dev/mapper/m1:/dev/mapper/m2 /mnt
+
+    run_fio_randrw --filesize=1000M --loops=1
+
+    # Btree churn: the counters that went negative are metadata ones
+    mkdir /mnt/dir
+    for i in $(seq 1 30000); do echo $i > /mnt/dir/f$i; done
+    for i in 1 2 3; do
+	bcachefs subvolume snapshot /mnt /mnt/snap$i
+	for j in $(seq 1 5000); do echo x >> /mnt/dir/f$((j * i)); done
+    done
+    sync
+    for i in 1 2 3; do bcachefs subvolume delete /mnt/snap$i; done
+    sync
+    reconcile_stage_status "after preconditioning"
+
+    # Fail member 1 underneath the mounted filesystem:
+    sectors=$(blockdev --getsz /dev/mapper/m1)
+    dmsetup load m1 --table "0 $sectors error"
+    dmsetup suspend --nolockfs m1
+    dmsetup resume m1
+
+    dd if=/dev/urandom of=/mnt/degraded bs=1M count=256 conv=fsync status=none
+    reconcile_stage_status "after failing member 1"
+
+    bcachefs device add /mnt /dev/mapper/m3
+    reconcile_stage_status "after device add"
+    bcachefs device remove 1 /mnt
+    reconcile_stage_status "after device remove"
+
+    timeout 300 bcachefs reconcile wait /mnt || echo "reconcile wait timed out"
+    bcachefs reconcile status /mnt || true
+    bcachefs fs usage /mnt || true
+
+    local wrapped=$(reconcile_counters_wrapped)
+    umount /mnt
+
+    bcachefs fsck -ny /dev/mapper/m0 /dev/mapper/m2 /dev/mapper/m3
+
+    for i in 0 1 2 3; do dmsetup remove m$i; done
+
+    if [[ -n $wrapped ]]; then
+	echo "ERROR: reconcile counters went negative:"
+	echo "$wrapped"
+	return 1
+    fi
+}
+
 test_key_type_error()
 {
     # A replicas=2 filesystem mounted very_degraded on one device: every
