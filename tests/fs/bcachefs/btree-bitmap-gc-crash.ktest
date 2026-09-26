@@ -1,0 +1,308 @@
+#!/usr/bin/env bash
+#
+# Online btree bitmap GC versus interior updates that are not yet durable.
+#
+# The member btree_allocated_bitmap must cover every btree node that can be
+# reachable after a crash. btree_bitmap_gc rebuilds it from the in-memory
+# btree topology and then replaces the on-disk bitmap with the result. An
+# interior update changes the in-memory topology as soon as its new nodes are
+# allocated, but the old nodes stay reachable on disk until the new nodes have
+# been written and the parent update has been journalled.
+#
+# These tests hold btree node and journal writes (but not superblock writes)
+# behind dm-delay while a device is being evacuated. A lower linear mapping
+# can be suspended without flushing the delayed writes, so copies of the raw
+# devices are what a crash at that moment would leave behind. Offline fsck of
+# the copies must not find reachable btree nodes outside the bitmap.
+#
+# test_btree_bitmap_gc_crash requires bitmap GC to wait for the held update,
+# checks a crash image from that window, releases the writes, then checks a
+# second crash image taken after GC publishes the new bitmap;
+# test_btree_bitmap_gc_crash_no_gc takes the identical crash image without
+# running bitmap GC, as a control for the crash image itself.
+
+# shellcheck source=tests/fs/bcachefs/bcachefs-test-libs.sh
+# shellcheck disable=SC1091
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+require-kernel-config DM_DELAY
+
+config-scratch-devs 2G
+config-scratch-devs 2G
+config-scratch-devs 2G
+config-scratch-devs 2G
+config-scratch-devs 2G
+config-scratch-devs 2G
+config-timeout 600
+
+# Long enough to never expire during the test; held bios are released
+# explicitly by swapping the table back.
+bitmap_gc_hold_ms=600000
+bitmap_gc_bucket_sectors=1024
+bitmap_gc_observation_seconds=60
+
+bitmap_gc_dm_linear()
+{
+    local name=$1 dev=$2
+    local sz
+    sz=$(blockdev --getsz "$dev")
+
+    dmsetup reload "$name" --table "0 $sz linear $dev 0"
+    dmsetup suspend --nolockfs "$name"
+    dmsetup resume "$name"
+}
+
+# Hold every write outside the superblock copies. Flushes are not delayed, so
+# superblock writes (which are submitted with preflush) still complete.
+bitmap_gc_dm_hold()
+{
+    local name=$1 dev=$2 start=$3 end=$4
+    local sz
+    sz=$(blockdev --getsz "$dev")
+    local table="0 $start linear $dev 0
+$start $((end - start)) delay $dev $start 0 $dev $start $bitmap_gc_hold_ms $dev $start 0"
+
+    (( end < sz )) && table+="
+$end $((sz - end)) linear $dev $end"
+
+    dmsetup reload "$name" --table "$table"
+    dmsetup suspend --nolockfs "$name"
+    dmsetup resume "$name"
+}
+
+bitmap_gc_inflight_updates()
+{
+    grep -c '^mode=' "/sys/kernel/debug/bcachefs/$1/btree_updates" || true
+}
+
+bitmap_gc_snapshot()
+{
+    local lower0=$1 lower1=$2 dev0=$3 dev1=$4 copy0=$5 copy1=$6
+    local ret=0
+
+    # Suspending dm-delay would release its queued bios. Suspend the lower
+    # linear targets instead, without a flush, so both raw devices stay fixed
+    # while they are copied and the delayed bios remain queued above them.
+    echo "snapshot: suspending $lower0 and $lower1"
+    dmsetup suspend --noflush --nolockfs "$lower0" "$lower1"
+    echo "snapshot: copying $dev0 to $copy0"
+    dd if="$dev0" of="$copy0" bs=4M iflag=direct oflag=direct status=none || ret=$?
+    echo "snapshot: copying $dev1 to $copy1"
+    dd if="$dev1" of="$copy1" bs=4M iflag=direct oflag=direct status=none || ret=$?
+    echo "snapshot: resuming $lower0 and $lower1"
+    dmsetup resume --noflush --nolockfs "$lower0" "$lower1"
+    echo "snapshot: complete"
+    return $ret
+}
+
+bitmap_gc_check_crash_copy()
+{
+    local label=$1 copy0=$2 copy1=$3
+    local log=/tmp/bitmap-gc-fsck-$label.txt ret=0
+
+    bcachefs show-super -f members_v2 "$copy1" |
+	grep -i -A1 'btree allocated bitmap' || true
+    bcachefs fsck -n "$copy0" "$copy1" > "$log" 2>&1 || ret=$?
+    cat "$log"
+    echo "fsck of $label crash image returned $ret"
+
+    if grep -q 'not marked in member info btree allocated bitmap' "$log"; then
+	echo "FAILED: $label crash image has reachable btree nodes outside the btree allocated bitmap"
+	return 1
+    fi
+    (( ret == 0 ))
+}
+
+bitmap_gc_cleanup()
+{
+    set +e
+    dmsetup resume --noflush --nolockfs bitmapgcbase0 bitmapgcbase1 \
+	>/dev/null 2>&1
+    # Release any queued writes before unmounting.  A failure between
+    # installing the delay tables and the normal release path otherwise
+    # leaves umount waiting for bitmap_gc_hold_ms.
+    bitmap_gc_dm_linear bitmapgc0 /dev/mapper/bitmapgcbase0 \
+	>/dev/null 2>&1
+    bitmap_gc_dm_linear bitmapgc1 /dev/mapper/bitmapgcbase1 \
+	>/dev/null 2>&1
+    umount /mnt >/dev/null 2>&1
+    dmsetup remove --retry bitmapgc0 bitmapgc1 >/dev/null 2>&1
+    dmsetup remove --retry bitmapgcbase0 bitmapgcbase1 >/dev/null 2>&1
+}
+
+bitmap_gc_crash_test()
+{
+    local run_gc=$1
+    # Populated by config-scratch-devs in the ktest runner.
+    # shellcheck disable=SC2154
+    local dev0=${ktest_scratch_dev[0]} dev1=${ktest_scratch_dev[1]}
+    local copy0=${ktest_scratch_dev[2]} copy1=${ktest_scratch_dev[3]}
+    local post_copy0=${ktest_scratch_dev[4]} post_copy1=${ktest_scratch_dev[5]}
+    local lower0=bitmapgcbase0 lower1=bitmapgcbase1
+    local base0=/dev/mapper/$lower0 base1=/dev/mapper/$lower1
+    local mnt0=/dev/mapper/bitmapgc0 mnt1=/dev/mapper/bitmapgc1
+
+    set_watchdog 400
+    modprobe dm-delay
+    # run_test_isolated() installs the descendant cleanup. Add mapper cleanup
+    # while this test owns them, and restore the original handler on success.
+    trap 'bitmap_gc_cleanup; kill_descendants $BASHPID' EXIT
+
+    dmsetup create "$lower0" --table "0 $(blockdev --getsz "$dev0") linear $dev0 0"
+    dmsetup create "$lower1" --table "0 $(blockdev --getsz "$dev1") linear $dev1 0"
+    dmsetup create bitmapgc0 --table "0 $(blockdev --getsz "$base0") linear $base0 0"
+    dmsetup create bitmapgc1 --table "0 $(blockdev --getsz "$base1") linear $base1 0"
+
+    run_quiet "" bcachefs format -f \
+	--bucket_size=$((bitmap_gc_bucket_sectors * 512)) \
+	--metadata_replicas=1 --data_replicas=1 \
+	"$mnt0" "$mnt1"
+    mount -t bcachefs -o noreconcile_enabled "$mnt0:$mnt1" /mnt
+
+    local uuid='' entry
+    for entry in /sys/fs/bcachefs/*; do
+	[[ ${entry##*/} =~ ^[0-9a-f-]{36}$ ]] || continue
+	if [[ -n $uuid ]]; then
+	    echo "FAILED: multiple mounted bcachefs filesystems" >&2
+	    return 1
+	fi
+	uuid=${entry##*/}
+    done
+    [[ -n $uuid ]]
+    local fs_sysfs=/sys/fs/bcachefs/$uuid
+    mountpoint -q /sys/kernel/debug || mount -t debugfs debugfs /sys/kernel/debug
+
+    # A new filesystem already has many btree nodes on both devices, since
+    # several btrees are presplit at format time. Keep it free of file data,
+    # so evacuating the second device is purely btree node rewrites.
+    sync -f /mnt
+
+    bcachefs fs usage -h /mnt
+
+    # Superblock copies: the first two are adjacent at the start of the
+    # device, spaced by the maximum superblock size; any further copy is at
+    # the end. Hold everything in between.
+    local offsets_text
+    offsets_text=$(bcachefs show-super --layout "$mnt1" |
+	awk -F: '/Offsets:/ { gsub(/,/, " ", $2); print $2; exit }')
+    local -a offsets=()
+    read -r -a offsets <<< "$offsets_text"
+    (( ${#offsets[@]} >= 2 ))
+    local sb_size=$((offsets[1] - offsets[0]))
+    local hold_start=$((offsets[1] + sb_size))
+    local hold_end
+    hold_end=$(blockdev --getsz "$dev1")
+    (( ${#offsets[@]} > 2 )) && hold_end=${offsets[-1]}
+    echo "superblocks at ${offsets[*]}, holding writes to sectors $hold_start-$hold_end"
+
+    # Mark the second device for evacuation with reconcile off, then remount
+    # so that no journal entry still needed for replay lives on it (journal
+    # read skips devices that are being evacuated).
+    bcachefs device set-state ro "$mnt1"
+    bcachefs device set-state evacuating "$mnt1"
+    umount /mnt
+    mount -t bcachefs -o noreconcile_enabled "$mnt0:$mnt1" /mnt
+
+    bitmap_gc_dm_hold bitmapgc0 "$base0" "$hold_start" "$hold_end"
+    bitmap_gc_dm_hold bitmapgc1 "$base1" "$hold_start" "$hold_end"
+
+    echo 1 > "$fs_sysfs/options/reconcile_enabled"
+    echo 1 > "$fs_sysfs/internal/trigger_reconcile_wakeup"
+
+    # Wait for node rewrites to be in flight, stuck on their held writes:
+    local n=0 prev=-1 stable=0
+    for _ in $(seq 1 60); do
+	n=$(bitmap_gc_inflight_updates "$uuid")
+	if (( n > 0 && n == prev )); then
+	    stable=$((stable + 1))
+	    (( stable >= 3 )) && break
+	else
+	    stable=0
+	fi
+	prev=$n
+	sleep 1
+    done
+    echo "interior updates in flight: $n"
+    cat "/sys/kernel/debug/bcachefs/$uuid/btree_updates"
+    (( n > 0 ))
+
+    local gc_pid='' premature_publication=0
+    if (( run_gc )); then
+	# A safe implementation blocks before publishing the bitmap. The
+	# unpatched implementation publishes, prints its completion line, then
+	# blocks in the recovery runner's journal flush.
+	bcachefs fsck -o recovery_passes=btree_bitmap_gc /mnt > /tmp/bitmap-gc-online.txt 2>&1 &
+	gc_pid=$!
+	for _ in $(seq 1 60); do
+	    grep -q 'Currently running:.*btree_bitmap_gc' "$fs_sysfs/recovery_status" && break
+	    sleep 1
+	done
+	cat "$fs_sysfs/recovery_status"
+	grep -q 'Currently running:.*btree_bitmap_gc' "$fs_sysfs/recovery_status"
+	kill -0 "$gc_pid"
+
+	# Give an implementation that incorrectly publishes before waiting a
+	# bounded chance to reach the observable completion point. Keep waiting
+	# after observing it so the crash cut matches the no-GC control's age.
+	for _ in $(seq 1 $bitmap_gc_observation_seconds); do
+	    if grep -q 'mi_btree_bitmap sectors' /tmp/bitmap-gc-online.txt; then
+		premature_publication=1
+	    fi
+	    sleep 1
+	done
+    else
+	# Timing-matched negative control for the held crash image.
+	sleep $bitmap_gc_observation_seconds
+    fi
+
+    # First crash point: the old topology is still durable. Bitmap GC must
+    # not have published a bitmap which omits it.
+    bitmap_gc_snapshot "$lower0" "$lower1" "$dev0" "$dev1" "$copy0" "$copy1"
+    if (( run_gc )); then
+	cat /tmp/bitmap-gc-online.txt
+	if grep -q 'mi_btree_bitmap sectors' /tmp/bitmap-gc-online.txt; then
+	    premature_publication=1
+	    echo "FAILED: bitmap GC published while an interior update was held"
+	else
+	    echo "bitmap GC is still waiting with the interior update held"
+	fi
+    fi
+
+    bitmap_gc_dm_linear bitmapgc0 "$base0"
+    bitmap_gc_dm_linear bitmapgc1 "$base1"
+    if [[ -n $gc_pid ]]; then
+	wait "$gc_pid"
+	cat /tmp/bitmap-gc-online.txt
+	grep -q 'mi_btree_bitmap sectors' /tmp/bitmap-gc-online.txt
+
+	# Second crash point: the pass returned only after making the observed
+	# topology durable, then publishing its replacement bitmap.
+	bitmap_gc_snapshot "$lower0" "$lower1" "$dev0" "$dev1" "$post_copy0" "$post_copy1"
+    fi
+
+    umount /mnt
+    dmsetup remove --retry bitmapgc0
+    dmsetup remove --retry bitmapgc1
+    dmsetup remove --retry "$lower0" "$lower1"
+    trap 'kill_descendants $BASHPID' EXIT
+
+    local held_ret=0
+    bitmap_gc_check_crash_copy held "$copy0" "$copy1" || held_ret=$?
+    if (( run_gc )); then
+	bitmap_gc_check_crash_copy completed "$post_copy0" "$post_copy1"
+	(( premature_publication == 0 ))
+    fi
+    (( held_ret == 0 ))
+}
+
+test_btree_bitmap_gc_crash()
+{
+    bitmap_gc_crash_test 1
+}
+
+test_btree_bitmap_gc_crash_no_gc()
+{
+    bitmap_gc_crash_test 0
+}
+
+main "$@"
