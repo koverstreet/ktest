@@ -916,6 +916,9 @@ test_reconcile_metadata_target_undersized()
 # with insufficient_devices, and parked without placing anything.
 test_reconcile_data_target_undersized()
 {
+    # moves to a one-device target ask for data_replicas new copies, get
+    # one, and keep the old pointers - the allocator counts the shortfall:
+    ktest_expect_sb_errors="write_degraded_insufficient_devices"
     set_watchdog 900
 
     run_quiet "" bcachefs format -f			\

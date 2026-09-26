@@ -703,8 +703,9 @@ test_device_set_state_rw_offline()
 test_device_readd()
 {
     # fio reads racing the offline/online cycle recover from the good
-    # replica (io errors while offline, csum errors from stale data after):
-    ktest_expect_sb_errors="data_read_(io|csum)_err_recovered"
+    # replica (io errors while offline, csum errors from stale data after),
+    # and writes while it's offline land at one replica:
+    ktest_expect_sb_errors="data_read_(io|csum)_err_recovered|write_degraded_insufficient_devices"
 
     set_watchdog 120
     run_quiet "" bcachefs format -f		\
