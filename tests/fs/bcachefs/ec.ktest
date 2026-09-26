@@ -1511,4 +1511,50 @@ test_ec_read_no_reconstruct_returns_raw()
 
     umount /mnt
 }
+
+# bcachefs#1213: a degraded read of encrypted, erasure coded data. The
+# reconstruct punts to retry without going through bch2_read_endio(), which is
+# what restores the original bio's bi_end_io - so when the retry completed it,
+# a second endio pass ran over pages the retry had already decrypted, failed
+# the MAC, and a large buffered read could come back EIO.
+test_ec_encrypted_degraded_read()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	--encrypted --no_passphrase		\
+	"${ktest_scratch_dev[@]}"
+    local devs="$(join_by : "${ktest_scratch_dev[@]}")"
+
+    mount -t bcachefs "$devs" /mnt
+    dd if=/dev/urandom of=/mnt/data bs=1M count=64 conv=fsync status=none
+    local want=$(md5sum < /mnt/data)
+    umount /mnt
+
+    if ! bcachefs list -b stripes "${ktest_scratch_dev[@]}" | grep -q "type stripe"; then
+	echo "ERROR: no stripes - the data never got erasure coded, so the"
+	echo "       reconstruct path is never reached"
+	exit 1
+    fi
+
+    mount -t bcachefs "$devs" /mnt
+    bcachefs device offline --force "${ktest_scratch_dev[1]}"
+    echo 3 > /proc/sys/vm/drop_caches
+
+    # One read(2) of the whole file: readahead failing and read_folio
+    # retrying can hide a failed extent from smaller reads.
+    if ! dd if=/mnt/data of=/tmp/data bs=64M count=1 iflag=fullblock status=none; then
+	echo "ERROR: buffered read of degraded encrypted EC data failed"
+	exit 1
+    fi
+
+    if [[ $(md5sum < /tmp/data) != "$want" ]]; then
+	echo "ERROR: degraded read returned the wrong data"
+	exit 1
+    fi
+
+    umount /mnt
+}
 main "$@"
