@@ -721,6 +721,45 @@ test_reflink_option_propagate()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# tools#928: propagating a higher replica count onto reflinked data pads the
+# indirect extents with invalid-device pointers and charges extra_disk_res for
+# them - and the propagate commit had no disk reservation to charge it to:
+# NULL deref in __bch2_disk_reservation_add().
+test_reflink_option_propagate_replicas()
+{
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f			\
+	--data_replicas=2				\
+	${ktest_scratch_dev[2]}				\
+	${ktest_scratch_dev[3]}
+
+    mount -t bcachefs ${ktest_scratch_dev[2]}:${ktest_scratch_dev[3]} /mnt
+
+    # Written at one replica, so the indirect extents record replicas=1;
+    # the destination wants the filesystem's two.
+    mkdir /mnt/src /mnt/dst
+    bcachefs set-file-option --data_replicas=1 /mnt/src
+
+    dd if=/dev/urandom of=/mnt/src/f bs=1M count=8 oflag=direct
+    local want=$(md5sum < /mnt/src/f)
+    cp --reflink=always /mnt/src/f /mnt/dst/f
+    rm /mnt/src/f
+
+    bcachefs reflink-option-propagate --set-may-update /mnt/dst/f
+
+    if [[ $(md5sum < /mnt/dst/f) != "$want" ]]; then
+	echo "ERROR: file contents changed across reflink-option-propagate"
+	exit 1
+    fi
+
+    umount /mnt
+
+    local devs=(${ktest_scratch_dev[2]} ${ktest_scratch_dev[3]})
+    bcachefs fsck -ny "${devs[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[2]}
+}
+
 # When an extent is made indirect, bch2_make_extent_indirect() must snapshot
 # the source inode's IO options onto the new reflink_v: a non-degraded data
 # extent carries no bch_extent_reconcile entry (the reconciler re-derives the
