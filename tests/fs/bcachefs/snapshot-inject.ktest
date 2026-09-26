@@ -2012,6 +2012,35 @@ test_fsck_inflight_deletion()
     verify_fs_state must-mount
 }
 
+# The same in-flight deletion under online fsck (bcachefs#1222). Unlinking a
+# subvolume zeroes its fs_path_parent, and check_subvolume_structure took that
+# for an unreachable subvolume and reattached it in lost+found - online fsck
+# resurrected everything waiting on delete_dead_snapshots. Mounted with
+# auto_snapshot_deletion off, the pending subvolume is still there when fsck
+# runs; it's legitimate and must be left alone.
+test_fsck_online_inflight_deletion()
+{
+    setup_snapshot_tree
+
+    mount -t bcachefs -o noauto_snapshot_deletion ${ktest_scratch_dev[0]} /mnt
+    bcachefs subvolume delete /mnt/snap-2
+
+    local rc=0
+    bcachefs fsck -n ${ktest_scratch_dev[0]} || rc=$?
+    if (( rc != 0 )); then
+	echo "TEST FAILED: online fsck found errors in a legitimate in-flight deletion (exit $rc)"
+	exit 1
+    fi
+    if [[ -n $(ls -A /mnt/lost+found 2>/dev/null) ]]; then
+	echo "TEST FAILED: online fsck reattached a subvolume pending deletion: $(ls /mnt/lost+found)"
+	exit 1
+    fi
+    umount /mnt
+
+    skip_snaps="snap-2"
+    verify_fs_state must-mount
+}
+
 # SNAP flag cleared on a snapshot subvolume that isn't the tree's master:
 # subvol_not_master_and_not_snapshot sets it back. Pure flag repair, no
 # data movement.
