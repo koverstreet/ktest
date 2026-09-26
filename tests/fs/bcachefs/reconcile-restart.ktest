@@ -206,4 +206,80 @@ test_reconcile_survives_disable_during_scan()
     bcachefs_test_end_checks "$dev"
 }
 
+# Suspend and hibernate failed with "Freezing of tasks failed ... bch-reconcile"
+# (bcachefs #700, tools #972). The freezer stops freezable workqueues before it
+# freezes kernel threads, and move completions run on freezable workqueues - so
+# a mover that waits for its IO before freezing waits forever. pm_test=freezer
+# runs exactly that sequence, workqueues included, and thaws again.
+test_reconcile_freezes_during_moves()
+{
+    set_watchdog 300
+
+    local dev=${ktest_scratch_dev[0]}
+    local sysfs
+    local dev_name=$(basename "$dev")
+
+    # A rotational device takes the phys phase, whose per-device workers are
+    # the case a workqueue can't freeze:
+    echo "rotational: $(cat /sys/block/$dev_name/queue/rotational)"
+
+    run_quiet "" bcachefs format -f "$dev"
+    mount -t bcachefs "$dev" /mnt
+    sysfs=$(echo /sys/fs/bcachefs/*/)
+
+    dd if=/dev/urandom of=/mnt/testfile bs=1M count=1024 oflag=direct status=none
+    local want=$(md5sum < /mnt/testfile)
+
+    # Every extent now needs rewriting:
+    echo zstd:9 > $sysfs/options/background_compression
+
+    echo 5000 > /sys/power/pm_freeze_timeout
+    echo freezer > /sys/power/pm_test
+
+    local i armed=0 failed=0
+    for i in $(seq 1 5); do
+	local waited=0
+	while [[ $(head -n1 $sysfs/reconcile_status) == waiting:* ]] && (( waited < 30 )); do
+	    sleep 1
+	    waited=$((waited + 1))
+	done
+
+	if [[ $(head -n1 $sysfs/reconcile_status) == waiting:* ]]; then
+	    echo "attempt $i: reconcile not running, not armed"
+	    continue
+	fi
+	armed=$((armed + 1))
+
+	if echo freeze > /sys/power/state; then
+	    echo "attempt $i: froze with reconcile running"
+	else
+	    echo "attempt $i: FREEZE FAILED with reconcile running"
+	    failed=$((failed + 1))
+	fi
+	sleep 1
+    done
+
+    echo none > /sys/power/pm_test
+
+    if (( failed )); then
+	dmesg | grep -A20 "Freezing.*failed" | tail -60 || true
+	echo "FAILED: $failed of $armed freezes failed while reconcile was moving data"
+	return 1
+    fi
+    if (( !armed )); then
+	echo "FAILED: reconcile was never running when we froze - this run tests nothing"
+	return 1
+    fi
+
+    timeout 240 bcachefs reconcile wait /mnt || true
+    if [[ $(md5sum < /mnt/testfile) != "$want" ]]; then
+	echo "FAILED: data changed across the freezes"
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "$dev"
+    bcachefs_test_end_checks "$dev"
+}
+
 main "$@"
