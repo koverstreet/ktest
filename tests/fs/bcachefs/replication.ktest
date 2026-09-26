@@ -1776,4 +1776,38 @@ test_many_device_mount()
     rm -rf $dir
 }
 
+# tools#956: taking a device out of the allocator shrank capacity under the
+# reservations dirty pagecache already held, and writeback then waited in the
+# allocator for space that wasn't coming back - sync never returned.
+test_set_state_under_dirty_reservations()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f --replicas=2 --fs_size=512M "${ktest_scratch_dev[@]}"
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+
+    # Buffered and unsynced, until full: reservations, not data yet
+    mkdir /mnt/fill
+    local i
+    for i in $(seq 1 400); do
+	dd if=/dev/zero of=/mnt/fill/b$i bs=1M count=16 status=none 2>/dev/null || break
+    done
+
+    bcachefs device set-state --force evacuating ${ktest_scratch_dev[4]}
+
+    # A hung sync is in D and can't be killed: poll, don't wait
+    rm -f /tmp/sync.done
+    ( sync -f /mnt && touch /tmp/sync.done ) &
+    for i in $(seq 1 60); do
+	[[ -f /tmp/sync.done ]] && break
+	sleep 2
+    done
+    if [[ ! -f /tmp/sync.done ]]; then
+	echo "ERROR: sync hung after taking a device out under dirty reservations"
+	exit 1
+    fi
+
+    umount /mnt
+}
+
 main "$@"
