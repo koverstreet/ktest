@@ -1558,6 +1558,54 @@ test_ec_encrypted_degraded_read()
     umount /mnt
 }
 
+# tools#921: device remove --force on an empty EC filesystem, right after
+# mount, failed about half the time with remove_by_backpointer_did_not_terminate
+# and left the device evacuating. Mount's presplit_shard_boundaries leaves
+# interior updates in flight; the drop scan ran ahead of them, found nothing to
+# do while their buckets stayed counted, and ten fast scans tripped the stall
+# check. Reproduces here only with the reporter's geometry (512M loop devices),
+# at ~20% per attempt: thirty clean attempts don't happen by chance.
+test_ec_device_remove_after_mount()
+{
+    set_watchdog 600
+
+    # The reporter's geometry: five 512M loop devices.
+    local dir=/ec-remove-devs
+    local i d failed=0
+
+    mkdir -p $dir
+    for i in $(seq 1 30); do
+	local devs=()
+	for d in 0 1 2 3 4; do
+	    truncate -s 512M $dir/d$d
+	    devs+=("$(losetup --find --show $dir/d$d)")
+	done
+
+	run_quiet "" bcachefs format -f		\
+	    --erasure_code			\
+	    --metadata_replicas=2		\
+	    "${devs[@]}"
+	mount -t bcachefs "$(join_by : "${devs[@]}")" /mnt
+
+	if ! bcachefs device remove --force ${devs[4]}; then
+	    echo "attempt $i: device remove --force failed"
+	    failed=$((failed + 1))
+	fi
+
+	umount /mnt
+	for d in "${devs[@]}"; do
+	    losetup -d $d
+	done
+	rm -f $dir/d*
+    done
+    rm -rf $dir
+
+    if (( failed )); then
+	echo "ERROR: $failed of 30 removals failed"
+	return 1
+    fi
+}
+
 # Stripe reconcile work, as printed - "MISSING" if there's no row, which must
 # not read as "none".
 ec_reconcile_stripes()
