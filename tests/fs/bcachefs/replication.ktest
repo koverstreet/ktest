@@ -842,6 +842,9 @@ do_replicas_errors_test()
 
 test_replicas_write_errors()
 {
+    # Every write to the flakey device fails, so with two devices and
+    # replicas=2 writes go degraded - by design, not a bug:
+    ktest_expect_sb_errors="write_degraded_insufficient_devices|write_degraded_no_progress"
     do_replicas_errors_test error_writes
 }
 
@@ -1580,7 +1583,9 @@ test_replace_replica()
 
 test_key_type_error()
 {
-    ktest_expect_sb_errors="data_lost_device_removed"
+    # A replicas=2 filesystem mounted very_degraded on one device: every
+    # write is degraded.
+    ktest_expect_sb_errors="data_lost_device_removed|write_degraded_insufficient_devices"
     set_watchdog 20
 
     bcachefs format -f --replicas=2 ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
