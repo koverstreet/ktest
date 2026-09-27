@@ -1163,13 +1163,16 @@ test_missing_child()
     kvdb_rw -c "set snapshots 0:$victim:0 deleted" \
 	 -c "set subvolumes 0:$last_subvol:0 deleted"
 
-    # expect=repair (FAILING until R5 lands): resurrect the missing child
-    # as a leaf (parent=us, derived depth/tree, no subvol) so its keys stay
-    # reachable; if empty, the next deletion run condemns it through the
-    # front door. The resurrected leaf carries no subvol, so it isn't
-    # walked; it stays skipped, and the oracle is converge-clean + every
-    # other snap intact.
+    # expect=repair: resurrect the missing child as a leaf (parent=us,
+    # derived depth/tree, no subvol) so its keys stay reachable; if empty,
+    # the next deletion run condemns it through the front door. The
+    # resurrected leaf carries no subvol, so it isn't walked; it stays
+    # skipped, and the oracle is converge-clean + every other snap intact.
+    #
+    # The subvolume went too: its dirent now names nothing, and its root
+    # inode loses its subvol, its dirent and its path.
     skip_snaps="snap-$((NR_SNAPS - 1))"
+    ktest_expect_sb_errors="snapshot_child_missing_but_accounted|dirent_to_missing_subvol|inode_bi_subvol_missing|inode_points_to_missing_dirent|inode_unreachable"
     check_fsck repair
 }
 
