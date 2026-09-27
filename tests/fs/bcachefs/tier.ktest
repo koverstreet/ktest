@@ -420,6 +420,10 @@ test_change_replicas()
 
 test_concurrent_all_device_removal()
 {
+    # All four removals put their device in evacuating before the ones that
+    # can't finish fail: meanwhile there are too few rw devices for
+    # replicas=2, and writes go degraded:
+    ktest_expect_sb_errors="write_degraded_insufficient_devices|write_degraded_no_progress"
     set_watchdog 120
 
     run_quiet "" bcachefs format -f			\
