@@ -124,8 +124,8 @@ PACKAGES+=(llvm libclang-dev libunwind-dev libelf-dev)
 # text is the entire thing we want to see.
 PACKAGES+=(plymouth plymouth-themes plymouth-label)
 
-# quota tools:
-PACKAGES+=(libudev-dev libldap2-dev)
+# quota tools (linuxquota's rquota/RPC support needs the tirpc headers):
+PACKAGES+=(libudev-dev libldap2-dev libtirpc-dev)
 
 # xfstests:
 PACKAGES+=(acct bsdextrautils xfsprogs xfslibs-dev quota libcap2-bin)
