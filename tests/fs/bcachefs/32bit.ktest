@@ -5,6 +5,7 @@ ktest_arch=x86
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
 
 config-timeout 30
+config-scratch-devs 1G
 
 test_boot()
 {
