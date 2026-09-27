@@ -977,6 +977,70 @@ test_device_evacuate_online()
 # Reading the file back is the control. If it still reads then nothing was
 # lost, an empty `damage ls` would be correct rather than a bug, and the
 # run has said nothing - so the test reports that instead of passing.
+# Stripe backpointers - one per stripe per block, at btree=stripes level=0 -
+# are zero length, so a missing one never makes a bucket's backpointer sectors
+# disagree with its sector counts: fsck used to be blind to them, and stripe
+# reuse was deleting them (tools: 1.40 stripe_backpointer_idx). Delete every
+# one of them and check that fsck finds and restores them all.
+ec_stripe_bps()
+{
+    bcachefs kvdb -c "list backpointers POS_MIN SPOS_MAX" "${ktest_scratch_dev[@]}" |
+	awk '$4 == "backpointer" && /btree=stripes level=0 /'
+}
+
+test_ec_stripe_backpointers_missing()
+{
+    ktest_expect_sb_errors="ptr_to_missing_backpointer"
+    set_watchdog 180
+
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	"${ktest_scratch_dev[@]}"
+
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+    dd if=/dev/urandom of=/mnt/testfile bs=1M count=64 oflag=direct
+    sync
+    umount /mnt
+
+    local before=$(ec_stripe_bps | wc -l)
+    if ((!before)); then
+	echo "no stripe backpointers: no stripe formed, so this run tests nothing"
+	false
+    fi
+    echo "deleting $before stripe backpointers"
+
+    local inject=$(mktemp)
+    ec_stripe_bps | awk '{print "set backpointers", $5, "deleted"}' > $inject
+    bcachefs kvdb --rw "${ktest_scratch_dev[@]}" < $inject
+
+    if [[ -n $(ec_stripe_bps) ]]; then
+	echo "injection didn't take: stripe backpointers still present"
+	false
+    fi
+
+    if bcachefs fsck -n "${ktest_scratch_dev[@]}"; then
+	echo "ERROR: fsck -n passed with every stripe backpointer missing"
+	false
+    fi
+
+    local ret=0
+    bcachefs fsck -y "${ktest_scratch_dev[@]}" || ret=$?
+    if ((ret != 1)); then
+	echo "ERROR: fsck -y returned $ret, expected 1 (errors fixed)"
+	false
+    fi
+
+    local after=$(ec_stripe_bps | wc -l)
+    if ((after != before)); then
+	echo "ERROR: $before stripe backpointers before, $after after repair"
+	false
+    fi
+
+    bcachefs fsck -n "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_ec_force_remove_records_damage()
 {
     ktest_expect_sb_errors="data_lost_device_removed"
