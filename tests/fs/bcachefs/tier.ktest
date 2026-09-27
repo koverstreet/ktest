@@ -314,6 +314,10 @@ test_device_remove()
 
 test_device_remove_background()
 {
+    # Removing an hdd leaves one: every extent's second copy must go on
+    # the 2G of ssd, and fio's file is 3.5G - writes during and after the
+    # removal are necessarily degraded:
+    ktest_expect_sb_errors="write_degraded_insufficient_devices|write_degraded_no_progress"
     set_watchdog 240
     setup_tracing 'bcachefs:trans_restart_relock'
 
