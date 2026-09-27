@@ -1051,9 +1051,12 @@ test_ec_force_remove_records_damage()
     # convert block offsets with - ec.ktest doesn't otherwise define it.
     local bucket_kb=512
 
+    # Metadata has to survive losing two devices - forced removal won't drop
+    # the last copy of a btree node - while the 4+1 stripes' data doesn't:
     run_quiet "" bcachefs format -f		\
 	--erasure_code				\
 	--replicas=2				\
+	--metadata_replicas=3			\
 	--bucket_size=${bucket_kb}k		\
 	"${ktest_scratch_dev[@]}"
     local devs="$(join_by : "${ktest_scratch_dev[@]}")"
@@ -1090,7 +1093,9 @@ test_ec_force_remove_records_damage()
 	return 1
     fi
 
-    mount -t bcachefs "$devs" /mnt
+    # Without reconcile: it repairs the stripes after the first removal, and
+    # the second then costs nothing.
+    mount -t bcachefs -o noreconcile_enabled "$devs" /mnt
 
     if [[ -n $(bcachefs damage ls /mnt) ]]; then
 	echo "ERROR: damage recorded before anything was removed"
