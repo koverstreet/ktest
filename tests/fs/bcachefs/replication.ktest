@@ -509,6 +509,32 @@ test_device_ro()
 # used to decide from ca->mi.state, which a state change writes only after it
 # has recalculated - so a device set ro kept counting towards capacity
 # indefinitely.
+# tools#914: taking a device out of the rw set has to refuse, without --force,
+# when that leaves fewer rw devices than --replicas - and must not make a later
+# mount of the same filesystem any stricter.
+test_device_ro_below_replicas()
+{
+    set_watchdog 60
+    local d0=${ktest_scratch_dev[0]} d1=${ktest_scratch_dev[1]}
+
+    run_quiet "" bcachefs format -f --replicas=2 $d0 $d1
+    mount -t bcachefs $d0:$d1 /mnt
+
+    if bcachefs device set-state ro $d1; then
+	echo "ERROR: set-state ro went below --replicas=2 without --force"
+	return 1
+    fi
+    grep -q "\\[rw\\]" /sys/fs/bcachefs/*/dev-1/state
+
+    bcachefs device set-state --force ro $d1
+    grep -q "\\[ro\\]" /sys/fs/bcachefs/*/dev-1/state
+
+    # starting with a member ro is unchanged: no -o degraded needed
+    umount /mnt
+    mount -t bcachefs $d0:$d1 /mnt
+    umount /mnt
+}
+
 test_device_set_state_capacity()
 {
     set_watchdog 60
