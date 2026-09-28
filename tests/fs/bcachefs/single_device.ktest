@@ -2125,6 +2125,108 @@ test_torn_primary_superblock()
     fi
 }
 
+# The rotational flag decides, for an extent with reconcile work pending,
+# whether its backpointers carry BACKPOINTER_RECONCILE_PHYS and have matching
+# reconcile_work_phys entries - set when the backpointer is created. So
+# flipping it on a device with pending work leaves those backpointers stale,
+# and the flip schedules check_reconcile_work to repair them quietly. Reconcile
+# is off so the background_compression work stays pending across the flip;
+# after it, overwrite and delete some of the old data so the update paths run
+# too. fsck -n must then be clean.
+rotational_flip_mount()
+{
+    mount -t bcachefs -o reconcile_enabled=0 ${ktest_scratch_dev[0]} /mnt
+}
+
+# Start from @1 explicitly - virtio disks report rotational, so what format
+# autodetects isn't a choice we'd get to test both directions with
+rotational_flip_format()
+{
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f --background_compression=zstd $dev
+    # set-fs-option refuses a filesystem that has never been started
+    rotational_flip_mount
+    echo $1 > /sys/fs/bcachefs/*/dev-0/rotational
+    umount /mnt
+}
+
+rotational_flip_write()
+{
+    dd if=/dev/zero of=/mnt/a bs=1M count=32 conv=fsync status=none
+    dd if=/dev/zero of=/mnt/b bs=1M count=32 conv=fsync status=none
+}
+
+# The repair pass is scheduled on the flip, and online it runs in the background
+rotational_flip_wait_repair()
+{
+    local i
+    for i in $(seq 1 60); do
+	grep -qE '^(Scheduled|Currently running).*check_reconcile_work' \
+	    /sys/fs/bcachefs/*/recovery_status || return 0
+	sleep 1
+    done
+    echo "ERROR: check_reconcile_work never finished"
+    cat /sys/fs/bcachefs/*/recovery_status
+    return 1
+}
+
+rotational_flip_churn()
+{
+    [[ $(cat /sys/fs/bcachefs/*/dev-0/rotational) == $1 ]]
+    rotational_flip_wait_repair
+    dd if=/dev/zero of=/mnt/a bs=1M count=8 seek=4 conv=notrunc,fsync status=none
+    rm /mnt/b
+    sync
+}
+
+test_rotational_flip_offline()
+{
+    set_watchdog 180
+    local dev=${ktest_scratch_dev[0]}
+
+    for from in 0 1; do
+	local to=$((1 - from))
+	echo "=== offline flip $from -> $to"
+
+	rotational_flip_format $from
+	rotational_flip_mount
+	rotational_flip_write
+	umount /mnt
+
+	# the work the flip has to deal with
+	(( $(bcachefs list -b reconcile_work $dev | wc -l) > 0 ))
+
+	bcachefs set-fs-option --rotational=$to -d 0 $dev
+
+	rotational_flip_mount
+	rotational_flip_churn $to
+	umount /mnt
+
+	bcachefs fsck -n $dev
+    done
+}
+
+test_rotational_flip_online()
+{
+    set_watchdog 180
+
+    for from in 0 1; do
+	local to=$((1 - from))
+	echo "=== online flip $from -> $to"
+
+	rotational_flip_format $from
+	rotational_flip_mount
+	rotational_flip_write
+
+	echo $to > /sys/fs/bcachefs/*/dev-0/rotational
+	rotational_flip_churn $to
+	umount /mnt
+
+	bcachefs fsck -n ${ktest_scratch_dev[0]}
+    done
+}
+
 test_recover_super()
 {
     set_watchdog 60
