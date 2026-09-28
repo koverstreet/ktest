@@ -186,6 +186,49 @@ test_promote()
 	--background_target=hdd
 }
 
+# tools#1054: moving a file into a directory with different inherited options
+# (rename, or both ways with RENAME_EXCHANGE) reinherits them, but nothing
+# queued a reconcile scan for it - its existing
+# extents kept the old options, and check_reconcile_work flagged them (fatal
+# with errors=ro).
+test_rename_reinherit_reconcile()
+{
+    set_watchdog 120
+
+    run_quiet "" bcachefs format -f				\
+	--label=ssd.ssd1 ${ktest_scratch_dev[0]}		\
+	--label=hdd.hdd1 ${ktest_scratch_dev[1]}
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+
+    # In a snapshotted subvolume, so the new options also have to be
+    # propagated to the inodes' ancestor versions - two propagate ops in one
+    # transaction, for the exchange
+    bcachefs subvolume create /mnt/sv
+    # Different targets both ways, so either direction leaves the moved
+    # file's existing extents on the wrong target
+    mkdir /mnt/sv/a /mnt/sv/b
+    bcachefs set-file-option --background_target=ssd /mnt/sv/a
+    bcachefs set-file-option --background_target=hdd /mnt/sv/b
+
+    dd if=/dev/urandom of=/mnt/sv/a/foo bs=1M count=8 conv=fsync status=none
+    dd if=/dev/urandom of=/mnt/sv/a/bar bs=1M count=8 conv=fsync status=none
+    dd if=/dev/urandom of=/mnt/sv/b/baz bs=1M count=8 conv=fsync status=none
+    bcachefs subvolume snapshot /mnt/sv /mnt/snap
+
+    mv /mnt/sv/a/foo /mnt/sv/b/foo
+
+    # RENAME_EXCHANGE: both inodes move, and reinherit in opposite directions
+    local bar=$(md5sum < /mnt/sv/a/bar)
+    mv --exchange /mnt/sv/a/bar /mnt/sv/b/baz
+    [[ $(md5sum < /mnt/sv/b/baz) == "$bar" ]]
+
+    timeout 60 bcachefs reconcile wait /mnt
+    umount /mnt
+
+    bcachefs fsck -n ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_setattr()
 {
     setup_tracing `bcachefs_slowpath_tracepoints`
