@@ -1378,8 +1378,6 @@ test_ec_stripe_buf_limit()
 
 test_ec_crash_recovery()
 {
-    [[ -f /sys/module/bcachefs/parameters/journal_replay_slowpath_ratio ]] || exit 0
-
     set_watchdog 600
 
     local loops=$((($ktest_priority + 1) * 20))
@@ -1390,7 +1388,10 @@ test_ec_crash_recovery()
 	"${ktest_scratch_dev[@]}"
     devs="$(join_by : "${ktest_scratch_dev[@]}")"
 
-    echo 4 > /sys/module/bcachefs/parameters/journal_replay_slowpath_ratio
+    # Force 1 in 4 keys through the journal replay slow path, where the kernel
+    # has the knob - the crash recovery loop itself doesn't need it:
+    local slowpath=/sys/module/bcachefs/parameters/journal_replay_slowpath_ratio
+    [[ -f $slowpath ]] && echo 4 > $slowpath
 
     for i in $(seq 1 $loops); do
 	echo "=== crash recovery iteration $i/$loops ==="
