@@ -1484,6 +1484,41 @@ test_ec_repair_stripe_ptr()
     check_bcachefs_counters ${ktest_scratch_dev[0]}
 }
 
+test_ec_stripe_open_invalidates_update()
+{
+    # Opening an existing stripe (reuse, repair) must invalidate the relock of
+    # a transaction that queued an update to the stripe key: that's how a
+    # bch2_trigger_stripe() "empty and not open, delete it" decision is kept
+    # from committing after the commit path dropped and retook its locks.
+    # The check itself is test_stripe_open_invalidates_update in
+    # fs/debug/tests.rs; this lays down a stripe for it to use and quiets the
+    # filesystem.
+    set_watchdog 180
+
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	"${ktest_scratch_dev[@]}"
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
+
+    mount -t bcachefs $devs /mnt
+    dd if=/dev/zero of=/mnt/foo bs=1M count=128 oflag=direct
+    sync
+
+    # Let reconcile build its stripes, then quiet it: the test relocks a
+    # transaction holding the stripes leaf, and background stripe work holding
+    # that leaf's intent lock makes the relock fail for reasons that have
+    # nothing to do with the open.
+    timeout 120 bcachefs reconcile wait /mnt || true
+    echo 0 > /sys/fs/bcachefs/*/options/reconcile_enabled
+    echo 0 > /sys/fs/bcachefs/*/options/copygc_enabled
+
+    echo test_stripe_open_invalidates_update 1 1 > /sys/fs/bcachefs/*/perf_test
+
+    umount /mnt
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 # Reported by ChH on IRC (2026-09-06): a stripe with one csum-bad block and
 # another on an offline device.
 #
