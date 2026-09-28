@@ -482,6 +482,42 @@ test_logged_op_resume_inode_opts()
     echo "recovery finished the interrupted climb: $n compressed extents"
 }
 
+# The same interrupted op, but unmounted cleanly: the next mount finds a logged
+# op on a clean filesystem, and fixing logged_op_but_clean logs the error via
+# the resume's btree_trans. That log was left queued into the resume's own
+# transactions - bch2_trans_begin() WARNs on updates it's about to drop.
+test_logged_op_resume_after_clean_unmount()
+{
+    set_watchdog 300
+    ktest_expect_sb_errors="logged_op_but_clean"
+
+    setup_fs
+    bcachefs subvolume create /mnt/sub
+    write_data /mnt/sub/file
+    sync
+    bcachefs subvolume snapshot /mnt/sub /mnt/snap
+
+    echo inode_opt_propagate > /sys/fs/bcachefs/*/internal/logged_op_fail_next
+
+    if bcachefs set-file-option --background_compression=zstd /mnt/sub/file; then
+	echo "FAIL: set-file-option succeeded - the injection didn't fire"
+	return 1
+    fi
+
+    umount /mnt
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    reconcile_settle || return 1
+    umount /mnt
+
+    local n=$(compressed_extents)
+    if (( n == 0 )); then
+	echo "FAIL: the resumed op didn't finish the climb - data uncompressed"
+	return 1
+    fi
+    echo "recovery finished the interrupted climb: $n compressed extents"
+}
+
 # The master subvolume - the one in the tree that isn't itself a snapshot -
 # breaks the tie. Its set-file-option runs second here, so under the rule above
 # it would have been refused.
