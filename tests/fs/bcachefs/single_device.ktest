@@ -2076,6 +2076,55 @@ d_test_nocow_fragmented2()
     umount /mnt
 }
 
+# tools#1053: a torn write to the primary superblock leaves a copy with a higher
+# seq and a checksum that doesn't match. We open from a backup, but the next
+# superblock write reads slot 0 back first, sees the higher seq, takes it for
+# another writer and goes emergency read-only - on every mount.
+test_torn_primary_superblock()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+
+    # format writes the superblock unchecksummed; the first mount writes it
+    # with a checksum, which is what a torn write has to break
+    local mark=$(dmesg | wc -l)
+    mount -t bcachefs $dev /mnt
+    umount /mnt
+
+    # all copies are at the same seq here: nothing to repair
+    if dmesg | tail -n +$((mark + 1)) | grep -q "rewrote primary superblock"; then
+	echo "ERROR: rewrote a healthy primary superblock"
+	return 1
+    fi
+
+    # seq is at byte 112 of struct bch_sb, the primary at sector 8: bump the
+    # low byte, leaving the checksum stale
+    local off=$((4096 + 112))
+    local b=$(od -An -tu1 -j $off -N1 $dev | tr -d ' ')
+    (( b < 255 ))
+    printf "\\x$(printf %02x $((b + 1)))" |
+	dd of=$dev bs=1 seek=$off conv=notrunc status=none
+    sync
+
+    mount -t bcachefs $dev /mnt
+    touch /mnt/foo
+    umount /mnt
+
+    if dmesg | grep -q "Superblock modified by another process"; then
+	echo "ERROR: torn primary superblock taken for another writer"
+	return 1
+    fi
+
+    # The primary must have been rewritten: a fresh read shouldn't need the
+    # backups
+    if bcachefs show-super $dev 2>&1 | grep -q "primary superblock unreadable"; then
+	echo "ERROR: primary superblock not repaired"
+	return 1
+    fi
+}
+
 test_recover_super()
 {
     set_watchdog 60
