@@ -1662,6 +1662,59 @@ test_ec_encrypted_degraded_read()
     umount /mnt
 }
 
+# tools#975: the same geometry as tools#921, but with data written and stripes
+# formed first. Stripe reshape during the removal deletes old stripes and
+# writes new ones at other indices, re-adding backpointers the drop scan has
+# already walked past; on small devices evacuation is slow, and a fixed scan
+# cap gave up with remove_by_backpointer_did_not_terminate.
+test_ec_device_remove_with_stripes()
+{
+    set_watchdog 900
+
+    local dir=/ec-remove-devs
+    local i d f failed=0
+
+    mkdir -p $dir
+    for i in $(seq 1 5); do
+	local devs=()
+	for d in 0 1 2 3 4; do
+	    truncate -s 512M $dir/d$d
+	    devs+=("$(losetup --find --show $dir/d$d)")
+	done
+
+	run_quiet "" bcachefs format -f		\
+	    --erasure_code			\
+	    --replicas=2			\
+	    --metadata_replicas=2		\
+	    "${devs[@]}"
+	mount -t bcachefs "$(join_by : "${devs[@]}")" /mnt
+
+	for f in $(seq 1 200); do
+	    dd if=/dev/urandom of=/mnt/file_$f bs=4K count=10 status=none
+	done
+	sync
+	timeout 60 bcachefs reconcile wait /mnt || true
+
+	if ! bcachefs device remove --force ${devs[4]}; then
+	    echo "attempt $i: device remove --force failed"
+	    failed=$((failed + 1))
+	fi
+
+	umount /mnt
+	bcachefs fsck -ny "${devs[@]:0:4}"
+	for d in "${devs[@]}"; do
+	    losetup -d $d
+	done
+	rm -f $dir/d*
+    done
+    rm -rf $dir
+
+    if (( failed )); then
+	echo "ERROR: $failed of 5 removals failed"
+	return 1
+    fi
+}
+
 # tools#921: device remove --force on an empty EC filesystem, right after
 # mount, failed about half the time with remove_by_backpointer_did_not_terminate
 # and left the device evacuating. Mount's presplit_shard_boundaries leaves
