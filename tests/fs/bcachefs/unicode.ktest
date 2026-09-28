@@ -116,4 +116,41 @@ test_casefold_negative_parallel_lookup()
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
 }
 
+# rmdir in a casefolded dir calls d_invalidate(), which waits for child dentries
+# another thread is killing; if that thread is evicting a deleted subdirectory it
+# needs the dirents leaf the rmdir may still hold locked. Race the last close of
+# an rmdir'd subdirectory against rmdir of its parent.
+test_casefold_rmdir_vs_evict()
+{
+    set_watchdog 120
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount ${ktest_scratch_dev[0]} /mnt
+
+    mkdir /mnt/casefold_dir
+    bcachefs set-file-option --casefold /mnt/casefold_dir
+
+    rmdir_vs_evict()
+    {
+	local d=/mnt/casefold_dir/w$1
+
+	for i in $(seq 1 2000); do
+	    mkdir -p $d/sub
+	    sleep 0.00$((RANDOM % 3)) < $d/sub &
+	    rmdir $d/sub
+	    sleep 0.00$((RANDOM % 3))
+	    rmdir $d
+	    wait
+	done
+    }
+
+    for i in $(seq 1 8); do
+	rmdir_vs_evict $i &
+    done
+    wait
+
+    umount /mnt
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+}
+
 main "$@"
