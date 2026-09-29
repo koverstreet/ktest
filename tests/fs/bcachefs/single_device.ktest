@@ -2391,6 +2391,35 @@ test_device_model_stored_partition()
     [[ -n $stored ]] || { echo "FAIL: device model not stored for partition $part (#595)"; return 1; }
 }
 
+# bcachefs format warns when two format devices are partitions of the same
+# disk, since replicas on them don't survive losing that disk
+# (koverstreet/bcachefs-tools#666). A warning, not an error - see
+# koverstreet/bcachefs#144 - and --quiet suppresses it.
+test_format_warns_when_replicas_share_parent_disk()
+{
+    set_watchdog 120
+
+    local disk out
+    disk=$(scsi_debug_disk 256 2)
+    local part1="${disk}1" part2="${disk}2"
+
+    out="$(bcachefs format -f --replicas=2 "$part1" "$part2" 2>&1)"
+    echo "$out"
+    grep -F "warning: requested 2 replicas" <<< "$out"
+    grep -F "warning: multiple format devices share a parent disk:" <<< "$out"
+    grep -F "$part1" <<< "$out"
+    grep -F "$part2" <<< "$out"
+
+    out="$(bcachefs format -f -q --replicas=2 "$part1" "$part2" 2>&1)"
+    echo "$out"
+    if grep -F "warning:" <<< "$out"; then
+	echo "FAIL: --quiet didn't suppress the parent disk warning"
+	return 1
+    fi
+
+    modprobe -r scsi_debug
+}
+
 # Replace-in-place via O_TRUNC (`date | tee f`, editors, config writers): the
 # truncate commits with the next journal write, the new data sits dirty for
 # dirty_expire (30s), so a crash in between leaves an empty file. bcachefs
