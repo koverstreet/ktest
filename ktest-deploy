@@ -50,13 +50,15 @@ workers=$(json5_to_json "$CONFIG_PATH" | jq -r '.executors | keys[]')
 # feeds the build cache keys.
 #
 # Deps live per-slot under ~/ktest-ci/<slot>/ on workers, and in the default
-# ~/.ktest/deps/ for non-CI runs; refresh both. Unmatched globs / missing
-# checkouts are skipped by the -d guard.
+# ~/.ktest/deps/ for non-CI runs; refresh both. fstests.sh builds and runs
+# xfstests from ~/ktest/tests/fs/xfstests, though, not the clone require-git
+# made - untracked inside ktest, so the reset above doesn't touch it: refresh
+# that too. Unmatched globs / missing checkouts are skipped by the -d guard.
 read -r -d '' remote_cmd <<'REMOTE' || true
 set -e
 cd ktest && git fetch -q origin && git reset --hard -q origin/master
 git log -1 --format='    ktest    %h %s'
-for d in ~/ktest-ci/*/xfstests ~/.ktest/deps/xfstests; do
+for d in ~/ktest-ci/*/xfstests ~/.ktest/deps/xfstests ~/ktest/tests/fs/xfstests; do
     [ -d "$d/.git" ] || continue
     git -C "$d" fetch -q origin && git -C "$d" reset --hard -q origin/master
     echo "    xfstests $d -> $(git -C "$d" rev-parse --short HEAD)"
