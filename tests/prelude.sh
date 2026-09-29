@@ -783,6 +783,31 @@ check_dmesg()
 	    -e "UBSAN:"
 }
 
+# dmesg_mark <name>, dmesg_since <name>
+#
+# For a test that looks at what the kernel logged after some point: dmesg_mark
+# writes a marker to the kernel log, dmesg_since prints what followed its last
+# occurrence. Tests must not dmesg -C for this: the harness owns the buffer, and
+# check_dmesg finds the start of the test by the TEST marker a clear deletes.
+dmesg_mark()
+{
+    echo "ktest mark: $1" | to_kmsg
+}
+
+dmesg_since()
+{
+    dmesg |
+	awk -v m="ktest mark: $1" '
+	    { line[NR] = $0 }
+	    index($0, m) { last = NR }
+	    END {
+		if (!last)
+		    print "ktest: dmesg mark \"" m "\" is gone - ring buffer overflowed? printing everything" > "/dev/stderr"
+		for (i = last + 1; i <= NR; i++)
+		    print line[i]
+	    }'
+}
+
 ktest_in_vm()
 {
     [[ -e /dev/kmsg ]] && [[ -w /dev/kmsg ]]
