@@ -2464,4 +2464,169 @@ test_truncate_rewrite_flush_on_close()
     fi
 }
 
+#
+# Checksum narrowing: after a partial overwrite, each surviving piece of a
+# checksummed extent keeps a checksum over the whole original range, so every
+# read of it reads and bounces that whole range. The first read of such a piece
+# should recompute the checksum over just the live range and rewrite the key
+# (bch2_rbio_narrow_crcs()).
+#
+# Since "bcachefs: Make checksum narrowing more paranoid", can_narrow_crc()
+# tests uncompressed_size < live_size, which no valid key satisfies (live_size
+# is the key's size, and crc.offset + live_size <= uncompressed_size is a
+# validate check). So narrowing never runs: data_read_narrow_crcs stays 0, the
+# pieces keep their 512k crc, and a repeat read still reads 512k.
+
+counter_since_mount()
+{
+    awk '/since mount/ { print $3 }' /sys/fs/bcachefs/*/counters/$1
+}
+
+dev_sectors_read()
+{
+    awk '{ print $3 }' /sys/block/$(basename $(readlink -f $1))/stat
+}
+
+# extent_crcs <inum>
+#
+# One line per extent of <inum>: "<start> <len> <crc size> <crc offset> <csum>",
+# in 512-byte sectors, bcachefs's unit whatever the device's logical block size
+# (the filesystem block size here is 4k). Key lines print as "u64s N type extent <inum>:<end>:<snap> len L",
+# crc entries as "crcNN: c_size C size S offset O nonce N csum T ...".
+extent_crcs()
+{
+    awk -v ino="$1" '
+	/^u64s / {
+	    want = 0
+	    if ($4 != "extent")
+		next
+	    split($5, p, ":")
+	    if (p[1] != ino)
+		next
+	    want = 1
+	    end = p[2]
+	    len = $7
+	}
+	want && /crc(32|64|128): c_size/ {
+	    for (i = 1; i < NF; i++) {
+		if ($i == "size")
+		    size = $(i + 1)
+		if ($i == "offset")
+		    off = $(i + 1)
+		if ($i == "csum")
+		    csum = $(i + 1)
+	    }
+	    print end - len, len, size, off, csum
+	    want = 0
+	}' /sys/kernel/debug/bcachefs/*/btrees/extents/keys
+}
+
+# Layout, in 512-byte sectors: one 1024-sector (512k) extent, with the 8
+# sectors (4k) at 512 (256k) overwritten. The left piece is 0..512 (crc offset 0), the right piece
+# 520..1024 (crc offset 520), and both keep the 1024-sector crc until narrowed.
+narrow_crcs_test()
+{
+    local dev=${ktest_scratch_dev[0]}
+    local ret=0
+
+    set_watchdog 120
+
+    # Extents are also capped by the write point bucket's free space, so the
+    # bucket must hold the whole 512k write.
+    run_quiet "" bcachefs format -f		\
+	--block_size=4k				\
+	--bucket_size=1M			\
+	--encoded_extent_max=512k		\
+	--compression=none			\
+	"$@"					\
+	$dev
+
+    dd if=/dev/urandom of=/tmp/expect bs=512k count=1 status=none
+    dd if=/dev/urandom of=/tmp/patch bs=4k count=1 status=none
+
+    mount -t bcachefs $dev /mnt
+    dd if=/tmp/expect of=/mnt/f bs=512k count=1 iflag=fullblock oflag=direct status=none
+    sync
+    local ino=$(stat -c %i /mnt/f)
+    echo "after the 512k write:"
+    extent_crcs $ino
+
+    dd if=/tmp/patch of=/mnt/f bs=4k count=1 seek=64 conv=notrunc oflag=direct status=none
+    dd if=/tmp/patch of=/tmp/expect bs=4k count=1 seek=64 conv=notrunc status=none
+    sync
+    local layout=$(extent_crcs $ino)
+    echo "after the 4k overwrite at 256k:"
+    echo "$layout"
+    umount /mnt
+
+    if ! grep -qx '0 512 1024 0 [a-z0-9_]*' <<< "$layout" ||
+       ! grep -qx '520 504 1024 520 [a-z0-9_]*' <<< "$layout"; then
+	echo "ERROR: no partially overwritten 512k extent - this run tests nothing"
+	return 1
+    fi
+
+    # A fresh mount, so the reads below go to disk and the counters start at 0.
+    mount -t bcachefs $dev /mnt
+
+    dd if=/mnt/f of=/dev/null bs=4k count=1 iflag=direct status=none
+    dd if=/mnt/f of=/dev/null bs=4k count=1 skip=65 iflag=direct status=none
+
+    local narrowed=$(counter_since_mount data_read_narrow_crcs)
+    local failed=$(counter_since_mount data_read_narrow_crcs_fail)
+    local bounced=$(counter_since_mount data_read_bounce)
+    echo "one read of each piece: narrow_crcs $narrowed, narrow_crcs_fail $failed, bounce $bounced"
+
+    if [[ $bounced -lt 2 ]]; then
+	echo "ERROR: the reads did not bounce - this run tests nothing"
+	return 1
+    fi
+
+    if [[ $narrowed != 2 || $failed != 0 ]]; then
+	echo "ERROR: expected both pieces narrowed (narrow_crcs 2, narrow_crcs_fail 0)"
+	ret=1
+    fi
+
+    layout=$(extent_crcs $ino)
+    echo "after the reads:"
+    echo "$layout"
+    if ! grep -qx '0 512 512 0 [a-z0-9_]*' <<< "$layout" ||
+       ! grep -qx '520 504 504 0 [a-z0-9_]*' <<< "$layout"; then
+	echo "ERROR: the pieces' crcs still cover the whole original extent"
+	ret=1
+    fi
+
+    local before=$(dev_sectors_read $dev)
+    dd if=/mnt/f of=/dev/null bs=4k count=1 iflag=direct status=none
+    local read=$(( $(dev_sectors_read $dev) - before ))
+    echo "a repeat 4k read of the left piece read $read sectors ($((read / 2))k) from $dev"
+    if [[ $read -ge 1024 ]]; then
+	echo "ERROR: a 4k read of the 256k left piece still reads the whole 512k extent"
+	ret=1
+    fi
+
+    umount /mnt
+
+    mount -t bcachefs $dev /mnt
+    if ! cmp /mnt/f /tmp/expect; then
+	echo "ERROR: file contents changed"
+	ret=1
+    fi
+    umount /mnt
+
+    bcachefs fsck -ny $dev
+    bcachefs_test_end_checks $dev
+    return $ret
+}
+
+test_narrow_crcs()
+{
+    narrow_crcs_test --data_checksum=crc32c
+}
+
+test_narrow_crcs_encrypted()
+{
+    narrow_crcs_test --encrypted --no_passphrase
+}
+
+
 main "$@"
