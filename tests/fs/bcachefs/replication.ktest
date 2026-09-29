@@ -2127,4 +2127,138 @@ test_set_state_under_dirty_reservations()
     umount /mnt
 }
 
+# A flushing journal write on a multi-device filesystem first sends an empty
+# REQ_PREFLUSH bio to every rw member (journal_write_preflush(), separate_flush)
+# and waits for all of them. It does so even for members that have had no
+# writes since their last flush, so an idle or read-only member gets a cache
+# flush on every fsync. On SATA a cache flush is a non-queued command, so it
+# drains the device's NCQ queue even when the cache is clean.
+#
+# Here the journal, metadata and data all go to one device, and two more
+# members get no writes. Each of those should see (almost) no flushes during a
+# loop of fsyncs; today each gets one per fsync. Then one of them does get
+# data writes, and must still be flushed on every fsync.
+
+# dev_stat <dev> <field>: a /sys/block/<dev>/stat field, 1-based
+# (7: sectors written, 16: flush requests completed). The empty preflush bios
+# count as write I/Os, but write no sectors.
+dev_stat()
+{
+    awk -v f=$2 '{ print $f }' /sys/block/$(basename $(readlink -f $1))/stat
+}
+
+declare -A sectors flushes
+
+stats_start()
+{
+    local dev
+    for dev in ${ktest_scratch_dev[@]}; do
+	sectors[$dev]=$(dev_stat $dev 7)
+	flushes[$dev]=$(dev_stat $dev 16)
+    done
+}
+
+stats_end()
+{
+    local dev
+    for dev in ${ktest_scratch_dev[@]}; do
+	sectors[$dev]=$(( $(dev_stat $dev 7) - ${sectors[$dev]} ))
+	flushes[$dev]=$(( $(dev_stat $dev 16) - ${flushes[$dev]} ))
+	echo "$dev: ${sectors[$dev]} sectors written, ${flushes[$dev]} flushes"
+    done
+}
+
+# fsync_loop <file> <nr>: <nr> 4k appends, each followed by fsync
+fsync_loop()
+{
+    local cmds=() i
+    for ((i = 1; i <= $2; i++)); do
+	cmds+=(-c "pwrite -q $((i * 4096)) 4k" -c fsync)
+    done
+    xfs_io -f "${cmds[@]}" $1
+}
+
+test_journal_flush_clean_devices()
+{
+    local fast=${ktest_scratch_dev[0]}
+    local hdd1=${ktest_scratch_dev[1]}
+    local hdd2=${ktest_scratch_dev[2]}
+    local devs=($fast $hdd1 $hdd2)
+    local nr=100 ret=0 dev
+
+    set_watchdog 120
+
+    for dev in ${devs[@]}; do
+	local wc=$(cat /sys/block/$(basename $(readlink -f $dev))/queue/write_cache)
+	if [[ $wc != "write back" ]]; then
+	    echo "ERROR: $dev has write_cache \"$wc\", so the block layer drops flushes - this run tests nothing"
+	    return 1
+	fi
+    done
+
+    run_quiet "" bcachefs format -f		\
+	--block_size=4k				\
+	--data_replicas=1			\
+	--metadata_replicas=1			\
+	--label=ssd.ssd1 $fast			\
+	--label=hdd.hdd1 $hdd1			\
+	--label=hdd.hdd2 $hdd2			\
+	--foreground_target=ssd			\
+	--metadata_target=ssd
+
+    mount -t bcachefs "$(join_by : "${devs[@]}")" /mnt
+    mkdir /mnt/hdd
+    bcachefs set-file-option --foreground_target=hdd.hdd1 /mnt/hdd
+
+    # Get the one-time writes (replicas entries, the superblock's clean ->
+    # dirty transition) out of the way before counting.
+    fsync_loop /mnt/f 1
+    fsync_loop /mnt/hdd/f 1
+    sync
+
+    echo "$nr fsyncs of data on $fast:"
+    stats_start
+    fsync_loop /mnt/f $nr
+    stats_end
+
+    if [[ ${flushes[$fast]} -lt $nr ]]; then
+	echo "ERROR: $fast got fewer flushes than fsyncs - this run tests nothing"
+	ret=1
+    fi
+    for dev in $hdd1 $hdd2; do
+	if [[ ${sectors[$dev]} -ne 0 ]]; then
+	    echo "ERROR: $dev was written to - this run tests nothing"
+	    ret=1
+	elif [[ ${flushes[$dev]} -gt $((nr / 10)) ]]; then
+	    echo "ERROR: $dev had no writes but got ${flushes[$dev]} flushes for $nr fsyncs"
+	    ret=1
+	fi
+    done
+
+    echo "$nr fsyncs of data on $hdd1:"
+    stats_start
+    fsync_loop /mnt/hdd/f $nr
+    stats_end
+
+    if [[ ${sectors[$hdd1]} -lt $((nr * 8)) || ${sectors[$hdd2]} -ne 0 ]]; then
+	echo "ERROR: the data did not go to $hdd1 only - this run tests nothing"
+	ret=1
+    fi
+    if [[ ${flushes[$hdd1]} -lt $nr ]]; then
+	echo "ERROR: $hdd1 was written before every fsync but got only ${flushes[$hdd1]} flushes for $nr fsyncs"
+	ret=1
+    fi
+    if [[ ${flushes[$hdd2]} -gt $((nr / 10)) ]]; then
+	echo "ERROR: $hdd2 had no writes but got ${flushes[$hdd2]} flushes for $nr fsyncs"
+	ret=1
+    fi
+
+    umount /mnt
+
+    bcachefs fsck -ny ${devs[@]}
+    bcachefs_test_end_checks ${devs[@]}
+    return $ret
+}
+
+
 main "$@"
