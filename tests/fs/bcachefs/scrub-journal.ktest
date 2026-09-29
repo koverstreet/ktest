@@ -2,6 +2,7 @@
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
 
 config-scratch-devs 4G
+config-scratch-devs 4G
 config-timeout $(stress_timeout)
 
 #
@@ -313,6 +314,82 @@ test_scrub_journal()
     bcachefs fsck -ny "$dev"
 
     echo "Test passed: scrub detected corruption, rewind recovered"
+}
+
+# The same, with every extent replicated and only one device's copy corrupted:
+# the device didn't honour the flush, but nothing was lost - every bad replica
+# has a good one on the other device. Rewinding would throw away writes for no
+# reason; the scrub has to repair from the good replicas instead.
+test_scrub_journal_replicated()
+{
+    ktest_expect_device_errors=1
+    set_watchdog 300
+
+    local BUCKET_SIZE_KB=512
+    local BUCKET_SIZE_SECTORS=$((BUCKET_SIZE_KB * 2))
+
+    local dev0=${ktest_scratch_dev[0]}
+    local dev1=${ktest_scratch_dev[1]}
+
+    run_quiet "" bcachefs format -f		\
+	--errors=ro				\
+	--replicas=2				\
+	--bucket_size=${BUCKET_SIZE_KB}k	\
+	--no_initialize				\
+	"$dev0" "$dev1"
+
+    mount -t bcachefs "$dev0:$dev1" /mnt
+
+    run_fio_base			\
+	--filesize=100M			\
+	--loops=2			\
+	--name=randrw			\
+	--rw=randrw			\
+	--bsrange=4k-256k
+
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+    umount /mnt
+
+    local scrub_seq=$(bcachefs list_journal -F -D "$dev0" "$dev1"|tail -n2|awk '{print $3}'|head -n1)
+    echo "Scrub window starts at seq $scrub_seq"
+    [[ -n $scrub_seq ]]
+
+    local extents=$(bcachefs list_journal -s "$scrub_seq.." -b extents "$dev0" "$dev1")
+    [[ -n $extents ]]
+
+    # Member 0's copies only: member 1 keeps a good replica of everything
+    local nr_corrupted=$(echo "$extents" |
+	bcachefs_ptr_sectors $BUCKET_SIZE_SECTORS 0 | head -10 |
+	bcachefs_corrupt_sectors "$dev0")
+    echo "Corrupted $nr_corrupted member 0 replicas"
+    (( nr_corrupted > 0 ))
+
+    mount_capture -t bcachefs -o scrub_recent_journal_entries=always,verbose \
+	"$dev0:$dev1" /mnt
+
+    if ! grep -q 'bad replicas, to repair from good ones' <<< "$mount_output"; then
+	echo "FAIL: scrub didn't find the bad replicas"
+	exit 1
+    fi
+
+    if grep 'rewinding from seq' <<< "$mount_output"; then
+	echo "FAIL: scrub rewound when every extent had a good replica"
+	exit 1
+    fi
+
+    local repaired=$(grep -o 'repairing [0-9]* extents from good replicas' <<< "$mount_output" |
+		     awk '{print $2}')
+    echo "repaired from good replicas: ${repaired:-none}"
+    if (( ${repaired:-0} == 0 )); then
+	echo "FAIL: nothing repaired from the good replicas"
+	exit 1
+    fi
+
+    # Everything reads back
+    find /mnt -type f -exec cat {} + > /dev/null
+
+    umount /mnt
+    bcachefs fsck -ny "$dev0" "$dev1"
 }
 
 main "$@"
