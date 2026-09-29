@@ -498,6 +498,59 @@ scrub_journal_btree_node_setup()
     nr_corrupted=$(echo "$sectors" | bcachefs_corrupt_sectors "${devs[0]}")
 }
 
+# Nodes created in the window, every copy corrupted: the scrub can't repair
+# them, and mustn't rewind - a rewind only rolls back leaf keys, the interior
+# pointers to the nodes stay. It flags the btree as having lost data instead,
+# so topology repair runs before journal replay and the filesystem mounts.
+test_scrub_journal_btree_node()
+{
+    ktest_expect_device_errors=1
+    # Losing the nodes: reading them (the corruption overwrote their
+    # headers), topology repair, and what the lost nodes' keys referenced
+    # left stale - backpointers, pointer gens, alloc info
+    ktest_expect_sb_errors="btree_node_bad_magic|btree_node_topology_[a-z_]+"
+    ktest_expect_sb_errors+="|backpointer_to_missing_ptr|stale_dirty_ptr"
+    ktest_expect_sb_errors+="|lru_entry_bad|alloc_key_to_missing_lru_entry"
+    ktest_expect_sb_errors+="|freespace_key_wrong|need_discard_freespace_key_bad"
+    set_watchdog 300
+
+    local nr_corrupted
+    scrub_journal_btree_node_setup 1
+    echo "Corrupted $nr_corrupted btree nodes"
+
+    # The window is also cut to flushes within scrub_journal_max_rewind_secs
+    # (default 10) of the newest: widen it, so the flush ranges decide what's
+    # checked and not how fast the VM ran the workload
+    local mount_ret=0
+    mount_capture -t bcachefs -o scrub_recent_journal_entries=always,scrub_journal_max_rewind_secs=3600,verbose \
+	${ktest_scratch_dev[0]} /mnt || mount_ret=$?
+
+    if ! grep -q 'btree nodes with no good replica' <<< "$mount_output"; then
+	echo "FAIL: scrub didn't find the lost btree nodes"
+	exit 1
+    fi
+
+    if grep 'rewinding from seq' <<< "$mount_output"; then
+	echo "FAIL: rewound for lost btree nodes - the rewind doesn't remove them"
+	exit 1
+    fi
+
+    if (( mount_ret )); then
+	echo "FAIL: recovery didn't get past the lost btree nodes"
+	exit 1
+    fi
+
+    umount /mnt
+
+    # Topology repair after losing a node leaves alloc info stale for the
+    # buckets the lost node's keys pointed to, beyond what the mount fixes
+    local ret=0
+    bcachefs fsck -y ${ktest_scratch_dev[0]} || ret=$?
+    (( ret <= 1 ))
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_scrub_journal_btree_node_replicated()
 {
     ktest_expect_device_errors=1
@@ -507,9 +560,7 @@ test_scrub_journal_btree_node_replicated()
     scrub_journal_btree_node_setup 2
     echo "Corrupted $nr_corrupted member 0 btree node replicas"
 
-    # The window is also cut to flushes within scrub_journal_max_rewind_secs
-    # (default 10) of the newest: widen it, so the flush ranges decide what's
-    # checked and not how fast the VM ran the workload
+    # see test_scrub_journal_btree_node
     mount_capture -t bcachefs -o scrub_recent_journal_entries=always,scrub_journal_max_rewind_secs=3600,verbose \
 	"${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}" /mnt
 
