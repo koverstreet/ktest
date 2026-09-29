@@ -369,24 +369,83 @@ test_subvol_delete()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# Subvolumes deleted but not yet torn down: their key sits in state "unlinked"
+# until the cleanup worker runs bch2_subvolume_set_deleted().
+nr_unlinked_subvols()
+{
+    bcachefs list -b subvolumes /mnt | grep -cw unlinked || true
+}
+
+# wait_nr_unlinked_subvols <nr> <seconds>
+#
+# Polls once a second: each bcachefs list opens a (nostart) bch_fs to format
+# keys, which logs.
+wait_nr_unlinked_subvols()
+{
+    local nr
+
+    for _ in $(seq 1 $2); do
+	nr=$(nr_unlinked_subvols)
+	[[ $nr == "$1" ]] && return 0
+	sleep 1
+    done
+
+    echo "$nr subvolumes still unlinked after $2s, expected $1"
+    bcachefs list -b subvolumes /mnt
+    return 1
+}
+
+# Deleting a subvolume while something outside the filesystem holds a file in
+# it open - koverstreet/bcachefs-tools#1041, where a CSI driver's loop devices
+# and NFS exports did it.
+#
+# Deletion is deferred to one worker (wait_for_pagecache_and_delete_work),
+# which evicts the subvolume's inodes before deleting it. It waits,
+# uninterruptibly, for every one of them to be freed - so a holder that stays
+# attached pins it in D state indefinitely, with a c->writes ref. And since
+# it's a single work item, every subvolume deleted after that one queues
+# behind it: none of them are torn down, and their space is never freed.
+#
+# What's checked is that a held subvolume doesn't block the deletion of
+# another, and that it completes itself once the holder goes away. That
+# holds whatever the fix looks like - revoke with ESTALE, retrying busy
+# subvolumes later - as long as deletion stops blocking on the holder.
 test_subvol_delete_loop_holder()
 {
     local loopdev=
 
+    set_watchdog 120
     trap '[[ -n "$loopdev" ]] && losetup -d "$loopdev" || true' RETURN
 
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
-    bcachefs subvolume create /mnt/subvolume_1
-    truncate -s 64M /mnt/subvolume_1/loop.img
-    loopdev=$(losetup --find --show /mnt/subvolume_1/loop.img)
+    bcachefs subvolume create /mnt/held
+    truncate -s 64M /mnt/held/loop.img
+    loopdev=$(losetup --find --show /mnt/held/loop.img)
 
-    bcachefs subvolume delete /mnt/subvolume_1
+    bcachefs subvolume create /mnt/unheld
+    dd if=/dev/urandom of=/mnt/unheld/data bs=1M count=16 status=none
+    sync
+
+    bcachefs subvolume delete /mnt/held
+    bcachefs subvolume delete /mnt/unheld
+
+    # held stays unlinked while the loop device is attached; unheld must not
+    # wait for it:
+    if ! wait_nr_unlinked_subvols 1 30; then
+	echo "FAIL: deleting a subvolume with a held file blocked deleting another"
+	return 1
+    fi
 
     losetup -d "$loopdev"
     loopdev=
     trap - RETURN
+
+    if ! wait_nr_unlinked_subvols 0 30; then
+	echo "FAIL: held subvolume not deleted after its holder went away"
+	return 1
+    fi
 
     umount /mnt
 
