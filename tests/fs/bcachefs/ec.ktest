@@ -408,6 +408,14 @@ test_ec_crypto_lz4()
     do_ec_test --encrypted --no_passphrase --compression=lz4
 }
 
+# Encrypted, erasure-coded data that has moved from foreground_target to
+# background_target - koverstreet/bcachefs-tools#1056: once striped, scrub and
+# reads reported nearly all of it corrupt, with "got 00000000" for every stripe
+# block, and after a reboot it all read back fine. That looks like a stripe
+# buffer that was never filled rather than bad data on disk.
+#
+# Random data, not zeroes: a read path that hands back an unfilled (zeroed)
+# buffer without catching it would otherwise pass the md5 check.
 test_ec_crypto_background_target_scrub_before_remount()
 {
     set_watchdog 360
@@ -429,7 +437,7 @@ test_ec_crypto_background_target_scrub_before_remount()
 
     mount -t bcachefs $devs /mnt
 
-    dd if=/dev/zero of=/mnt/ec-background-file bs=1M count=256 oflag=direct status=progress
+    dd if=/dev/urandom of=/mnt/ec-background-file bs=1M count=256 oflag=direct status=progress
     md5sum /mnt/ec-background-file > /root/ec-background-file.md5
 
     for i in $(seq 1 120); do
