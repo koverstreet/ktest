@@ -1,0 +1,287 @@
+#!/usr/bin/env bash
+#
+# Stripe reuse should read only the blocks it carries forward.
+#
+# ec_old_stripe_read() reads every block of the old stripe, parity included,
+# but ec_old_stripe_fold() keeps only the data blocks that still hold live
+# data; parity is regenerated at create. Everything else is read and thrown
+# away.
+#
+# Four devices, 3+1 stripes: fill past the 40% free line so that every new
+# stripe is a reuse (ec_should_reuse_stripe()), empty two of three blocks in
+# some stripes, then write and compare what the reuses read with what they
+# carried (the stripe_reuse tracepoint's "Reused N/M data blocks").
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config BCACHEFS_ERASURE_CODING
+
+config-scratch-devs 512M
+config-scratch-devs 512M
+config-scratch-devs 512M
+config-scratch-devs 512M
+
+SR_BUCKET=$((1024 * 1024))
+SR_BUCKET_SECTORS=2048
+
+sr_counter()
+{
+    awk '/since mount/ {print $3}' /sys/fs/bcachefs/*/counters/$1
+}
+
+# Bytes of one data type (user, parity, ...) read or written, summed over all
+# devices: sr_io_done read|write <type>
+sr_io_done()
+{
+    cat /sys/fs/bcachefs/*/dev-*/io_done | awk -v rw="\"$1\"" -v t="\"$2\":" '
+	/"read"|"write"/ { in_rw = index($0, rw) }
+	in_rw && $1 == t { sub(",", "", $2); s += $2 }
+	END { print s + 0 }'
+}
+
+# Bytes read and written at the block layer, summed over the scratch devices
+sr_dev_io()
+{
+    local dev
+    for dev in "${ktest_scratch_dev[@]}"; do
+	cat /sys/block/$(basename $dev)/stat
+    done | awk '{r += $3; w += $7} END {print r * 512, w * 512}'
+}
+
+# Full stripes of ballast, then stripes with two of three data blocks emptied:
+# the reuse candidates. Leaves the fs unmounted and the md5s of the surviving
+# small files in /tmp/sr.md5.
+sr_setup()
+{
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	--bucket_size=1M			\
+	"${ktest_scratch_dev[@]}"
+    local i
+
+    mount -t bcachefs $(join_by : "${ktest_scratch_dev[@]}") /mnt
+
+    # ~60% of every device
+    for i in $(seq 1 9); do
+	dd if=/dev/zero of=/mnt/ballast.$i bs=1M count=100 oflag=direct status=none
+    done
+
+    # One bucket per file, so each file is one stripe data block
+    for i in $(seq 1 96); do
+	dd if=/dev/urandom of=/mnt/small.$i bs=1M count=1 oflag=direct status=none
+    done
+    sync
+    for i in $(seq 1 96); do
+	if ((i % 3)); then
+	    rm /mnt/small.$i
+	fi
+    done
+    sync
+    (cd /mnt && md5sum small.*) > /tmp/sr.md5
+    umount /mnt
+}
+
+# Write 32M into the reuse candidates; wait for the stripe creates to finish,
+# so that every reuse whose read we count is also traced
+sr_write()
+{
+    dd if=/dev/zero of=/mnt/new bs=1M count=32 oflag=direct status=none
+    sync
+
+    local n=-1
+    while [[ $n != $(sr_counter stripe_reuse) ]]; do
+	n=$(sr_counter stripe_reuse)
+	sleep 2
+    done
+    sync
+}
+
+# "<reuses traced> <data blocks carried>" from the stripe_reuse tracepoint
+sr_traced()
+{
+    grep -oE 'Reused [0-9]+/[0-9]+ data blocks' /sys/kernel/tracing/trace |
+	awk '{split($2, b, "/"); n++; s += b[1]} END {print n + 0, s + 0}'
+}
+
+test_stripe_reuse_reads_only_carried()
+{
+    set_watchdog 300
+
+    sr_setup
+
+    # Remount: copygc recomputes low_on_space, and nothing is cached
+    mount -t bcachefs $(join_by : "${ktest_scratch_dev[@]}") /mnt
+    sleep 2
+    bcachefs fs usage -h /mnt
+
+    setup_tracing bcachefs:stripe_reuse
+
+    local user0=$(sr_io_done read user) parity0=$(sr_io_done read parity)
+    local wuser0=$(sr_io_done write user) wparity0=$(sr_io_done write parity)
+    local dev0=($(sr_dev_io))
+    local create0=$(sr_counter stripe_create) evac0=$(sr_counter evacuate_bucket)
+
+    sr_write
+
+    local dev1=($(sr_dev_io))
+    local user=$(( $(sr_io_done read user) - user0 ))
+    local parity=$(( $(sr_io_done read parity) - parity0 ))
+    local wuser=$(( $(sr_io_done write user) - wuser0 ))
+    local wparity=$(( $(sr_io_done write parity) - wparity0 ))
+    local dev_read=$(( dev1[0] - dev0[0] )) dev_write=$(( dev1[1] - dev0[1] ))
+    local reuses=$(sr_counter stripe_reuse)
+    local creates=$(( $(sr_counter stripe_create) - create0 ))
+    local evac=$(( $(sr_counter evacuate_bucket) - evac0 ))
+    local t=($(sr_traced))
+    local traced=${t[0]} carried_bytes=$((t[1] * SR_BUCKET))
+
+    echo 0 > /sys/kernel/tracing/tracing_on
+
+    echo "stripe_reuse $reuses (traced $traced), stripe_create $creates, evacuate_bucket $evac"
+    echo "carried ${t[1]} blocks ($((carried_bytes >> 20)) MiB)," \
+	 "read user $((user >> 20)) MiB, parity $((parity >> 20)) MiB"
+    echo "written user $((wuser >> 20)) MiB, parity $((wparity >> 20)) MiB"
+    echo "block layer: read $((dev_read >> 10)) KiB, written $((dev_write >> 10)) KiB," \
+	 "total $(((dev_read + dev_write) >> 10)) KiB"
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+
+    if ((reuses < 4 || traced != reuses || evac)); then
+	echo "ERROR: precondition failed: want >= 4 reuses, all traced, and no copygc"
+	return 1
+    fi
+
+    local ret=0
+    if ((parity)); then
+	echo "ERROR: stripe reuse read $((parity >> 20)) MiB of parity, which it regenerates"
+	ret=1
+    fi
+    # Slack: one more reuse may have started (and read) but not been created
+    if ((user > carried_bytes + 3 * SR_BUCKET)); then
+	echo "ERROR: stripe reuse read $((user >> 20)) MiB of data blocks to carry $((carried_bytes >> 20)) MiB"
+	ret=1
+    fi
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+    return $ret
+}
+
+# "<dev idx> <sector>" of one live data block in every 3+1 stripe that also
+# has an empty data block, i.e. every stripe a reuse would carry from, from
+# `bcachefs list -b stripes` on stdin
+sr_carried_blocks()
+{
+    awk -v bsz=$SR_BUCKET_SECTORS '
+	function flush() {
+	    if (nr_data && live && live < nr_data)
+		print ldev, lsec
+	    nr_data = 0
+	}
+	/blocks [0-9]+:[0-9]+/ {
+	    flush()
+	    match($0, /blocks [0-9]+:[0-9]+/)
+	    split(substr($0, RSTART + 7, RLENGTH - 7), b, ":")
+	    nr_data = b[1]
+	    idx = live = 0
+	    next
+	}
+	nr_data && idx < nr_data {
+	    for (i = 1; i <= NF; i++)
+		if ($i ~ /^[0-9]+:[0-9]+:[0-9]+$/) {
+		    split($i, p, ":")
+		    c = match($0, /#[0-9]+/) ? substr($0, RSTART + 1, RLENGTH - 1) + 0 : 0
+		    if (c && !live++) {
+			ldev = p[1]
+			lsec = p[2] * bsz + p[3]
+		    }
+		    idx++
+		    break
+		}
+	}
+	END { flush() }'
+}
+
+sr_sb_errors()
+{
+    { bcachefs show-super -f errors,errors_v2 ${ktest_scratch_dev[0]} 2>/dev/null ||
+      bcachefs show-super -f errors ${ktest_scratch_dev[0]}; } |
+	awk -v e="$1" '$1 == e && $2 + 0 > n { n = $2 + 0 } END { print n + 0 }'
+}
+
+# A carried block that fails its checksum: reading only the carried blocks must
+# fall back to reading the whole stripe and reconstructing, and the new stripe
+# must carry the right data.
+test_stripe_reuse_corrupt_carried_block()
+{
+    set_watchdog 300
+
+    sr_setup
+
+    local blocks=$(bcachefs list -b stripes "${ktest_scratch_dev[@]}" | sr_carried_blocks)
+    local nr_corrupt=$(echo "$blocks" | grep -c . || true)
+    local dev sec
+    while read -r dev sec; do
+	[[ -n $dev ]] || continue
+	dd if=/dev/urandom of=${ktest_scratch_dev[$dev]} bs=512 seek=$sec count=8 \
+	    conv=notrunc,fsync status=none
+    done <<< "$blocks"
+    echo "corrupted 4k at the start of a carried block in $nr_corrupt stripes"
+
+    mount -t bcachefs $(join_by : "${ktest_scratch_dev[@]}") /mnt
+    sleep 2
+
+    setup_tracing bcachefs:stripe_reuse
+
+    local parity0=$(sr_io_done read parity)
+    local evac0=$(sr_counter evacuate_bucket)
+
+    sr_write
+
+    local parity=$(( $(sr_io_done read parity) - parity0 ))
+    local reuses=$(sr_counter stripe_reuse)
+    local evac=$(( $(sr_counter evacuate_bucket) - evac0 ))
+    local t=($(sr_traced))
+
+    echo 0 > /sys/kernel/tracing/tracing_on
+    umount /mnt
+
+    # Only the reuses have read the corrupted blocks so far
+    local csum_errs=$(sr_sb_errors stripe_read_csum_err)
+    echo "stripe_reuse $reuses (traced ${t[0]}), carried ${t[1]} blocks," \
+	 "stripe_read_csum_err $csum_errs, parity read $((parity >> 20)) MiB"
+
+    mount -t bcachefs $(join_by : "${ktest_scratch_dev[@]}") /mnt
+    local ret=0
+    if ! (cd /mnt && md5sum --quiet -c /tmp/sr.md5); then
+	echo "ERROR: surviving files changed"
+	ret=1
+    fi
+    if ! cmp -s /mnt/new <(head -c $((32 << 20)) /dev/zero); then
+	echo "ERROR: the file written into the reused stripes reads back wrong"
+	ret=1
+    fi
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+
+    if ((nr_corrupt < 16 || reuses < 4 || t[0] != reuses || evac)); then
+	echo "ERROR: precondition failed: want >= 16 corrupted stripes, >= 4 reuses, all traced, and no copygc"
+	return 1
+    fi
+    if ((csum_errs < reuses)); then
+	echo "ERROR: $reuses reuses of stripes with a corrupted carried block, but only $csum_errs stripe checksum errors"
+	ret=1
+    fi
+    if ((parity < reuses * SR_BUCKET)); then
+	echo "ERROR: $((parity >> 20)) MiB of parity read for $reuses reuses: the stripes weren't reconstructed"
+	ret=1
+    fi
+
+    ktest_expect_device_errors=1
+    ktest_expect_sb_errors="stripe_read_csum_err|data_read_csum_err(_recovered)?"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+    return $ret
+}
+
+main "$@"
