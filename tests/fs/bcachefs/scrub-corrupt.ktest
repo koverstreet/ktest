@@ -6,7 +6,7 @@
 # the filesystem unmounted, then verify scrub's exit code: bit 2 =
 # errors corrected, bit 4 = uncorrectable errors found.
 #
-# Four cases:
+# Five cases:
 #   single_replica - no redundancy: scrub must report uncorrectable
 #   replicated     - four replicas, random subsets of copies corrupt
 #                    (including one extent with three of four gone):
@@ -16,6 +16,10 @@
 #   ec_parity      - EC stripe parity block corrupt: scrub must repair
 #                    it (parity is reconstructible from the intact data
 #                    blocks).
+#   ec_unreferenced - EC stripe data block corrupt where no live extent
+#                    references it any more: scrub must repair it, and
+#                    the file must read back with another block of the
+#                    stripe offline.
 
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
 
@@ -302,6 +306,175 @@ test_scrub_corrupt_ec_parity()
 
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+# Print "<offset in bucket> <sectors on disk> <file sector> <len> <whole>
+# <ptrs> <stripe idx>" for every key with a pointer into bucket $2 of
+# device $1, from a bkey listing on stdin. whole: the key spans its entire
+# checksummed region. ptrs: non-cached pointers.
+bucket_extents()
+{
+    awk -v dev="$1" -v bucket="$2" '
+	function flush(	i) {
+	    for (i = 0; i < nhit; i++)
+		print hit[i], nptrs, idx[i]
+	    nhit = nptrs = 0
+	}
+	$1 == "u64s" {
+	    flush()
+	    extent = $4 == "extent"
+	    split($5, pos, ":")
+	    len = c_size = size = $7
+	    crc_offset = 0
+	    stripe = "-"
+	    next
+	}
+	!extent { next }
+	$1 ~ /^crc(32|64|128):$/ {
+	    for (i = 2; i < NF; i++)
+		if ($i == "c_size")
+		    c_size = $(i + 1)
+		else if ($i == "size")
+		    size = $(i + 1)
+		else if ($i == "offset")
+		    crc_offset = $(i + 1)
+	}
+	# A stripe_ptr entry precedes the pointer it belongs to.
+	$1 == "stripe_ptr:" { stripe = $3 }
+	$1 == "ptr:" {
+	    if ($0 !~ / cached/)
+		nptrs++
+	    for (i = 2; i <= 3 && i <= NF; i++)
+		if ($i ~ /^[0-9]+:[0-9]+:[0-9]+$/) {
+		    split($i, p, ":")
+		    if (p[1] == dev && p[2] == bucket) {
+			idx[nhit] = stripe
+			hit[nhit++] = p[3] " " c_size " " (pos[2] - len) " " len " " \
+			    (crc_offset == 0 && len == size)
+		    }
+		    break
+		}
+	    stripe = "-"
+	}
+	END { flush() }' | sort -n
+}
+
+test_scrub_corrupt_ec_unreferenced()
+{
+    ktest_expect_device_errors=1
+    ktest_expect_sb_errors="stripe_read_csum_err|data_read_(io|csum)_err(_recovered)?"
+    set_watchdog 300
+
+    setup_ec_corrupt
+
+    local nr_data nr_red
+    read -r nr_data nr_red <<< "$stripe_meta"
+    if ((nr_red != 1)); then
+	echo "ERROR: stripe has $nr_red parity blocks; one bad block plus one"
+	echo "       offline device is only data loss with one"
+	return 1
+    fi
+
+    local vdev vsector ddev dsector
+    read -r vdev vsector <<< "$(stripe_block 0)"
+    read -r ddev dsector <<< "$(stripe_block 1)"
+    local vbucket=$((vsector / BUCKET_SIZE_SECTORS))
+    local dbucket=$((dsector / BUCKET_SIZE_SECTORS))
+
+    local layout=$(bcachefs list -b extents "${ktest_scratch_dev[@]}" |
+	bucket_extents $vdev $vbucket)
+    echo "stripe block 0, dev $vdev bucket $vbucket (off size start len whole ptrs stripe):"
+    echo "$layout"
+
+    # Scrub reads a key's whole checksummed region, so only deleting a
+    # whole key leaves sectors it never reads.
+    local off size start len whole stripe
+    read -r off size start len whole _ stripe <<< "$layout"
+    if [[ $whole != 1 || $stripe == - ]] || (($(wc -l <<< "$layout") < 2)); then
+	echo "ERROR: block 0 needs two erasure coded keys, the first a whole"
+	echo "       checksummed extent, so one can go while the other stays live"
+	return 1
+    fi
+    local end=$((off + size))
+
+    # The punch leaves a fragmented stripe bucket, and copygc moves those:
+    # it could take the live key out of block 0.
+    local devs="$(join_by : "${ktest_scratch_dev[@]}")"
+    mount -t bcachefs -o nocopygc_enabled $devs /mnt
+    fallocate -p -o $((start * 512)) -l $((len * 512)) /mnt/testfile
+    cp /mnt/testfile /root/scrub-orig
+    umount /mnt
+
+    local extents=$(bcachefs list -b extents "${ktest_scratch_dev[@]}")
+    echo "after punching file sectors $start-$((start + len - 1)):"
+    bucket_extents $vdev $vbucket <<< "$extents"
+    echo "stripe block 1, dev $ddev bucket $dbucket:"
+    bucket_extents $ddev $dbucket <<< "$extents"
+
+    if ! bucket_extents $vdev $vbucket <<< "$extents" |
+	    awk -v a=$off -v b=$end -v s=$stripe '
+		$1 < b && a < $1 + $2	{ overlap = 1 }
+		$7 == s			{ live = 1 }
+		END			{ exit overlap || !live }'; then
+	echo "ERROR: block 0 sectors $off-$((end - 1)) are still referenced, or"
+	echo "       block 0 has no live key of stripe $stripe left"
+	return 1
+    fi
+
+    # Reconstruct reads only the range being read, so the block taken
+    # offline has to hold data at the same offsets.
+    if ! bucket_extents $ddev $dbucket <<< "$extents" |
+	    awk -v a=$off -v b=$end -v s=$stripe '
+		$1 < b && a < $1 + $2 && $6 == 1 && $7 == s { found = 1 }
+		END { exit !found }'; then
+	echo "ERROR: block 1 (dev $ddev) has no single-pointer key of stripe"
+	echo "       $stripe over sectors $off-$((end - 1)), so taking it offline"
+	echo "       would not make a read reconstruct through the dead range"
+	return 1
+    fi
+
+    echo "corrupting unreferenced sectors $off-$((end - 1)) of stripe $stripe block 0: dev $vdev"
+    seq $((vbucket * BUCKET_SIZE_SECTORS + off)) 8 \
+	$((vbucket * BUCKET_SIZE_SECTORS + end - 8)) |
+	bcachefs_corrupt_sectors ${ktest_scratch_dev[$vdev]} > /dev/null
+
+    mount -t bcachefs -o nocopygc_enabled $devs /mnt
+
+    # Unlike the tests above, carry on after a scrub failure: the read below
+    # is where it turns into data loss.
+    local rc=0 failed=0
+    bcachefs scrub ${ktest_scratch_dev[$vdev]} || rc=$?
+    echo "scrub exit code: $rc"
+    if (((rc & 4) != 0)); then
+	echo "ERROR: scrub found the unreferenced corruption but left it"
+	echo "       uncorrected, and reconstructing block 1 still reads it"
+	failed=1
+    elif (((rc & 2) == 0)); then
+	echo "ERROR: scrub reported no corrected errors with sectors"
+	echo "       $off-$((end - 1)) of stripe $stripe block 0 (dev $vdev) corrupt"
+	failed=1
+    fi
+
+    # A repair may queue a rebuild. The tail of testfile that does not fill
+    # a stripe stays queued as erasure_code work, so skip that type.
+    timeout 60 bcachefs reconcile wait -t replicas,stripes /mnt || true
+
+    echo "offlining dev $ddev (stripe $stripe block 1)"
+    bcachefs device offline --force ${ktest_scratch_dev[$ddev]}
+
+    if ! cmp /mnt/testfile /root/scrub-orig; then
+	echo "ERROR: testfile does not read back with dev $ddev offline:"
+	echo "       reconstructing block 1 reads block 0 sectors $off-$((end - 1))"
+	failed=1
+    fi
+    umount /mnt
+
+    if ((failed)); then
+	return 1
+    fi
+
+    # No fsck: a member is still offline.
+    bcachefs_test_end_checks ${ktest_scratch_dev[$vdev]}
 }
 
 main "$@"
