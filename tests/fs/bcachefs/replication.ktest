@@ -277,35 +277,36 @@ hot_remove_blockdev()
     return 1
 }
 
-wait_dev_state_not_rw()
+wait_dev_offline_from_block_layer()
 {
-    local fs_uuid=$1
-    local dev_idx=$2
-    local state_file=/sys/fs/bcachefs/$fs_uuid/dev-$dev_idx/state
-    local state=
-
     for _ in $(seq 1 100); do
-	if [[ ! -e $state_file ]]; then
-	    return 0
-	fi
-
-	state=$(cat "$state_file")
-	if [[ $state != *"[rw]"* ]]; then
-	    echo "dev-$dev_idx state after hot remove: $state"
-	    return 0
-	fi
-
+	dmesg | grep -q "offline from block layer" && return 0
 	sleep .1
     done
 
-    echo "dev-$dev_idx still rw after hot remove: $state"
+    echo "no 'offline from block layer' message after hot remove"
     return 1
 }
 
+# A block device yanked out from under a mounted filesystem (surprise removal:
+# cable pull, dead controller) - koverstreet/bcachefs-tools#985.
+#
+# The block layer tells the filesystem through blk_holder_ops->mark_dead:
+# bch2_fs_bdev_mark_dead(). If the filesystem can continue without the device
+# (BCH_FORCE_IF_DEGRADED), the device goes offline: removed from the allocator,
+# io refs dropped, superblock released. Otherwise the filesystem goes emergency
+# read-only.
+#
+# The member state (rw/ro/failed/spare) must NOT change: it's persistent admin
+# policy, and a flaky link that drops a device and brings it back shouldn't
+# rewrite it. So "offline" is what we check, not the member state.
+#
+# The failure this guards against is a ghost device: the filesystem not
+# noticing the removal and still allocating to it, so new writes are silently
+# short a replica. The degraded md5 check can't see that (the surviving copy
+# reads fine), so we check the new file's pointers directly.
 test_device_hot_remove_offlines_dead_dev()
 {
-    # Reproducer for koverstreet/bcachefs-tools#985: a surprise-removed member must
-    # not stay readwrite and receive new writes as a ghost device.
     ktest_expect_device_errors=1
     set_watchdog 120
 
@@ -319,20 +320,40 @@ test_device_hot_remove_offlines_dead_dev()
 
     dd if=/dev/urandom of=/mnt/before-hot-remove bs=1M count=64 oflag=direct
     sync
-
-    local fs_uuid=$(bcachefs fs usage -h /mnt | awk '/^Filesystem:/ {print $2; exit}')
     bcachefs fs usage -h /mnt
 
+    dmesg -C
     echo "hot-removing ${ktest_scratch_dev[1]}"
     hot_remove_blockdev ${ktest_scratch_dev[1]}
-    wait_dev_state_not_rw "$fs_uuid" 1
+    wait_dev_offline_from_block_layer
 
     dd if=/dev/urandom of=/mnt/after-hot-remove bs=1M count=64 oflag=direct
     sync
     (cd /mnt && md5sum before-hot-remove after-hot-remove) > /root/hot-remove.md5
+    local inum=$(stat -c %i /mnt/after-hot-remove)
     bcachefs fs usage -h /mnt
 
     umount /mnt
+
+    # Pointers of the file written after the removal, by member index: none
+    # may be on member 1 (the removed device), and both replicas must be on
+    # the survivors - an empty listing would otherwise pass the first check.
+    bcachefs list -b extents -s $inum:0 -e $((inum + 1)):0	\
+	${ktest_scratch_dev[0]} ${ktest_scratch_dev[2]} > /root/after-hot-remove.extents
+    local dev
+    for dev in 0 1 2; do
+	local nr=$(bcachefs_ptr_sectors 1 $dev < /root/after-hot-remove.extents | wc -l)
+	echo "after-hot-remove: $nr pointers on member $dev"
+
+	if [[ $dev == 1 && $nr != 0 ]]; then
+	    echo "FAIL: data written after hot remove has pointers to the removed device"
+	    return 1
+	fi
+	if [[ $dev != 1 && $nr == 0 ]]; then
+	    echo "FAIL: no pointers on surviving member $dev - listing broken, or write under-replicated"
+	    return 1
+	fi
+    done
 
     mount -t bcachefs -o degraded ${ktest_scratch_dev[0]}:${ktest_scratch_dev[2]} /mnt
     (cd /mnt && md5sum -c /root/hot-remove.md5)
