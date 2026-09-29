@@ -245,38 +245,6 @@ test_device_evacuate_online()
     do_remove_test 0 1
 }
 
-hot_remove_blockdev()
-{
-    local dev=$1
-    local name=${dev#/dev/}
-    local block_sys=/sys/block/$name
-
-    if [[ ! -d $block_sys ]]; then
-	echo "block device $dev is not present in sysfs"
-	return 1
-    fi
-
-    local remove_path
-    for remove_path in "$block_sys/device/delete" "$block_sys/device/remove"; do
-	if [[ -e $remove_path ]]; then
-	    echo 1 > "$remove_path"
-	    return 0
-	fi
-    done
-
-    remove_path=$(readlink -f "$block_sys/device")
-    while [[ $remove_path != /sys && $remove_path != / ]]; do
-	if [[ -e $remove_path/remove ]]; then
-	    echo 1 > "$remove_path/remove"
-	    return 0
-	fi
-	remove_path=$(dirname "$remove_path")
-    done
-
-    echo "no sysfs hot-remove knob found for $dev"
-    return 1
-}
-
 wait_dev_offline_from_block_layer()
 {
     for _ in $(seq 1 100); do
@@ -324,7 +292,7 @@ test_device_hot_remove_offlines_dead_dev()
 
     dmesg_mark hot_remove
     echo "hot-removing ${ktest_scratch_dev[1]}"
-    hot_remove_blockdev ${ktest_scratch_dev[1]}
+    scratch_dev_unplug 1
     wait_dev_offline_from_block_layer
 
     dd if=/dev/urandom of=/mnt/after-hot-remove bs=1M count=64 oflag=direct
@@ -358,6 +326,8 @@ test_device_hot_remove_offlines_dead_dev()
     mount -t bcachefs -o degraded ${ktest_scratch_dev[0]}:${ktest_scratch_dev[2]} /mnt
     (cd /mnt && md5sum -c /root/hot-remove.md5)
     umount /mnt
+
+    scratch_dev_plug 1
 
     bcachefs reset-counters --counters=data_update_fail ${ktest_scratch_dev[0]}
     bcachefs reset-counters --counters=bucket_alloc_fail ${ktest_scratch_dev[0]}
