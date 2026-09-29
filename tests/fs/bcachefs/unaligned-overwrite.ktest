@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+#
+# Read amplification of buffered overwrites that don't cover whole page cache
+# folios, over checksummed extents.
+#
+# A buffered write that covers only part of a folio reads the folio in first
+# (__bch2_buffered_write() -> bch2_read_single_folio()). A checksum covers the
+# whole extent, so that read fetches up to encoded_extent_max from disk, but it
+# fills only the one folio: its bio has a single bvec and no readahead iterator,
+# so readpage_bio_extend() never runs, and the rest is discarded. The next
+# write's folio is in the same extent, so a sequential rewrite in 16k writes
+# that aren't folio aligned reads every 512k extent once per 16k folio: about
+# 32x the data written. Download clients that write one stream of
+# concatenated files do this: file boundaries fall at arbitrary offsets.
+#
+# Expected to fail until the single-folio read in the write path puts the rest
+# of the extent it has to read anyway into the page cache.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+
+UO_FILE_MB=64
+UO_EXTENT_SECTORS=1024
+UO_WRITE=16384
+
+uo_sectors_read()
+{
+    awk '{ print $3 }' /sys/block/$1/stat
+}
+
+uo_counter()
+{
+    awk '/since mount/ { print $3 }' /sys/fs/bcachefs/*/counters/$1
+}
+
+# Succeeds if inode $1's extents in the listing on stdin are all one whole,
+# aligned, uncompressed crc32c region of UO_EXTENT_SECTORS each.
+uo_check_extents()
+{
+    awk -v ino=$1 -v want=$UO_EXTENT_SECTORS \
+	-v nr=$((UO_FILE_MB * 2048 / UO_EXTENT_SECTORS)) '
+	function flush() {
+	    if (!have)
+		return
+	    n++
+	    if (len != want || c_size != want || size != want || offset != 0 ||
+		csum != "crc32c" || compress != "none" || (end - len) % want) {
+		bad++
+		print "unexpected extent: " key
+	    }
+	    have = 0
+	}
+	/^u64s / {
+	    flush()
+	    split($5, p, ":")
+	    if (p[1] "" != ino "")
+		next
+	    have = 1; key = $0; end = p[2]
+	    len = c_size = size = offset = -1; csum = compress = ""
+	    for (i = 1; i < NF; i++)
+		if ($i == "len")
+		    len = $(i + 1)
+	}
+	have && /crc(32|64|128): / {
+	    for (i = 1; i < NF; i++) {
+		if ($i == "c_size")	c_size = $(i + 1)
+		if ($i == "size")	size = $(i + 1)
+		if ($i == "offset")	offset = $(i + 1)
+		if ($i == "csum")	csum = $(i + 1)
+		if ($i == "compress")	compress = $(i + 1)
+	    }
+	}
+	END {
+	    flush()
+	    print "extents: " n + 0 " (want " nr "), unexpected: " bad + 0
+	    exit !(n == nr && !bad)
+	}'
+}
+
+# uo_pass <name> <offset>: write a fresh file of 512k checksummed extents,
+# then rewrite it with sequential 16k buffered writes starting at <offset>.
+# Sets uo_amp to device bytes read per 100 bytes written by the rewrite.
+uo_pass()
+{
+    local name=$1 start=$2
+    local dev=${ktest_scratch_dev[0]}
+    local devname=$(basename $(readlink -f $dev))
+    local nr=$((UO_FILE_MB * 1024 * 1024 / UO_WRITE - 1))
+    local len=$((nr * UO_WRITE))
+
+    echo "=== $name: $nr x 16k writes from offset $start"
+
+    run_quiet "" bcachefs format -f		\
+	--block_size=4k				\
+	--bucket_size=2M			\
+	--encoded_extent_max=512k		\
+	--data_checksum=crc32c			\
+	--compression=none			\
+	$dev
+
+    dd if=/dev/urandom of=/tmp/uo-model bs=1M count=$UO_FILE_MB status=none
+
+    # One write per extent: a larger O_DIRECT write is split into bios along
+    # the user buffer's pages, and extents are cut from each bio's start.
+    mount -t bcachefs $dev /mnt
+    dd if=/tmp/uo-model of=/mnt/f bs=512k oflag=direct status=none
+    local ino=$(stat -c %i /mnt/f)
+    umount /mnt
+
+    bcachefs list -b extents $dev > /tmp/uo-$name.keys
+    if ! uo_check_extents $ino < /tmp/uo-$name.keys; then
+	echo "ERROR: $name: precondition failed, extents are not what this test measures:"
+	head -n 30 /tmp/uo-$name.keys
+	return 1
+    fi
+
+    # Mounted fresh, so none of the file is in the page cache.
+    mount -t bcachefs $dev /mnt
+    local r0=$(uo_sectors_read $devname) b0=$(uo_counter data_read_bounce)
+    xfs_io -c "pwrite -S 0x5a -b $UO_WRITE $start $len" -c fsync /mnt/f
+    local r1=$(uo_sectors_read $devname) b1=$(uo_counter data_read_bounce)
+    umount /mnt
+
+    local read=$(( (r1 - r0) * 512 ))
+    uo_amp=$(( read * 100 / len ))
+    printf '%s: wrote %d KiB, device read %d KiB (%d.%02dx), bounced reads %d\n' \
+	$name $((len >> 10)) $((read >> 10)) $((uo_amp / 100)) $((uo_amp % 100)) $((b1 - b0))
+
+    xfs_io -c "pwrite -S 0x5a -b $UO_WRITE $start $len" /tmp/uo-model
+    mount -t bcachefs $dev /mnt
+    cmp /mnt/f /tmp/uo-model
+    umount /mnt
+    rm -f /tmp/uo-model
+
+    bcachefs fsck -ny $dev
+}
+
+test_unaligned_overwrite_read_amp()
+{
+    set_watchdog 600
+
+    local devname=$(basename $(readlink -f ${ktest_scratch_dev[0]}))
+    if [[ ! -e /sys/block/$devname/stat ]]; then
+	echo "ERROR: no /sys/block/$devname/stat to measure reads from"
+	return 1
+    fi
+
+    local ret=0
+
+    # 16k aligned: every write covers a whole folio, so nothing is read. If
+    # this reads much, the measurement is confounded and the rest is moot.
+    uo_pass folio_aligned 0
+    local control=$uo_amp
+
+    # A file starting at an arbitrary stream offset: not even block aligned.
+    uo_pass unaligned 1536
+    local unaligned=$uo_amp
+
+    # Block aligned is not enough: folios are allocated at the write's size and
+    # alignment, so the 16k folio after each write is still partly covered.
+    uo_pass block_aligned 4096
+    local block_aligned=$uo_amp
+
+    if (( control > 50 )); then
+	echo "ERROR: folio aligned control read ${control}% of what it wrote"
+	ret=1
+    fi
+
+    if (( unaligned > 200 )); then
+	echo "ERROR: unaligned overwrite read ${unaligned}% of what it wrote"
+	ret=1
+    fi
+
+    if (( block_aligned > 200 )); then
+	echo "ERROR: block aligned overwrite read ${block_aligned}% of what it wrote"
+	ret=1
+    fi
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+    return $ret
+}
+
+main "$@"
