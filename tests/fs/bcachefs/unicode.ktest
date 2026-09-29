@@ -116,6 +116,96 @@ test_casefold_negative_parallel_lookup()
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
 }
 
+# Lookups racing create, rename and unlink of one name in a casefolded
+# directory, where the renames cycle it between two spellings that casefold
+# equal (MiSsInG -> MISSING): negative dentries, case-alias renames and the
+# unlink-side d_invalidate() all under contention. Lockdep reports and warnings
+# fail the test through check_dmesg; a hang through the watchdog; a stall that
+# recovers through the hung-task check here.
+#
+# The workers are python for os.rename(): mv refuses to rename between two
+# names for the same file, which is the case-alias rename we want.
+casefold_storm_worker='
+import os, sys, time
+
+role, d, secs, tid = sys.argv[1], sys.argv[2], float(sys.argv[3]), sys.argv[4]
+target, alias = d + "/MiSsInG", d + "/MISSING"
+end = time.monotonic() + secs
+
+def quiet(f, *args):
+    try:
+        f(*args)
+    except OSError:
+        pass
+
+i = 0
+while time.monotonic() < end:
+    i += 1
+    if role == "lookup":
+        quiet(os.stat, target)
+        try:
+            os.close(os.open(target, os.O_RDONLY))
+        except OSError:
+            pass
+    elif role == "rename":
+        tmp = f"{d}/.tmp.{tid}.{i}"
+        try:
+            with open(tmp, "w") as f:
+                f.write("x")
+        except OSError:
+            continue
+        try:
+            os.rename(tmp, target)
+        except OSError:
+            quiet(os.unlink, tmp)
+        quiet(os.rename, target, alias)
+        quiet(os.rename, alias, f"{d}/alias.{tid}.{i}")
+        quiet(os.unlink, f"{d}/alias.{tid}.{i}")
+        quiet(os.unlink, alias)
+    else:
+        quiet(os.unlink, target)
+        quiet(os.unlink, alias)
+'
+
+test_casefold_lookup_rename_unlink_storm()
+{
+    set_watchdog 120
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount ${ktest_scratch_dev[0]} /mnt
+
+    local dir=/mnt/casefold_dir
+    mkdir $dir
+    bcachefs set-file-option --casefold $dir
+    sync
+    echo 3 > /proc/sys/vm/drop_caches
+
+    local dmesg_before=$(dmesg | wc -l)
+    local pids=() role i
+
+    for role in lookup rename unlink; do
+	for i in $(seq 1 4); do
+	    python3 -c "$casefold_storm_worker" $role $dir 30 $i &
+	    pids+=($!)
+	done
+    done
+    for i in "${pids[@]}"; do
+	wait $i
+    done
+
+    if dmesg | tail -n +$((dmesg_before + 1)) | grep "blocked for more than"; then
+	echo "FAIL: task stalled during the casefold lookup/rename/unlink storm"
+	return 1
+    fi
+
+    echo "created" > $dir/missing
+    [[ $(cat $dir/MISSING) == "created" ]]
+
+    umount /mnt
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 # rmdir in a casefolded dir calls d_invalidate(), which waits for child dentries
 # another thread is killing; if that thread is evicting a deleted subdirectory it
 # needs the dirents leaf the rmdir may still hold locked. Race the last close of
