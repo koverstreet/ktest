@@ -1938,11 +1938,24 @@ replace_file()
     dd if=/dev/urandom of=$1 bs=4k count=1 oflag=direct status=none
 }
 
+# CI container churn on a layer: create and delete $2 snapshots of it, so the
+# layer's chain deepens and snapshot ids spread past the is_ancestor bitmap.
+churn_containers()
+{
+    local i
+    for i in $(seq $2); do
+	bcachefs subvolume snapshot /mnt/$1 /mnt/ctr
+	bcachefs subvolume delete /mnt/ctr
+    done
+}
+
 # snap-l0 base layer with world (replaced below) and keep (never touched);
 # snap-l1 and snap-x replace world, snap-l2 keeps and touches it, snap-z is
-# snap-l2's child that replaces it again.
+# snap-l2's child that replaces it again. $1: containers churned on snap-l2.
 build_layer_tree()
 {
+    local churn=${1:-0}
+
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
@@ -1957,11 +1970,13 @@ build_layer_tree()
     bcachefs subvolume snapshot /mnt/snap-l0 /mnt/snap-l2
     bcachefs subvolume snapshot /mnt/snap-l2 /mnt/snap-x
     replace_file /mnt/snap-x/world
+    churn_containers snap-l2 $churn
 
     # Gives snap-l2 its own version of the inode, as in the field report:
     touch /mnt/snap-l2/world
     bcachefs subvolume snapshot /mnt/snap-l2 /mnt/snap-z
     replace_file /mnt/snap-z/world
+    churn_containers snap-l2 $churn
 
     capture_state $MANIFEST
     umount /mnt
@@ -1983,6 +1998,7 @@ extents_without_inode()
 }
 
 # fsck must finish the collapse without dropping data any layer still reads.
+# $@: extra fsck arguments.
 check_layer_tree_fsck()
 {
     local skew=$(extents_without_inode)
@@ -1997,7 +2013,7 @@ check_layer_tree_fsck()
 
     local out=/tmp/fsck-layer-tree.out
     local rc1=0 rc2=0
-    bcachefs fsck -y ${ktest_scratch_dev[0]} 2>&1 | tee $out || rc1=$?
+    bcachefs fsck "$@" -y ${ktest_scratch_dev[0]} 2>&1 | tee $out || rc1=$?
     echo "fsck -y exited $rc1"
 
     if grep -q "key in missing inode" $out; then
@@ -2042,6 +2058,35 @@ test_interrupted_collapse_replaced_file_twice()
 
     skip_snaps="snap-l0 snap-l1 snap-x"
     check_layer_tree_fsck
+}
+
+# Field snapshot ids were hundreds of thousands apart, so is_ancestor ran on
+# skiplists; the variants above stay within the 128-id bitmap.
+test_interrupted_collapse_replaced_file_churn()
+{
+    build_layer_tree 150
+
+    interrupt_snapshot_deletion snap-l1 snap-l0
+    interrupt_snapshot_deletion snap-x
+
+    local ids=($(all_snap_ids | sort -n))
+    echo "snapshot ids span ${ids[0]}..${ids[-1]}"
+
+    skip_snaps="snap-l0 snap-l1 snap-x"
+    check_layer_tree_fsck
+}
+
+# The field report ran userspace fsck; the variants above get the in-kernel one.
+test_interrupted_collapse_replaced_file_churn_userspace()
+{
+    build_layer_tree 150
+
+    interrupt_snapshot_deletion snap-l1 snap-l0
+    interrupt_snapshot_deletion snap-x
+
+    skip_snaps="snap-l0 snap-l1 snap-x"
+    # BCACHEFS_KERNEL_ONLY, exported by the test libs, overrides -K:
+    (unset BCACHEFS_KERNEL_ONLY; check_layer_tree_fsck -K)
 }
 
 # creation_parent: genealogy metadata, but live - deletion reparents
