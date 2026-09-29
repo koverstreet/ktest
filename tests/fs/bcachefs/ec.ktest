@@ -1636,6 +1636,9 @@ test_ec_encrypted_degraded_read()
     mount -t bcachefs "$devs" /mnt
     dd if=/dev/urandom of=/mnt/data bs=1M count=64 conv=fsync status=none
     local want=$(md5sum < /mnt/data)
+    # Stripes are built by reconcile, after the write - unmounting straight
+    # away left none about a third of the time:
+    timeout 120 bcachefs reconcile wait /mnt || true
     umount /mnt
 
     if ! bcachefs list -b stripes "${ktest_scratch_dev[@]}" | grep -q "type stripe"; then
