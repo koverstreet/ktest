@@ -42,10 +42,10 @@ mount_capture()
 {
     local ret
 
-    dmesg -C
+    dmesg_mark mount_capture
     script -qefc "mount $*" /dev/null < /dev/null && ret=0 || ret=$?
 
-    mount_output=$(dmesg)
+    mount_output=$(dmesg_since mount_capture)
     return $ret
 }
 

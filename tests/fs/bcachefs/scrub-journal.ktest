@@ -18,16 +18,16 @@ config-timeout $(stress_timeout)
 # visible because test_scrub_journal asserts the same string positively.
 #
 # The pty's own output is not the place to look - it is the redrawing progress
-# display, about a screenful. dmesg is, so clear it first and read it after.
+# display, about a screenful. dmesg is: mark it first and read what follows.
 #
 mount_capture()
 {
     local ret
 
-    dmesg -C
+    dmesg_mark mount_capture
     script -qefc "mount $*" /dev/null < /dev/null && ret=0 || ret=$?
 
-    mount_output=$(dmesg)
+    mount_output=$(dmesg_since mount_capture)
     return $ret
 }
 

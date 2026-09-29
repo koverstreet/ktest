@@ -1201,12 +1201,12 @@ format_with_data()
 # indicator never fired", which is why there is a control below.
 progress_lines_in_dmesg()
 {
-    dmesg | grep -cE '[0-9]+%, done [0-9]+/[0-9]+ (nodes|keys)'
+    dmesg_since "$1" | grep -cE '[0-9]+%, done [0-9]+/[0-9]+ (nodes|keys)'
 }
 
 pass_lines_in_dmesg()
 {
-    dmesg | grep -cE 'check_[a-z_]+\.\.\.'
+    dmesg_since "$1" | grep -cE 'check_[a-z_]+\.\.\.'
 }
 
 set_delay()
@@ -1331,21 +1331,21 @@ test_progress_reaches_dmesg_when_nobody_draws()
 	rm -f /run/systemd/show-status
     fi
 
-    dmesg -C
+    dmesg_mark progress_control
     mount -t bcachefs -o $MOUNT_OPTS ${ktest_scratch_dev[0]} $MNT 2>/dev/null
     umount $MNT
 
     [[ -n $saved ]] && touch /run/systemd/show-status
     set_delay 0
 
-    local progress=$(progress_lines_in_dmesg)
+    local progress=$(progress_lines_in_dmesg progress_control)
     echo "progress lines in dmesg with no display: $progress"
 
     if (( progress == 0 )); then
 	echo "the slowed mount never printed a progress line at all."
 	echo "the delay knob or the indicators are not doing anything, and the"
 	echo "systemd test below would pass without proving anything."
-	dmesg | tail -40
+	dmesg_since progress_control | tail -40
 	exit 1
     fi
 }
@@ -1598,7 +1598,7 @@ test_systemd_mount_shows_status()
 
     preflight
     set_delay $DELAY_MS
-    dmesg -C
+    dmesg_mark systemd_mount
 
     echo
     echo "==================== watch this bit ===================="
@@ -1634,13 +1634,13 @@ test_systemd_mount_shows_status()
 	exit 1
     fi
 
-    local passes=$(pass_lines_in_dmesg)
-    local progress=$(progress_lines_in_dmesg)
+    local passes=$(pass_lines_in_dmesg systemd_mount)
+    local progress=$(progress_lines_in_dmesg systemd_mount)
     echo "dmesg during the systemd mount: $passes pass lines, $progress progress lines"
 
     if (( passes == 0 )); then
 	echo "recovery did not announce any passes - did it run at all?"
-	dmesg | tail -40
+	dmesg_since systemd_mount | tail -40
 	exit 1
     fi
 
@@ -1650,7 +1650,7 @@ test_systemd_mount_shows_status()
     if (( progress != 0 )); then
 	echo "progress still went to dmesg during a systemd mount, so nothing"
 	echo "was drawing it - mount.bcachefs did not take the console."
-	dmesg | grep -E '[0-9]+%, done' | head -5
+	dmesg_since systemd_mount | grep -E '[0-9]+%, done' | head -5
 	exit 1
     fi
 

@@ -280,7 +280,7 @@ hot_remove_blockdev()
 wait_dev_offline_from_block_layer()
 {
     for _ in $(seq 1 100); do
-	dmesg | grep -q "offline from block layer" && return 0
+	dmesg_since hot_remove | grep -q "offline from block layer" && return 0
 	sleep .1
     done
 
@@ -322,7 +322,7 @@ test_device_hot_remove_offlines_dead_dev()
     sync
     bcachefs fs usage -h /mnt
 
-    dmesg -C
+    dmesg_mark hot_remove
     echo "hot-removing ${ktest_scratch_dev[1]}"
     hot_remove_blockdev ${ktest_scratch_dev[1]}
     wait_dev_offline_from_block_layer
