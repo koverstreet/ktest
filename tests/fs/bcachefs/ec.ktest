@@ -1141,6 +1141,14 @@ test_ec_force_remove_records_damage()
     bcachefs_test_end_checks ${ktest_scratch_dev[1]}
 }
 
+# Keep writing to an erasure-coded filesystem after losing a member -
+# koverstreet/bcachefs-tools#1057: a 13+2 array with one disk pulled took
+# writes for a while, then froze.
+#
+# Still open: with a member missing, EC writes block on stripe buffer memory
+# that can't be freed (stripe_buf_mem_blocked) - the same wedge
+# test_ec_stripe_buf_limit reaches with every member present. The timeout
+# turns a freeze into a failure instead of a watchdog kill.
 test_ec_degraded_continued_writes()
 {
     set_watchdog 300
