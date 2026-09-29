@@ -7,7 +7,7 @@ set -o pipefail
 
 . "$ktest_dir/cross.conf"
 
-trap 'echo "Error $? at $BASH_SOURCE $LINENO from: $BASH_COMMAND, exiting"' ERR
+trap 'echo "Error $? at $BASH_SOURCE $LINENO from: $BASH_COMMAND, exiting" >&2' ERR
 
 ktest_tmp=${ktest_tmp:-""}
 # When the caller (e.g. ci-daemon's -T) supplies the tmp dir, it owns
