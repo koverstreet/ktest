@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 #
 # Setting a device's durability to 0 should restore the durability of the data
-# on it: a replicated extent gets another replica.
+# on it: a replicated extent gets another replica, and a stripe gets its block
+# on that device rebuilt elsewhere, as when the device is evacuating.
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config BCACHEFS_ERASURE_CODING
 
 config-scratch-devs 2G
 config-scratch-devs 2G
@@ -46,6 +49,95 @@ dz_extents()
 	}
 	END { done(); print n + 0, low + 0, on + 0, ec + 0, both + 0 }' \
 	/sys/kernel/debug/bcachefs/*/btrees/extents/keys
+}
+
+# dz_stripes_on <dev_idx>: number of stripes with a block on dev_idx. Block
+# pointers are on the lines after the key's header line; the header has the
+# key position, which also looks like a:b:c.
+dz_stripes_on()
+{
+    awk -v d="$1" '
+	/^u64s/ { n += on; on = 0; next }
+	{
+	    for (i = 1; i <= NF; i++)
+		if (split($i, a, ":") == 3 && a[1] ~ /^[0-9]+$/ && a[1] == d)
+		    on = 1
+	}
+	END { print n + on }' /sys/kernel/debug/bcachefs/*/btrees/stripes/keys
+}
+
+# Stripes with a block on a durability=0 device: the stripe-level checks
+# (reconcile's stripe flag, stripe_degraded(), stripe reuse) test
+# bch2_dev_bad_or_evacuating(), not durability, so nothing rebuilds the block,
+# and every extent in those stripes is left at durability 1 (a 1-parity stripe
+# sums its two least durable blocks: 0 + 1). A replicated file in the same
+# filesystem is the control: its extents get another replica. Device 0 is used
+# because the durability change only scans device 0's backpointers (see
+# test_durability_zero_rereplicate).
+test_ec_durability_zero()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	"${ktest_scratch_dev[@]}"
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+    local sysfs=$(echo /sys/fs/bcachefs/*/)
+
+    mkdir /mnt/rep
+    setfattr -n bcachefs.erasure_code -v 0 /mnt/rep
+
+    dd if=/dev/urandom of=/mnt/ec bs=1M count=512 status=none
+    dd if=/dev/urandom of=/mnt/rep/f bs=1M count=64 status=none
+    sync
+    timeout 120 bcachefs reconcile wait /mnt || true
+
+    local ec_sum=$(md5sum < /mnt/ec) rep_sum=$(md5sum < /mnt/rep/f)
+    local ec_ino=$(stat -c %i /mnt/ec) rep_ino=$(stat -c %i /mnt/rep/f)
+    local ec_n ec_low ec_on ec_striped rep_n rep_low rep_on rep_striped x
+
+    read ec_n ec_low ec_on ec_striped x < <(dz_extents $ec_ino 0)
+    read rep_n rep_low rep_on rep_striped x < <(dz_extents $rep_ino 0)
+    local stripes=$(dz_stripes_on 0)
+    echo "before: EC file: $ec_n extents, $ec_striped erasure coded; $stripes stripes with a block on dev 0"
+    echo "before: replicated file: $rep_n extents, $rep_on with a copy on dev 0, $rep_low below durability 2"
+
+    if [[ $ec_n == 0 || $ec_striped != $ec_n || $stripes == 0 ||
+	  $rep_n == 0 || $rep_striped != 0 || $rep_on == 0 || $rep_low != 0 ]]; then
+	echo "ERROR: precondition failed - this run tests nothing"
+	return 1
+    fi
+
+    echo 0 > ${sysfs}dev-0/durability
+    timeout 120 bcachefs reconcile wait /mnt || true
+    bcachefs reconcile status /mnt
+
+    read rep_n rep_low rep_on rep_striped x < <(dz_extents $rep_ino 0)
+    stripes=$(dz_stripes_on 0)
+    echo "after durability=0 on dev 0:"
+    echo "  $stripes stripes with a block on dev 0"
+    echo "  replicated file: $rep_n extents, $rep_on with a durable copy on dev 0, $rep_low below durability 2"
+
+    local ret=0
+    if [[ $rep_low != 0 ]]; then
+	echo "ERROR: control: $rep_low replicated extents not re-replicated"
+	ret=1
+    fi
+    if [[ $stripes != 0 ]]; then
+	echo "ERROR: $stripes stripes still have a block on the durability=0 device (stripe durability 1)"
+	ret=1
+    fi
+
+    if [[ $(md5sum < /mnt/ec) != "$ec_sum" || $(md5sum < /mnt/rep/f) != "$rep_sum" ]]; then
+	echo "ERROR: data changed"
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+    return $ret
 }
 
 # The durability hook queues RECONCILE_SCAN_device with .dev = inum, and the
