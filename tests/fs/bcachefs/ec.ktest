@@ -1944,4 +1944,186 @@ test_ec_evacuate_cancelled()
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
+# Setting a device's durability to 0 should restore the durability of the data
+# on it: a replicated extent gets another replica, and a stripe gets its block
+# on that device rebuilt elsewhere, as when the device is evacuating.
+
+# dz_extents <inum> <dev> [<dev2>]: for the extents of <inum>, print
+# "<extents> <below durability 2> <with a durable ptr on dev> <erasure coded>
+# <with durable ptrs on dev and dev2>". The key text's durability is only
+# meaningful for replicated extents: for an erasure coded one it is
+# bch2_bkey_durability_safe(), which assumes redundancy + 1 without reading the
+# stripe.
+dz_extents()
+{
+    awk -v ino="$1" -v d="$2" -v d2="${3:--1}" '
+	function done() {
+	    if (cur) { n++; low += dur < 2; on += ondev; ec += striped; both += ondev && ondev2 }
+	}
+	/^u64s/ {
+	    done()
+	    split($5, p, ":")
+	    cur = $4 == "extent" && p[1] == ino
+	    dur = match($0, /durability: [0-9]+/) ? substr($0, RSTART + 12, RLENGTH - 12) + 0 : 0
+	    ondev = 0
+	    ondev2 = 0
+	    striped = 0
+	    next
+	}
+	cur && /stripe_ptr:/ { striped = 1 }
+	cur && /ptr:/ && !/stripe_ptr:/ && !/ cached/ {
+	    for (i = 1; i <= NF; i++)
+		if (split($i, a, ":") == 3 && a[1] ~ /^[0-9]+$/) {
+		    if (a[1] == d)
+			ondev = 1
+		    if (a[1] == d2)
+			ondev2 = 1
+		    break
+		}
+	}
+	END { done(); print n + 0, low + 0, on + 0, ec + 0, both + 0 }' \
+	/sys/kernel/debug/bcachefs/*/btrees/extents/keys
+}
+
+# dz_stripes_on <dev_idx>: number of stripes with a block on dev_idx. Block
+# pointers are on the lines after the key's header line; the header has the
+# key position, which also looks like a:b:c.
+dz_stripes_on()
+{
+    awk -v d="$1" '
+	/^u64s/ { n += on; on = 0; next }
+	{
+	    for (i = 1; i <= NF; i++)
+		if (split($i, a, ":") == 3 && a[1] ~ /^[0-9]+$/ && a[1] == d)
+		    on = 1
+	}
+	END { print n + on }' /sys/kernel/debug/bcachefs/*/btrees/stripes/keys
+}
+
+# Stripes with a block on a durability=0 device: the stripe-level checks
+# (reconcile's stripe flag, stripe_degraded(), stripe reuse) test
+# bch2_dev_bad_or_evacuating(), not durability, so nothing rebuilds the block,
+# and every extent in those stripes is left at durability 1 (a 1-parity stripe
+# sums its two least durable blocks: 0 + 1). A replicated file in the same
+# filesystem is the control: its extents get another replica. Device 0 is used
+# because the durability change only scans device 0's backpointers (see
+# test_durability_zero_rereplicate).
+test_ec_durability_zero()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	"${ktest_scratch_dev[@]}"
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+    local sysfs=$(echo /sys/fs/bcachefs/*/)
+
+    mkdir /mnt/rep
+    setfattr -n bcachefs.erasure_code -v 0 /mnt/rep
+
+    dd if=/dev/urandom of=/mnt/ec bs=1M count=512 status=none
+    dd if=/dev/urandom of=/mnt/rep/f bs=1M count=64 status=none
+    sync
+    timeout 120 bcachefs reconcile wait /mnt || true
+
+    local ec_sum=$(md5sum < /mnt/ec) rep_sum=$(md5sum < /mnt/rep/f)
+    local ec_ino=$(stat -c %i /mnt/ec) rep_ino=$(stat -c %i /mnt/rep/f)
+    local ec_n ec_low ec_on ec_striped rep_n rep_low rep_on rep_striped x
+
+    read ec_n ec_low ec_on ec_striped x < <(dz_extents $ec_ino 0)
+    read rep_n rep_low rep_on rep_striped x < <(dz_extents $rep_ino 0)
+    local stripes=$(dz_stripes_on 0)
+    echo "before: EC file: $ec_n extents, $ec_striped erasure coded; $stripes stripes with a block on dev 0"
+    echo "before: replicated file: $rep_n extents, $rep_on with a copy on dev 0, $rep_low below durability 2"
+
+    if [[ $ec_n == 0 || $ec_striped != $ec_n || $stripes == 0 ||
+	  $rep_n == 0 || $rep_striped != 0 || $rep_on == 0 || $rep_low != 0 ]]; then
+	echo "ERROR: precondition failed - this run tests nothing"
+	return 1
+    fi
+
+    echo 0 > ${sysfs}dev-0/durability
+    timeout 120 bcachefs reconcile wait /mnt || true
+    bcachefs reconcile status /mnt
+
+    read rep_n rep_low rep_on rep_striped x < <(dz_extents $rep_ino 0)
+    stripes=$(dz_stripes_on 0)
+    echo "after durability=0 on dev 0:"
+    echo "  $stripes stripes with a block on dev 0"
+    echo "  replicated file: $rep_n extents, $rep_on with a durable copy on dev 0, $rep_low below durability 2"
+
+    local ret=0
+    if [[ $rep_low != 0 ]]; then
+	echo "ERROR: control: $rep_low replicated extents not re-replicated"
+	ret=1
+    fi
+    if [[ $stripes != 0 ]]; then
+	echo "ERROR: $stripes stripes still have a block on the durability=0 device (stripe durability 1)"
+	ret=1
+    fi
+
+    if [[ $(md5sum < /mnt/ec) != "$ec_sum" || $(md5sum < /mnt/rep/f) != "$rep_sum" ]]; then
+	echo "ERROR: data changed"
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+    return $ret
+}
+
+# The durability hook queues RECONCILE_SCAN_device with .dev = inum, and the
+# sysfs device option path passes inum 0, so the scan always walks device 0's
+# backpointers. Setting durability=0 on any other device re-replicates nothing.
+test_durability_zero_rereplicate()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f		\
+	--replicas=2				\
+	"${ktest_scratch_dev[@]}"
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+    local sysfs=$(echo /sys/fs/bcachefs/*/)
+
+    dd if=/dev/urandom of=/mnt/f bs=1M count=128 status=none
+    sync
+    timeout 120 bcachefs reconcile wait /mnt || true
+
+    local sum=$(md5sum < /mnt/f) ino=$(stat -c %i /mnt/f)
+    local n low on striped both
+
+    read n low on striped both < <(dz_extents $ino 1 0)
+    echo "before: $n extents, $on with a copy on dev 1 ($both of them also on dev 0), $low below durability 2"
+    if [[ $n == 0 || $on == 0 || $low != 0 || $striped != 0 ]]; then
+	echo "ERROR: precondition failed - this run tests nothing"
+	return 1
+    fi
+
+    echo 0 > ${sysfs}dev-1/durability
+    timeout 120 bcachefs reconcile wait /mnt || true
+    bcachefs reconcile status /mnt
+
+    read n low on striped both < <(dz_extents $ino 1 0)
+    echo "after durability=0 on dev 1: $n extents, $on with a durable copy on dev 1, $low below durability 2"
+
+    local ret=0
+    if [[ $low != 0 ]]; then
+	echo "ERROR: $low extents with a copy on dev 1 left at durability 1"
+	ret=1
+    fi
+
+    if [[ $(md5sum < /mnt/f) != "$sum" ]]; then
+	echo "ERROR: data changed"
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+    return $ret
+}
+
+
 main "$@"
