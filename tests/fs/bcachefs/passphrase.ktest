@@ -88,10 +88,16 @@ test_no_passphrase_roundtrip()
 	return 1
     fi
 
-    # Back to where we started: encrypted, key in the clear. unlock should now
-    # say so rather than prompt.
-    bcachefs unlock --check $(dev) > /run/check-out 2>&1
+    # Back to where we started: encrypted, key in the clear. unlock --check
+    # has nothing to unlock and says so, exiting nonzero - initramfs scripts
+    # branch on that - rather than prompting.
+    local rc=0
+    bcachefs unlock --check $(dev) > /run/check-out 2>&1 || rc=$?
     cat /run/check-out
+    if [[ $rc -eq 0 ]] || ! grep -q 'no encryption' /run/check-out; then
+	echo "remove-passphrase left a passphrase on the filesystem"
+	return 1
+    fi
 }
 
 # set-passphrase differs from the working unlock --file path in TWO ways, not
@@ -134,22 +140,12 @@ test_change_existing_passphrase()
 {
     format_with_passphrase "$PASS_A"
 
-    # FAILS with "incorrect passphrase" on the CURRENT passphrase, before any
-    # of the new-passphrase work. Three candidate causes are eliminated by the
-    # two tests above plus a probe:
-    #
-    #   fixture      - format_with_passphrase_then_unlock passes, so PASS_A
-    #                  really is this filesystem's passphrase.
-    #   stdin reader - unlock_from_stdin_isolates_the_reader passes, so
-    #                  read_from_stdin() + check() accept PASS_A.
-    #   a swallowed  - feeding 2, 3 and 6 lines all fail identically, and the
-    #   prompt         failure never moves to the new-passphrase check. So
-    #                  #255's spurious nostart prompt is not eating input.
-    #
-    # What is left: unlock passes its sb from sb_io::read_super(), while
-    # set-passphrase passes one from Fs::open(nostart).sb_handle(). Same
-    # check(), same passphrase, different superblock - and check() reads only
-    # crypt.key() and sb.nonce(), so one of those two differs between them.
+    # The current passphrase, then the new one, one line each. This failed
+    # with "no passphrase read: end of file on stdin": opening the filesystem
+    # needs its key, and without one the open (bch2_request_key() in
+    # userspace) prompts for the passphrase itself - taking the first line -
+    # before set-passphrase asked for it and got EOF. An earlier probe here,
+    # feeding 2, 3 and 6 lines, concluded no prompt was eating input; it was.
     if ! bcachefs set-passphrase $(dev) > /run/set-out 2>&1 \
 	    < <(printf '%s\n%s\n' "$PASS_A" "$PASS_B"); then
 	echo "set-passphrase failed changing an existing passphrase:"
