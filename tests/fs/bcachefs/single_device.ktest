@@ -2807,4 +2807,40 @@ test_unaligned_overwrite_read_amp()
 }
 
 
+# An offline superblock edit persists the edit, and nothing else. The open
+# used to make the version upgrade/downgrade decision a start would make, and
+# the write that followed persisted it - set-fs-option on an unmounted
+# filesystem upgraded it to whatever version the tools know, possibly newer
+# than the kernel that mounts it next.
+test_offline_sb_edit_keeps_version()
+{
+    local dev=${ktest_scratch_dev[0]}
+
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f --version=1.38 $dev
+    # offline edits refuse a never-started filesystem; start it without
+    # letting the mount upgrade it either
+    mount -t bcachefs -o version_upgrade=none $dev /mnt
+    umount /mnt
+
+    local before=$(bcachefs show-super $dev | grep -E '^Version( upgrade complete)?:')
+    echo "$before"
+
+    bcachefs set-fs-option --compression=lz4 $dev
+
+    if ! bcachefs show-super $dev | grep -qE '^ +compression: +lz4$'; then
+	echo "ERROR: set-fs-option did not write the option"
+	bcachefs show-super $dev | grep -E '^ +compression:'
+	return 1
+    fi
+
+    local after=$(bcachefs show-super $dev | grep -E '^Version( upgrade complete)?:')
+    if [[ "$after" != "$before" ]]; then
+	echo "ERROR: an offline set-fs-option changed the superblock version:"
+	echo "$after"
+	return 1
+    fi
+}
+
 main "$@"
