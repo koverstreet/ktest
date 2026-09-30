@@ -490,7 +490,7 @@ scratch_dev_unplug()
     local slots=(/sys/bus/pci/slots/*)
 
     if [[ ! -e ${slots[0]} ]]; then
-	echo "scratch_dev_unplug: no PCI hotplug slots registered - is CONFIG_HOTPLUG_PCI_ACPI set?"
+	echo "scratch_dev_unplug: no PCI hotplug slots registered - is CONFIG_HOTPLUG_PCI_ACPI (x86) or CONFIG_HOTPLUG_PCI_SHPC (arm64) set?"
 	exit 1
     fi
 

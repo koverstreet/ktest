@@ -57,6 +57,10 @@ case $ktest_arch in
 	require-kernel-config CPU_LITTLE_ENDIAN
 	require-kernel-config PCI_HOST_GENERIC
 	require-kernel-config RTC_DRV_PL031
+	# shpchp: the hotpluggable disk slots. The scratch disks sit behind a
+	# pcie-pci-bridge (lib/libktest.sh), a standard hotplug controller;
+	# x86 drives it with acpiphp, which is x86 ACPI.
+	require-kernel-config HOTPLUG_PCI_SHPC
 
 	have_virtio=1
 
