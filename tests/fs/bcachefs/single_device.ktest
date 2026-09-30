@@ -2843,4 +2843,95 @@ test_offline_sb_edit_keeps_version()
     fi
 }
 
+# Offline superblock edits have to write what they say they write, leave the
+# version alone, and refuse a filesystem that has never been started - where
+# bch2_write_super() skips the write - rather than report success.
+
+offline_sb_counter()
+{
+    bcachefs show-super --field-only counters $1 | awk -v c=$2 '$1 == c { print $2 }'
+}
+
+sb_version()
+{
+    bcachefs show-super $1 | grep -E '^Version( upgrade complete)?:'
+}
+
+test_reset_counters_offline()
+{
+    local dev=${ktest_scratch_dev[0]}
+
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f $dev
+    if bcachefs reset-counters $dev; then
+	echo "ERROR: reset-counters claimed success on a never-started filesystem"
+	return 1
+    fi
+
+    mount -t bcachefs $dev /mnt
+    dd if=/dev/zero of=/mnt/f bs=1M count=8 conv=fsync status=none
+    umount /mnt
+
+    local version=$(sb_version $dev)
+    local before=$(offline_sb_counter $dev transaction_commit)
+    if [[ -z $before || $before -eq 0 ]]; then
+	echo "ERROR: transaction_commit is \"$before\" after writing - this run tests nothing"
+	return 1
+    fi
+
+    bcachefs reset-counters --counters=transaction_commit $dev
+
+    local after=$(offline_sb_counter $dev transaction_commit)
+    echo "transaction_commit: $before -> $after"
+    if [[ $after -ne 0 ]]; then
+	echo "ERROR: reset-counters didn't persist"
+	return 1
+    fi
+    if [[ "$(sb_version $dev)" != "$version" ]]; then
+	echo "ERROR: reset-counters changed the superblock version:"
+	sb_version $dev
+	return 1
+    fi
+}
+
+test_recovery_pass_offline()
+{
+    local dev=${ktest_scratch_dev[0]}
+
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f $dev
+    if bcachefs recovery-pass --set check_allocations $dev; then
+	echo "ERROR: recovery-pass claimed success on a never-started filesystem"
+	return 1
+    fi
+
+    mount -t bcachefs $dev /mnt
+    umount /mnt
+
+    local version=$(sb_version $dev)
+
+    bcachefs recovery-pass --set check_allocations $dev
+    # a fresh open reads it back from disk:
+    if ! bcachefs recovery-pass $dev | grep -q check_allocations; then
+	echo "ERROR: recovery-pass --set didn't persist:"
+	bcachefs recovery-pass $dev
+	return 1
+    fi
+
+    bcachefs recovery-pass --unset check_allocations $dev
+    if bcachefs recovery-pass $dev | grep -q check_allocations; then
+	echo "ERROR: recovery-pass --unset didn't persist:"
+	bcachefs recovery-pass $dev
+	return 1
+    fi
+
+    if [[ "$(sb_version $dev)" != "$version" ]]; then
+	echo "ERROR: recovery-pass changed the superblock version:"
+	sb_version $dev
+	return 1
+    fi
+}
+
 main "$@"
