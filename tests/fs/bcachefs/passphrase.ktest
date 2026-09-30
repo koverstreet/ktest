@@ -25,15 +25,23 @@ PASS_B="second-passphrase-entirely"
 
 dev() { echo "${ktest_scratch_dev[0]}"; }
 
+# Both formats mount once: set-passphrase and remove-passphrase write the
+# superblock, and a filesystem that has never been started has no initialized
+# superblock to write - they refuse it ("mount it once first"), as
+# set-fs-option does.
 format_no_passphrase()
 {
     run_quiet "" bcachefs format -f --encrypted --no_passphrase $(dev)
+    mount -t bcachefs $(dev) /mnt
+    umount /mnt
 }
 
 format_with_passphrase()
 {
     echo "$1" > /run/pass-in
     run_quiet "" bcachefs format -f --encrypted --passphrase_file=/run/pass-in $(dev)
+    mount -t bcachefs $(dev) /mnt < /run/pass-in
+    umount /mnt
     rm -f /run/pass-in
 }
 
