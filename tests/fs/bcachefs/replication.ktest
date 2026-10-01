@@ -1453,6 +1453,12 @@ test_rereplicate_file()
 # option. And it must reach all of the file's extents, including those written
 # before a snapshot was taken.
 #
+# Except unset + snap: extents written before the snapshot are shared with it,
+# and options accumulate up the snapshot tree as the max over values that are
+# *set*. The snapshot still sets data_replicas=1; the live file, once unset,
+# sets nothing - the filesystem default doesn't override an inode option. So
+# the shared extents correctly stay at 1x.
+#
 # Parametrized matrix; each test_* wrapper is one point:
 #   $1 where:  file  - change the option directly on the file
 #              dir   - change it on the subvolume root, reaching the file
@@ -1518,6 +1524,19 @@ rereplicate_opt_change_test()
     bcachefs reconcile wait -t replicas /mnt
 
     bcachefs fs usage -h --all /mnt
+
+    if [[ $change == unset && $snap == snap ]]; then
+	if [[ $(user_durability_1) != 1 ]]; then
+	    echo "FAIL: shared extents left durability 1 after 'unset' on $where,"
+	    echo "      but the snapshot still sets data_replicas=1"
+	    return 1
+	fi
+
+	umount /mnt
+	bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+	bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+	return 0
+    fi
 
     if [[ $(user_durability_1) != 0 ]]; then
 	echo "FAIL: durability=1 data remains after '$change' on $where + reconcile"
