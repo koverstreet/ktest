@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+#
+# Reconcile-pass convergence: after data is written and an option change
+# makes the stored per-extent reconcile opts stale, one full reconcile
+# pass must actually persist the refreshed opts — verified by fsck's
+# "extent with incorrect/missing reconcile opts" check coming back clean.
+#
+# This fails loudly on bugs where the move path's transaction commits
+# are silently dropped: the reconcile pass claims to process every
+# extent, but nothing reaches the journal and fsck finds every extent
+# still stale.  Regression test for the inverted condition in
+# bch2_trans_commit_lazy() (bcachefs-tools#780): red on the buggy
+# wrapper, green with the fix.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+config-timeout 600
+
+# Reuse a prebuilt (bcachefs-less, for dkms runs) kernel — ktest's config
+# regeneration would re-enable built-in bcachefs otherwise.
+[[ -n ${KTEST_NO_KBUILD:-} ]] && config-no-kbuild
+
+test_reconcile_opts_converge()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f "${ktest_scratch_dev[0]}"
+    mount -t bcachefs "${ktest_scratch_dev[0]}" /mnt
+
+    # Data first, option second: the extents' stored reconcile opts are
+    # now stale relative to the fs options.
+    for i in $(seq 0 9); do
+	dd if=/dev/urandom of=/mnt/file$i bs=1M count=4 status=none
+    done
+    sync
+
+    echo 1 > /sys/fs/bcachefs/*/options/background_compression 2>/dev/null ||
+	echo lz4 > /sys/fs/bcachefs/*/options/background_compression
+
+    # Kick reconcile and let it work through the backlog.
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_wakeup
+
+    # Wait for reconcile to go idle: no data updates in flight and no
+    # movement for a few consecutive polls.
+    local quiet=0 prev=-1
+    for i in $(seq 1 120); do
+	local moved=$(awk '/since mount:/ { print $NF; exit }' \
+	    /sys/fs/bcachefs/*/counters/data_update 2>/dev/null)
+	if [[ $moved = $prev ]]; then
+	    quiet=$((quiet + 1))
+	    (( quiet >= 5 )) && break
+	else
+	    quiet=0
+	    prev=$moved
+	fi
+	sleep 1
+    done
+    echo "reconcile quiesced after ${i}s (data_update=$prev)"
+
+    # Phase 2: CLEAR the option.  Extents now carry reconcile entries that
+    # are stale relative to the fs opts, and removing a stale entry is an
+    # opts-only update — no data movement can mask a dropped commit.
+    echo none > /sys/fs/bcachefs/*/options/background_compression 2>/dev/null ||
+	echo 0 > /sys/fs/bcachefs/*/options/background_compression
+
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_wakeup
+
+    quiet=0; prev=-1
+    for i in $(seq 1 120); do
+	local moved2=$(awk '/since mount:/ { print $NF; exit }' \
+	    /sys/fs/bcachefs/*/counters/data_update 2>/dev/null)
+	if [[ $moved2 = $prev ]]; then
+	    quiet=$((quiet + 1))
+	    (( quiet >= 5 )) && break
+	else
+	    quiet=0
+	    prev=$moved2
+	fi
+	sleep 1
+    done
+    echo "clear-phase quiesced after ${i}s (data_update=$prev)"
+
+    umount /mnt
+
+    # The loud assertion: with the reconcile-opt updates actually
+    # committed, fsck is clean.  If the move path dropped its commits,
+    # every extent still has stale opts and fsck reports
+    # "extent with incorrect/missing reconcile opts".
+    bcachefs fsck -ny "${ktest_scratch_dev[0]}"
+
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+main "$@"

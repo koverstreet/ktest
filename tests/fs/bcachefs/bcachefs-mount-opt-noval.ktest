@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+#
+# Verify whether a valueless mount option whose parser is BCH_OPT_FN
+# dereferences NULL.
+#
+# gcc -fanalyzer flagged bch2_opt_val_synonym_lookup() being reached with a
+# NULL value, ending in strcmp(NULL, i->v1). Reading the code, every link
+# holds:
+#
+#  - bch2_parse_one_mount_opt() looks the synonym up BEFORE calling
+#    bch2_opt_parse(), so the parser never gets a chance to handle NULL first.
+#  - The guard that would skip a valueless option deliberately exempts
+#    BCH_OPT_FN options, because their parsers are allowed to accept NULL.
+#  - fix_errors is OPT_FS|OPT_MOUNT with OPT_FN, and
+#    bch2_opt_fix_errors_parse() indeed opens with `if (!val)`.
+#
+# So the intent is clearly "valueless fix_errors means FSCK_FIX_yes", and the
+# synonym lookup runs first and does not expect NULL.
+#
+# What the reading CANNOT settle is whether the option reaches bcachefs as NULL
+# at all: the VFS may normalise a valueless -o option to an empty string before
+# bcachefs sees it, in which case strcmp("" , ...) is harmless and this is a
+# false positive. That is a runtime question, hence this test.
+#
+# Blames to Kent, ef8dd631f788, 2025-04-06.
+#
+# Pass  = mount succeeds or fails cleanly (no oops)  -> analyzer FP, retract.
+# Fail  = kernel oops in bch2_opt_val_synonym_lookup -> real bug, report.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 1G
+config-timeout 300
+
+test_mount_opt_no_value()
+{
+    set_watchdog 120
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+
+    # Control: the same option WITH a value must work, so a failure below is
+    # attributable to the missing value and not to the option being rejected.
+    echo "=== control: fix_errors=yes ==="
+    mount -t bcachefs -o fix_errors=yes ${ktest_scratch_dev[0]} /mnt
+    umount /mnt
+    echo "control ok"
+
+    # The candidate. If the analyzer is right this oopses inside
+    # bch2_opt_val_synonym_lookup() -> strcmp(NULL, ...) and never returns.
+    echo "=== candidate: bare fix_errors ==="
+    if mount -t bcachefs -o fix_errors ${ktest_scratch_dev[0]} /mnt; then
+	echo "mounted with bare fix_errors"
+	umount /mnt
+    else
+	echo "mount refused bare fix_errors (rc=$?) -- clean failure, no oops"
+    fi
+
+    # A couple of neighbours, in case the reachable one is a different OPT_FN.
+    local opt
+    for opt in verbose degraded norecovery; do
+	echo "=== neighbour: bare $opt ==="
+	if mount -t bcachefs -o $opt ${ktest_scratch_dev[0]} /mnt; then
+	    umount /mnt
+	    echo "  mounted"
+	else
+	    echo "  refused (rc=$?)"
+	fi
+    done
+
+    echo "SURVIVED: no oops from any valueless option"
+}
+
+main "$@"

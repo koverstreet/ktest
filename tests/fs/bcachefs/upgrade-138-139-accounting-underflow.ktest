@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+#
+# accounting_key_underflow after a 1.38 -> 1.39 on-disk upgrade: is it the
+# in-kernel path, or is it the on-disk state?
+#
+# WHY THIS EXISTS
+# ---------------
+# version-upgrade-138-to-139.ktest reports, after the upgrade,
+#
+#   errors this recovery:
+#     accounting_mismatch                  4
+#     accounting_key_underflow             1
+#
+# and the underflow does NOT appear when the same image is upgraded with
+# `bcachefs fsck -y` in userspace on the host. That could mean either
+#
+#   (a) the in-kernel fsck/upgrade path is what introduces or reports it, or
+#   (b) the difference is mount-vs-fsck: a mount runs only the passes the
+#       upgrade table schedules for 1.39, which do NOT include
+#       check_allocations, while `fsck` runs the full PASS_FSCK set and so
+#       rebuilds accounting from scratch.
+#
+# This test discriminates. It holds the *upgrade* fixed (an in-kernel mount)
+# and varies only the *checker*: the same post-upgrade device is checked once
+# with the in-kernel fsck and once with the userspace one.
+#
+# ktest's bcachefs-test-libs.sh exports BCACHEFS_KERNEL_ONLY=1, and
+# src/commands/fsck.rs checks that env var BEFORE cli.no_kernel, so -K alone
+# cannot force userspace here. `env --unset=BCACHEFS_KERNEL_ONLY` can.
+# Watch for the "Running userspace offline fsck" / "Running in-kernel offline
+# fsck" banner rather than assuming.
+#
+# It also answers whether the underflow is transient: a read-only check is
+# repeated, then a repairing fsck, then a check.
+#
+# USAGE
+#   ktest_138_image=<out1>/upgrade-138/fs-1.38.img \
+#   build-test-kernel run -k <1.39-tree> -o <out2> \
+#       tests/fs/bcachefs/upgrade-138-139-accounting-underflow.ktest underflow_paths
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-mem 2G
+config-timeout 1800
+config-image	"$ktest_138_image"
+
+upgrade_dev=/dev/vdb
+
+# The counters that matter. Printed for every fsck run so the runs can be
+# compared line by line.
+report_acct()
+{
+    local tag=$1 log=$2 rc=$3
+
+    echo "--- $tag: exit $rc ---"
+    grep --extended-regexp 'Running (in-kernel|userspace) offline fsck' "$log" ||
+	echo "  (no fsck implementation banner -- check the log)"
+    grep --after-context=2 'Accounting underflow for' "$log" ||
+	echo "  (no accounting underflow)"
+    grep --after-context=8 'errors this recovery' "$log" ||
+	echo "  (no errors this recovery)"
+}
+
+test_underflow_paths()
+{
+    set_watchdog 900
+
+    if [[ -z ${ktest_138_image:-} ]]; then
+	echo "FAIL: ktest_138_image is not set"
+	return 1
+    fi
+
+    local out=${ktest_out:-/ktest-out}/underflow
+    mkdir --parents "$out"
+
+    bcachefs show-super "$upgrade_dev" | grep --max-count=1 '^Version:'
+
+    # ---- the upgrade: an ordinary in-kernel read-write mount -------------
+    dmesg -C
+    mount -t bcachefs "$upgrade_dev" /mnt
+    umount /mnt
+    dmesg > "$out/upgrade-dmesg.txt"
+
+    bcachefs show-super "$upgrade_dev" | grep --max-count=1 '^Version:'
+
+    # ---- same device, two checkers, both read-only (nochanges) ----------
+    local rc=0
+    bcachefs fsck -n "$upgrade_dev" > "$out/post-kernel.log" 2>&1 || rc=$?
+    report_acct "post-upgrade, IN-KERNEL fsck -n" "$out/post-kernel.log" $rc
+
+    rc=0
+    env --unset=BCACHEFS_KERNEL_ONLY \
+	bcachefs fsck --no-kernel -n "$upgrade_dev" > "$out/post-userspace.log" 2>&1 || rc=$?
+    report_acct "post-upgrade, USERSPACE fsck -n" "$out/post-userspace.log" $rc
+
+    # Export the post-upgrade image so the same bytes can be re-checked on
+    # the host, outside any VM.
+    dd if="$upgrade_dev" of="$out/fs-after-upgrade.img" bs=1M conv=sparse status=none
+    sync
+
+    # ---- transient or persistent? ---------------------------------------
+    # Repeat the read-only check: nochanges means nothing was written, so a
+    # still-reported underflow is on-disk state, not a one-off.
+    rc=0
+    bcachefs fsck -n "$upgrade_dev" > "$out/post-kernel-2.log" 2>&1 || rc=$?
+    report_acct "post-upgrade, IN-KERNEL fsck -n (repeat)" "$out/post-kernel-2.log" $rc
+
+    # Now let it write, and check again.
+    rc=0
+    bcachefs fsck -y "$upgrade_dev" > "$out/repair.log" 2>&1 || rc=$?
+    report_acct "repairing fsck -y" "$out/repair.log" $rc
+
+    rc=0
+    bcachefs fsck -n "$upgrade_dev" > "$out/after-repair.log" 2>&1 || rc=$?
+    report_acct "after repair, fsck -n" "$out/after-repair.log" $rc
+
+    echo "artefacts in <ktest_out>/underflow/"
+    echo "DONE"
+}
+
+main "$@"

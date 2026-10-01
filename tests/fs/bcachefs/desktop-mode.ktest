@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+#
+# Desktop mode: journal_flush_disabled + journal_flush_ordered.
+#
+# The invariant under test is prefix consistency: after a crash, recovery
+# must land on a point-in-time prefix of history — every surviving file is
+# complete, and no later operation survives while an earlier one is lost.
+# fsync is allowed to lie about durability (journal_flush_disabled); the
+# periodic ordered flush boundary is the consistency point.
+#
+# The failure mode this guards against: inode creates land in flushed
+# journal entries while their data extent inserts land in later noflush
+# (blacklisted) entries — zero-byte files after recovery, the signature of
+# the 2026-06-02 pacman crash.
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+config-timeout $(stress_timeout)
+
+# Sequential marker workload: create file_NNNNNN in order, each holding its
+# own number, no fsync.  Stops on the first write error (EROFS after the
+# emergency shutdown).
+#
+# Paced to ~2000 creates/s: the journal_flush_ordered v1 race window is
+# (create rate x sync_inodes_sb duration) — files created while the
+# pre-flush data sync runs share its flush entry but miss the sync.
+# Unpaced (~50k/s) that tail measured ~65k files; the v2 commit gate is
+# the real fix, until then the test pins v1's documented behavior.
+write_seq_files()
+{
+    local dir=$1
+
+    mkdir -p $dir
+    for i in $(seq -w 1 999999); do
+	echo "content-$i" > $dir/file_$i 2>/dev/null || break
+	(( 10#$i % 100 )) || sleep 0.05
+    done
+}
+
+# Verify the prefix-consistency invariant over the surviving files:
+#
+#   1. No holes: creates were sequential, so survivors must be {1..max}.
+#   2. No complete file after a zero-byte file: a zero-byte file means the
+#      create survived but the data didn't; anything complete *after* it
+#      would mean a later write survived while an earlier one was lost.
+#   3. The zero-byte tail is bounded by $3: v1 of journal_flush_ordered has
+#      a known race window (metadata committed between the data sync
+#      returning and the flush entry being written), which can only affect
+#      files created immediately before the flush boundary.  Pass 0 for
+#      strict (v2) semantics.
+#   4. Some complete files survived at all (the mechanism does something).
+verify_prefix()
+{
+    local dir=$1
+    local desc=$2
+    local allowed_zero_tail=$3
+    local nr=0 max_n=0 max_complete=0 min_zero=0 nr_zero=0
+    local fail=0
+
+    for f in $dir/file_*; do
+	[[ -e $f ]] || break
+	local num=${f##*_}
+	local n=$((10#$num))
+
+	nr=$((nr + 1))
+	((n > max_n)) && max_n=$n
+
+	if [[ -s $f ]]; then
+	    [[ "$(cat $f)" = "content-$num" ]] ||
+		{ echo "FAIL($desc): $f content wrong"; fail=1; }
+	    ((n > max_complete)) && max_complete=$n
+	else
+	    nr_zero=$((nr_zero + 1))
+	    [[ $min_zero -eq 0 || $n -lt $min_zero ]] && min_zero=$n
+	fi
+    done
+
+    echo "$desc: $nr survivors, max=$max_n, complete prefix=$max_complete, zero-byte=$nr_zero"
+
+    [[ $nr -gt 0 ]] ||
+	{ echo "FAIL($desc): no files survived at all"; return 1; }
+
+    [[ $nr -eq $max_n ]] ||
+	{ echo "FAIL($desc): holes in survivor set ($nr files, max $max_n)"; fail=1; }
+
+    [[ $max_complete -gt 0 ]] ||
+	{ echo "FAIL($desc): no complete files survived"; fail=1; }
+
+    if [[ $nr_zero -gt 0 ]]; then
+	[[ $min_zero -gt $max_complete ]] ||
+	    { echo "FAIL($desc): complete file_$max_complete survives after zero-byte file_$min_zero"; fail=1; }
+    fi
+
+    [[ $((max_n - max_complete)) -le $allowed_zero_tail ]] ||
+	{ echo "FAIL($desc): zero-byte tail $((max_n - max_complete)) exceeds allowed $allowed_zero_tail"; fail=1; }
+
+    return $fail
+}
+
+crash_one_iteration()
+{
+    local mountopts=$1
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs -o $mountopts ${ktest_scratch_dev[0]} /mnt
+
+    write_seq_files /mnt/seq &
+    local writer=$!
+
+    # let several flush cycles happen mid-workload
+    sleep $((3 + RANDOM % 5))
+
+    echo "Triggering emergency shutdown..."
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+
+    wait $writer || true
+    umount /mnt
+
+    # plain recovery: replay stops at the last flush entry,
+    # noflush entries are blacklisted
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+}
+
+# Positive test: with ordered flush, recovery yields a complete prefix.
+# The allowed zero-byte tail covers the documented v1 race window; tighten
+# to 0 when the flush-time commit gate lands.
+test_ordered_flush_prefix()
+{
+    set_watchdog 600
+
+    local iterations=5
+
+    for i in $(seq 1 $iterations); do
+	echo "=== ordered iteration $i/$iterations ==="
+
+	crash_one_iteration journal_flush_disabled,journal_flush_delay=1000,journal_flush_ordered
+
+	local ret=0
+	verify_prefix /mnt/seq "ordered#$i" 200 || ret=1
+
+	umount /mnt
+	bcachefs fsck -ny ${ktest_scratch_dev[0]}
+
+	[[ $ret = 0 ]] || return 1
+    done
+
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+# Negative control: without ordered flush the same workload must produce
+# zero-byte files (creates flushed, extent inserts blacklisted) — proving
+# this test can detect the bug class.  Retry a few times since it depends
+# on where the flush boundary falls.
+test_unordered_negative_control()
+{
+    set_watchdog 600
+
+    local attempts=5
+
+    for i in $(seq 1 $attempts); do
+	echo "=== control attempt $i/$attempts ==="
+
+	crash_one_iteration journal_flush_disabled,journal_flush_delay=1000
+
+	local nr_zero=$(find /mnt/seq -name 'file_*' -size 0 2>/dev/null | wc -l)
+	echo "control#$i: $nr_zero zero-byte files"
+
+	umount /mnt
+
+	if [[ $nr_zero -gt 0 ]]; then
+	    echo "control: bug class detected as expected"
+	    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+	    return 0
+	fi
+    done
+
+    echo "FAIL: unordered control never produced zero-byte files — test cannot detect the bug class"
+    return 1
+}
+
+# Worker lifecycle: mount/unmount cycles and runtime toggling while writes
+# are in flight.  Catches arm/disarm races (the worker self-rearms and is
+# torn down with disable_delayed_work_sync in put_super).
+test_worker_lifecycle()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+
+    for i in $(seq 1 20); do
+	mount -t bcachefs -o journal_flush_ordered,journal_flush_delay=100 \
+	    ${ktest_scratch_dev[0]} /mnt
+
+	dd if=/dev/zero of=/mnt/foo bs=64k count=16 oflag=direct 2>/dev/null &
+	local writer=$!
+
+	echo 0 > /sys/fs/bcachefs/*/options/journal_flush_ordered
+	echo 1 > /sys/fs/bcachefs/*/options/journal_flush_ordered
+
+	wait $writer || true
+	umount /mnt
+    done
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+main "$@"

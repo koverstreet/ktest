@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+#
+# Dedup byte-verify mismatch: regression test for the relock bug
+# (swap-files commit e10edaec8293).
+#
+# bch2_dedup_extent() drops btree locks (bch2_trans_unlock_long) for the
+# byte-verify reads.  The byte-verify-MISMATCH path (checksum collision,
+# data differs) used to return without relocking; the caller then panicked
+# "trans should be locked, unlocked by read_extent__rbio_alloc".
+#
+# The dedup_force_byte_verify_mismatch debug option makes the verify report
+# a mismatch as if the checksums had collided on differing data, so two
+# identical files (which collide in the dedup index naturally) drive the
+# mismatch path deterministically.
+#
+# Red/green: on a kernel without the relock fix this test panics the VM;
+# on a fixed kernel the extent is skipped, the counter increments, and
+# fsck comes back clean.
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+config-mem 4G   # the in-VM bcachefs-tools + dkms build needs ~4G
+config-scratch-devs 4G
+config-timeout $(stress_timeout)
+
+# Reuse a prebuilt (bcachefs-less, for dkms runs) kernel — ktest's config
+# regeneration would re-enable built-in bcachefs otherwise.
+[[ -n ${KTEST_NO_KBUILD:-} ]] && config-no-kbuild
+
+counter_since_mount()
+{
+    awk '/^since mount:/ { print $NF }' "$1"
+}
+
+test_dedup_force_mismatch()
+{
+    set_watchdog 300
+
+    # Requires the VM's bcachefs-tools to be the dedup-capable branch
+    # (run via dkms-dedup_mismatch.ktest with the deps checkout on
+    # port/on-testing or another dedup branch).
+    run_quiet "" bcachefs format -f --background_dedup=1 ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # Force the mismatch BEFORE writing, so the very first dedup attempt
+    # takes the collision path.
+    echo 1 > /sys/fs/bcachefs/*/options/dedup_force_byte_verify_mismatch
+
+    # Two identical files: same checksum, natural dedup-index collision.
+    dd if=/dev/urandom of=/mnt/a bs=64k count=1 status=none
+    cp /mnt/a /mnt/b
+    cp /mnt/a /tmp/reference
+    sync
+
+    # Reconcile is driven by the io_clock, which advances on writes — the
+    # tiny 128k above may not move it enough to schedule a pass.  Advance
+    # it with bulk junk, then kick both the full and pending reconcile
+    # triggers (indexing happens on the full pass; dedup on re-process).
+    dd if=/dev/zero of=/mnt/clock bs=1M count=64 status=none
+    sync
+    rm -f /mnt/clock
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_wakeup
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_pending_wakeup
+
+    # On the buggy kernel the panic fires here.
+    local mismatches=0
+    for i in $(seq 1 60); do
+	mismatches=$(counter_since_mount \
+	    /sys/fs/bcachefs/*/counters/dedup_byte_verify_mismatch)
+	(( mismatches > 0 )) && break
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_wakeup
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_pending_wakeup
+	sleep 1
+    done
+
+    # Quiesce reconcile before verifying: with the force knob on it re-hits
+    # the collision path every pass, and even off it churns the dedup
+    # backlog — either way it holds btree locks and, on a 2-CPU debug VM,
+    # starves the foreground verification reads (they spin in
+    # six_lock_increment / bch2_btree_iter_peek).  Turn dedup off and clear
+    # the force so reconcile settles.  The counters already captured the
+    # verdict (mismatch path ran, no panic).
+    echo 0 > /sys/fs/bcachefs/*/options/dedup_force_byte_verify_mismatch
+    echo 0 > /sys/fs/bcachefs/*/options/background_dedup
+    sleep 3
+
+    if (( mismatches == 0 )); then
+	echo "FAIL: mismatch path never ran (counter still 0). Diagnostics:"
+	for c in dedup_extent_indexed dedup_extent_deduped \
+		 dedup_byte_verify_mismatch dedup_sectors_saved \
+		 dedup_stale_entry; do
+	    echo "  $c = $(counter_since_mount /sys/fs/bcachefs/*/counters/$c 2>/dev/null)"
+	done
+	cat /sys/fs/bcachefs/*/options/dedup_force_byte_verify_mismatch 2>/dev/null
+	cat /sys/fs/bcachefs/*/options/background_dedup 2>/dev/null
+	cat /sys/fs/bcachefs/*/options/data_checksum 2>/dev/null
+	return 1
+    fi
+    echo "mismatch path taken ${mismatches}x, no panic"
+
+    # Forced mismatch means nothing may be deduped and data must be intact.
+    cmp /mnt/a /tmp/reference || { echo "FAIL: file a corrupted"; return 1; }
+    cmp /mnt/b /tmp/reference || { echo "FAIL: file b corrupted"; return 1; }
+
+    local deduped=$(counter_since_mount \
+	/sys/fs/bcachefs/*/counters/dedup_extent_deduped)
+    (( deduped == 0 )) ||
+	{ echo "FAIL: $deduped extents deduped despite forced mismatch"; return 1; }
+
+    # Clear the force knob so reconcile stops re-hitting the mismatch path
+    # on every pass — otherwise it never quiesces and umount hangs.
+    echo 0 > /sys/fs/bcachefs/*/options/dedup_force_byte_verify_mismatch
+
+    umount /mnt
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+main "$@"

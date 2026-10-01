@@ -52,13 +52,49 @@ test_csum_change_compressed()
     umount /mnt
 
     # Precondition: extents must be compressed and crc32c, or we're not
-    # exercising the encoded-data fast path at all
-    local keys=$(bcachefs list -b extents ${ktest_scratch_dev[0]})
-    if ! echo "$keys" | grep -q "csum crc32c.*compress zstd"; then
-	echo "FAIL: precondition — expected zstd-compressed crc32c extents, got:"
-	echo "$keys" | head -20
+    # exercising the encoded-data fast path at all.
+    #
+    # NB: do NOT test this with a single regex spanning both markers.
+    # The crc line is exactly 81 chars and "compress zstd" sits at the very
+    # end (cols 68-81), so any 80-column wrap or truncation in the harness
+    # splits "zstd" and the match fails — while the log still *looks* correct
+    # to a human reading it. That is what made this precondition fail
+    # spuriously in 3s; verified 2026-07-27 against a loopback fs formatted
+    # with these exact options, where the markers do land as expected:
+    #   crc64: c_size 8 size 512 offset 0 nonce 0 csum crc32c 0:… compress zstd
+    local keys keys_rc
+    local errf=$(mktemp)
+    keys=$(bcachefs list -b extents ${ktest_scratch_dev[0]} 2>"$errf"); keys_rc=$?
+
+    if (( keys_rc != 0 )); then
+	echo "FAIL: precondition — 'bcachefs list -b extents' exited $keys_rc"
+	echo "stderr:"; cat "$errf"
+	rm -f "$errf"
 	return 1
     fi
+
+    # Test compression SEMANTICALLY (c_size < size) rather than by the
+    # "compress zstd" label: c_size/size sit at cols ~10-30 and survive
+    # truncation, whereas the label does not. This is also the stronger
+    # assertion — it checks the extent is actually compressed, not merely
+    # labelled. Field layout of a crc line:
+    #   $1=crc64: $2=c_size $3=N $4=size $5=N … $10=csum $11=<type> … $14=<compression>
+    local n_compressed_crc32c=$(awk '
+	$2 == "c_size" && $4 == "size" && $3 + 0 < $5 + 0 && $11 == "crc32c" { n++ }
+	END { print n + 0 }' <<<"$keys")
+    local n_crc32c=$(grep -c "csum crc32c" <<<"$keys" || true)
+    echo "precondition: crc32c lines=$n_crc32c, compressed+crc32c extents=$n_compressed_crc32c"
+
+    if (( n_compressed_crc32c == 0 )); then
+	echo "FAIL: precondition — expected compressed crc32c extents"
+	echo "  captured $(wc -l <<<"$keys") lines from stdout"
+	echo "  stderr:"; cat "$errf"
+	echo "  extent/crc lines seen:"
+	grep -E "type extent|crc[0-9]*:" <<<"$keys" | head -20
+	rm -f "$errf"
+	return 1
+    fi
+    rm -f "$errf"
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 

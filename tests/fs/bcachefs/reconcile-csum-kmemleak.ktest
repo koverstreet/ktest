@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+#
+# Run the checksum-only rechecksum path under kmemleak.
+#
+# Why: reconcile_rechecksum_extent() allocates a read buffer per extent and must
+# free it on every exit path. While porting it to bcachefs-tools the raw
+# alloc_page()/__bio_add_page()/bio_free_pages() trio had to be swapped for
+# bch2_bio_alloc_pages()/bch2_bio_free_pages_pool(); an intermediate version of
+# that change dropped the free entirely, which would have leaked one buffer per
+# converted extent. That was caught by reading the code, not by a tool.
+#
+# CONFIG_DEBUG_KMEMLEAK is available in the ktest kernel (HAVE_DEBUG_KMEMLEAK=y)
+# but off by default. With it on, a leak in this path shows up directly: the
+# test converts 256 extents, so a per-extent leak is 256 unreferenced objects.
+#
+# This is a tooling test, not a correctness test -- it deliberately re-runs the
+# same workload as reconcile-csum.ktest and then asks the kernel whether
+# anything was left behind.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+config-mem 4G
+config-timeout 1200
+
+require-kernel-config DEBUG_KMEMLEAK
+require-kernel-config DEBUG_FS
+
+reconcile_work_remaining()
+{
+    bcachefs fs usage -f rebalance_work /mnt | awk '
+	$1 ~ /^(replicas|checksum|erasure_code|compression|target|high_priority|stripes):$/ { sum += $2 + $3 }
+	END { print sum + 0 }'
+}
+
+# kmemleak needs two scans with a gap: the first primes it, and objects must
+# survive a full scan cycle before being reported, which suppresses transients
+# still referenced from registers/stack.
+kmemleak_scan_and_report()
+{
+    local label=$1
+    echo clear > /sys/kernel/debug/kmemleak
+    sleep 5
+    echo scan > /sys/kernel/debug/kmemleak
+    sleep 10
+    echo scan > /sys/kernel/debug/kmemleak
+    sleep 5
+
+    local report=/tmp/kmemleak-$label.txt
+    cat /sys/kernel/debug/kmemleak > $report 2>/dev/null
+
+    local n=$(grep --count 'unreferenced object' $report || true)
+    echo "kmemleak [$label]: $n unreferenced objects"
+    if (( n )); then
+	echo "--- first 60 lines of the report ---"
+	head --lines=60 $report
+	# Anything mentioning bcachefs is ours and is what we care about.
+	local ours=$(grep --count --ignore-case 'bch2_\|bcachefs' $report || true)
+	echo "kmemleak [$label]: $ours of those name a bcachefs symbol"
+	return $ours
+    fi
+    return 0
+}
+
+test_rechecksum_kmemleak()
+{
+    set_watchdog 900
+
+    run_quiet "" bcachefs format -f		\
+	--block_size=4k				\
+	--data_checksum=crc32c			\
+	--compression=zstd			\
+	--background_compression=zstd		\
+	${ktest_scratch_dev[0]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    dd if=/dev/zero of=/mnt/data bs=1M count=64 conv=fsync status=none
+    umount /mnt
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # Baseline: whatever mount/recovery leaves behind is not our concern.
+    kmemleak_scan_and_report baseline || true
+
+    bcachefs set-fs-option --data_checksum=xxhash ${ktest_scratch_dev[0]}
+
+    local i zeros=0 settled=0
+    for ((i = 0; i < 45; i++)); do
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_wakeup
+	sleep 2
+	local work=$(reconcile_work_remaining)
+	echo "t=$((i * 2))s	work remaining: $work"
+	if (( work )); then
+	    zeros=0
+	elif (( ++zeros >= 3 )); then
+	    settled=1
+	    break
+	fi
+    done
+
+    if (( ! settled )); then
+	echo "NOTE: reconcile did not settle; kmemleak result below still valid"
+    fi
+
+    # The interesting scan: after the rechecksum path has run over every extent.
+    local leaked=0
+    kmemleak_scan_and_report after-rechecksum || leaked=$?
+
+    umount /mnt
+
+    if (( leaked )); then
+	echo "FAIL: kmemleak reports $leaked leaked object(s) naming bcachefs" \
+	     "after the checksum-only rechecksum path ran"
+	return 1
+    fi
+
+    echo "PASS: no bcachefs-attributed leaks after rechecksum"
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+main "$@"

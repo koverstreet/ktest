@@ -1,0 +1,574 @@
+#!/usr/bin/env bash
+#
+# Does the on-disk upgrade from 1.38 (need_discard_by_journal_seq) to stock
+# 1.39 (per_dev_fragmentation_lru) preserve per-inode IO options?
+#
+# WHY THIS EXISTS
+# ---------------
+# A production filesystem sits at on-disk 1.38 with ~413,000 inodes carrying
+# explicit per-inode data_replicas overrides. Upstream's 1.39 upgrade entry
+# (fs/sb/downgrade.c, UPGRADE_TABLE) schedules
+#
+#   check_lrus, check_alloc_to_lru_refs, check_inodes, check_xattrs,
+#   check_snapshots, check_subvols, delete_dead_snapshots
+#
+# and lists these errors as tolerated, which feeds them to errors_silent:
+#
+#   inode_has_inode_opts_flag_wrong, inode_has_access_acl_flag_wrong,
+#   inode_has_default_acl_flag_wrong, lru_entry_bad,
+#   alloc_key_to_missing_lru_entry, snapshot_state_bad, subvol_state_bad
+#
+# So the upgrade repairs them without naming a single one in dmesg -- the
+# mount log says only "Fixed errors, running fsck a second time". Nor does
+# the superblock "errors" field help: that lists errors the filesystem still
+# carries, and is empty on a healthy fs. This test therefore counts the
+# repairs two independent ways and cross-checks them:
+#
+#   1. the has_inode_opts / has_access_acl / has_default_acl bits in the
+#      inodes btree, dumped with `bcachefs list` before and after (see
+#      inode_flag_counts below), and
+#   2. the "errors this recovery:" summary of a full 1.39 fsck run on the
+#      un-upgraded image with -o version_upgrade=none, which is not silenced
+#      and names each error with a count.
+#
+# check_inodes is the dangerous one: it rewrites every inode whose
+# has_inode_opts / has_access_acl / has_default_acl flag is wrong. A rewrite
+# that dropped bi_data_replicas would silently destroy the production
+# overrides. That rewrite path is the thing this test is built to exercise.
+#
+# TWO STAGES, TWO KERNELS, ONE IMAGE
+# ----------------------------------
+# ktest boots exactly one kernel per invocation, so this runs as two separate
+# invocations sharing a disk image:
+#
+#   stage 1  test_populate_138  -- run against a kernel whose
+#            bcachefs_metadata_version_current == 1.38 (upstream
+#            ca944a61e079 or equivalent). Formats, populates, sets per-inode
+#            and per-directory options plus POSIX ACLs, records a manifest
+#            INSIDE the filesystem, and exports the raw device to
+#            $ktest_out/upgrade-138/fs-1.38.img.
+#
+#   stage 2  test_upgrade_139   -- run against a kernel whose current version
+#            is 1.39, with ktest_138_image pointing at that exported image.
+#            Mounts it (version_upgrade defaults to `compatible`, which is
+#            what makes the upgrade run), then asserts.
+#
+# Stage 1 MUST be run on a 1.38 kernel and not merely formatted at 1.38 by a
+# 1.39 kernel. bch2_inode_pack() (fs/fs/inode.c) recomputes
+# BCH_INODE_has_inode_opts on *every* pack, unconditionally and independent of
+# the on-disk version -- so a 1.39 kernel writing inodes into a 1.38-format
+# filesystem already sets the flag correctly, check_inodes finds nothing to
+# fix, no inode is ever rewritten, and the test proves nothing about the
+# repair path. Only a kernel that predates the flag (<= 1.38) leaves the bit
+# clear on disk. The stage-2 assertions therefore include a check that the
+# repair actually fired; if it did not, the run is reported as NOT having
+# exercised the interesting path rather than as a pass.
+#
+# USAGE
+#   # stage 1, against a 1.38 kernel tree:
+#   build-test-kernel run -k <1.38-tree> -o <out1> \
+#       tests/fs/bcachefs/version-upgrade-138-to-139.ktest populate_138
+#
+#   # stage 2, against a 1.39 kernel tree:
+#   ktest_138_image=<out1>/upgrade-138/fs-1.38.img \
+#   build-test-kernel run -k <1.39-tree> -o <out2> \
+#       tests/fs/bcachefs/version-upgrade-138-to-139.ktest upgrade_139
+#
+# The image is attached with qemu snapshot=on, so stage 2 never modifies the
+# host copy and can be re-run as many times as needed.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-mem 2G
+config-timeout 1800
+
+# Stage 2 consumes an image built by stage 1; stage 1 needs a blank scratch
+# device. Both land on /dev/vdb (images are attached before scratch devs, and
+# only one of the two is ever declared).
+if [[ -n ${ktest_138_image:-} ]]; then
+    config-image	"$ktest_138_image"
+else
+    config-scratch-devs	1G
+fi
+
+upgrade_dev=/dev/vdb
+
+# Manifest lives inside the test filesystem so it travels with the image
+# across the two invocations. Excluded from its own checksum list.
+manifest_in_fs=/manifest.tsv
+
+nr_files=400		# total regular files created under /mnt/data
+nr_repl1=200		# of those, how many get an explicit data_replicas=1
+nr_repl2=8		# ... and how many get data_replicas=2
+nr_acl=12		# how many get a POSIX access ACL
+
+# "Version:  need_discard_by_journal_seq (1.38)" -> "1.38". Assert on the
+# numeric only: version *names* differ between forks, numbers do not.
+sb_version_number()
+{
+    bcachefs show-super "$1" 2>/dev/null |
+	grep --max-count=1 '^Version:' |
+	sed --quiet 's/^Version:.*(\([0-9]*\.[0-9]*\))[[:space:]]*$/\1/p'
+}
+
+sb_version_line()
+{
+    bcachefs show-super "$1" 2>/dev/null |
+	grep --extended-regexp '^(Version|Oldest version on disk|Version upgrade complete):' || true
+}
+
+# Explicit per-inode value of a bcachefs IO option, or the empty string when
+# the inode carries no override. `bcachefs set-file-option` is a setxattr on
+# bcachefs.<opt>; the same xattr read back reports only explicitly-set
+# options (the bcachefs_effective.* namespace is the one that reports
+# inherited/default values, and is deliberately NOT what we check here).
+file_opt()
+{
+    getfattr --only-values --absolute-names --name="bcachefs.$2" "$1" 2>/dev/null || true
+}
+
+# The superblock "errors" field lists errors the filesystem still carries; it
+# is NOT a repair tally, and it is empty on a healthy fs. Printed for the
+# record only -- do not read repair counts out of it.
+sb_error_counts()
+{
+    bcachefs show-super --field-only errors "$1" 2>/dev/null || true
+}
+
+# Direct measurement of the three inode flags the 1.39 upgrade sets, straight
+# out of the inodes btree with `bcachefs list` (pure userspace, offline, no
+# kernel involvement). This is the only reliable count available: the upgrade
+# entry feeds its errors to errors_silent, so nothing reaches dmesg, and the
+# superblock error field is not a counter either. Bit numbers from
+# fs/fs/inode_format.h BCH_INODE_FLAGS(): has_inode_opts 12 (0x1000),
+# has_access_acl 13 (0x2000), has_default_acl 14 (0x4000).
+#
+# Prints: <inodes with bi_data_replicas != 0> <has_inode_opts> <has_access_acl> <has_default_acl>
+inode_flag_counts()
+{
+    local dev=$1 dump=$2
+
+    bcachefs list --btree inodes "$dev" > "$dump" 2>/dev/null || true
+    # NB: match /flags=/, NOT /flags=\(/. bcachefs prints the hex bare when no
+    # named flag is set ("flags=(19300000)") but prefixes the names when any
+    # is ("flags=has_inode_opts(19301000)") -- so anchoring on the paren
+    # matches exactly the inodes we are trying to count and reports 0.
+    gawk '
+	/flags=/ {
+	    h = $0; sub(/.*\(/, "", h); sub(/\).*/, "", h)
+	    v = strtonum("0x" h)
+	    if (and(v,  4096)) opts++
+	    if (and(v,  8192)) aacl++
+	    if (and(v, 16384)) dacl++
+	}
+	/bi_data_replicas=[1-9]/ { repl++ }
+	END { print repl+0, opts+0, aacl+0, dacl+0 }' "$dump"
+}
+
+# ---------------------------------------------------------------------------
+# stage 1: build a 1.38 filesystem with per-inode options, on a 1.38 kernel
+# ---------------------------------------------------------------------------
+test_populate_138()
+{
+    set_watchdog 900
+
+    if [[ -n ${ktest_138_image:-} ]]; then
+	echo "FAIL: ktest_138_image is set, so /dev/vdb is a pre-built image"
+	echo "      rather than a blank scratch device. Unset it for stage 1."
+	return 1
+    fi
+
+    local out=${ktest_out:-/ktest-out}/upgrade-138
+    mkdir --parents "$out"
+
+    run_quiet "" bcachefs format --force --version=1.38 "$upgrade_dev"
+
+    mount -t bcachefs "$upgrade_dev" /mnt
+
+    # PRECONDITION 1: the kernel that just initialised this filesystem must
+    # itself be a 1.38 kernel. A 1.39 kernel would have upgraded on mount
+    # (version_upgrade defaults to `compatible`), and -- more importantly --
+    # would already be setting BCH_INODE_has_inode_opts on every inode it
+    # packs, leaving stage 2's check_inodes with nothing to repair.
+    local v=$(sb_version_number "$upgrade_dev")
+    echo "on-disk version after first mount: $v"
+    sb_version_line "$upgrade_dev"
+    if [[ $v != 1.38 ]]; then
+	echo "FAIL: precondition -- expected on-disk version 1.38 after the"
+	echo "      first mount, got '$v'. This stage MUST run against a"
+	echo "      kernel whose bcachefs_metadata_version_current is 1.38;"
+	echo "      anything newer auto-upgrades on mount and makes the whole"
+	echo "      two-stage test meaningless. Check which -k tree was used."
+	umount /mnt
+	return 1
+    fi
+
+    mkdir --parents /mnt/data /mnt/diropt /mnt/acldir
+
+    local i path
+    echo "creating $nr_files files"
+    for ((i = 0; i < nr_files; i++)); do
+	path=$(printf '/mnt/data/f%04d' $i)
+	# Distinct, non-trivial content per file; 16K each.
+	dd if=/dev/urandom of="$path" bs=4k count=4 status=none
+    done
+    sync
+
+    # Per-inode overrides. data_replicas=1 matches production's dominant case
+    # (an explicit override that happens to equal the fs default -- still a
+    # nonzero bi_data_replicas, still lost if the upgrade drops it).
+    echo "setting data_replicas=1 on $nr_repl1 files"
+    for ((i = 0; i < nr_repl1; i++)); do
+	path=$(printf '/mnt/data/f%04d' $i)
+	bcachefs set-file-option --data_replicas=1 "$path"
+    done
+
+    # A handful at 2, mirroring production's 3 such inodes. This is a
+    # single-device filesystem, so the second replica can never be allocated;
+    # that is fine, the point is the inode field, not the data placement.
+    echo "setting data_replicas=2 on $nr_repl2 files"
+    for ((i = nr_repl1; i < nr_repl1 + nr_repl2; i++)); do
+	path=$(printf '/mnt/data/f%04d' $i)
+	bcachefs set-file-option --data_replicas=2 "$path"
+    done
+
+    # Per-DIRECTORY option, so inheritance is exercised: files created under
+    # it afterwards inherit, and set-file-option propagates to the ones
+    # already there (propagate_recurse in src/commands/attr.rs).
+    echo "setting a per-directory option and creating inheriting children"
+    for ((i = 0; i < 10; i++)); do
+	dd if=/dev/urandom of=$(printf '/mnt/diropt/pre%02d' $i) bs=4k count=2 status=none
+    done
+    bcachefs set-file-option --data_replicas=1 --background_compression=zstd /mnt/diropt
+    for ((i = 0; i < 10; i++)); do
+	dd if=/dev/urandom of=$(printf '/mnt/diropt/post%02d' $i) bs=4k count=2 status=none
+    done
+    sync
+
+    # POSIX ACLs: an access ACL on some files (drives has_access_acl) and a
+    # default ACL on a directory (drives has_default_acl).
+    echo "setting POSIX ACLs on $nr_acl files and a default ACL on /mnt/acldir"
+    for ((i = 0; i < nr_acl; i++)); do
+	path=$(printf '/mnt/data/f%04d' $i)
+	setfacl --modify=u:1000:rw "$path"
+    done
+    setfacl --default --modify=u:1000:rwx /mnt/acldir
+    for ((i = 0; i < 5; i++)); do
+	dd if=/dev/urandom of=$(printf '/mnt/acldir/a%02d' $i) bs=4k count=2 status=none
+    done
+    sync
+
+    # Record path <TAB> explicit data_replicas (empty = none) <TAB> sha256,
+    # for every regular file. Written into the filesystem itself so it
+    # survives into stage 2's VM.
+    echo "recording manifest"
+    local tmp=/tmp/manifest.tsv
+    : > "$tmp"
+    local f sum repl
+    while IFS= read -r f; do
+	sum=$(sha256sum "$f")
+	sum=${sum%% *}
+	repl=$(file_opt "$f" data_replicas)
+	printf '%s\t%s\t%s\n' "${f#/mnt}" "$repl" "$sum" >> "$tmp"
+    done < <(find /mnt -type f -not -name "$(basename $manifest_in_fs)" | sort)
+
+    local nr_recorded=$(wc --lines < "$tmp")
+    local nr_with_opt=$(awk --field-separator='\t' '$2 != "" { n++ } END { print n + 0 }' "$tmp")
+    echo "manifest: $nr_recorded files, $nr_with_opt with an explicit data_replicas"
+
+    # PRECONDITION 2: the overrides must actually be readable back, or stage
+    # 2 has nothing to compare against and would trivially "pass".
+    if (( nr_with_opt < nr_repl1 + nr_repl2 )); then
+	echo "FAIL: precondition -- only $nr_with_opt files carry an explicit"
+	echo "      data_replicas, expected at least $((nr_repl1 + nr_repl2))."
+	echo "      Either set-file-option did not take, or getfattr is not"
+	echo "      reporting bcachefs.data_replicas. Sample:"
+	head --lines=5 "$tmp"
+	umount /mnt
+	return 1
+    fi
+
+    cp "$tmp" "/mnt$manifest_in_fs"
+    cp "$tmp" "$out/manifest.tsv"
+    sync
+
+    umount /mnt
+
+    v=$(sb_version_number "$upgrade_dev")
+    echo "on-disk version after clean unmount: $v"
+    if [[ $v != 1.38 ]]; then
+	echo "FAIL: on-disk version drifted to '$v' during stage 1"
+	return 1
+    fi
+
+    echo "=== stage 1 superblock ==="
+    sb_version_line "$upgrade_dev"
+    echo "=== stage 1 error counters ==="
+    sb_error_counts "$upgrade_dev"
+
+    # CONTROL: the same offline fsck stage 2 runs after the upgrade, run here
+    # before it. Without this baseline a dirty fsck in stage 2 cannot be
+    # attributed to the upgrade rather than to how this filesystem was built.
+    # Reported, not fatal -- a dirty baseline is information stage 2 needs,
+    # not a reason to withhold the image.
+    echo "=== stage 1 control: offline fsck of the 1.38 filesystem ==="
+    local fsck_rc=0
+    bcachefs fsck -ny "$upgrade_dev" || fsck_rc=$?
+    echo "pre-upgrade fsck -ny exit status: $fsck_rc"
+
+    # Export the raw device for stage 2. Sparse so the host copy stays small.
+    echo "exporting $upgrade_dev to $out/fs-1.38.img"
+    dd if="$upgrade_dev" of="$out/fs-1.38.img" bs=1M conv=sparse status=none
+    sync
+    ls --size --human-readable "$out/fs-1.38.img"
+
+    echo "STAGE 1 COMPLETE: 1.38 image at <ktest_out>/upgrade-138/fs-1.38.img"
+    echo "Run stage 2 with ktest_138_image pointing at it."
+}
+
+# ---------------------------------------------------------------------------
+# stage 2: mount that image on a 1.39 kernel and check what survived
+# ---------------------------------------------------------------------------
+test_upgrade_139()
+{
+    set_watchdog 900
+
+    if [[ -z ${ktest_138_image:-} ]]; then
+	echo "FAIL: ktest_138_image is not set, so /dev/vdb is a blank scratch"
+	echo "      device rather than the 1.38 filesystem stage 1 built."
+	echo "      This stage cannot synthesise its own input: the whole"
+	echo "      point is inodes written by a kernel that predates"
+	echo "      BCH_INODE_has_inode_opts. Run stage 1 first."
+	return 1
+    fi
+
+    local out=${ktest_out:-/ktest-out}/upgrade-139
+    mkdir --parents "$out"
+
+    echo "=== before mount ==="
+    sb_version_line "$upgrade_dev"
+    local before=$(sb_version_number "$upgrade_dev")
+    echo "on-disk version before mount: $before"
+
+    if [[ $before != 1.38 ]]; then
+	echo "FAIL: precondition -- the supplied image is at version"
+	echo "      '$before', not 1.38. ktest_138_image points at the wrong"
+	echo "      file, or stage 1 ran against the wrong kernel."
+	return 1
+    fi
+
+    echo "=== superblock errors field before the upgrade (not a repair count) ==="
+    sb_error_counts "$upgrade_dev"
+
+    # Baseline straight out of the inodes btree, offline.
+    local repl_before opts_before aacl_before dacl_before
+    read -r repl_before opts_before aacl_before dacl_before \
+	< <(inode_flag_counts "$upgrade_dev" "$out/inodes-before.txt")
+    echo "=== inodes btree before the upgrade ==="
+    echo "  inodes with bi_data_replicas != 0: $repl_before"
+    echo "  has_inode_opts set:                $opts_before"
+    echo "  has_access_acl set:                $aacl_before"
+    echo "  has_default_acl set:               $dacl_before"
+
+    # CONTROL for the post-upgrade fsck below. Stage 1's control fsck used
+    # the 1.38 checker on a 1.38 filesystem, so a dirty fsck after the
+    # upgrade has two possible causes: the upgrade damaged something, or
+    # 1.39's fsck simply checks more than 1.38's did. This run holds the
+    # checker fixed at 1.39 and varies only whether the upgrade happened.
+    #
+    # -o version_upgrade=none is what makes it a control: fsck runs the same
+    # recovery code as mount, and would otherwise perform the 1.38 -> 1.39
+    # upgrade in memory before checking anything, measuring the post-upgrade
+    # state all over again. -n keeps it read-only, so the image is untouched.
+    #
+    # NB: this runs in-kernel, and -K/--no-kernel CANNOT change that here.
+    # bcachefs-test-libs.sh exports BCACHEFS_KERNEL_ONLY=1 for every bcachefs
+    # ktest, and src/commands/fsck.rs checks that env var *before* cli.kernel
+    # / cli.no_kernel, so it wins over the flag outright. Watch for the
+    # "Running in-kernel offline fsck" line rather than assuming.
+    echo "=== control: 1.39 fsck of the 1.38 filesystem, upgrade suppressed ==="
+    local pre_fsck_rc=0
+    bcachefs fsck -ny -o version_upgrade=none "$upgrade_dev" || pre_fsck_rc=$?
+    echo "1.39-fsck-on-un-upgraded-1.38 exit status: $pre_fsck_rc"
+
+    # Clear dmesg so the captured log is exactly the upgrade.
+    dmesg -C
+
+    mount -t bcachefs "$upgrade_dev" /mnt
+
+    dmesg > "$out/upgrade-dmesg.txt"
+    echo "=== upgrade dmesg (full copy at <ktest_out>/upgrade-139/upgrade-dmesg.txt) ==="
+    cat "$out/upgrade-dmesg.txt"
+
+    # ---- assertion 1: the filesystem is now at 1.39 --------------------
+    local after=$(sb_version_number "$upgrade_dev")
+    echo "on-disk version after mount: $after"
+    sb_version_line "$upgrade_dev"
+
+    local failed=0
+    if [[ $after != 1.39 ]]; then
+	echo "FAIL: expected on-disk version 1.39 after mounting with a"
+	echo "      1.39-capable kernel, got '$after'."
+	failed=1
+    fi
+
+    # ---- assertions 2-4: every recorded file, option and checksum ------
+    if [[ ! -f "/mnt$manifest_in_fs" ]]; then
+	echo "FAIL: no manifest at /mnt$manifest_in_fs -- the image was not"
+	echo "      built by this test's stage 1."
+	umount /mnt
+	return 1
+    fi
+
+    local nr=0 opt_ok=0 opt_bad=0 opt_lost=0 opt_gained=0 sum_ok=0 sum_bad=0
+    local line rest path want_repl want_sum got_repl got_sum
+    # NB: split the TSV by hand rather than `IFS=$'\t' read -r a b c`. Tab is
+    # an IFS *whitespace* character, so read collapses runs of tabs into one
+    # delimiter -- a file with no override (empty middle field) would have its
+    # checksum silently read as its data_replicas. That misparse made 217 of
+    # 425 files report bogus mismatches on the first run of this test.
+    while IFS= read -r line; do
+	path=${line%%$'\t'*}
+	rest=${line#*$'\t'}
+	want_repl=${rest%%$'\t'*}
+	want_sum=${rest#*$'\t'}
+	nr=$((nr + 1))
+	got_repl=$(file_opt "/mnt$path" data_replicas)
+	got_sum=$(sha256sum "/mnt$path")
+	got_sum=${got_sum%% *}
+
+	if [[ $got_repl = "$want_repl" ]]; then
+	    opt_ok=$((opt_ok + 1))
+	else
+	    opt_bad=$((opt_bad + 1))
+	    if [[ -n $want_repl && -z $got_repl ]]; then
+		opt_lost=$((opt_lost + 1))
+	    elif [[ -z $want_repl && -n $got_repl ]]; then
+		opt_gained=$((opt_gained + 1))
+	    fi
+	    if (( opt_bad <= 10 )); then
+		echo "  option mismatch: $path want='$want_repl' got='$got_repl'"
+	    fi
+	fi
+
+	if [[ $got_sum = "$want_sum" ]]; then
+	    sum_ok=$((sum_ok + 1))
+	else
+	    sum_bad=$((sum_bad + 1))
+	    if (( sum_bad <= 10 )); then
+		echo "  checksum mismatch: $path"
+	    fi
+	fi
+    done < "/mnt$manifest_in_fs"
+
+    local want_with_opt=$(awk --field-separator='\t' '$2 != "" { n++ } END { print n + 0 }' "/mnt$manifest_in_fs")
+
+    echo "=== manifest verification ==="
+    echo "files checked:                       $nr"
+    echo "files that had a data_replicas override: $want_with_opt"
+    echo "data_replicas matches:               $opt_ok"
+    echo "data_replicas mismatches:            $opt_bad (lost: $opt_lost, gained: $opt_gained)"
+    echo "content checksum matches:            $sum_ok"
+    echo "content checksum mismatches:         $sum_bad"
+
+    (( opt_bad )) && failed=1
+    (( sum_bad )) && failed=1
+    if (( nr == 0 )); then
+	echo "FAIL: manifest was empty"
+	failed=1
+    fi
+
+    umount /mnt
+
+    # ---- step 6: what the upgrade actually repaired --------------------
+    echo "=== superblock errors field after the upgrade (not a repair count) ==="
+    sb_error_counts "$upgrade_dev"
+
+    local repl_after opts_after aacl_after dacl_after
+    read -r repl_after opts_after aacl_after dacl_after \
+	< <(inode_flag_counts "$upgrade_dev" "$out/inodes-after.txt")
+
+    echo "=== inodes btree after the upgrade (before -> after) ==="
+    printf '  %-34s %6s -> %6s\n' "inodes with bi_data_replicas != 0" "$repl_before" "$repl_after"
+    printf '  %-34s %6s -> %6s\n' "has_inode_opts set"    "$opts_before" "$opts_after"
+    printf '  %-34s %6s -> %6s\n' "has_access_acl set"    "$aacl_before" "$aacl_after"
+    printf '  %-34s %6s -> %6s\n' "has_default_acl set"   "$dacl_before" "$dacl_after"
+
+    echo "=== fsck errors the upgrade repaired ==="
+    echo "  inode_has_inode_opts_flag_wrong    $((opts_after - opts_before))"
+    echo "  inode_has_access_acl_flag_wrong    $((aacl_after - aacl_before))"
+    echo "  inode_has_default_acl_flag_wrong   $((dacl_after - dacl_before))"
+    echo "  (lru_entry_bad, alloc_key_to_missing_lru_entry, snapshot_state_bad,"
+    echo "   subvol_state_bad: not separately countable -- see dmesg section below)"
+
+    echo "=== dmesg mentions of the tolerated errors (expected: none --"
+    echo "    the upgrade entry feeds them to errors_silent) ==="
+    grep --extended-regexp \
+	'inode_has_inode_opts_flag_wrong|inode_has_access_acl_flag_wrong|inode_has_default_acl_flag_wrong|lru_entry_bad|alloc_key_to_missing_lru_entry|snapshot_state_bad|subvol_state_bad|has_inode_opts flag wrong|has_access_acl|has_default_acl' \
+	"$out/upgrade-dmesg.txt" || echo "  (none)"
+
+    echo "=== did the upgrade fix anything at all? ==="
+    grep --extended-regexp 'Fixed errors, running fsck a second time' \
+	"$out/upgrade-dmesg.txt" || echo "  (no -- the upgrade found nothing to repair)"
+
+    echo "=== recovery passes the upgrade ran ==="
+    grep --extended-regexp 'running recovery pass|check_inodes|check_xattrs|check_lrus|check_alloc_to_lru_refs|check_snapshots|check_subvols|delete_dead_snapshots|version upgrade|upgrading' \
+	"$out/upgrade-dmesg.txt" || echo "  (none found in dmesg)"
+
+    # ---- assertion 5: no inode lost its options --------------------------
+    # The btree-level check, stronger than the manifest one above: it counts
+    # every inode carrying a nonzero bi_data_replicas, including directories
+    # and inherited children that the bcachefs.<opt> xattr does not report.
+    if (( repl_after != repl_before )); then
+	echo "FAIL: the number of inodes carrying bi_data_replicas changed"
+	echo "      across the upgrade: $repl_before -> $repl_after."
+	failed=1
+    fi
+
+    # ---- did the interesting path actually run? ------------------------
+    local repaired=$((opts_after - opts_before))
+    if (( repaired <= 0 )); then
+	echo "WARNING: check_inodes set ZERO has_inode_opts flags, so no inode"
+	echo "         carrying an option was ever rewritten. The"
+	echo "         option-preservation result above is therefore WEAK: it"
+	echo "         shows the upgrade did not touch the inodes, not that a"
+	echo "         rewrite preserves options. This happens when stage 1"
+	echo "         ran on a kernel that already knows the flag (>= 1.39)."
+	echo "         Re-run stage 1 against a genuine 1.38 kernel."
+	failed=1
+    fi
+
+    # Offline fsck, reported rather than aborting: the option/checksum
+    # numbers above are the point of this test and must be printed even when
+    # fsck is unhappy. Stage 1 runs the same check on the same filesystem
+    # *before* the upgrade, so a nonzero exit here is only attributable to the
+    # upgrade if stage 1's control run was clean -- compare the two.
+    echo "=== post-upgrade offline fsck ==="
+    local fsck_rc=0
+    bcachefs fsck -ny "$upgrade_dev" || fsck_rc=$?
+    echo "post-upgrade fsck -ny exit status: $fsck_rc"
+    echo "  (control, same 1.39 fsck on the un-upgraded 1.38 image: $pre_fsck_rc)"
+    if (( fsck_rc != 0 && pre_fsck_rc == 0 )); then
+	echo "FAIL: fsck -ny is clean on the 1.38 image but not after the"
+	echo "      upgrade (exit $fsck_rc). The upgrade introduced this."
+	failed=1
+    elif (( fsck_rc != 0 )); then
+	echo "NOTE: fsck -ny is dirty after the upgrade (exit $fsck_rc), but it"
+	echo "      is equally dirty on the 1.38 image when checked by the same"
+	echo "      1.39 fsck (exit $pre_fsck_rc). That is a pre-existing"
+	echo "      condition the newer checker reports, not upgrade damage."
+    fi
+
+    check_bcachefs_leaks
+    check_bcachefs_device_errors "$upgrade_dev"
+
+    if (( failed )); then
+	echo "FAIL: version upgrade 1.38 -> 1.39 did not preserve everything"
+	return 1
+    fi
+
+    echo "PASS: on-disk version 1.39, $opt_ok/$nr per-inode options intact," \
+	 "$sum_ok/$nr checksums intact"
+}
+
+main "$@"
