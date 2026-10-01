@@ -1898,10 +1898,8 @@ ec_reconcile_stripes()
 # queues every stripe with a block on it for repair, and the rebuilds then fail
 # for space (bucket_alloc_no_progress, EAGAIN-class) while the device is still
 # readable.
-test_ec_repair_no_space()
+ec_repair_no_space_setup()
 {
-    set_watchdog 600
-
     run_quiet "" bcachefs format -f		\
 	--erasure_code				\
 	--replicas=2				\
@@ -1911,28 +1909,167 @@ test_ec_repair_no_space()
     mount -t bcachefs $devs /mnt
 
     fill_device /mnt/fiotest || true
+}
 
-    local sysfs=$(echo /sys/fs/bcachefs/*/)
-    # reconcile_stripe counts sectors and prints them human-readable
-    # ("29.4G"), so compare, don't do arithmetic:
-    local stripes_before=$(awk '/since mount/ {print $3}' $sysfs/counters/reconcile_stripe)
+# reconcile_stripe counts the stripe repair work attempted, in sectors, printed
+# human-readable ("29.4G"); as bytes, for arithmetic:
+ec_stripe_repair_bytes()
+{
+    awk '/since mount/ {print $3}' /sys/fs/bcachefs/*/counters/reconcile_stripe |
+	sed 's/k$/K/' | numfmt --from=iec
+}
+
+ec_reconcile_thread_alive()
+{
+    if grep -q 'Reconcile thread exited' /sys/fs/bcachefs/*/reconcile_status; then
+	cat /sys/fs/bcachefs/*/reconcile_status
+	echo "FAILED: reconcile thread exited on a stripe it couldn't repair"
+	return 1
+    fi
+}
+
+test_ec_repair_no_space()
+{
+    set_watchdog 600
+
+    ec_repair_no_space_setup
+    local before=$(ec_stripe_repair_bytes)
 
     bcachefs device set-state -f evacuating ${ktest_scratch_dev[0]}
 
     for i in $(seq 1 60); do
-	if grep -q 'Reconcile thread exited' $sysfs/reconcile_status; then
-	    cat $sysfs/reconcile_status
-	    echo "FAILED: reconcile thread exited on a stripe it couldn't repair"
-	    return 1
-	fi
+	ec_reconcile_thread_alive || return 1
 	sleep 1
     done
 
     # Known positive: the repair path ran, so the thread had the chance to die
-    local stripes_after=$(awk '/since mount/ {print $3}' $sysfs/counters/reconcile_stripe)
-    echo "reconcile_stripe: $stripes_before -> $stripes_after"
-    if [[ -z $stripes_after || $stripes_after == "$stripes_before" ]]; then
+    local after=$(ec_stripe_repair_bytes)
+    echo "stripe repair work: $before -> $after bytes"
+    if (( after <= before )); then
 	echo "FAILED: no stripe repairs ran - this test didn't test anything"
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+}
+
+# #1075, part two: with the thread surviving, a stripe that can't be repaired
+# for lack of space must not be retried flat out. Nothing changes on a full,
+# idle filesystem, so after the first pass has failed every repair there is
+# nothing new to try - and before parking, reconcile retried the same stripes
+# continuously (~3000 failures in four minutes, 29.4G of repair work on a 20G
+# filesystem).
+#
+# Implementation-agnostic: it measures repair work attempted after the first
+# pass has settled, however the stripes end up waiting.
+test_ec_repair_no_space_spin()
+{
+    set_watchdog 600
+
+    ec_repair_no_space_setup
+    bcachefs device set-state -f evacuating ${ktest_scratch_dev[0]}
+
+    # The first pass: every stripe with a block on dev0 is tried once.
+    sleep 60
+    ec_reconcile_thread_alive || return 1
+
+    local settled=$(ec_stripe_repair_bytes)
+    if (( settled == 0 )); then
+	echo "FAILED: no stripe repairs ran - this test didn't test anything"
+	return 1
+    fi
+
+    sleep 60
+    ec_reconcile_thread_alive || return 1
+
+    local later=$(ec_stripe_repair_bytes)
+    local retried=$((later - settled))
+    echo "stripe repair work: first pass $settled bytes, next 60s $retried bytes"
+
+    if (( retried > 1 << 30 )); then
+	echo "FAILED: reconcile retried $(numfmt --to=iec $retried) of stripe" \
+	     "repairs in 60s on a full, idle filesystem - nothing changed, so" \
+	     "there was nothing new to try"
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+}
+
+# #1075, the other side of the gate: when space is short but copygc can make
+# some, a stripe repair must wait for copygc, not narrow the stripe. Narrowing
+# is for when waiting can't help (device sizes, failure domains, nothing to
+# reclaim) - here every device is fragmented, so it can.
+#
+# Fragmentation: many small files written interleaved, so each bucket holds
+# pieces of several, then every other file deleted. Free buckets stay near
+# zero - copygc's "can make progress" - while half of every bucket is
+# reclaimable.
+#
+# A narrowing shows in the reconcile_stripe tracepoint as
+# "ret stripe_needs_block_evacuate"; there's no counter for it.
+test_ec_repair_wait_copygc()
+{
+    set_watchdog 1200
+
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	--ec_max_data_blocks=3			\
+	"${ktest_scratch_dev[@]}"
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
+    mount -t bcachefs $devs /mnt
+
+    mkdir /mnt/frag
+    fio --name=frag --directory=/mnt/frag	\
+	--ioengine=sync --rw=randwrite --bs=64k	\
+	--nrfiles=2048 --filesize=1M		\
+	--file_service_type=random		\
+	--numjobs=8 --group_reporting > /dev/null || true
+
+    find /mnt/frag -type f | sort | awk 'NR % 2' | xargs rm -f
+    sync
+    bcachefs fs usage -h /mnt
+
+    local T=/sys/kernel/tracing
+    [[ -d $T/events ]] || mount -t tracefs nodev $T
+    echo 1 > $T/events/bcachefs/reconcile_stripe/enable
+    echo 1 > $T/tracing_on
+
+    bcachefs device set-state -f evacuating ${ktest_scratch_dev[0]}
+
+    local drained=false
+    for i in $(seq 1 600); do
+	ec_reconcile_thread_alive || return 1
+	# dev-0 is ${ktest_scratch_dev[0]}; its alloc_debug rows are
+	# "<type> <buckets> <sectors> <fragmented>"
+	local left=$(awk '$1 == "user" || $1 == "stripe" || $1 == "parity" { n += $2 }
+			  END { print n + 0 }' /sys/fs/bcachefs/*/dev-0/alloc_debug)
+	if (( left == 0 )); then
+	    drained=true
+	    break
+	fi
+	sleep 1
+    done
+
+    echo 0 > $T/tracing_on
+    local repairs=$(grep -c 'reconcile_stripe:' $T/trace || true)
+    local narrowed=$(grep -c 'ret stripe_needs_block_evacuate' $T/trace || true)
+    echo "stripe repairs traced: $repairs, narrowed: $narrowed"
+    bcachefs fs usage -h /mnt
+
+    if (( repairs == 0 )); then
+	echo "FAILED: no stripe repairs ran - this test didn't test anything"
+	return 1
+    fi
+    if (( narrowed )); then
+	echo "FAILED: narrowed $narrowed stripes when copygc could make space"
+	return 1
+    fi
+    if ! $drained; then
+	echo "FAILED: ${ktest_scratch_dev[0]} didn't drain in 600s"
 	return 1
     fi
 
