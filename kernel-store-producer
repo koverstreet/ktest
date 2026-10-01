@@ -213,12 +213,29 @@ main() {
         mapfile -t workers < <(read_workers)
         local ok=0
 
+        # Retried: the workers' sshd is on the open internet, and when
+        # scanners fill its MaxStartups queue it drops new connections at
+        # random - farm7's log: "drop connection #10 from [farm1] ...
+        # Maxstartups", seen here as "Connection closed by <worker> port 22".
+        # deploy_to is idempotent (overwrite, then extract-and-exchange), so
+        # trying again is safe.
         for worker in "${workers[@]}"; do
             log "deploying to $worker"
-            if deploy_to "$worker"; then
+            local attempt deployed=false
+            for attempt in 1 2 3 4; do
+                if deploy_to "$worker"; then
+                    deployed=true
+                    break
+                fi
+                (( attempt < 4 )) || break
+                log "deploy to $worker failed (attempt $attempt/4), retrying in $((attempt * 30))s"
+                $dry_run || sleep $((attempt * 30))
+            done
+
+            if $deployed; then
                 ok=$((ok + 1))
             else
-                log "WARNING: deploy to $worker failed — store NOT updated there, continuing"
+                log "WARNING: deploy to $worker failed after 4 attempts — store NOT updated there, continuing"
                 failed+=("$worker")
             fi
         done
