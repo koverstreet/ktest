@@ -1919,6 +1919,17 @@ ec_stripe_repair_bytes()
 	sed 's/k$/K/' | numfmt --from=iec
 }
 
+# Buckets of data still on dev-$1; 0 once an evacuate has drained it.
+# alloc_debug's usage rows are "<type> <buckets> <sectors> <fragmented>", and
+# the reserves section after them has a row per watermark - one of which is
+# also called "stripe".
+ec_dev_bucket_count()
+{
+    awk '/^reserves:/ { exit }
+	 $1 == "user" || $1 == "stripe" || $1 == "parity" { n += $2 }
+	 END { print n + 0 }' /sys/fs/bcachefs/*/dev-$1/alloc_debug
+}
+
 ec_reconcile_thread_alive()
 {
     if grep -q 'Reconcile thread exited' /sys/fs/bcachefs/*/reconcile_status; then
@@ -2043,11 +2054,7 @@ test_ec_repair_wait_copygc()
     local drained=false
     for i in $(seq 1 600); do
 	ec_reconcile_thread_alive || return 1
-	# dev-0 is ${ktest_scratch_dev[0]}; its alloc_debug rows are
-	# "<type> <buckets> <sectors> <fragmented>"
-	local left=$(awk '$1 == "user" || $1 == "stripe" || $1 == "parity" { n += $2 }
-			  END { print n + 0 }' /sys/fs/bcachefs/*/dev-0/alloc_debug)
-	if (( left == 0 )); then
+	if (( $(ec_dev_bucket_count 0) == 0 )); then
 	    drained=true
 	    break
 	fi
@@ -2072,6 +2079,62 @@ test_ec_repair_wait_copygc()
 	echo "FAILED: ${ktest_scratch_dev[0]} didn't drain in 600s"
 	return 1
     fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+}
+
+# #1076: a stripe repair has to fit failure domains, not just devices. The
+# allocator puts at most one block of a stripe in a domain, so with dev3 and
+# dev4 sharing one, a 3+1 stripe spans all four domains - and evacuating dev0
+# leaves four rw devices but three domains, every one already holding a
+# carried block. The rebuild can't place a new block; it has to narrow.
+#
+# Before the fix: insufficient_devices on every pass, and dev0 never drains.
+test_ec_repair_domains()
+{
+    set_watchdog 600
+
+    run_quiet "" bcachefs format -f				\
+	--erasure_code						\
+	--replicas=2						\
+	--ec_max_data_blocks=3					\
+	--failure_domain=d0 ${ktest_scratch_dev[0]}		\
+	--failure_domain=d1 ${ktest_scratch_dev[1]}		\
+	--failure_domain=d2 ${ktest_scratch_dev[2]}		\
+	--failure_domain=d3 ${ktest_scratch_dev[3]}		\
+	--failure_domain=d3 ${ktest_scratch_dev[4]}
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
+    mount -t bcachefs $devs /mnt
+
+    dd if=/dev/urandom of=/mnt/fiotest bs=1M count=1024 oflag=direct
+    sync
+    bcachefs fs usage -h /mnt
+
+    if (( $(ec_dev_bucket_count 0) == 0 )); then
+	echo "FAILED: nothing on ${ktest_scratch_dev[0]} - this test didn't test anything"
+	return 1
+    fi
+
+    bcachefs device set-state -f evacuating ${ktest_scratch_dev[0]}
+
+    local drained=false
+    for i in $(seq 1 300); do
+	ec_reconcile_thread_alive || return 1
+	if (( $(ec_dev_bucket_count 0) == 0 )); then
+	    drained=true
+	    break
+	fi
+	sleep 1
+    done
+
+    bcachefs fs usage -h /mnt
+    if ! $drained; then
+	echo "FAILED: ${ktest_scratch_dev[0]} didn't drain in 300s:" \
+	     "$(ec_dev_bucket_count 0) buckets left"
+	return 1
+    fi
+    echo "drained in ${i}s"
 
     umount /mnt
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
