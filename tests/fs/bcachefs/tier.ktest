@@ -717,9 +717,9 @@ test_mv_cross_subvol_io_opts()
     local devs=(${ktest_scratch_dev[0]} ${ktest_scratch_dev[2]})
     local extents=$(bcachefs list -b extents "${devs[@]}")
 
-    if echo "$extents" | grep -q "reflink_p.*may_update_opts"; then
+    if echo "$extents" | grep "reflink_p.*may_update_opts" >/dev/null; then
 	echo "PASS: reflink_p has may_update_opts"
-    elif echo "$extents" | grep -q reflink_p; then
+    elif echo "$extents" | grep reflink_p >/dev/null; then
 	echo "FAIL: reflink_p missing may_update_opts flag"
 	echo "Reconciler won't update IO path options after cross-subvol mv"
 	echo "$extents" | grep reflink_p
@@ -846,7 +846,7 @@ test_reflink_inode_opts()
     local reflink_keys=$(bcachefs list -b reflink "${devs[@]}")
     echo "$reflink_keys"
 
-    if echo "$reflink_keys" | grep -q "reconcile.*replicas=2 (inode)"; then
+    if echo "$reflink_keys" | grep "reconcile.*replicas=2 (inode)" >/dev/null; then
 	echo "PASS: reflink_v carries the inode's reconcile opts (data_replicas=2)"
     else
 	echo "FAIL: reflink_v missing the inode's reconcile opts"

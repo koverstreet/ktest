@@ -1264,7 +1264,7 @@ test_missing_child_metadata_only()
     # And the keys are still there. Read through kvdb rather than the mount
     # below so this still reports the right thing if recovery regresses and
     # leaves the filesystem unmountable again.
-    if ! kvdb -c 'list dirents' | grep -q renamed; then
+    if ! kvdb -c 'list dirents' | grep renamed >/dev/null; then
 	echo "TEST FAILED: the victim's dirent is gone - its child pointer" \
 	     "was cleared as though a metadata-only snapshot were empty"
 	exit 1
@@ -1795,7 +1795,7 @@ test_no_keys_interior_owns_keys()
     # its keys must not be unlinked, whichever mechanism was supposed to stop
     # it - and if it survived, the manifest above has already proved its keys
     # came with it.
-    if ! echo "$(all_snap_ids)" | grep -qw "$victim"; then
+    if ! echo "$(all_snap_ids)" | grep -w "$victim" >/dev/null; then
 	echo "TEST FAILED: snapshot node $victim was deleted while it still owned keys"
 	exit 1
     fi
@@ -3299,7 +3299,7 @@ test_dirent_overwritten_inode()
     # The fileA whiteout deletion is the op that silently no-oped when
     # kvdb deletions converted to whiteouts (the raw-deletion fix is what
     # makes this construction land) - assert it landed:
-    if kvdb -c "list dirents" | grep -qF "type whiteout $posA:$mid "; then
+    if kvdb -c "list dirents" | grep -F "type whiteout $posA:$mid " >/dev/null; then
 	echo "TEST FAILED: fileA dirent whiteout survived surgery - kvdb deletion no-oped"
 	exit 1
     fi
@@ -3491,7 +3491,7 @@ test_lostfound_deleted_in_snapshot()
     # The dirent has to be gone in $live while lost+found's whiteout is still
     # there: if the rm didn't land, fsck runs against a tree that has a
     # lost+found where it looks for one and tests nothing.
-    kvdb -c 'list dirents' | grep -q "lost+found" || {
+    kvdb -c 'list dirents' | grep "lost+found" >/dev/null || {
 	echo "TEST FAILED: no lost+found dirent survives - setup broken"
 	exit 1
     }

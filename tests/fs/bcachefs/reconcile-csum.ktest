@@ -54,7 +54,7 @@ test_csum_change_compressed()
     # Precondition: extents must be compressed and crc32c, or we're not
     # exercising the encoded-data fast path at all
     local keys=$(bcachefs list -b extents ${ktest_scratch_dev[0]})
-    if ! echo "$keys" | grep -q "csum crc32c.*compress zstd"; then
+    if ! echo "$keys" | grep "csum crc32c.*compress zstd" >/dev/null; then
 	echo "FAIL: precondition — expected zstd-compressed crc32c extents, got:"
 	echo "$keys" | head -20
 	return 1

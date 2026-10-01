@@ -103,8 +103,8 @@ test_basic()
     # validate accepted them; to_text resolves the names
     kvdb -c "list damage"
     [[ $(kvdb -c "list damage" | grep -c "type damage") = 3 ]]
-    kvdb -c "list damage" | grep -q "jset_seq_blacklisted"
-    kvdb -c "list damage" | grep -q "bset_bad_csum"
+    kvdb -c "list damage" | grep "jset_seq_blacklisted" >/dev/null
+    kvdb -c "list damage" | grep "bset_bad_csum" >/dev/null
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
@@ -200,13 +200,13 @@ test_organic_record()
     [[ $(damage_key_count) -ge 1 ]]
     kvdb -c "list damage" |
 	grep -qE "inode_points_to_missing_dirent|inode_unreachable"
-    kvdb -c "list damage" | grep -q " first "
+    kvdb -c "list damage" | grep " first " >/dev/null
 
     # and the ioctl surface sees it: the file was reattached in
     # lost+found, annotated with what happened to it
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs damage ls -R /mnt
-    bcachefs damage ls -R /mnt | grep -q "lost+found/$inum:"
+    bcachefs damage ls -R /mnt | grep "lost+found/$inum:" >/dev/null
     umount /mnt
 
     # repair converged: a second fsck finds nothing
@@ -257,7 +257,7 @@ test_check_damage_orphan()
     bcachefs fsck -y ${ktest_scratch_dev[0]} || true
 
     [[ $(damage_key_count) = 1 ]]
-    kvdb -c "list damage" | grep -q "0:$inum:"
+    kvdb -c "list damage" | grep "0:$inum:" >/dev/null
     assert_output_lacks "0:99999:" kvdb -c "list damage"
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
@@ -298,7 +298,7 @@ test_snapshot_deletion_merge()
 
     kvdb -c "list damage"
     [[ $(damage_key_count) = 1 ]]
-    kvdb -c "list damage" | grep -q "jset_seq_blacklisted nr 2"
+    kvdb -c "list damage" | grep "jset_seq_blacklisted nr 2" >/dev/null
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
 }
@@ -335,7 +335,7 @@ test_clear()
     [[ -z $(bcachefs damage /mnt/file) ]]
     [[ $(damage_names /mnt/snap/file) = "jset_seq_blacklisted" ]]
     assert_output_lacks "^file:" bcachefs damage ls /mnt
-    bcachefs damage ls -R /mnt | grep -q "^snap/file:"
+    bcachefs damage ls -R /mnt | grep "^snap/file:" >/dev/null
 
     # sole view: the key is really deleted
     bcachefs damage clear /mnt/plain
@@ -350,7 +350,7 @@ test_clear()
     # whiteouts; plain's is gone outright
     kvdb -c "list damage"
     [[ $(damage_key_count) = 1 ]]
-    kvdb -c "list damage" | grep -q "whiteout"
+    kvdb -c "list damage" | grep "whiteout" >/dev/null
     assert_output_lacks "0:$inum_plain:" kvdb -c "list damage"
 
     bcachefs fsck -n ${ktest_scratch_dev[0]}
@@ -369,7 +369,7 @@ test_unknown_error_id()
     umount /mnt
 
     inject_damage $inum 9999
-    kvdb -c "list damage" | grep -q "(unknown error 9999)"
+    kvdb -c "list damage" | grep "(unknown error 9999)" >/dev/null
 
     # not an error: fsck passes clean and keeps the key
     bcachefs fsck -n ${ktest_scratch_dev[0]}

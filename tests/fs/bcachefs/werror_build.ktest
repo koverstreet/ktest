@@ -167,10 +167,10 @@ test_werror()
     # insmods by path (so a by-name modprobe would NOT find it -- the module
     # never enters /lib/modules), and a cache hit modprobes. Only plain
     # dkms-reload installs without loading, so ask before reaching for it.
-    if ! lsmod | grep -qw bcachefs; then
+    if ! lsmod | grep -w bcachefs >/dev/null; then
 	modprobe bcachefs || true
     fi
-    if ! lsmod | grep -qw bcachefs; then
+    if ! lsmod | grep -w bcachefs >/dev/null; then
 	echo "FAIL: bcachefs is not loaded, and modprobe could not load it"
 	echo "the module built, so this is a load failure -- check dmesg for"
 	echo "unresolved symbols or a vermagic mismatch against $(uname -r)"

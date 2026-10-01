@@ -248,7 +248,7 @@ test_device_evacuate_online()
 wait_dev_offline_from_block_layer()
 {
     for _ in $(seq 1 100); do
-	dmesg_since hot_remove | grep -q "offline from block layer" && return 0
+	dmesg_since hot_remove | grep "offline from block layer" >/dev/null && return 0
 	sleep .1
     done
 

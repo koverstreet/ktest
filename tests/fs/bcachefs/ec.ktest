@@ -1186,7 +1186,7 @@ test_ec_force_remove_records_damage()
     fi
 
     local ok=1
-    bcachefs damage ls /mnt | grep -qE "^testfile: .*data_lost_device_removed" || ok=0
+    bcachefs damage ls /mnt | grep -E "^testfile: .*data_lost_device_removed" >/dev/null || ok=0
 
     umount /mnt
 
@@ -1744,7 +1744,7 @@ test_ec_encrypted_degraded_read()
     timeout 120 bcachefs reconcile wait /mnt || true
     umount /mnt
 
-    if ! bcachefs list -b stripes "${ktest_scratch_dev[@]}" | grep -q "type stripe"; then
+    if ! bcachefs list -b stripes "${ktest_scratch_dev[@]}" | grep "type stripe" >/dev/null; then
 	echo "ERROR: no stripes - the data never got erasure coded, so the"
 	echo "       reconstruct path is never reached"
 	exit 1

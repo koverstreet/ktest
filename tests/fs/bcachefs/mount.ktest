@@ -1735,7 +1735,7 @@ test_plymouth_shows_status()
     # condition that actually matters, unlike the variable, which cannot reach
     # us here (the host sets KTEST_GUI, and nothing in the tree reads the
     # ktest.env file that would have carried it in).
-    if lspci | grep -qiE 'vga|display controller'; then
+    if lspci | grep -iE 'vga|display controller' >/dev/null; then
 	echo "display adapter present: expect a graphical plugin, and tty1 in"
 	echo "KD_GRAPHICS with nothing readable in its character buffer."
     else
@@ -1774,7 +1774,7 @@ test_plymouth_shows_status()
     # whether the splash is on the VGA console or being written down ktest's
     # own hvc0, so success proves nothing here - the open descriptors do.
     local ply_pid=$(pgrep -x plymouthd | head -1)
-    if ls -l /proc/$ply_pid/fd 2>/dev/null | grep -q /dev/hvc0; then
+    if ls -l /proc/$ply_pid/fd 2>/dev/null | grep /dev/hvc0 >/dev/null; then
 	echo "plymouthd has /dev/hvc0 open despite --ignore-serial-consoles:"
 	ls -l /proc/$ply_pid/fd | grep -E 'tty|hvc'
 	echo

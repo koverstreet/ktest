@@ -61,7 +61,7 @@ uncompressed_extents()
 # cookie has gone produces this, with nothing left to rewrite the data.
 assert_no_opts_mismatch()
 {
-    if dmesg | grep -q "incorrect/missing reconcile opts"; then
+    if dmesg | grep "incorrect/missing reconcile opts" >/dev/null; then
 	echo "FAIL: extents disagree with their inode's options:"
 	dmesg | grep "incorrect/missing reconcile opts" | head -5
 	return 1

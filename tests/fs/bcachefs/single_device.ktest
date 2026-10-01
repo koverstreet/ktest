@@ -166,7 +166,7 @@ test_mount_by_filesystem_label()
 
     set_watchdog 10
 
-    if ! bcachefs mount --help 2>&1 | grep -q 'LABEL='; then
+    if ! bcachefs mount --help 2>&1 | grep 'LABEL=' >/dev/null; then
         echo "bcachefs mount LABEL= support not available, skipping"
         return 0
     fi
@@ -900,7 +900,7 @@ test_rebalance_scan()
     sleep 0.5
     echo zstd > /sys/fs/bcachefs/*/options/background_compression
     sleep 2
-    cat /sys/fs/bcachefs/*/compression_stats|grep zstd|grep -q '8.00M'
+    cat /sys/fs/bcachefs/*/compression_stats|grep zstd| grep '8.00M' >/dev/null
     umount /mnt
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
@@ -2117,7 +2117,7 @@ test_torn_primary_superblock()
     umount /mnt
 
     # all copies are at the same seq here: nothing to repair
-    if dmesg | tail -n +$((mark + 1)) | grep -q "rewrote primary superblock"; then
+    if dmesg | tail -n +$((mark + 1)) | grep "rewrote primary superblock" >/dev/null; then
 	echo "ERROR: rewrote a healthy primary superblock"
 	return 1
     fi
@@ -2135,14 +2135,14 @@ test_torn_primary_superblock()
     touch /mnt/foo
     umount /mnt
 
-    if dmesg | grep -q "Superblock modified by another process"; then
+    if dmesg | grep "Superblock modified by another process" >/dev/null; then
 	echo "ERROR: torn primary superblock taken for another writer"
 	return 1
     fi
 
     # The primary must have been rewritten: a fresh read shouldn't need the
     # backups
-    if bcachefs show-super $dev 2>&1 | grep -q "primary superblock unreadable"; then
+    if bcachefs show-super $dev 2>&1 | grep "primary superblock unreadable" >/dev/null; then
 	echo "ERROR: primary superblock not repaired"
 	return 1
     fi
@@ -2829,7 +2829,7 @@ test_offline_sb_edit_keeps_version()
 
     bcachefs set-fs-option --compression=lz4 $dev
 
-    if ! bcachefs show-super $dev | grep -qE '^ +compression: +lz4$'; then
+    if ! bcachefs show-super $dev | grep -E '^ +compression: +lz4$' >/dev/null; then
 	echo "ERROR: set-fs-option did not write the option"
 	bcachefs show-super $dev | grep -E '^ +compression:'
 	return 1
@@ -2914,14 +2914,14 @@ test_recovery_pass_offline()
 
     bcachefs recovery-pass --set check_allocations $dev
     # a fresh open reads it back from disk:
-    if ! bcachefs recovery-pass $dev | grep -q check_allocations; then
+    if ! bcachefs recovery-pass $dev | grep check_allocations >/dev/null; then
 	echo "ERROR: recovery-pass --set didn't persist:"
 	bcachefs recovery-pass $dev
 	return 1
     fi
 
     bcachefs recovery-pass --unset check_allocations $dev
-    if bcachefs recovery-pass $dev | grep -q check_allocations; then
+    if bcachefs recovery-pass $dev | grep check_allocations >/dev/null; then
 	echo "ERROR: recovery-pass --unset didn't persist:"
 	bcachefs recovery-pass $dev
 	return 1

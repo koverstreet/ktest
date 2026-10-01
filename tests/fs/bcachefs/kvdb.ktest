@@ -37,7 +37,7 @@ test_sb_set()
     echo ":: superblock after sb set:"
     bcachefs show-super ${ktest_scratch_dev[0]} | grep -i "sanitized" || true
 
-    if ! bcachefs show-super ${ktest_scratch_dev[0]} | grep -q "Dirents sanitized"; then
+    if ! bcachefs show-super ${ktest_scratch_dev[0]} | grep "Dirents sanitized" >/dev/null; then
 	echo "FAIL: sb set dirents_sanitized=1 didn't persist to the superblock"
 	return 1
     fi

@@ -613,12 +613,17 @@ wait_for_dev()
 #
 #	! some_command | grep -q PATTERN
 #
-# which is a silent pass waiting to happen: pipefail isn't set here, so only
-# grep's status counts. If some_command segfaults, exits nonzero, or has its
-# output format changed out from under the test, grep matches nothing, the
-# negation turns that into success, and the assertion has quietly stopped
-# asserting. (Setting pipefail makes it worse, not better: a failing command
-# would then mask even a real match.)
+# which is a silent pass waiting to happen. If some_command segfaults, exits
+# nonzero, or has its output format changed out from under the test, grep
+# matches nothing, the negation turns that into success, and the assertion has
+# quietly stopped asserting.
+#
+# And pipefail IS set (lib/common.sh), which makes it worse: grep -q exits at
+# its first match, some_command takes SIGPIPE writing the rest, and the
+# pipeline fails on a real match - intermittently, since it depends on whether
+# some_command was still writing. ec_encrypted_degraded_read's "no stripes"
+# was this, on 16 stripes that existed. Outside these helpers, send grep's
+# output to /dev/null rather than using -q, so it reads all its input.
 #
 # An assertion whose command died is not a passing assertion - it's a test that
 # can no longer tell you what it claims to. Fail, and print what was captured.

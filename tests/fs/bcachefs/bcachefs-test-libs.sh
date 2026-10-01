@@ -605,7 +605,7 @@ _check_bcachefs_counters()
 
 	local max_fail=$((nr_commits / ratio))
 
-	if echo $event|grep -q data_update; then
+	if echo $event| grep data_update >/dev/null; then
 	    max_fail=$((nr_data_update / ratio))
 	fi
 

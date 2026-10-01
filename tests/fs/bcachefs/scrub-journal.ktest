@@ -62,7 +62,7 @@ test_scrub_journal_clean()
     # Clean unmount: superblock gets marked clean.
     umount /mnt
 
-    if ! bcachefs show-super "$dev" | grep -qi 'clean.*1\|^ *clean'; then
+    if ! bcachefs show-super "$dev" | grep -i 'clean.*1\|^ *clean' >/dev/null; then
 	echo "NOTE: could not confirm clean flag in show-super; continuing"
     fi
 

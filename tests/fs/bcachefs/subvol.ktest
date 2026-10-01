@@ -768,7 +768,7 @@ test_snapshot_whiteout_resurrection()
     echo 2 > /proc/sys/vm/drop_caches
 
     # readdir hits the dirents btree directly:
-    if ls /mnt/dir | grep -q '^foo$'; then
+    if ls /mnt/dir | grep '^foo$' >/dev/null; then
 	echo "deleted file resurrected after snapshot collapse"
 	ls -la /mnt/dir
 	false
