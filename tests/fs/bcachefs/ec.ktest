@@ -1889,6 +1889,57 @@ ec_reconcile_stripes()
 # before those are rebuilt, and nothing cleared the bit: stripe repair found the
 # stripe not degraded and returned without touching it, so reconcile revisited
 # the whole queue forever, doing no IO.
+# #1075: a stripe repair that fails for want of space must not end the reconcile
+# thread - with it gone, all background data movement stops until something
+# restarts it.
+#
+# Full filesystem; stripes capped at 3+1, so bch2_stripe_repair() can't bow out
+# with stripe_needs_block_evacuate and actually allocates. Evacuating a device
+# queues every stripe with a block on it for repair, and the rebuilds then fail
+# for space (bucket_alloc_no_progress, EAGAIN-class) while the device is still
+# readable.
+test_ec_repair_no_space()
+{
+    set_watchdog 600
+
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	--ec_max_data_blocks=3			\
+	"${ktest_scratch_dev[@]}"
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
+    mount -t bcachefs $devs /mnt
+
+    fill_device /mnt/fiotest || true
+
+    local sysfs=$(echo /sys/fs/bcachefs/*/)
+    # reconcile_stripe counts sectors and prints them human-readable
+    # ("29.4G"), so compare, don't do arithmetic:
+    local stripes_before=$(awk '/since mount/ {print $3}' $sysfs/counters/reconcile_stripe)
+
+    bcachefs device set-state -f evacuating ${ktest_scratch_dev[0]}
+
+    for i in $(seq 1 60); do
+	if grep -q 'Reconcile thread exited' $sysfs/reconcile_status; then
+	    cat $sysfs/reconcile_status
+	    echo "FAILED: reconcile thread exited on a stripe it couldn't repair"
+	    return 1
+	fi
+	sleep 1
+    done
+
+    # Known positive: the repair path ran, so the thread had the chance to die
+    local stripes_after=$(awk '/since mount/ {print $3}' $sysfs/counters/reconcile_stripe)
+    echo "reconcile_stripe: $stripes_before -> $stripes_after"
+    if [[ -z $stripes_after || $stripes_after == "$stripes_before" ]]; then
+	echo "FAILED: no stripe repairs ran - this test didn't test anything"
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+}
+
 test_ec_evacuate_cancelled()
 {
     set_watchdog 300
