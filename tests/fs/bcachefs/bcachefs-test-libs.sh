@@ -269,6 +269,13 @@ export BCACHEFS_KERNEL_ONLY=1
 
 bcachefs_mem_in_use()
 {
+    # kfree_rcu() batches objects into a per-cpu sheaf and only issues the
+    # call_rcu() once it's full, so on an idle system they sit there counted
+    # as allocated - rcu_barrier() alone can't see them. Shrinking a cache
+    # hands its partial sheaves to call_rcu(); then the barrier frees them.
+    for f in /sys/kernel/slab/*/shrink; do
+	echo 1 > $f
+    done 2> /dev/null
     echo 1 > /sys/module/rcutree/parameters/do_rcu_barrier
 
     # check_for_deadlock's allocations are module lifetime, not fs:
