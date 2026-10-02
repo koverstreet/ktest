@@ -224,7 +224,7 @@ stop_dst_pressure()
 
 assert_no_srcu_journal_warnings()
 {
-    if dmesg | grep -E 'btree trans held srcu lock|bch2_journal_flush_seq stuck\?'; then
+    if grep -E 'btree trans held srcu lock|bch2_journal_flush_seq stuck\?' "$1"; then
 	echo "journal/move pressure emitted SRCU or journal flush liveness warning" >&2
 	dump_journal_srcu_debug >&2
 	return 1
@@ -291,6 +291,8 @@ test_journal_flush_srcu_liveness()
 
     local fioout="$ktest_out/journal-srcu-dst-pressure-fio-out"
     local evacuate_log="$ktest_out/journal-srcu-evacuate-out"
+    local kernel_log="$ktest_out/journal-srcu-kernel-log"
+    local kernel_log_pid
     local evacuate_timeout=${ktest_journal_srcu_evac_timeout:-360}
     local seed_size=$((384 * 1024 * 1024))
     local journal_srcu_pressure_pid
@@ -314,6 +316,8 @@ test_journal_flush_srcu_liveness()
 
     dmesg -C || true
 	: > /sys/kernel/tracing/trace || true
+    stdbuf -oL dmesg --follow --raw >"$kernel_log" &
+    kernel_log_pid=$!
 
     start_dst_pressure "$fioout"
     fiopid=$journal_srcu_pressure_pid
@@ -327,8 +331,10 @@ test_journal_flush_srcu_liveness()
 	return 1
     fi
 
-    echo "source seed: $((seed_size / 1024 / 1024)) MiB; 30s floor corresponds to at most 12.8 MiB/s"
+    echo "source seed: $((seed_size / 1024 / 1024)) MiB; source reads capped at 8 MiB/s"
     echo "fio write_bytes before evacuate: $fio_bytes_before"
+    qemu_monitor block_set_io_throttle "disk$ktest_scratch_dev_base" \
+        0 $((8 * 1024 * 1024)) 0 0 0 0
     if ! echo 1 > /sys/fs/bcachefs/*/options/reconcile_enabled; then
         stop_dst_pressure "$fiopid"
         echo "could not enable reconcile before device evacuate" >&2
@@ -344,6 +350,7 @@ test_journal_flush_srcu_liveness()
         ret=1
     else
         evacuate_elapsed=$((SECONDS - evacuate_started))
+        echo "device evacuate elapsed: ${evacuate_elapsed}s"
         if ((evacuate_elapsed < 30)); then
             echo "device evacuate completed suspiciously quickly: ${evacuate_elapsed}s" >&2
             ret=1
@@ -361,7 +368,14 @@ test_journal_flush_srcu_liveness()
         fi
     fi
 
+    qemu_monitor block_set_io_throttle "disk$ktest_scratch_dev_base" 0 0 0 0 0 0
     stop_dst_pressure "$fiopid"
+    if ! kill -0 "$kernel_log_pid" 2>/dev/null; then
+        echo "kernel log capture stopped during journal/SRCU pressure" >&2
+        ret=1
+    fi
+    kill "$kernel_log_pid" 2>/dev/null || true
+    wait "$kernel_log_pid" 2>/dev/null || true
 
     if ((ret)); then
 	dump_journal_srcu_debug "$ktest_out/journal-srcu-debug-failure"
@@ -376,7 +390,7 @@ test_journal_flush_srcu_liveness()
 	ret=1
     fi
 
-    if ! assert_no_srcu_journal_warnings; then
+    if ! [[ -s $kernel_log ]] || ! assert_no_srcu_journal_warnings "$kernel_log"; then
 	ret=1
     fi
 
