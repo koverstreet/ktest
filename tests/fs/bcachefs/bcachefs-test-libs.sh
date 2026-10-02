@@ -6,6 +6,9 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../../test-libs.sh
 
+export PATH="/sbin:$PATH"
+hash -r
+
 # nodebug test variant: the harness passes ktest_bcachefs_no_debug (it
 # rides testrunner's ktest_* passthrough). Translate it once to the
 # internal NO_BCACHEFS_DEBUG that the checks below — and bcachefs_antagonist
