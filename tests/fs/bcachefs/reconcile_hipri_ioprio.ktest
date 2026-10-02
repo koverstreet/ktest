@@ -36,19 +36,14 @@ check_hipri_reconcile_ioprio()
     return 1
 }
 
-src_has_user_data()
-{
-    awk '$1 == "user" { found = $2 > 0 } END { exit !found }' \
-	/sys/fs/bcachefs/*/dev-0/alloc_debug
-}
-
 wait_for_src_user_data_evacuated()
 {
-    local has_data
+    local sectors
 
     for _ in $(seq 1 1200); do
-	has_data=$(cat /sys/fs/bcachefs/*/dev-0/has_data)
-	if ! grep -qw user <<< "$has_data"; then
+	sectors=$(bcachefs_dev_user_sectors 0) || return 1
+	if (( sectors == 0 )); then
+	    echo "source user data sectors: 0"
 	    return 0
 	fi
 	sleep .1
@@ -61,6 +56,7 @@ wait_for_src_user_data_evacuated()
 
 test_hipri_reconcile_uses_best_effort_ioprio()
 {
+    local sectors
     set_watchdog 240
 
     run_quiet "" bcachefs format -f			\
@@ -78,7 +74,8 @@ test_hipri_reconcile_uses_best_effort_ioprio()
     dd if=/dev/zero of=/mnt/src-only-data bs=4M count=64 oflag=direct status=none
     sync
 
-    if ! src_has_user_data; then
+    sectors=$(bcachefs_dev_user_sectors 0) || return 1
+    if (( sectors == 0 )); then
 	echo "test setup failed: source device has no user data"
 	dump_reconcile_debug
 	return 1
