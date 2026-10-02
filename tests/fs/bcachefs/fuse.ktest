@@ -2,11 +2,6 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
 
-require-git http://evilpiepirate.org/git/linuxquota.git
-require-make linuxquota
-
-require-git http://evilpiepirate.org/git/xfstests.git ../xfstests
-
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../fstests.sh
 
 require-kernel-config FUSE_FS
