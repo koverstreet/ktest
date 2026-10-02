@@ -28,12 +28,6 @@ dump_reconcile_debug()
     cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
 }
 
-src_has_user_data()
-{
-    awk '$1 == "user" { found = $2 > 0 } END { exit !found }' \
-	/sys/fs/bcachefs/*/dev-0/alloc_debug
-}
-
 reconcile_phys_considered()
 {
     awk '/phys workers last phase:/ { print $6 }' /sys/fs/bcachefs/*/reconcile_status
@@ -79,6 +73,7 @@ assert_reconcile_phys_skipped_empty_devices()
 
 test_reconcile_phys_skips_empty_rotational_devices()
 {
+    local sectors
     set_watchdog 180
 
     run_quiet "" bcachefs format -f		    \
@@ -101,7 +96,8 @@ test_reconcile_phys_skips_empty_rotational_devices()
     dd if=/dev/zero of=/mnt/src-only-data bs=4M count=64 oflag=direct status=none
     sync
 
-    if ! src_has_user_data; then
+    sectors=$(bcachefs_dev_user_sectors 0) || return 1
+    if (( sectors == 0 )); then
 	echo "test setup failed: source device has no user data"
 	dump_reconcile_debug
 	return 1
@@ -118,7 +114,8 @@ test_reconcile_phys_skips_empty_rotational_devices()
     assert_reconcile_phys_skipped_empty_devices
     bcachefs reconcile wait -t high_priority /mnt
 
-    if src_has_user_data; then
+    sectors=$(bcachefs_dev_user_sectors 0) || return 1
+    if (( sectors != 0 )); then
 	echo "source device still has user data after evacuation"
 	dump_reconcile_debug
 	return 1
