@@ -900,4 +900,42 @@ test_online_three_device_replicas_metadata_under_randrw_shrink()
     finish verify_replicas_metadata "${devs[@]}"
 }
 
+test_online_shrink_journal_to_zero()
+{
+    set_watchdog 180
+    local devs=("${ktest_scratch_dev[0]}" "${ktest_scratch_dev[1]}")
+    local target_dev device_usage
+
+    run_quiet "" bcachefs format -f --replicas=2 "${devs[@]}"
+    mount_mnt "${devs[@]}"
+    check_bcachefs_errors "${devs[@]}"
+
+    bcachefs device resize-journal "${devs[0]}" 64M
+    bcachefs device resize-journal "${devs[1]}" 64M
+    test -n "$(bcachefs show-super -F journal_v2 "${devs[0]}")"
+
+    bcachefs device resize-journal "${devs[0]}" 0
+    test -z "$(bcachefs show-super -F journal_v2 "${devs[0]}")"
+    check_bcachefs_errors "${devs[@]}"
+    run_fio_randrw /mnt/journal-zero --size=64M
+
+    umount /mnt
+    check_bcachefs_errors "${devs[@]}"
+    bcachefs fsck -ny "${devs[@]}"
+    check_bcachefs_errors "${devs[@]}"
+    mount_mnt "${devs[@]}"
+    target_dev=${devs[0]##*/}
+    device_usage=$(bcachefs fs usage -f devices /mnt)
+    printf '%s\n' "$device_usage"
+    printf '%s\n' "$device_usage" |
+	awk -v dev="$target_dev" '$0 ~ dev && $0 ~ /rw/ { found = 1 }
+				    END { exit !found }'
+    test -z "$(bcachefs show-super -F journal_v2 "${devs[0]}")"
+    test -n "$(bcachefs show-super -F journal_v2 "${devs[1]}")"
+    umount /mnt
+    bcachefs fsck -ny "${devs[@]}"
+    check_bcachefs_errors "${devs[@]}"
+    bcachefs_test_end_checks "${devs[0]}"
+}
+
 main "$@"
