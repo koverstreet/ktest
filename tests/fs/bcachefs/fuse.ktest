@@ -12,13 +12,11 @@ require-git http://evilpiepirate.org/git/xfstests.git ../xfstests
 require-kernel-config FUSE_FS
 
 export MKFS_OPTIONS=
-export FSTYP=fuse.bcachefs
+export FSTYP=fuseblk.bcachefs
 #export FUSE_SUBTYP=.bcachefs
 
 run_tests()
 {
-    mv /usr/local/sbin/mount.fuse.bcachefs /sbin
-
     run_fstests "$@"
 }
 
