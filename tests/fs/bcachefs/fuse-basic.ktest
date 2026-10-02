@@ -99,4 +99,28 @@ test_rename_overwrite()
     fuse_unmount ${ktest_scratch_dev[0]}
 }
 
+# unmount, fsck, mount again straight away - xfstests' repair path, and what
+# anyone does after a recovery mount. fuseblk's unmount waits for the daemon
+# to shut the filesystem down, so the device must be free for fsck and the
+# remount must succeed.
+test_remount_cycle()
+{
+    set_watchdog 120
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+
+    local i
+    for i in $(seq 1 5); do
+	fuse_mount ${ktest_scratch_dev[0]}
+	echo $i > /mnt/fuse/f$i
+	fuse_unmount ${ktest_scratch_dev[0]}
+    done
+
+    fuse_mount ${ktest_scratch_dev[0]}
+    for i in $(seq 1 5); do
+	[[ $(cat /mnt/fuse/f$i) == $i ]] || { echo "FAIL: f$i lost"; return 1; }
+    done
+    fuse_unmount ${ktest_scratch_dev[0]}
+}
+
 main "$@"
