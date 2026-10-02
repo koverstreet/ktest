@@ -2501,7 +2501,8 @@ extent_crcs()
 	    if ($4 != "extent")
 		next
 	    split($5, p, ":")
-	    if (p[1] != ino)
+	    # As strings: inode numbers past 2^53 compare equal as doubles
+	    if (p[1] "" != ino "")
 		next
 	    want = 1
 	    end = p[2]

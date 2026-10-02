@@ -2209,7 +2209,8 @@ dz_extents()
 	/^u64s/ {
 	    done()
 	    split($5, p, ":")
-	    cur = $4 == "extent" && p[1] == ino
+	    # As strings: inode numbers past 2^53 compare equal as doubles
+	    cur = $4 == "extent" && p[1] "" == ino ""
 	    dur = match($0, /durability: [0-9]+/) ? substr($0, RSTART + 12, RLENGTH - 12) + 0 : 0
 	    ondev = 0
 	    ondev2 = 0
