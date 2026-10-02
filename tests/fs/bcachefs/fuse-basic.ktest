@@ -66,4 +66,37 @@ test_readdir_multibuffer()
     fuse_unmount ${ktest_scratch_dev[0]}
 }
 
+# rename onto an existing name has to replace it. fusemount used to pass
+# BCH_RENAME regardless - the mode that means "there is no target", which
+# isn't checked - so the rename inserted a second dirent of the same name:
+# both names listed, rm -r failing with ENOTEMPTY, and the replaced inode
+# never losing its link. And once the replaced inode is unlinked, it has to
+# actually be deleted when the kernel lets go of it: with no inode cache
+# nothing ever did, and unmount left the filesystem clean with deleted inodes
+# outstanding. fuse_unmount's fsck catches that.
+test_rename_overwrite()
+{
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    fuse_mount ${ktest_scratch_dev[0]}
+
+    echo old > /mnt/fuse/b
+    echo new > /mnt/fuse/a
+    mv /mnt/fuse/a /mnt/fuse/b
+
+    local got=$(ls /mnt/fuse | grep -vx lost+found)
+    if [[ $got != b ]]; then
+	echo "FAIL: after mv a b, directory lists: $got"
+	return 1
+    fi
+    if [[ $(cat /mnt/fuse/b) != new ]]; then
+	echo "FAIL: b doesn't have the renamed file's contents"
+	return 1
+    fi
+
+    rm /mnt/fuse/b
+    fuse_unmount ${ktest_scratch_dev[0]}
+}
+
 main "$@"
