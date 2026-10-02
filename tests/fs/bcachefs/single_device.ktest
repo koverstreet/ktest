@@ -1371,7 +1371,7 @@ test_update_command()
 {
     set_watchdog 60
 
-    if ! bcachefs update --help | grep -q 'Upgrade a mounted filesystem'; then
+    if ! bcachefs update --help | grep 'Upgrade a mounted filesystem' >/dev/null; then
 	echo "bcachefs update command not available, skipping"
 	return 0
     fi
