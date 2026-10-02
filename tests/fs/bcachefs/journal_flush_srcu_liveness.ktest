@@ -159,6 +159,7 @@ start_dst_pressure()
 	--iodepth=64				\
 	--iodepth_batch=16			\
 	--direct=1				\
+	--thread=1				\
 	--numjobs=1				\
 	--time_based				\
 	--runtime=420				\
@@ -169,7 +170,45 @@ start_dst_pressure()
 	--filesize=256M				\
 	--filename=/mnt/dst-pressure/hotfile	\
 	>"$log" 2>&1 &
-    echo $!
+    journal_srcu_pressure_pid=$!
+}
+
+fio_tgid_write_bytes()
+{
+    local pid=$1
+    local task bytes total=0
+
+    for task in /proc/$pid/task/*/io; do
+        [[ -r $task ]] || continue
+        bytes=$(awk '$1 == "write_bytes:" { print $2; found = 1; exit } END { if (!found) exit 1 }' \
+            "$task") || return 1
+        total=$((total + bytes))
+    done
+
+    echo "$total"
+}
+
+wait_dst_pressure_progress()
+{
+    local pid=$1
+    local deadline=$((SECONDS + 15))
+    local bytes_before
+    local bytes_after
+
+    while ((SECONDS < deadline)); do
+        if ! kill -0 "$pid" 2>/dev/null || [[ ! -r /proc/$pid/io ]]; then
+            return 1
+        fi
+        bytes_before=$(fio_tgid_write_bytes "$pid") || return 1
+        sleep 1
+        bytes_after=$(fio_tgid_write_bytes "$pid") || return 1
+        if ((bytes_after - bytes_before >= 256 * 1024)); then
+            echo "$bytes_after"
+            return 0
+        fi
+    done
+
+    return 1
 }
 
 stop_dst_pressure()
@@ -250,16 +289,22 @@ test_journal_flush_srcu_liveness()
 {
     set_watchdog 900
 
-	local fioout="$ktest_out/journal-srcu-dst-pressure-fio-out"
-	local evacuate_log="$ktest_out/journal-srcu-evacuate-out"
-	local evacuate_timeout=${ktest_journal_srcu_evac_timeout:-360}
-	local fiopid
+    local fioout="$ktest_out/journal-srcu-dst-pressure-fio-out"
+    local evacuate_log="$ktest_out/journal-srcu-evacuate-out"
+    local evacuate_timeout=${ktest_journal_srcu_evac_timeout:-360}
+    local seed_size=$((384 * 1024 * 1024))
+    local journal_srcu_pressure_pid
+    local fiopid
+    local fio_bytes_before
+    local fio_bytes_after
+    local evacuate_started
+    local evacuate_elapsed
     local events
     local ret=0
 
     format_journal_srcu_fs
-    mount -t bcachefs "$(devs)" /mnt
-    seed_source_data
+    mount -t bcachefs -o reconcile_enabled=0 "$(devs)" /mnt
+    seed_source_data "$seed_size"
     stress_journal_flush_srcu_path
 
     events=$(journal_srcu_trace_events | xargs)
@@ -268,17 +313,52 @@ test_journal_flush_srcu_liveness()
     fi
 
     dmesg -C || true
-    : > /sys/kernel/tracing/trace || true
+	: > /sys/kernel/tracing/trace || true
 
-    fiopid=$(start_dst_pressure "$fioout")
-    sleep 3
+    start_dst_pressure "$fioout"
+    fiopid=$journal_srcu_pressure_pid
 
-	if ! timeout "$evacuate_timeout" bcachefs device evacuate "${ktest_scratch_dev[0]}" \
-	>"$evacuate_log" 2>&1; then
-	cat "$evacuate_log" || true
+    if ! fio_bytes_before=$(wait_dst_pressure_progress "$fiopid"); then
 	cat "$fioout" || true
-	echo "device evacuate did not complete under journal/SRCU pressure" >&2
-	ret=1
+	echo "fio did not make destination write progress before device evacuate" >&2
+	stop_dst_pressure "$fiopid"
+	dump_journal_srcu_debug "$ktest_out/journal-srcu-debug-failure"
+	poweroff -f || true
+	return 1
+    fi
+
+    echo "source seed: $((seed_size / 1024 / 1024)) MiB; 30s floor corresponds to at most 12.8 MiB/s"
+    echo "fio write_bytes before evacuate: $fio_bytes_before"
+    if ! echo 1 > /sys/fs/bcachefs/*/options/reconcile_enabled; then
+        stop_dst_pressure "$fiopid"
+        echo "could not enable reconcile before device evacuate" >&2
+        return 1
+    fi
+    evacuate_started=$SECONDS
+
+    if ! timeout "$evacuate_timeout" bcachefs device evacuate "${ktest_scratch_dev[0]}" \
+        >"$evacuate_log" 2>&1; then
+        cat "$evacuate_log" || true
+        cat "$fioout" || true
+        echo "device evacuate did not complete under journal/SRCU pressure" >&2
+        ret=1
+    else
+        evacuate_elapsed=$((SECONDS - evacuate_started))
+        if ((evacuate_elapsed < 30)); then
+            echo "device evacuate completed suspiciously quickly: ${evacuate_elapsed}s" >&2
+            ret=1
+        fi
+        if ! kill -0 "$fiopid" 2>/dev/null || [[ ! -r /proc/$fiopid/io ]]; then
+            echo "fio pressure stopped before device evacuate completed" >&2
+            ret=1
+        else
+            fio_bytes_after=$(fio_tgid_write_bytes "$fiopid" || true)
+            echo "fio write_bytes after evacuate: $fio_bytes_after"
+            if [[ -z $fio_bytes_after ]] || ((fio_bytes_after - fio_bytes_before < 256 * 1024)); then
+                echo "fio wrote less than one 256 KiB block during device evacuate" >&2
+                ret=1
+            fi
+        fi
     fi
 
     stop_dst_pressure "$fiopid"
