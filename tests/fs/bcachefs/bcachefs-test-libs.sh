@@ -647,6 +647,17 @@ check_bcachefs_counters()
     done
 }
 
+bcachefs_dev_user_sectors()
+{
+    local device=$1
+    local sectors
+
+    sectors=$(awk '$1 == "user" { found = 1; print $3; exit } END { if (!found) exit 1 }' \
+        /sys/fs/bcachefs/*/dev-"$device"/alloc_debug) || return 1
+    [[ $sectors =~ ^[0-9]+$ ]] || return 1
+    printf '%s\n' "$sectors"
+}
+
 trace_data_update_has_ioprio()
 {
     local operation=$1
