@@ -6,12 +6,30 @@
 
 require-kernel-config FUSE_FS
 
+# FSTYP is the filesystem, not the driver - as xfstests runs glusterfs - so
+# that everything xfstests does specially for bcachefs applies here too;
+# -o fuse is what makes mount.bcachefs use the FUSE daemon.
 export MKFS_OPTIONS=
-export FSTYP=fuseblk.bcachefs
-#export FUSE_SUBTYP=.bcachefs
+export FSTYP=bcachefs
+export BCACHEFS_MOUNT_OPTIONS="-o fuse"
+
+# bcachefs-test-libs.sh makes the tools defer to the kernel implementation
+# (fsck, format); here the userspace implementation is the one under test, and
+# the kernel driver isn't loaded at all:
+unset BCACHEFS_KERNEL_ONLY
 
 run_tests()
 {
+    # With the kernel driver loaded, a mount that doesn't go through
+    # BCACHEFS_MOUNT_OPTIONS would quietly test it instead of FUSE. Unload it
+    # and keep it unloaded, so that such a mount fails instead:
+    rmmod bcachefs 2>/dev/null
+    echo "install bcachefs /bin/false" > /etc/modprobe.d/ktest-fuse-only.conf
+    if grep -qw bcachefs /proc/filesystems; then
+	echo "fuse.ktest: kernel bcachefs is still loaded, refusing to run" >&2
+	return 1
+    fi
+
     # generic/409,generic/410,generic/411,generic/589: shared subtree tests
     #   mount the same device a second time; the kernel hands back the existing
     #   superblock, but a second fuse daemon can't open a device the first holds
@@ -22,10 +40,7 @@ run_tests()
     #   gets the EIO (441 is also expunged on bcachefs proper)
     # generic/484: syncfs reporting a writeback error only once - expunged on
     #   bcachefs proper too
-    # generic/741: xfstests _notruns it for FSTYP=bcachefs ("mount.bcachefs
-    #   logs extra output"), but that check doesn't match fuseblk.bcachefs
-    run_fstests -e generic/108,generic/409,generic/410,generic/411,generic/441,generic/484,generic/589,generic/732,generic/741 "$@"
+    run_fstests -e generic/108,generic/409,generic/410,generic/411,generic/441,generic/484,generic/589,generic/732 "$@"
 }
 
 main "$@"
-
