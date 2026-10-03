@@ -139,6 +139,7 @@ test_subvolumes()
     mkdir /mnt/kern/sub/d
     echo indir > /mnt/kern/sub/d/g
     bcachefs subvolume snapshot /mnt/kern/sub /mnt/kern/snap
+    bcachefs subvolume snapshot -r /mnt/kern/sub /mnt/kern/rosnap
     echo changed > /mnt/kern/sub/f
     umount /mnt/kern
 
@@ -183,6 +184,15 @@ try:
 except OSError as e:
     sys.exit(0 if e.errno == errno.EXDEV else 1)
 sys.exit(1)" || { echo "FAIL: cross-subvolume rename wasn't EXDEV"; return 1; }
+
+    # A read-only snapshot reads, and refuses every kind of write
+    expect $m/rosnap/f origin
+    ! (echo x > $m/rosnap/f) 2>/dev/null	|| { echo "FAIL: wrote to a read-only snapshot"; return 1; }
+    ! truncate -s 0 $m/rosnap/f 2>/dev/null	|| { echo "FAIL: truncated in a read-only snapshot"; return 1; }
+    ! mv $m/rosnap/d/g $m/rosnap/g 2>/dev/null	|| { echo "FAIL: renamed in a read-only snapshot"; return 1; }
+    ! ln $m/rosnap/f $m/rosnap/f2 2>/dev/null	|| { echo "FAIL: linked in a read-only snapshot"; return 1; }
+    ! touch $m/rosnap/new 2>/dev/null		|| { echo "FAIL: created in a read-only snapshot"; return 1; }
+    expect $m/rosnap/f origin
 
     fuse_unmount $dev
 }
