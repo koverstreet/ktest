@@ -315,7 +315,7 @@ usage_dev_bytes()
 kick_reconcile_io_clock()
 {
 	dd if=/dev/urandom of=/mnt/reconcile-clock-kick bs=1M count=32 \
-	    oflag=direct status=none
+	    oflag=direct status=none || return
 	sync
 }
 
@@ -326,10 +326,16 @@ check_uncapped_ssd_reconcile_window()
 
 observe_uncapped_ssd_reconcile_window()
 {
-	local i snapshot status
-	for i in $(seq 1 1200); do
+	local uuid=$1 ready_file=$2 i snapshot status
+	: > "$ready_file"
+	echo "ssd_observer_armed uuid=$uuid"
+	for i in $(seq 1 12000); do
+	    if [[ $(<"/sys/fs/bcachefs/$uuid/options/background_target") != data ]]; then
+		sleep .01
+		continue
+	    fi
 	    snapshot="$ktest_out/ssd_moving_ctxts.$i"
-	    cat /sys/fs/bcachefs/*/internal/moving_ctxts > "$snapshot"
+	    cat "/sys/fs/bcachefs/$uuid/internal/moving_ctxts" > "$snapshot"
 	    if check_uncapped_ssd_reconcile_window "$snapshot"; then
 		echo "observed uncapped SSD reconcile_work window"
 		return 0
@@ -341,7 +347,7 @@ observe_uncapped_ssd_reconcile_window()
 		    return 1
 		fi
 	    fi
-	    sleep .1
+	    sleep .01
 	done
 	echo "did not observe the SSD reconcile_work window"
 	dump_move_window_debug
@@ -567,15 +573,38 @@ test_rotational_metadata_target_move_window()
 	return 1
 	fi
 
-	echo data > "$options/background_target"
-	if [[ $(<"$options/background_target") != data ]]; then
-	    echo "SSD background_target readback failed for filesystem $fs_uuid"
+	local ssd_observer_ready="$ktest_out/ssd_observer.ready"
+	rm -f "$ssd_observer_ready"
+	observe_uncapped_ssd_reconcile_window "$fs_uuid" "$ssd_observer_ready" &
+	local observer_pid=$!
+	for i in $(seq 1 100); do
+	    [[ -e $ssd_observer_ready ]] && break
+	    if ! kill -0 "$observer_pid" 2>/dev/null; then
+		wait "$observer_pid"
+		return 1
+	    fi
+	    sleep .05
+	done
+	if [[ ! -e $ssd_observer_ready ]]; then
+	    echo "SSD observer did not become ready"
+	    kill "$observer_pid" 2>/dev/null || true
+	    wait "$observer_pid" || true
+	    return 1
+	fi
+	if ! echo data > "$options/background_target" ||
+	   [[ $(<"$options/background_target") != data ]]; then
+	    echo "SSD background_target transition failed for filesystem $fs_uuid"
+	    kill "$observer_pid" 2>/dev/null || true
+	    wait "$observer_pid" || true
 	    return 1
 	fi
 	read_reconcile_options "$fs_uuid"
-	observe_uncapped_ssd_reconcile_window &
-	local observer_pid=$!
-	kick_reconcile_io_clock
+	if ! kick_reconcile_io_clock; then
+	    echo "SSD reconcile I/O-clock kick failed for filesystem $fs_uuid"
+	    kill "$observer_pid" 2>/dev/null || true
+	    wait "$observer_pid" || true
+	    return 1
+	fi
 	wait "$observer_pid"
 	timeout 120 bcachefs reconcile wait --types target /mnt
     if src_has_user_data || (( $(usage_dev_bytes data user) == 0 )) ||
