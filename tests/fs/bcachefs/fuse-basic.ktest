@@ -123,4 +123,68 @@ test_remount_cycle()
     fuse_unmount ${ktest_scratch_dev[0]}
 }
 
+# Subvolumes and snapshots through fuse. A snapshot shares inode numbers - and
+# generations - with its origin, so a fuse node ID that is just the inode number
+# can't tell them apart. Set up with the kernel (fuse can't create subvolumes
+# yet), then check through fuse that each path reaches its own inode.
+test_subvolumes()
+{
+    local dev=${ktest_scratch_dev[0]} m=/mnt/fuse
+
+    run_quiet "" bcachefs format -f $dev
+    mkdir -p /mnt/kern
+    mount -t bcachefs $dev /mnt/kern
+    bcachefs subvolume create /mnt/kern/sub
+    echo origin > /mnt/kern/sub/f
+    mkdir /mnt/kern/sub/d
+    echo indir > /mnt/kern/sub/d/g
+    bcachefs subvolume snapshot /mnt/kern/sub /mnt/kern/snap
+    echo changed > /mnt/kern/sub/f
+    umount /mnt/kern
+
+    fuse_mount $dev
+
+    expect() # <file> <contents>
+    {
+	local got=$(cat "$1")
+	[[ $got == "$2" ]] || { echo "FAIL: $1: got '$got', want '$2'"; return 1; }
+    }
+
+    expect $m/sub/f changed
+    expect $m/snap/f origin
+    expect $m/snap/d/g indir
+
+    # Both open at once: two live node IDs for one inode number
+    exec 3<$m/sub/f 4<$m/snap/f
+    [[ $(cat <&3) == changed && $(cat <&4) == origin ]] ||
+	{ echo "FAIL: with both open, the wrong file answered"; return 1; }
+    exec 3<&- 4<&-
+
+    # st_ino as the kernel reports it: the bcachefs inode number, same in both
+    [[ $(stat -c %i $m/sub/f) == $(stat -c %i $m/snap/f) ]] ||
+	{ echo "FAIL: st_ino differs between origin and snapshot"; return 1; }
+
+    # Writes land in the subvolume they were made through
+    echo snapnew > $m/snap/f
+    expect $m/sub/f changed
+    expect $m/snap/f snapnew
+
+    # After eviction, node IDs resolve again to the right inodes
+    echo 3 > /proc/sys/vm/drop_caches
+    expect $m/sub/f changed
+    expect $m/snap/f snapnew
+    expect $m/snap/d/g indir
+
+    # The core refuses renames across subvolumes
+    python3 -c "
+import errno, os, sys
+try:
+    os.rename('$m/sub/f', '$m/snap/moved')
+except OSError as e:
+    sys.exit(0 if e.errno == errno.EXDEV else 1)
+sys.exit(1)" || { echo "FAIL: cross-subvolume rename wasn't EXDEV"; return 1; }
+
+    fuse_unmount $dev
+}
+
 main "$@"
