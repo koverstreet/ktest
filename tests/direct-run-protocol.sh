@@ -98,12 +98,45 @@ assert_trace $'status:TEST SUCCESS\nsync\nTEST SUCCESS'
 ktest_finish_vm 0 || fail "guest success was not returned to the host"
 
 # A nonzero qemu exit remains nonzero even if an old/success status exists.
-if ktest_finish_vm 37; then
+trace="$ktest_out/qemu-cleanup"
+: > "$trace"
+kill()
+{
+    printf 'kill:%s\n' "$*" >> "$trace"
+}
+wait()
+{
+    printf 'wait:%s\n' "$*" >> "$trace"
+}
+export trace ktest_out
+export -f kill wait
+run_qemu_test()
+{
+    bash -e -c '. "$1"; shift; ktest_run_qemu 2 123 456 "$@"' \
+	_ "$ROOT/lib/test-result.sh" "$@"
+}
+if run_qemu_test bash -c 'exit 37'; then
     fail "qemu failure was discarded"
 else
     got=$?
     [[ $got = 37 ]] || fail "qemu failure became $got"
 fi
+assert_trace $'kill:123 456\nwait:123 456'
+
+: > "$trace"
+run_qemu_test bash -c 'exit 0' ||
+    fail "qemu success with guest success failed"
+assert_trace $'kill:123 456\nwait:123 456'
+
+ktest_write_result "TEST FAILED"
+: > "$trace"
+if run_qemu_test bash -c 'exit 0'; then
+    fail "qemu success with guest failure passed"
+else
+    got=$?
+    [[ $got = 1 ]] || fail "guest failure became $got"
+fi
+assert_trace $'kill:123 456\nwait:123 456'
 
 # Intentional sysrq reboot and crashdump collection do not publish success:
 # both retain the pre-VM failure default until a later normal boot finishes.
