@@ -6,9 +6,9 @@ require-kernel-config BCACHEFS_FS=y
 
 config-mem 4G
 config-cpus 2
-config-scratch-devs 1G
-config-scratch-devs 1G
-config-scratch-devs 1G
+config-scratch-devs 1G 'iops=300,bps=104857600'
+config-scratch-devs 1G 'iops=300,bps=104857600'
+config-scratch-devs 1G 'iops=300,bps=104857600'
 
 devs()
 {
