@@ -50,6 +50,22 @@ ktest_finish_vm()
     ktest_result_code
 }
 
+ktest_run_qemu()
+{
+    local num_pids=$1
+    shift
+    local virtiofsd_pids=("${@:1:num_pids}")
+    shift "$num_pids"
+    local qemu_ret=0
+
+    ( echo 800 > /proc/self/oom_score_adj 2>/dev/null; exec "$@" ) || qemu_ret=$?
+
+    kill "${virtiofsd_pids[@]}" 2>/dev/null || true
+    wait "${virtiofsd_pids[@]}" 2>/dev/null || true
+
+    ktest_finish_vm "$qemu_ret"
+}
+
 ktest_finish_guest()
 {
     local ret=$1

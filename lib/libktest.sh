@@ -889,13 +889,7 @@ start_vm()
     # reads the log.
     log_verbose "qemu: ${qemu_cmd[*]}"
 
-    ( echo 800 > /proc/self/oom_score_adj 2>/dev/null; exec "${qemu_cmd[@]}" )
-    local qemu_ret=$?
-
-    kill "${virtiofsd_pids[@]}" 2>/dev/null || true
-    wait "${virtiofsd_pids[@]}" 2>/dev/null || true
-
-    ktest_finish_vm "$qemu_ret"
+    ktest_run_qemu "${#virtiofsd_pids[@]}" "${virtiofsd_pids[@]}" "${qemu_cmd[@]}"
 }
 
 map_clang_version() {
