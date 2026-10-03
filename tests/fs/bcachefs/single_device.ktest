@@ -1257,6 +1257,34 @@ test_online_resize()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# Format puts a backup superblock at the end of the device, rounded down to a
+# bucket boundary - so when the tail past the last bucket holds a whole
+# superblock, it sits beyond the last bucket. Growing the device brings that
+# bucket into existence; it has to come in marked sb, not free, or the allocator
+# hands it to user data and every superblock write overwrites it (#785).
+test_online_resize_sb_in_tail()
+{
+    set_watchdog 120
+
+    # 512 buckets of 2M, plus a 1.5M tail that holds the 1M backup superblock
+    run_quiet "" bcachefs format -f		\
+	--bucket_size=2M			\
+	--fs_size=$((1024 * 1024 * 1024 + 3 * 512 * 1024))	\
+	${ktest_scratch_dev[0]}
+    bcachefs show-super --layout ${ktest_scratch_dev[0]} | grep Offsets
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    bcachefs device resize ${ktest_scratch_dev[0]}
+
+    # Fill it, so every bucket - the one holding that superblock too - gets used
+    dd if=/dev/zero of=/mnt/fill bs=1M oflag=direct 2>/dev/null || true
+    sync
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_offline_resize()
 {
     set_watchdog 60
