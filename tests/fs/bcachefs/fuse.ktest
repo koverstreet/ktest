@@ -22,7 +22,9 @@ run_tests()
     #   gets the EIO (441 is also expunged on bcachefs proper)
     # generic/484: syncfs reporting a writeback error only once - expunged on
     #   bcachefs proper too
-    run_fstests -e generic/108,generic/409,generic/410,generic/411,generic/441,generic/484,generic/589,generic/732 "$@"
+    # generic/741: xfstests _notruns it for FSTYP=bcachefs ("mount.bcachefs
+    #   logs extra output"), but that check doesn't match fuseblk.bcachefs
+    run_fstests -e generic/108,generic/409,generic/410,generic/411,generic/441,generic/484,generic/589,generic/732,generic/741 "$@"
 }
 
 main "$@"
