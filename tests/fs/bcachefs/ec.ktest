@@ -944,6 +944,98 @@ test_ec_stripe_reuse()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# A reused stripe that can't be reconstructed records damage against what it
+# couldn't read - and a block fails as a whole on one bad granule of its stripe
+# checksum. Extents elsewhere in the block were read fine; their own checksums
+# say so, and they mustn't be recorded as lost (ChH on #bcache: 26 files
+# reported damaged, which read back fine).
+#
+# Every stripe gets the same 4k at the start of two of its data blocks
+# corrupted: two failures, one redundancy, so a reuse of any of them can't
+# reconstruct - and since both copies are bad at that offset, the file there is
+# genuinely unreadable. Reuse only happens with the filesystem full (see
+# test_ec_stripe_reuse), so fill it with small files, fragment every stripe by
+# deleting half, and write until a reuse records damage. Then: every file
+# recorded damaged has to actually fail to read.
+test_ec_reuse_lost_blocks_per_extent()
+{
+    set_watchdog 600
+
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	--bucket_size=256k			\
+	--fs_size=256M				\
+	"${ktest_scratch_dev[@]}"
+    devs="$(join_by : "${ktest_scratch_dev[@]}")"
+
+    mount -t bcachefs $devs /mnt
+    local i
+    for ((i = 0; i < 100000; i++)); do
+	dd if=/dev/urandom of=/mnt/f$i bs=64k count=1 2>/dev/null || break
+    done
+    local nr_files=$i
+    echo "wrote $nr_files files"
+    umount /mnt
+
+    # Stripe keys print a header, then one line per block, data blocks first:
+    #   vdc 1:42:0 gen 0#512    (name dev:bucket:offset, then sectors in use)
+    # First 4k of the first two data blocks in use, in every stripe:
+    local targets=$(bcachefs list -b stripes "${ktest_scratch_dev[0]}" |
+	awk '/type stripe/ {
+		split($0, h, "blocks "); split(h[2], b, ":")
+		nr_data = b[1]; block = 0; picked = 0
+		next
+	     }
+	     $2 ~ /^[0-9]+:[0-9]+:[0-9]+$/ {
+		if (block++ >= nr_data || picked >= 2)
+		    next
+		split($2, p, ":"); split($4, u, "#")
+		if (u[2] > 0) { print $1, p[2] * 512 + p[3]; picked++ }
+	     }')
+    local nr_targets=$(echo "$targets" | grep -c . || true)
+    echo "corrupting $nr_targets blocks"
+    (( nr_targets )) || { echo "FAIL: no stripe blocks found"; return 1; }
+
+    local name sector
+    while read name sector; do
+	dd if=/dev/urandom of=/dev/$name bs=512 count=8 seek=$sector conv=notrunc 2>/dev/null
+    done <<< "$targets"
+
+    mount -t bcachefs $devs /mnt
+    for ((i = 1; i < nr_files; i += 2)); do rm -f /mnt/f$i; done
+    sync
+
+    local round
+    for ((round = 0; round < 50; round++)); do
+	[[ -n $(bcachefs damage ls /mnt) ]] && break
+	for ((i = 0; i < 200; i++)); do
+	    dd if=/dev/urandom of=/mnt/n$round.$i bs=64k count=1 2>/dev/null || break
+	done
+	sync
+    done
+
+    # "name: error..." per damaged file
+    local damaged=($(bcachefs damage ls /mnt | sed 's/:.*//'))
+    echo "after $round rounds: ${#damaged[@]} files recorded damaged"
+    (( ${#damaged[@]} )) ||
+	{ echo "FAIL: no reuse ever hit a corrupted stripe - nothing tested"; return 1; }
+
+    echo 3 > /proc/sys/vm/drop_caches
+    local f good=0
+    for f in "${damaged[@]}"; do
+	f=/mnt/$f
+	[[ -f $f ]] || { echo "FAIL: damage ls named $f, which doesn't exist"; return 1; }
+	if cat "$f" > /dev/null 2>&1; then
+	    echo "recorded damaged but reads fine: $f"
+	    good=$((good + 1))
+	fi
+    done
+    (( ! good )) || { echo "FAIL: $good of ${#damaged[@]} files recorded damaged read back fine"; return 1; }
+
+    umount /mnt
+}
+
 do_remove_test()
 {
     offline=$1
