@@ -359,21 +359,21 @@ observe_metadata_scan_limits()
 	local uuid=$1 target=$2 ready_file=$3 captured_file=$4
 	local i snapshot snapshot_text status_before status_after phase_before phase_after status
 
-	: > "$ready_file"
 	echo "metadata_observer_armed uuid=$uuid"
+	: > "$ready_file"
 	for i in $(seq 1 2400); do
 	    if [[ $(<"/sys/fs/bcachefs/$uuid/options/metadata_target") != "$target" ]]; then
 		sleep .001
 		continue
 	    fi
-	    status_before=$(cat "/sys/fs/bcachefs/$uuid/reconcile_status" 2>&1 || true)
+	    status_before=$(<"/sys/fs/bcachefs/$uuid/reconcile_status") || return 1
 	    if [[ ! $status_before =~ scanning:[[:space:]]+metadata([[:space:]]|$) ]]; then
 		sleep .001
 		continue
 	    fi
 	    snapshot="$ktest_out/metadata_moving_ctxts.$i"
-	    snapshot_text=$(cat "/sys/fs/bcachefs/$uuid/internal/moving_ctxts") || return 1
-	    status_after=$(cat "/sys/fs/bcachefs/$uuid/reconcile_status" 2>&1 || true)
+	    snapshot_text=$(<"/sys/fs/bcachefs/$uuid/internal/moving_ctxts") || return 1
+	    status_after=$(<"/sys/fs/bcachefs/$uuid/reconcile_status") || return 1
 	    phase_before=$(grep -E 'scanning:[[:space:]]+metadata([[:space:]]|$)' <<<"$status_before" | head -1 || true)
 	    phase_after=$(grep -E 'scanning:[[:space:]]+metadata([[:space:]]|$)' <<<"$status_after" | head -1 || true)
 	    if [[ -n $phase_before && -n $phase_after ]]; then
