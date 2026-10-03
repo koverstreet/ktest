@@ -123,6 +123,27 @@ test_remount_cycle()
     fuse_unmount ${ktest_scratch_dev[0]}
 }
 
+# A symlink's data ends at i_size rounded up to a block, as page_symlink()
+# writes it - no NUL on disk. Writing the NUL too put one block past the end of
+# the inode whenever the target's length was a multiple of the block size, and
+# fsck deleted it (generic/083, generic/269). fuse_unmount's fsck catches it.
+test_symlink_lengths()
+{
+    local dev=${ktest_scratch_dev[0]} len target
+
+    run_quiet "" bcachefs format -f --block_size=512 $dev
+    fuse_mount $dev
+
+    for len in 1 511 512 513 1024 4095; do
+	target=$(head -c $len /dev/zero | tr '\0' x)
+	ln -s $target /mnt/fuse/l$len
+	[[ $(readlink /mnt/fuse/l$len) == $target ]] ||
+	    { echo "FAIL: symlink of length $len reads back wrong"; return 1; }
+    done
+
+    fuse_unmount $dev
+}
+
 # Subvolumes and snapshots through fuse. A snapshot shares inode numbers - and
 # generations - with its origin, so a fuse node ID that is just the inode number
 # can't tell them apart. Set up with the kernel (fuse can't create subvolumes
