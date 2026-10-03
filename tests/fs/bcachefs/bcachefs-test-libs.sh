@@ -647,6 +647,44 @@ check_bcachefs_counters()
     done
 }
 
+bcachefs_dev_user_sectors()
+{
+    local device=$1
+    local sectors
+
+    sectors=$(awk '$1 == "user" { found = 1; print $3; exit } END { if (!found) exit 1 }' \
+        /sys/fs/bcachefs/*/dev-"$device"/alloc_debug) || return 1
+    [[ $sectors =~ ^[0-9]+$ ]] || return 1
+    printf '%s\n' "$sectors"
+}
+
+trace_data_update_has_ioprio()
+{
+    local operation=$1
+    local priority=$2
+
+    awk -v operation="$operation" -v priority="$priority" '
+	function finish_event() {
+	    if (in_event && saw_operation && saw_priority)
+		found = 1
+	}
+	/ \[[0-9][0-9][0-9]\]/ {
+	    finish_event()
+	    in_event = $0 ~ /: data_update:/
+	    saw_operation = in_event && index($0, ": " operation)
+	    saw_priority = in_event && index($0, "ioprio: " priority)
+	    next
+	}
+	in_event && index($0, "ioprio:") && index($0, priority) {
+	    saw_priority = 1
+	}
+	END {
+	    finish_event()
+	    exit !found
+	}
+    ' /sys/kernel/tracing/trace
+}
+
 bcachefs_test_end_checks()
 {
     check_bcachefs_leaks
