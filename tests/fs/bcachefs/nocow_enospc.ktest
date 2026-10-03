@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+
+# shellcheck source=tests/fs/bcachefs/bcachefs-test-libs.sh
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+config-scratch-devs 4G
+config-timeout 120
+
+test_nocow_fallocate_enospc()
+{
+    set_watchdog 120
+
+    # shellcheck disable=SC2154 # ktest_scratch_dev is provided by ktest.
+    run_quiet "" bcachefs format -f --nocow --fs_size=768M "${ktest_scratch_dev[0]}"
+    mount -t bcachefs "${ktest_scratch_dev[0]}" /mnt
+
+    fallocate -l 256M /mnt/wal
+    dd if=/dev/urandom of=/tmp/nocow-pattern bs=4k count=1 status=none
+
+    dd if=/dev/zero of=/mnt/fill bs=1M oflag=direct status=none || true
+    sync || true
+
+    if dd if=/tmp/nocow-pattern of=/mnt/wal bs=4k count=1 conv=notrunc oflag=direct status=none; then
+	dd if=/mnt/wal of=/tmp/nocow-readback bs=4k count=1 iflag=direct status=none
+	cmp /tmp/nocow-pattern /tmp/nocow-readback
+
+	umount /mnt
+	mount -t bcachefs "${ktest_scratch_dev[0]}" /mnt
+	dd if=/mnt/wal of=/tmp/nocow-remount-readback bs=4k count=1 iflag=direct status=none
+	cmp /tmp/nocow-pattern /tmp/nocow-remount-readback
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[0]}"
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+main "$@"
