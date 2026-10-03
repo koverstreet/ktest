@@ -106,7 +106,14 @@ run_move_writes_fua_case()
 
     echo none > /sys/fs/bcachefs/*/options/foreground_target
     echo none > /sys/fs/bcachefs/*/options/background_target
-    echo "$expected" > /sys/fs/bcachefs/*/options/move_writes_fua
+    if [[ $expected == 0 ]]; then
+	if [[ $(cat /sys/fs/bcachefs/*/options/move_writes_fua) != 0 ]]; then
+	    echo "move_writes_fua must default to 0"
+	    return 1
+	fi
+    else
+	echo "$expected" > /sys/fs/bcachefs/*/options/move_writes_fua
+    fi
 
     setup_tracing 'block:block_bio_queue'
     echo move-writes-fua-start > /sys/kernel/tracing/trace_marker
