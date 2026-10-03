@@ -187,4 +187,67 @@ sys.exit(1)" || { echo "FAIL: cross-subvolume rename wasn't EXDEV"; return 1; }
     fuse_unmount $dev
 }
 
+# A directory file handle whose dentry is gone but whose inode isn't (an inotify
+# watch pins the inode, not the dentry) gets reconnected: LOOKUP ".." up to a
+# connected ancestor, and from a subvolume root that's in the parent subvolume.
+#
+# FUSE has no get_name, so the kernel finds each name by d_ino in the parent's
+# readdir - a snapshot next to its origin is ambiguous there. Snapshots go in
+# their own directory here, which is the usual layout anyway.
+test_subvolume_handles()
+{
+    local dev=${ktest_scratch_dev[0]} m=/mnt/fuse
+
+    run_quiet "" bcachefs format -f $dev
+    mkdir -p /mnt/kern
+    mount -t bcachefs $dev /mnt/kern
+    bcachefs subvolume create /mnt/kern/sub
+    mkdir /mnt/kern/sub/d /mnt/kern/snaps
+    bcachefs subvolume snapshot /mnt/kern/sub /mnt/kern/snaps/s1
+    umount /mnt/kern
+
+    fuse_mount $dev
+
+    local d
+    for d in $m/sub/d $m/snaps/s1/d; do
+	python3 - $d $m <<'EOF' || { echo "FAIL: $d: reconnecting its file handle"; return 1; }
+import ctypes, os, sys
+
+libc = ctypes.CDLL(None, use_errno=True)
+
+class FileHandle(ctypes.Structure):
+    _fields_ = [("handle_bytes", ctypes.c_uint),
+                ("handle_type",  ctypes.c_int),
+                ("f_handle",     ctypes.c_ubyte * 128)]
+
+def check(ret, what):
+    if ret < 0:
+        e = ctypes.get_errno()
+        sys.exit(f"{what}: {os.strerror(e)}")
+    return ret
+
+path, mnt = sys.argv[1], sys.argv[2]
+AT_FDCWD, IN_MODIFY = -100, 2
+
+fh, mnt_id = FileHandle(handle_bytes=128), ctypes.c_int()
+check(libc.name_to_handle_at(AT_FDCWD, path.encode(), ctypes.byref(fh), ctypes.byref(mnt_id), 0),
+      "name_to_handle_at")
+
+watch = check(libc.inotify_init(), "inotify_init")
+check(libc.inotify_add_watch(watch, path.encode(), IN_MODIFY), "inotify_add_watch")
+with open("/proc/sys/vm/drop_caches", "w") as f:
+    f.write("2")
+
+mnt_fd = os.open(mnt, os.O_RDONLY | os.O_DIRECTORY)
+fd = check(libc.open_by_handle_at(mnt_fd, ctypes.byref(fh), os.O_RDONLY | os.O_DIRECTORY),
+           "open_by_handle_at")
+got = os.readlink(f"/proc/self/fd/{fd}")
+if got != path:
+    sys.exit(f"open_by_handle_at opened {got}")
+EOF
+    done
+
+    fuse_unmount $dev
+}
+
 main "$@"
