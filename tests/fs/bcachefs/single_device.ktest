@@ -1285,6 +1285,41 @@ test_online_resize_sb_in_tail()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# What #785 left behind on filesystems that hit it: a superblock written into a
+# bucket that holds user data. Injected by moving the device's last backup
+# superblock into a user data bucket - the next superblock write lands on the
+# data, as it did there. fsck has to get the filesystem back to consistent and
+# mountable: the superblock stays, the data it overwrote can't.
+test_sb_in_user_bucket_repair()
+{
+    set_watchdog 120
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f --bucket_size=1M --fs_size=1G $dev
+    mount -t bcachefs $dev /mnt
+    dd if=/dev/urandom of=/mnt/f bs=1M count=64 oflag=direct 2>/dev/null
+    umount /mnt
+
+    # A bucket a dirty pointer of /mnt/f points into, past the first two superblocks
+    local bucket=$(bcachefs list -b extents $dev |
+	awk '/ptr:/ && !/cached/ && !b { split($3, p, ":"); if (p[2] > 8) b = p[2] } END { print b }')
+    [[ -n $bucket ]] || { echo "FAIL: no user data bucket found"; return 1; }
+    echo "moving superblock 3 into user data bucket $bucket"
+
+    bcachefs kvdb --rw -c "sb set -d 0 layout.sb_offset[2]=$((bucket * 2048))" $dev
+    bcachefs show-super --layout $dev | grep Offsets
+
+    # Repair, then it must be clean and mount; the overwritten part of the
+    # file is gone, and reads of it fail rather than return garbage
+    bcachefs fsck -y $dev && rc=0 || rc=$?
+    (( rc <= 1 )) || { echo "FAIL: fsck -y exited $rc"; return 1; }
+    bcachefs fsck -n $dev
+
+    mount -t bcachefs $dev /mnt
+    ! cat /mnt/f > /dev/null 2>&1 || { echo "FAIL: read the overwritten data back without an error"; return 1; }
+    umount /mnt
+}
+
 test_offline_resize()
 {
     set_watchdog 60
