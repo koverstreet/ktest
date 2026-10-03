@@ -314,7 +314,6 @@ test_journal_flush_srcu_liveness()
 	setup_tracing "$events"
     fi
 
-    dmesg -C || true
 	: > /sys/kernel/tracing/trace || true
     stdbuf -oL dmesg --follow --raw >"$kernel_log" &
     kernel_log_pid=$!
