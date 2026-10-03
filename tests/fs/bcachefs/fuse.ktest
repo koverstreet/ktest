@@ -40,7 +40,10 @@ run_tests()
     #   gets the EIO (441 is also expunged on bcachefs proper)
     # generic/484: syncfs reporting a writeback error only once - expunged on
     #   bcachefs proper too
-    run_fstests -e generic/108,generic/409,generic/410,generic/411,generic/441,generic/484,generic/589,generic/732 "$@"
+    # generic/294,generic/306,generic/416,generic/452: remount, which fusemount
+    #   refuses: there's no FUSE opcode telling the daemon about a remount, so
+    #   it couldn't make bcachefs itself read-only or read-write to match
+    run_fstests -e generic/108,generic/294,generic/306,generic/409,generic/410,generic/411,generic/416,generic/441,generic/452,generic/484,generic/589,generic/732 "$@"
 }
 
 main "$@"
