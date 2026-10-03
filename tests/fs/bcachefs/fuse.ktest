@@ -15,11 +15,14 @@ run_tests()
     # generic/409,generic/410,generic/411,generic/589: shared subtree tests
     #   mount the same device a second time; the kernel hands back the existing
     #   superblock, but a second fuse daemon can't open a device the first holds
+    # generic/732: mounts the same device at a second mount point, as above
     # generic/108,generic/441: expect a buffered write to a failing device to
     #   succeed and fsync to report the error; without the fuse writeback
     #   cache every write goes through to the daemon, and the write itself
     #   gets the EIO (441 is also expunged on bcachefs proper)
-    run_fstests -e generic/108,generic/409,generic/410,generic/411,generic/441,generic/589 "$@"
+    # generic/484: syncfs reporting a writeback error only once - expunged on
+    #   bcachefs proper too
+    run_fstests -e generic/108,generic/409,generic/410,generic/411,generic/441,generic/484,generic/589,generic/732 "$@"
 }
 
 main "$@"
