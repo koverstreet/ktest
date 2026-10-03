@@ -1320,6 +1320,70 @@ test_sb_in_user_bucket_repair()
     umount /mnt
 }
 
+# A journal bucket that also holds user data: fsck gives the bucket to the data
+# and deletes it from the journal - in memory and in the superblock's journal
+# bucket list. Injected by freeing a user data bucket's alloc key and growing
+# the journal until the allocator hands it that bucket.
+test_journal_bucket_delete()
+{
+    set_watchdog 120
+    local dev=${ktest_scratch_dev[0]}
+
+    # The device's journal buckets, one per line, from the superblock's
+    # "Buckets:  start-end ..." (end exclusive)
+    journal_buckets()
+    {
+	bcachefs show-super -f journal_v2 $dev |
+	    awk '/Buckets:/ { for (i = 2; i <= NF; i++) { split($i, r, "-"); for (b = r[1]; b < r[2]; b++) print b } }'
+    }
+
+    run_quiet "" bcachefs format -f --bucket_size=1M --fs_size=1G $dev
+
+    # Fill it, then free one user data bucket's alloc key - superblock and
+    # journal buckets are re-marked at every mount, user data buckets aren't -
+    # and grow the journal: the allocator gives it that bucket, with the data
+    # still in it
+    mount -t bcachefs $dev /mnt
+    local i
+    for ((i = 0; i < 2000; i++)); do
+	dd if=/dev/urandom of=/mnt/f$i bs=1M count=1 oflag=direct 2>/dev/null || break
+    done
+    # Free every other file, so the journal has room to grow
+    for ((i = 1; i < 2000; i += 2)); do rm -f /mnt/f$i; done
+    umount /mnt
+
+    local victim=$(bcachefs list -b extents $dev |
+	awk '/ptr:/ && !/cached/ && !b { split($3, p, ":"); if (p[2] > 64) b = p[2] } END { print b }')
+    [[ -n $victim ]] || { echo "FAIL: no user data bucket found"; return 1; }
+    bcachefs kvdb --rw -c "update alloc 0:$victim data_type=0 dirty_sectors=0" $dev
+
+    mount -t bcachefs $dev /mnt
+    local size
+    for size in 64 128 192 256 320 384; do
+	bcachefs device resize-journal $dev ${size}M
+	[[ " $(journal_buckets | tr '\n' ' ') " == *" $victim "* ]] && break
+    done
+    umount /mnt
+
+    local before=($(journal_buckets))
+    local nr=${#before[@]}
+    echo "journal buckets: $nr, user data bucket $victim"
+    [[ " ${before[*]} " == *" $victim "* ]] ||
+	{ echo "FAIL: journal didn't take bucket $victim: ${before[*]}"; return 1; }
+
+    bcachefs fsck -y $dev && rc=0 || rc=$?
+    (( rc <= 1 )) || { echo "FAIL: fsck -y exited $rc"; return 1; }
+
+    local after=($(journal_buckets))
+    echo "after repair: ${#after[@]} journal buckets"
+    [[ " ${after[*]} " != *" $victim "* ]] ||
+	{ echo "FAIL: bucket $victim still in the superblock's journal list"; return 1; }
+    (( ${#after[@]} == nr - 1 )) ||
+	{ echo "FAIL: ${#after[@]} journal buckets after deleting one of $nr"; return 1; }
+
+    bcachefs fsck -n $dev
+}
+
 test_offline_resize()
 {
     set_watchdog 60
