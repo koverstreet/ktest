@@ -791,23 +791,21 @@ start_vm()
     # exclusive claim on the device - the next test's O_EXCL open then
     # fails with EBUSY. Truncate to zero first so every run gets an
     # empty sparse file.
-    for size in "${ktest_scratch_dev_sizes[@]}"; do
+
+    local device_index device_options
+    for ((device_index = 0; device_index < ${#ktest_scratch_dev_sizes[@]}; device_index++)); do
+	local size=${ktest_scratch_dev_sizes[$device_index]}
+	device_options=${ktest_scratch_dev_options[$device_index]:-}
 	local file="$ktest_out/vm/dev-$disknr"
 
 	truncate -s 0 "$file"
 	truncate -s "$size" "$file"
 
-	qemu_disk file="$file",cache=unsafe
-    done
-
-    for size in "${ktest_scratch_slowdevs[@]}"; do
-	local file="$ktest_out/vm/dev-$disknr"
-
-	truncate -s 0 "$file"
-	truncate -s "$size" "$file"
-
-	# slow device, 300 kiops and 100MB/s
-	qemu_disk file="$file",iops=300,bps=$((100*1024**2))
+	if [[ -n $device_options ]]; then
+	    qemu_disk file="$file",cache=unsafe,"$device_options"
+	else
+	    qemu_disk file="$file",cache=unsafe
+	fi
     done
 
     for size in "${ktest_pmem_devs[@]}"; do
