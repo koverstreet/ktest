@@ -7,6 +7,7 @@ config-scratch-devs 4G
 test_subvol_mount_option()
 {
     local dev=${ktest_scratch_dev[0]}
+    local outside mount_options flag
 
     set_watchdog 30
 
@@ -16,12 +17,58 @@ test_subvol_mount_option()
     echo root > /mnt/root-only
     bcachefs subvolume create /mnt/subvol
     echo subvol > /mnt/subvol/subvol-only
+    printf '#!/bin/sh\nexit 0\n' > /mnt/subvol/executable
+    chmod +x /mnt/subvol/executable
+
+    outside=$(mktemp -d)
+    echo outside > "$outside/outside-only"
+    ln -s "$outside" /mnt/outside-link
 
     umount /mnt
 
     mount -t bcachefs -o subvol=subvol $dev /mnt
     test "$(cat /mnt/subvol-only)" = subvol
-    ! test -e /mnt/root-only
+    if test -e /mnt/root-only; then
+        echo 'ERROR: subvolume mount exposes the filesystem root'
+        exit 1
+    fi
+    /mnt/executable
+    umount /mnt
+
+    mount -t bcachefs -o subvol=subvol,ro,nodev,nosuid,noexec $dev /mnt
+    test "$(cat /mnt/subvol-only)" = subvol
+    if test -e /mnt/root-only; then
+        echo 'ERROR: restricted subvolume mount exposes the filesystem root'
+        exit 1
+    fi
+    mount_options=$(findmnt -rn -M /mnt -o OPTIONS)
+    for flag in ro nodev nosuid noexec; do
+        echo "$mount_options" | grep -Eq "(^|,)$flag(,|$)"
+    done
+    if touch /mnt/must-not-write; then
+        echo 'ERROR: read-only subvolume mount permits writing'
+        exit 1
+    fi
+    if /mnt/executable; then
+        echo 'ERROR: noexec subvolume mount permits execution'
+        exit 1
+    fi
+    umount /mnt
+
+    if mount -t bcachefs -o subvol=outside-link $dev /mnt; then
+        echo 'ERROR: subvolume mount followed an outside-root symlink'
+        exit 1
+    fi
+    if findmnt -rn -M /mnt; then
+        echo 'ERROR: rejected subvolume mount left a mount behind'
+        exit 1
+    fi
+    test "$(cat "$outside/outside-only")" = outside
+    rm -r "$outside"
+
+    mount -t bcachefs $dev /mnt
+    test "$(cat /mnt/root-only)" = root
+    test "$(cat /mnt/subvol/subvol-only)" = subvol
     umount /mnt
 
     bcachefs fsck -ny $dev
