@@ -103,6 +103,12 @@ if [[ $DEBIAN_ARCH != i386 ]]; then
     PACKAGES+=(bpftrace bpfcc-tools)
 fi
 
+if [[ $DEBIAN_ARCH = amd64 ]]; then
+    # 32-bit userspace compatibility tests exercise Steam-style i386
+    # processes on an x86_64 kernel.
+    PACKAGES+=(gcc-multilib libc6-dev-i386)
+fi
+
 # build tools:
 PACKAGES+=(build-essential make gcc g++ clang lld)
 PACKAGES+=(autoconf automake autopoint bison flex pahole)
@@ -278,15 +284,9 @@ ZZ
 
     ln -sf /ktest-out/.bash_history "$MNT/root/.bash_history"
 
-    # Host tools built on a nix host - kbuild's fixdep, objtool and friends -
-    # have /nix/store/.../ld-linux baked in as their ELF interpreter. The guest
-    # reaches them through /host, so the binaries are there but the interpreter
-    # path isn't, and exec fails as a bare "not found" naming the binary rather
-    # than the loader.
-    #
-    # /host is the whole host root, so the store is already mounted; this just
-    # makes the absolute path resolve. Dangling and harmless on a non-nix host.
-    ln -sf /host/nix "$MNT/nix"
+    if [[ -L $MNT/nix && $(readlink "$MNT/nix") = /host/nix ]]; then
+	rm "$MNT/nix"
+    fi
 }
 
 update_packages()
