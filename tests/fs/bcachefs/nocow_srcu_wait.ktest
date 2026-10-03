@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+
+# shellcheck source=tests/fs/bcachefs/bcachefs-test-libs.sh
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+config-scratch-devs 4G
+config-timeout 180
+
+test_nocow_srcu_wait()
+{
+    # shellcheck disable=SC2154 # ktest_scratch_dev is provided by ktest.
+    local dev="${ktest_scratch_dev[0]}"
+    local runtime=45
+    local end
+    local pids=()
+    local i
+
+    set_watchdog 180
+
+    run_quiet "" bcachefs format -f --nocow --fs_size=1536M "$dev"
+    mount -t bcachefs "$dev" /mnt
+
+    for i in $(seq 0 7); do
+	xfs_io -f /mnt/nocow."$i" \
+	    -c "pwrite -S 0x55 0 64M" \
+	    -c fsync
+    done
+
+    dmesg -C
+    end=$((SECONDS + runtime))
+
+    for i in $(seq 0 7); do
+	(
+	    while (( SECONDS < end )); do
+		dd if=/dev/zero of=/mnt/nocow."$i" bs=4k count=256 \
+		    seek=$((RANDOM % 1024)) conv=notrunc oflag=direct status=none
+	    done
+	) &
+	pids+=("$!")
+    done
+
+    (
+	while (( SECONDS < end )); do
+	    for i in $(seq 0 7); do
+		truncate -s 64M /mnt/nocow."$i"
+	    done
+	    sync
+	done
+    ) &
+    pids+=("$!")
+
+    for i in "${pids[@]}"; do
+	wait "$i"
+    done
+
+    sync
+
+    if dmesg | grep -E 'btree trans held srcu lock|bch2_nocow_write.*blocked for more than'; then
+	echo "nocow write path held SRCU too long" >&2
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "$dev"
+    bcachefs_test_end_checks "$dev"
+}
+
+main "$@"
