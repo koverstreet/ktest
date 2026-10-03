@@ -121,6 +121,29 @@ test_remount_cycle()
 	[[ $(cat /mnt/fuse/f$i) == $i ]] || { echo "FAIL: f$i lost"; return 1; }
     done
     fuse_unmount ${ktest_scratch_dev[0]}
+
+    # A mount racing an unmount still in progress waits for it, as a kernel
+    # mount does - the old daemon's device locks don't make it "already in use
+    # by another FUSE mount" (generic/604, which does exactly this; 013, 524)
+    for i in $(seq 1 10); do
+	fuse_mount ${ktest_scratch_dev[0]}
+	for j in $(seq 1 200); do echo $j > /mnt/fuse/s$j; done
+	umount /mnt/fuse &
+	sleep 0.01
+	fuse_mount ${ktest_scratch_dev[0]}
+	wait
+	umount /mnt/fuse
+    done
+
+    # But a device that's actually mounted is refused, and at once
+    fuse_mount ${ktest_scratch_dev[0]}
+    mkdir -p /mnt/fuse2
+    local out
+    out=$(timeout 10 bcachefs fusemount ${ktest_scratch_dev[0]} /mnt/fuse2 2>&1) &&
+	{ echo "FAIL: second mount of a mounted device succeeded"; return 1; }
+    [[ $out == *"already in use"* ]] ||
+	{ echo "FAIL: second mount of a mounted device: $out"; return 1; }
+    umount /mnt/fuse
 }
 
 # A symlink's data ends at i_size rounded up to a block, as page_symlink()
