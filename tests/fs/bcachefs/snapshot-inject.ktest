@@ -272,7 +272,7 @@ subvol_snapshot()
 dirent_pos()
 {
     kvdb -c 'list dirents' |
-	sed -n "s/.*type dirent \([0-9:]*\).*: $1 ->.*/\1/p" | head -1
+	sed -n "s/.*type dirent \([0-9]*:[0-9]*:[0-9A-Z_]*\) .*: $1 ->.*/\1/p" | head -1
 }
 
 all_snap_ids()
@@ -2490,10 +2490,12 @@ test_orphan_become_tree_root()
     check_fsck repair
 }
 
-# subvol_loop: a cycle in the fs_path_parent chain (A->B, B->A).
-# check_subvolume_structure (pass 36) follows fs_path_parent chains and
-# must detect the cycle. walk_subvols uses directory names, not
-# fs_path_parent, so the data manifest is unaffected by the reattach.
+# A cycle in fs_path_parent (A->B, B->A) that the dirents don't agree with:
+# check_dirents puts fs_path_parent back from each subvolume's dirent
+# (subvol_fs_path_parent_wrong) before check_subvolume_structure runs, so
+# this never reaches subvol_loop - test_subvol_loop is the cycle that does.
+# walk_subvols uses directory names, not fs_path_parent, so the data
+# manifest is unaffected.
 test_subvol_fs_path_parent_cycle()
 {
     setup_snapshot_tree
@@ -2506,6 +2508,95 @@ test_subvol_fs_path_parent_cycle()
     skip_snaps=""
     ktest_expect_sb_errors="subvol_fs_path_parent_wrong"
     check_fsck repair
+}
+
+# subvol_loop: s1 made the child of its own child s2 - a cycle in the
+# fs_path_parent chain that every dirent agrees with, so check_dirents has
+# nothing to fix and only check_subvolume_structure can see it.
+#
+# Built from /s1/s2/d: s2's directory d becomes s1's dirent (d_type
+# DT_SUBVOL, child s1, parent s2), s1's fs_path_parent, subvolume_children
+# entry and root inode backpointer follow it, and s1's dirent in the root
+# is removed. d's own inode, orphaned by the repoint, is reattached on the
+# way (the side errors).
+#
+# (subvol_unreachable - fs_path_parent naming something that isn't a
+# subvolume - has no test: a missing parent key is reconstructed by an
+# earlier pass, test_subvol_key_lost_reconstructs, and a parent gone
+# altogether takes the child's dirent with it, which gets the child
+# reattached first. It's a backstop.)
+test_subvol_loop()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    bcachefs subvolume create /mnt/s1
+    bcachefs subvolume create /mnt/s1/s2
+    mkdir /mnt/s1/s2/d
+    echo s1-data > /mnt/s1/file-s1
+    echo s2-data > /mnt/s1/s2/file-s2
+    umount /mnt
+
+    local s1="" s2="" id
+    for id in $(all_subvol_ids); do
+	if [[ $id != 1 && $(subvol_field $id fs_path_parent) != 1 ]]; then
+	    s2=$id
+	fi
+    done
+    if [[ -z $s2 ]]; then
+	echo "TEST FAILED: no nested subvolume found"
+	kvdb -c 'list subvolumes' || true
+	exit 1
+    fi
+    s1=$(subvol_field $s2 fs_path_parent)
+    echo "=== s1 $s1, s2 $s2"
+
+    local d=$(dirent_pos d) s1_dirent=$(dirent_pos s1)
+    local d_dir=$(cut -d: -f1 <<< $d) d_off=$(cut -d: -f2 <<< $d)
+    [[ -n $d && -n $s1_dirent ]]
+
+    kvdb_rw -c "update dirents $d d_type=16 d_child_subvol=$s1 d_parent_subvol=$s2" \
+	    -c "update subvolumes 0:$s1:0 fs_path_parent=$s2" \
+	    -c "update inodes 0:$(subvol_field $s1 inode):$(subvol_snapshot $s1) bi_parent_subvol=$s2 bi_dir=$d_dir bi_dir_offset=$d_off" \
+	    -c "set dirents $s1_dirent deleted" \
+	    -c "set subvolume_children 1:$s1:0 deleted" \
+	    -c "set subvolume_children $s2:$s1:0 set"
+
+    local rc1=0 rc2=0
+    bcachefs fsck -y ${ktest_scratch_dev[0]} || rc1=$?
+    echo "first fsck -y exited $rc1"
+    if (( rc1 == 0 )); then
+	echo "TEST FAILED: fsck missed injected corruption"
+	exit 1
+    fi
+
+    # Named: a clean second run can't tell a repaired loop from one that
+    # was never seen.
+    if ! bcachefs show-super -f errors_v2 ${ktest_scratch_dev[0]} | grep -qw subvol_loop; then
+	echo "TEST FAILED: subvol_loop not recorded"
+	exit 1
+    fi
+
+    bcachefs fsck -n ${ktest_scratch_dev[0]} || rc2=$?
+    echo "second fsck -n exited $rc2"
+    if (( rc2 != 0 )); then
+	echo "TEST FAILED: errors remain after fsck -y"
+	exit 1
+    fi
+
+    # Both subvolumes reachable again, wherever the loop was broken
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    local f
+    for f in s1 s2; do
+	local path=$(find /mnt -name file-$f | head -1)
+	if [[ -z $path || $(cat "$path") != $f-data ]]; then
+	    echo "TEST FAILED: file-$f not reachable after repair"
+	    exit 1
+	fi
+    done
+    umount /mnt
+
+    ktest_expect_sb_errors="subvol_loop|inode_dir_wrong_nlink|inode_unreachable|inode_points_to_wrong_dirent"
+    check_sb_errors
 }
 
 # snapshot_tree_to_missing_snapshot: the tree key's root_snapshot names a
