@@ -1036,6 +1036,138 @@ test_ec_reuse_lost_blocks_per_extent()
     umount /mnt
 }
 
+# A stripe that can't be rebuilt mustn't strand its good extents (ChH on
+# #bcache: a drive died, and another block of the same stripe failed its
+# stripe checksum). With one redundancy and two blocks gone, repair can't
+# reconstruct the dead drive's block - but every extent in the other blocks
+# still reads against its own checksum, and it has no redundancy until it's
+# moved somewhere that does.
+#
+# dev0 is the dead drive: offlined, then evacuating, so every stripe with a
+# block on it needs repair. In every stripe, the first 4k of a data block on
+# dev2/dev3 is corrupted too, so none of them can be rebuilt. Once reconcile
+# has done what it can, dev1 goes offline as well: anything still relying on
+# a stuck stripe for its redundancy now can't be read. A file that fails to
+# read must be one damage ls already names - the genuinely lost ones - and
+# everything else must read back intact.
+#
+# @spare: add a fifth device first, so repair has room to rebuild the stripe
+# at full width (the reconstruct path) rather than narrowing it (the evacuate
+# path).
+ec_unrebuildable_stripe()
+{
+    local spare=$1
+
+    set_watchdog 900
+
+    local devs=("${ktest_scratch_dev[@]:0:4}")
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	--bucket_size=256k			\
+	--fs_size=512M				\
+	"${devs[@]}"
+
+    mount -t bcachefs "$(join_by : "${devs[@]}")" /mnt
+    local i
+    for ((i = 0; i < 400; i++)); do
+	dd if=/dev/urandom of=/mnt/f$i bs=256k count=1 2>/dev/null
+    done
+    sync
+    (cd /mnt; md5sum f*) > "$ktest_out/md5"
+    umount /mnt
+
+    # Stripe keys print a header, then one line per block, data blocks first:
+    #   vdc 1:42:0 gen 0#512    (name dev:bucket:offset, then sectors in use)
+    # In every stripe with a block on dev0: the first 4k of the first data
+    # block in use on dev2 or dev3.
+    local dev0=$(basename "${ktest_scratch_dev[0]}")
+    local dev1=$(basename "${ktest_scratch_dev[1]}")
+    local targets=$(bcachefs list -b stripes "${ktest_scratch_dev[0]}" |
+	awk -v dev0=$dev0 -v dev1=$dev1 '
+	     function flush() { if (on_dev0 && pick != "") print pick }
+	     /type stripe/ {
+		flush()
+		split($0, h, "blocks "); split(h[2], b, ":")
+		nr_data = b[1]; block = 0; on_dev0 = 0; pick = ""
+		next
+	     }
+	     $2 ~ /^[0-9]+:[0-9]+:[0-9]+$/ {
+		if ($1 == dev0)
+		    on_dev0 = 1
+		if (block++ >= nr_data || pick != "" || $1 == dev0 || $1 == dev1)
+		    next
+		split($2, p, ":"); split($4, u, "#")
+		if (u[2] > 0)
+		    pick = $1 " " p[2] * 512 + p[3]
+	     }
+	     END { flush() }')
+    local nr_targets=$(echo "$targets" | grep -c . || true)
+    echo "corrupting a block in $nr_targets stripes"
+    (( nr_targets )) || { echo "FAIL: no stripe with a block on $dev0 to corrupt"; return 1; }
+
+    local name sector
+    while read name sector; do
+	dd if=/dev/urandom of=/dev/$name bs=512 count=8 seek=$sector conv=notrunc 2>/dev/null
+    done <<< "$targets"
+
+    mount -t bcachefs "$(join_by : "${devs[@]}")" /mnt
+    (( spare )) && bcachefs device add -f /mnt "${ktest_scratch_dev[4]}"
+
+    bcachefs device offline --force "${ktest_scratch_dev[0]}"
+    bcachefs device set-state -f evacuating 0 /mnt
+
+    timeout 300 bcachefs reconcile wait /mnt || true
+    cat /sys/fs/bcachefs/*/reconcile_status
+
+    local repair_bytes=$(ec_stripe_repair_bytes)
+    echo "stripe repair work: $repair_bytes bytes"
+    (( repair_bytes )) || { echo "FAIL: no stripe repairs ran - nothing tested"; return 1; }
+
+    # Once the readable data is out, what's left of these stripes can never
+    # be repaired, and nothing is changing: reconcile must leave them be.
+    sleep 30
+    local retried=$(( $(ec_stripe_repair_bytes) - repair_bytes ))
+    echo "stripe repair work in the next 30s: $retried bytes"
+    (( retried <= 1 << 30 )) ||
+	{ echo "FAIL: reconcile retried $(numfmt --to=iec $retried) of stripe repairs in 30s on an idle filesystem"; return 1; }
+
+    local damaged=($(bcachefs damage ls /mnt | sed 's/:.*//'))
+    echo "${#damaged[@]} files recorded damaged"
+
+    bcachefs device offline --force "${ktest_scratch_dev[1]}"
+    echo 3 > /proc/sys/vm/drop_caches
+
+    local f sum good=0 lost=0 stranded=0
+    while read sum f; do
+	if [[ $(md5sum < /mnt/$f 2>/dev/null) == "$sum  -" ]]; then
+	    good=$((good + 1))
+	elif [[ " ${damaged[*]} " == *" $f "* ]]; then
+	    lost=$((lost + 1))
+	else
+	    echo "unreadable without $dev1, and not recorded damaged: $f"
+	    stranded=$((stranded + 1))
+	fi
+    done < "$ktest_out/md5"
+
+    echo "$good intact, $lost lost (recorded), $stranded stranded"
+    (( good )) || { echo "FAIL: nothing read back - nothing tested"; return 1; }
+    (( ! stranded )) ||
+	{ echo "FAIL: $stranded files had no redundancy left after repair"; return 1; }
+
+    umount /mnt
+}
+
+test_ec_unrebuildable_stripe_reconstruct()
+{
+    ec_unrebuildable_stripe 1
+}
+
+test_ec_unrebuildable_stripe_narrow()
+{
+    ec_unrebuildable_stripe 0
+}
+
 do_remove_test()
 {
     offline=$1
