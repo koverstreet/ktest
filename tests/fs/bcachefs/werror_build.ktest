@@ -143,11 +143,8 @@ test_werror()
 
 	if [[ ! -f $build/rust/extern.o ]]; then
 	    echo "FAIL: bindgen-generated rust/extern.o was not built"
-	    echo "bcachefs's Rust support auto-disables when rustc or bindgen"
-	    echo "are missing; install both, or this test cannot see"
-	    echo "generated-code warnings at all"
-	    checkdep bindgen
-	    checkdep rustc
+	    echo "every module build includes it, so the build did not finish -"
+	    echo "and without it this test cannot see generated-code warnings"
 	    return 1
 	fi
 

@@ -57,10 +57,11 @@ distro_rootfs_prepare()
 	rm -f "$ktest_out/$distro-rootfs-path"
 }
 
-# $1 distro, $2 expected number of Rust objects (of 3), rest: extra make args
+# $1 distro, $2 the Rust stack the module should be built with - kernel (the
+# kernel's own Rust) or vendored (bcachefs's copy) - rest: extra make args
 distro_dkms_build()
 {
-    local distro=$1 want_rust=$2; shift 2
+    local distro=$1 want_stack=$2; shift 2
     local make_args=("$@")
 
     if [[ ! -f /ktest-out/$distro-rootfs-path ]]; then
@@ -138,7 +139,8 @@ CONTAINER
     # whole environment, and on a nix host that is dense with store paths
     # which do not exist inside it. RUST_LIB_SRC is the quiet one: the
     # kernel's rust_is_available.sh honours it, a host store path makes it
-    # report Rust unavailable, and the module then builds C-only and passes.
+    # report Rust unavailable, and the module then quietly takes the vendored
+    # stack instead of the kernel's.
     chroot $root /usr/bin/env -i \
 	PATH=/usr/bin:/usr/sbin:/bin:/sbin HOME=/root TERM=dumb \
 	/build.sh
@@ -169,24 +171,19 @@ CONTAINER
 	return 1
     fi
 
-    # Counted with a loop, not `ls a b c | wc -l`: under pipefail an ls that
-    # cannot find one of its arguments exits 2 and takes the test with it,
-    # before it can report the count it was trying to measure.
-    local d=$root/build/src/src/fs/bcachefs rust_objs=0 o
-    for o in "$d/mod.o" "$d/uuid.o" "$d/rust/extern.o"; do
-	if [[ -f $o ]]; then rust_objs=$((rust_objs + 1)); fi
-    done
+    # Rust is required, so a module means Rust was built - the question is
+    # which stack. The vendored one leaves its crates under vrust/; using it
+    # when the kernel's should have worked means the probe declined wrongly,
+    # and the kernel-Rust path goes untested behind a green run.
+    local d=$root/build/src/src/fs/bcachefs stack=kernel
+    if [[ -f $d/vrust/core.o ]]; then stack=vendored; fi
 
-    if (( rust_objs != want_rust )); then
-	echo "FAIL: built $rust_objs/3 Rust objects, expected $want_rust"
-	if (( rust_objs < want_rust )); then
-	    echo "the toolchain is complete, so the probe declined - every"
-	    echo "Rust-path bug would go untested behind a green run"
-	fi
+    if [[ $stack != "$want_stack" ]]; then
+	echo "FAIL: built with the $stack Rust stack, expected $want_stack"
 	dump_build_log
 	return 1
     fi
 
     echo "PASS: bcachefs.ko built with $distro's toolchain" \
-	 "($(stat -c %s "$ko") bytes, $rust_objs/3 Rust objects)"
+	 "($(stat -c %s "$ko") bytes, $stack Rust)"
 }

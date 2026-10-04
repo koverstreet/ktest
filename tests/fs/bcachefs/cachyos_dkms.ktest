@@ -3,9 +3,8 @@
 # CachyOS: CONFIG_RUST=n, Clang 22.1.8 ThinLTO. LLVM=1 because a module for a
 # ThinLTO kernel has to be built with the LLVM toolchain.
 #
-# Zero Rust objects is the *correct* result here, not a degradation: bcachefs
-# gates its vendored-Rust path to kernels < 7.0 (217e4fccd8c0), and CachyOS
-# ships 7.x, so a CONFIG_RUST=n kernel builds C-only by design.
+# No kernel Rust to build against, so bcachefs's Rust comes from its vendored
+# stack - built with the rootfs's rustc, rust-src and bindgen.
 #
 # This is the configuration koverstreet/bcachefs#1197 died in. v1.39.0's probe
 # took the vendored path on any CONFIG_RUST=n kernel, and that path includes a
@@ -19,7 +18,7 @@ distro_rootfs_prepare cachyos
 
 test_cachyos_dkms()
 {
-    distro_dkms_build cachyos 0 LLVM=1
+    distro_dkms_build cachyos vendored LLVM=1
 }
 
 main "$@"
