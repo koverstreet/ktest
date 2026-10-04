@@ -5,7 +5,9 @@
 require-kernel-config MD
 require-kernel-config BLK_DEV_DM
 require-kernel-config DM_FLAKEY
+require-kernel-config DM_DELAY
 require-kernel-config BLK_DEV_LOOP
+require-kernel-config BCACHEFS_ERASURE_CODING
 
 config-scratch-devs 4G
 config-scratch-devs 4G
@@ -2277,6 +2279,1454 @@ test_journal_flush_clean_devices()
     bcachefs fsck -ny ${devs[@]}
     bcachefs_test_end_checks ${devs[@]}
     return $ret
+}
+
+
+#
+# Journal scrub
+#
+
+#
+# Whether recovery messages reach dmesg depends on the mount having a terminal.
+#
+# RecoveryDisplay::new() (src/recovery_display.rs) picks its sink in order:
+# stderr if stderr is a terminal, else plymouth, else /dev/console opened
+# directly. Measured in a VM: with a terminal, the scrub's messages are in dmesg;
+# run from a plain non-interactive shell they are not - they go to the console,
+# which the ktest log shows and dmesg never sees.
+#
+# So the pty is load-bearing, not cosmetic. Without it every assertion below
+# reads an empty dmesg, which is silent for the absent-string ones and only
+# visible because test_scrub_journal asserts the same string positively.
+#
+# The pty's own output is not the place to look - it is the redrawing progress
+# display, about a screenful. dmesg is: mark it first and read what follows.
+#
+mount_capture()
+{
+    local ret
+
+    dmesg_mark mount_capture
+    script -qefc "mount $*" /dev/null < /dev/null && ret=0 || ret=$?
+
+    mount_output=$(dmesg_since mount_capture)
+    return $ret
+}
+
+#
+# Mount with =always on a CLEANLY unmounted filesystem.
+#
+# This is the only thing that distinguishes always from unclean: it reads the
+# journal on a filesystem the superblock says is clean, which no other mount
+# path does. test_scrub_journal() below cannot reach it - it does an emergency
+# shutdown first, so c->sb.clean is false and both gates pass on the unclean
+# half of the ||. The default would take exactly the same path there.
+#
+# Regression test for ChH's report: journal_start.clean is only assigned once
+# bch2_journal_read() reaches a usable flush entry, so finding none left it
+# false from the initializer, and recovery reported "filesystem marked clean
+# but journal not empty" - the exact opposite of what happened - then went
+# emergency read-only at seq 0.
+#
+test_scrub_journal_clean()
+{
+    set_watchdog 120
+
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f --errors=ro "$dev"
+
+    mount -t bcachefs "$dev" /mnt
+    dd if=/dev/urandom of=/mnt/data bs=1M count=32 status=none
+    sync
+
+    # Clean unmount: superblock gets marked clean.
+    umount /mnt
+
+    if ! bcachefs show-super "$dev" | grep -i 'clean.*1\|^ *clean' >/dev/null; then
+	echo "NOTE: could not confirm clean flag in show-super; continuing"
+    fi
+
+    echo "Mounting cleanly-unmounted fs with scrub_recent_journal_entries=always..."
+    if ! mount_capture -t bcachefs -o scrub_recent_journal_entries=always,verbose "$dev" /mnt; then
+	echo "ERROR: mount failed on a clean filesystem with =always"
+	exit 1
+    fi
+
+    # Every check here is a check for absence, so first establish that the scrub
+    # ran at all - on a clean fs it may legitimately find no flush entries to
+    # check, but it must have looked.
+    if ! grep -qE 'journal scrub: checking|scrub_journal.*No journal flushes' <<< "$mount_output"; then
+	echo "ERROR: scrub did not run - the checks below would be vacuous"
+	exit 1
+    fi
+
+    if grep -q 'marked clean but journal not empty' <<< "$mount_output"; then
+	echo "ERROR: spurious clean_but_journal_not_empty on a clean filesystem"
+	exit 1
+    fi
+
+    if grep -qi 'emergency read only' <<< "$mount_output"; then
+	echo "ERROR: went emergency read-only mounting a clean filesystem"
+	exit 1
+    fi
+
+    # Nothing was corrupted, so nothing should have rewound.
+    if grep -q 'not honoring flush/FUA' <<< "$mount_output"; then
+	echo "ERROR: rewound a clean, uncorrupted filesystem"
+	exit 1
+    fi
+
+    echo hello > /mnt/still-writable
+    umount /mnt
+
+    bcachefs fsck -ny "$dev"
+
+    echo "Test passed: clean fs mounts with =always, no spurious rewind"
+}
+
+#
+# Leave an unclean filesystem behind on $1, with data in the journal.
+#
+unclean_shutdown_with_data()
+{
+    local dev=$1
+
+    run_quiet "" bcachefs format -f --errors=ro --no_initialize "$dev"
+    mount -t bcachefs "$dev" /mnt
+
+    run_fio_base			\
+	--filesize=50M			\
+	--name=randrw			\
+	--rw=randrw			\
+	--bsrange=4k-256k
+
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+    umount /mnt
+}
+
+#
+# The three values of scrub_recent_journal_entries do what their names say.
+#
+# unclean is 0 deliberately, so that it is the default and existing filesystems
+# get the scrub without being told to. Which makes 0 an *enabled* value - and
+# recovery.c:930 and journal/read.c:132 both used to test this option for
+# truthiness, so the default never scrubbed and "no" scrubbed on every unclean
+# mount. The one that matters is a user writing =no to turn the feature off and
+# getting it turned on.
+#
+# Asserted on an unclean filesystem, which is the case that distinguishes all
+# three. On a clean one, no and unclean agree.
+#
+test_scrub_journal_option_values()
+{
+    set_watchdog 300
+
+    local dev=${ktest_scratch_dev[0]}
+
+    unclean_shutdown_with_data "$dev"
+    mount_capture -t bcachefs -o scrub_recent_journal_entries=no,verbose "$dev" /mnt
+    umount /mnt
+    if grep -q 'journal scrub: checking' <<< "$mount_output"; then
+	echo "ERROR: =no scrubbed"
+	exit 1
+    fi
+
+    unclean_shutdown_with_data "$dev"
+    mount_capture -t bcachefs -o scrub_recent_journal_entries=unclean,verbose "$dev" /mnt
+    umount /mnt
+    if ! grep -q 'journal scrub: checking' <<< "$mount_output"; then
+	echo "ERROR: =unclean did not scrub an unclean filesystem"
+	exit 1
+    fi
+
+    unclean_shutdown_with_data "$dev"
+    mount_capture -t bcachefs -o scrub_recent_journal_entries=always,verbose "$dev" /mnt
+    umount /mnt
+    if ! grep -q 'journal scrub: checking' <<< "$mount_output"; then
+	echo "ERROR: =always did not scrub an unclean filesystem"
+	exit 1
+    fi
+
+    bcachefs fsck -ny "$dev"
+
+    echo "Test passed: no/unclean/always mean what they say"
+}
+
+#
+# Negative control for test_scrub_journal(): same unclean shutdown, same
+# =always mount, but nothing corrupted. The scrub must find nothing and must
+# not rewind.
+#
+# Without this, "the scrub always rewinds" and "the scrub always reports
+# flush/FUA errors" both pass the corruption test, because that test only
+# asserts the positive.
+#
+test_scrub_journal_no_corruption()
+{
+    set_watchdog 300
+
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f --errors=ro --no_initialize "$dev"
+
+    mount -t bcachefs "$dev" /mnt
+
+    run_fio_base			\
+	--filesize=50M			\
+	--name=randrw			\
+	--rw=randrw			\
+	--bsrange=4k-256k
+
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+    umount /mnt
+
+    echo "Mounting uncorrupted unclean fs with scrub_recent_journal_entries=always..."
+    mount_capture -t bcachefs -o scrub_recent_journal_entries=always,verbose "$dev" /mnt
+
+    # The scrub has to have actually run, or the two checks below pass for the
+    # wrong reason:
+    if ! grep -q 'journal scrub: checking' <<< "$mount_output"; then
+	echo "ERROR: scrub did not run - the checks below would be vacuous"
+	exit 1
+    fi
+
+    if grep -q 'not honoring flush/FUA' <<< "$mount_output"; then
+	echo "ERROR: scrub reported flush/FUA errors with nothing corrupted"
+	exit 1
+    fi
+
+    if grep -qi 'rewinding from seq' <<< "$mount_output"; then
+	echo "ERROR: scrub rewound with nothing corrupted"
+	exit 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "$dev"
+
+    echo "Test passed: no corruption, no rewind"
+}
+
+test_scrub_journal()
+{
+    ktest_expect_device_errors=1
+    set_watchdog 300
+
+    local BUCKET_SIZE_KB=512
+    local BUCKET_SIZE_SECTORS=$((BUCKET_SIZE_KB * 2))
+
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f		\
+	--errors=ro				\
+	--bucket_size=${BUCKET_SIZE_KB}k	\
+	--no_initialize				\
+	"$dev"
+
+    # Mount and write data — generates extent keys in the journal
+    mount -t bcachefs "$dev" /mnt
+
+    run_fio_base			\
+	--filesize=100M			\
+	--loops=2			\
+	--name=randrw			\
+	--rw=randrw			\
+	--bsrange=4k-256k
+
+    # Emergency shutdown — leaves unflushed journal entries
+    echo "Triggering emergency shutdown..."
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+    umount /mnt
+
+    # Get the seq of the 3rd-to-last flush entry — the start of the scrub window
+    local scrub_seq=$(bcachefs list_journal -F -D $dev|tail -n2|awk '{print $3}'|head -n1)
+    echo "Scrub window starts at seq $scrub_seq"
+
+    if [[ -z $scrub_seq ]]; then
+	echo "ERROR: No valid flush seq found in journal"
+	exit 1
+    fi
+
+    # Extract extent lines from journal entries in the scrub window
+    local extents=$(bcachefs list_journal -s "$scrub_seq.." -b extents "$dev") 2>/dev/null
+
+    if [[ -z $extents ]]; then
+	echo "ERROR: No extents found in journal scrub window"
+	exit 1
+    fi
+
+    local extent_sectors=$(echo "$extents" |
+	bcachefs_ptr_sectors $BUCKET_SIZE_SECTORS 0)
+
+    if [[ -z $extent_sectors ]]; then
+	echo "ERROR: No sector offsets parsed from extents"
+	exit 1
+    fi
+
+    local nr_total=$(echo "$extent_sectors" | wc -l)
+
+    # Corrupt a limited number of data blocks
+    local nr_corrupted=$(echo "$extent_sectors" | head -10 |
+	bcachefs_corrupt_sectors "$dev")
+
+    echo "Corrupted $nr_corrupted / $nr_total data extent locations"
+
+    # Mount with scrub_recent_journal_entries — should detect corruption
+    # and automatically rewind
+    echo "Mounting with scrub_recent_journal_entries=always..."
+    mount_capture -t bcachefs -o scrub_recent_journal_entries=always,verbose "$dev" /mnt
+
+    # Verify scrub detected the corruption
+    if ! grep -q 'not honoring flush/FUA' <<< "$mount_output"; then
+	echo "ERROR: Scrub did not detect flush/FUA corruption"
+	exit 1
+    fi
+
+    if ! grep -q 'rewinding from seq' <<< "$mount_output"; then
+	echo "ERROR: Scrub detected corruption but did not rewind"
+	exit 1
+    fi
+
+    echo "Scrub detected corruption and rewound automatically"
+
+    umount /mnt
+
+    # Final consistency check
+    bcachefs fsck -ny "$dev"
+
+    echo "Test passed: scrub detected corruption, rewind recovered"
+}
+
+# The same, with every extent replicated and only one device's copy corrupted:
+# the device didn't honour the flush, but nothing was lost - every bad replica
+# has a good one on the other device. Rewinding would throw away writes for no
+# reason; the scrub has to repair from the good replicas instead.
+test_scrub_journal_replicated()
+{
+    ktest_expect_device_errors=1
+    set_watchdog 300
+
+    local BUCKET_SIZE_KB=512
+    local BUCKET_SIZE_SECTORS=$((BUCKET_SIZE_KB * 2))
+
+    local dev0=${ktest_scratch_dev[0]}
+    local dev1=${ktest_scratch_dev[1]}
+
+    run_quiet "" bcachefs format -f		\
+	--errors=ro				\
+	--replicas=2				\
+	--bucket_size=${BUCKET_SIZE_KB}k	\
+	--no_initialize				\
+	"$dev0" "$dev1"
+
+    mount -t bcachefs "$dev0:$dev1" /mnt
+
+    run_fio_base			\
+	--filesize=100M			\
+	--loops=2			\
+	--name=randrw			\
+	--rw=randrw			\
+	--bsrange=4k-256k
+
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+    umount /mnt
+
+    local scrub_seq=$(bcachefs list_journal -F -D "$dev0" "$dev1"|tail -n2|awk '{print $3}'|head -n1)
+    echo "Scrub window starts at seq $scrub_seq"
+    [[ -n $scrub_seq ]]
+
+    local extents=$(bcachefs list_journal -s "$scrub_seq.." -b extents "$dev0" "$dev1")
+    [[ -n $extents ]]
+
+    # Member 0's copies only: member 1 keeps a good replica of everything
+    local nr_corrupted=$(echo "$extents" |
+	bcachefs_ptr_sectors $BUCKET_SIZE_SECTORS 0 | head -10 |
+	bcachefs_corrupt_sectors "$dev0")
+    echo "Corrupted $nr_corrupted member 0 replicas"
+    (( nr_corrupted > 0 ))
+
+    mount_capture -t bcachefs -o scrub_recent_journal_entries=always,verbose \
+	"$dev0:$dev1" /mnt
+
+    if ! grep -q 'bad replicas, to repair from good ones' <<< "$mount_output"; then
+	echo "FAIL: scrub didn't find the bad replicas"
+	exit 1
+    fi
+
+    if grep 'rewinding from seq' <<< "$mount_output"; then
+	echo "FAIL: scrub rewound when every extent had a good replica"
+	exit 1
+    fi
+
+    local repaired=$(grep -o 'repairing [0-9]* extents/btree nodes from good replicas' <<< "$mount_output" |
+		     awk '{print $2}')
+    echo "repaired from good replicas: ${repaired:-none}"
+    if (( ${repaired:-0} == 0 )); then
+	echo "FAIL: nothing repaired from the good replicas"
+	exit 1
+    fi
+
+    # Everything reads back
+    find /mnt -type f -exec cat {} + > /dev/null
+
+    umount /mnt
+    bcachefs fsck -ny "$dev0" "$dev1"
+}
+
+# btree nodes written in the scrub window: the journal scrub has to check the
+# nodes that pointers in the window point to, not just extents. $1 is the
+# number of devices; with 2, every node is replicated and only member 0's copy
+# is corrupted.
+#
+# Sets nr_corrupted; skips the test if no node was created in the window.
+scrub_journal_btree_node_setup()
+{
+    local nr_devs=$1
+    local BUCKET_SIZE_KB=512
+    local BUCKET_SIZE_SECTORS=$((BUCKET_SIZE_KB * 2))
+    local devs=("${ktest_scratch_dev[@]:0:$nr_devs}")
+
+    run_quiet "" bcachefs format -f		\
+	--errors=ro				\
+	--replicas=$nr_devs			\
+	--bucket_size=${BUCKET_SIZE_KB}k	\
+	--no_initialize				\
+	"${devs[@]}"
+
+    mount -t bcachefs "$(join_by : "${devs[@]}")" /mnt
+
+    run_fio_base			\
+	--filesize=50M			\
+	--name=randrw			\
+	--rw=randrw			\
+	--bsrange=4k-256k
+
+    # Hold journal reclaim off: it's what moves last_seq past the entries that
+    # created the nodes, once they're written - after which they're durable,
+    # not what a dropped flush loses, and not replayed or scrubbed.
+    echo 600000 > /sys/fs/bcachefs/*/options/journal_reclaim_delay
+
+    # Split btree nodes in the last flush ranges: the scrub checks the ranges
+    # between flush entries newest first, stopping after two clean ones. 4k
+    # random direct writes to a fresh file are one extent each, unmergeable,
+    # straight into the extents btree - several leaves' worth over the whole
+    # run, splitting as it goes. In chunks, each ended by a sync: every chunk
+    # is a flush range, whatever the timing. Shut down right after the last.
+    sync
+    local i
+    for i in 0 1 2 3; do
+	fio --name=split --filename=/mnt/split --rw=randwrite --bs=4k	\
+	    --offset=$((i * 16))M --size=16M --direct=1			\
+	    --ioengine=libaio --iodepth=32 --output=/dev/null
+	sync
+    done
+
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+    umount /mnt
+
+    # The last two flush ranges - of those the scrub sees: it starts from the
+    # first flush at or after the replay start (last_seq), and list_journal
+    # lists flushes from before it too
+    local flushes=$(bcachefs list_journal -F -D "${devs[@]}" 2>&1)
+    local replay_start=$(echo "$flushes" |
+	sed -n 's/.*replaying entries \([0-9]*\)-.*/\1/p' | head -n1)
+    local scrub_seq=$(echo "$flushes" |
+	awk -v s="$replay_start" '/^journal entry/ && $3 >= s { print $3 }' |
+	tail -n3 | head -n1)
+    [[ -n $scrub_seq ]] ||
+	ktest_skip "no flush entries after the replay start ($replay_start)"
+
+    # Nodes created in the window - what a dropped flush can lose. A pointer
+    # in the window can also be to an older node with a bset appended (its
+    # sectors_written updated): corrupting that node's start would destroy
+    # what was written before the window, which isn't what a dropped flush
+    # loses. Those have an overwrite entry with the same node seq; new nodes
+    # don't. Roots are btree_root entries, not keys: not scrubbed.
+    local nodes=$(bcachefs list_journal -s "$scrub_seq.." "${devs[@]}" | awk '
+	/u64s [0-9]+ type/ {
+	    kind = ""
+	    if (/type btree_ptr_v2/)
+		kind = /overwrite:/ ? "old" : /btree_keys:/ ? "new" : ""
+	    nr++
+	    key_kind[nr] = kind
+	}
+	kind != "" {
+	    key_lines[nr] = key_lines[nr] $0 "\n"
+	    if (match($0, /seq [0-9a-f]+ written/)) {
+		seq = substr($0, RSTART + 4, RLENGTH - 12)
+		key_seq[nr] = seq
+		if (kind == "old")
+		    old_seq[seq] = 1
+	    }
+	}
+	END {
+	    for (i = 1; i <= nr; i++)
+		if (key_kind[i] == "new" && !(key_seq[i] in old_seq))
+		    printf "%s", key_lines[i]
+	}')
+    local sectors=$(echo "$nodes" | bcachefs_ptr_sectors $BUCKET_SIZE_SECTORS 0)
+
+    echo "replay start $replay_start, flushes from there:" \
+	$(echo "$flushes" | awk -v s="$replay_start" '/^journal entry/ && $3 >= s { print $3 }')
+    echo "corrupting nodes created after seq $scrub_seq:" \
+	$(echo "$nodes" | grep -o 'seq [0-9a-f]* written [0-9]*' | awk '{print $2 "/" $4}')
+
+    # Where splits land depends on journal timing; now and then none do in
+    # the window, and there's nothing to test
+    [[ -n $sectors ]] ||
+	ktest_skip "no btree nodes created in the scrub window (from seq $scrub_seq)"
+
+    nr_corrupted=$(echo "$sectors" | bcachefs_corrupt_sectors "${devs[0]}")
+}
+
+# Nodes created in the window, every copy corrupted: the scrub can't repair
+# them, and mustn't rewind - a rewind only rolls back leaf keys, the interior
+# pointers to the nodes stay. It flags the btree as having lost data instead,
+# so topology repair runs before journal replay and the filesystem mounts.
+test_scrub_journal_btree_node()
+{
+    ktest_expect_device_errors=1
+    # Losing the nodes: reading them (the corruption overwrote their
+    # headers), topology repair, and what the lost nodes' keys referenced
+    # left stale - backpointers, pointer gens, alloc info
+    ktest_expect_sb_errors="btree_node_bad_magic|btree_node_topology_[a-z_]+"
+    ktest_expect_sb_errors+="|backpointer_to_missing_ptr|stale_dirty_ptr"
+    ktest_expect_sb_errors+="|lru_entry_bad|alloc_key_to_missing_lru_entry"
+    ktest_expect_sb_errors+="|freespace_key_wrong|need_discard_freespace_key_bad"
+    set_watchdog 300
+
+    local nr_corrupted
+    scrub_journal_btree_node_setup 1
+    echo "Corrupted $nr_corrupted btree nodes"
+
+    # The window is also cut to flushes within scrub_journal_max_rewind_secs
+    # (default 10) of the newest: widen it, so the flush ranges decide what's
+    # checked and not how fast the VM ran the workload
+    local mount_ret=0
+    mount_capture -t bcachefs -o scrub_recent_journal_entries=always,scrub_journal_max_rewind_secs=3600,verbose \
+	${ktest_scratch_dev[0]} /mnt || mount_ret=$?
+
+    if ! grep -q 'btree nodes with no good replica' <<< "$mount_output"; then
+	echo "FAIL: scrub didn't find the lost btree nodes"
+	exit 1
+    fi
+
+    if grep 'rewinding from seq' <<< "$mount_output"; then
+	echo "FAIL: rewound for lost btree nodes - the rewind doesn't remove them"
+	exit 1
+    fi
+
+    if (( mount_ret )); then
+	echo "FAIL: recovery didn't get past the lost btree nodes"
+	exit 1
+    fi
+
+    umount /mnt
+
+    # Topology repair after losing a node leaves alloc info stale for the
+    # buckets the lost node's keys pointed to, beyond what the mount fixes
+    local ret=0
+    bcachefs fsck -y ${ktest_scratch_dev[0]} || ret=$?
+    (( ret <= 1 ))
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_scrub_journal_btree_node_replicated()
+{
+    ktest_expect_device_errors=1
+    set_watchdog 300
+
+    local nr_corrupted
+    scrub_journal_btree_node_setup 2
+    echo "Corrupted $nr_corrupted member 0 btree node replicas"
+
+    # see test_scrub_journal_btree_node
+    mount_capture -t bcachefs -o scrub_recent_journal_entries=always,scrub_journal_max_rewind_secs=3600,verbose \
+	"${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}" /mnt
+
+    if ! grep -q 'bad replicas, to repair from good ones' <<< "$mount_output"; then
+	echo "FAIL: scrub didn't find the bad btree node replicas"
+	exit 1
+    fi
+
+    if grep 'rewinding from seq' <<< "$mount_output"; then
+	echo "FAIL: scrub rewound when every btree node had a good replica"
+	exit 1
+    fi
+
+    local repaired=$(grep -o 'repairing [0-9]* extents/btree nodes from good replicas' <<< "$mount_output" |
+		     awk '{print $2}')
+    echo "repaired from good replicas: ${repaired:-none}"
+    if (( ${repaired:-0} == 0 )); then
+	echo "FAIL: no btree node repaired from its good replica"
+	exit 1
+    fi
+
+    find /mnt -type f -exec cat {} + > /dev/null
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[0]}" "${ktest_scratch_dev[1]}"
+}
+
+#
+# The journal scrub on a degraded filesystem: one device unplugged, metadata
+# still readable from its mirror, data that only landed on the missing device
+# unreadable. The scrub has to run, and the missing device mustn't be taken
+# for one that dropped a flush.
+#
+test_scrub_journal_degraded()
+{
+    ktest_expect_device_errors=1
+    set_watchdog 300
+
+    local dev0=${ktest_scratch_dev[0]}
+    local dev1=${ktest_scratch_dev[1]}
+
+    # Metadata mirrored, data not: the filesystem has to survive losing a
+    # device well enough to mount and run recovery, while the extents that
+    # landed on the missing one have nowhere else to be read from. With
+    # metadata at 1 replica too, the root inode goes down with the device and
+    # the mount fails with ENOENT_bkey_type_mismatch before the scrub is the
+    # interesting part.
+    run_quiet "" bcachefs format -f --errors=continue --no_initialize	\
+	--metadata_replicas=2 --data_replicas=1				\
+	"$dev0" "$dev1"
+    local fs_uuid=$(bcachefs show-super "$dev0" | \
+	sed -n 's/^External UUID:[[:space:]]*//p')
+
+    mount -t bcachefs "$dev0:$dev1" /mnt
+
+    run_fio_base			\
+	--filesize=50M			\
+	--name=randrw			\
+	--rw=randrw			\
+	--bsrange=4k-256k
+
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+    umount /mnt
+
+    scratch_dev_unplug 1
+
+    echo "Mounting degraded with scrub_recent_journal_entries=always..."
+    mount_capture -t bcachefs -o degraded=very,scrub_recent_journal_entries=always,verbose,fix_errors=yes \
+	UUID=$fs_uuid /mnt
+
+    if ! grep -q 'journal scrub: checking' <<< "$mount_output"; then
+	echo "ERROR: scrub did not run on the degraded mount"
+	exit 1
+    fi
+
+    # The absent device's replicas aren't read at all: a device that isn't
+    # there says nothing about whether it honoured flush/FUA, and mustn't be
+    # taken for one that didn't - no report, no rewind.
+    if grep -E 'not honoring flush/FUA|rewinding from seq' <<< "$mount_output"; then
+	echo "ERROR: the absent device was taken for one that dropped a flush"
+	exit 1
+    fi
+
+    umount /mnt
+    scratch_dev_plug 1
+
+    echo "Test passed: scrub survives a degraded mount"
+}
+
+
+#
+# Scrub cancellation tests.
+#
+# Cancelling a scrub job means closing its progress fd, which blocks in
+# kthread_stop() until that device's scrub thread notices and drains its
+# in-flight reads. The scrub command must issue those closes in parallel
+# on interrupt: serial closes cost the sum of per-device stop latencies.
+#
+# scrub_cancel is the basic single-device test; the parallel_* tests
+# use dm-delay to make per-device stop latency large and controlled,
+# then verify the parallelism property directly (timing, and
+# simultaneous kthread_stop stack samples).
+#
+# The filesystem is the first four scratch devices, the ones wrapped in
+# dm-delay - scrub_delay_devs, not ktest_scratch_dev[@], for anything that
+# names its members.
+
+SCRUB_DELAY_NR_DEVS=4
+delay_devs=()
+
+scrub_delay_devs()
+{
+    echo "${ktest_scratch_dev[@]:0:$SCRUB_DELAY_NR_DEVS}"
+}
+
+# dm-delay wrappers over the scratch devices. Created with no delay so
+# format/mount/writes run at full speed; set_read_delay swaps in a
+# read-side delay just before the scrub under test.
+setup_delay_devs()
+{
+    local i
+
+    # Self-clean in case an earlier failed subtest left state behind:
+    umount /mnt 2>/dev/null || true
+    for i in $(seq 0 $((SCRUB_DELAY_NR_DEVS - 1))); do
+	dmsetup remove --retry scrubdelay$i 2>/dev/null || true
+    done
+
+    delay_devs=()
+    for i in $(seq 0 $((SCRUB_DELAY_NR_DEVS - 1))); do
+	local dev=${ktest_scratch_dev[$i]}
+	dmsetup create scrubdelay$i --table \
+	    "0 $(blockdev --getsz $dev) delay $dev 0 0"
+	delay_devs+=(/dev/mapper/scrubdelay$i)
+    done
+}
+
+set_read_delay()
+{
+    local ms=$1 i
+    for i in $(seq 0 $((SCRUB_DELAY_NR_DEVS - 1))); do
+	local dev=${ktest_scratch_dev[$i]}
+	dmsetup reload scrubdelay$i --table \
+	    "0 $(blockdev --getsz $dev) delay $dev 0 $ms $dev 0 0"
+	dmsetup suspend scrubdelay$i
+	dmsetup resume scrubdelay$i
+    done
+}
+
+teardown_delay_devs()
+{
+    local i
+    for i in $(seq 0 $((SCRUB_DELAY_NR_DEVS - 1))); do
+	dmsetup remove --retry scrubdelay$i
+    done
+    delay_devs=()
+}
+
+test_scrub_cancel()
+{
+    set_watchdog 180
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    # Enough data that the scrub can't finish before we get to cancel it. There
+    # is no --rate to slow a scrub down, so the only lever on how long it runs
+    # is how much it has to walk, and a scrub that has already finished tells us
+    # nothing about cancelling one: the first version wrote 100M and the scrub
+    # reported 100% complete before the two second wait below was up. That puts
+    # the rate somewhere above 70MB/s - we only know it beat the wait, not by
+    # how much - so size for the pessimistic end and leave the wait alone, since
+    # shortening it risks cancelling during startup instead of mid-walk.
+    dd if=/dev/urandom of=/mnt/testfile bs=1M count=2000 oflag=direct
+    sync
+
+    umount /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    echo "Starting scrub in background..."
+    bcachefs scrub ${ktest_scratch_dev[0]} &
+    scrub_pid=$!
+
+    # Let it get going, but nowhere near finishing
+    sleep 2
+
+    # Check it's actually running before we try to cancel it. Without this both
+    # of the ways that can fail - a scrub that died on startup (a renamed
+    # subcommand, say, which is what "bcachefs data scrub" had silently become)
+    # and a scrub that ran to completion because there wasn't enough to walk -
+    # surface several lines below as "kill: no such process", which reads like a
+    # cancellation bug rather than a scrub we never got to cancel.
+    #
+    # They want opposite fixes, so tell them apart by how it exited.
+    if ! kill -0 $scrub_pid 2>/dev/null; then
+        if wait $scrub_pid; then
+            echo "FAILED: scrub finished before we could cancel it"
+            echo "        (it needs more data to walk, or a shorter wait above)"
+        else
+            echo "FAILED: scrub exited nonzero before we could cancel it - it never started"
+        fi
+        umount /mnt
+        exit 1
+    fi
+
+    echo "Sending SIGINT to scrub (pid $scrub_pid)..."
+    kill -INT $scrub_pid
+
+    echo "Waiting for scrub to exit (should be quick)..."
+    local start=$(date +%s)
+
+    # Wait with timeout
+    local timeout=10
+    while kill -0 $scrub_pid 2>/dev/null; do
+        sleep 0.1
+        local now=$(date +%s)
+        local elapsed=$((now - start))
+        if [[ $elapsed -gt $timeout ]]; then
+            echo "FAILED: scrub did not exit within ${timeout}s"
+            echo "Thread state:"
+            cat /proc/$scrub_pid/stack 2>/dev/null || true
+
+            # Check kernel side
+            echo "Moving contexts:"
+            cat /sys/fs/bcachefs/*/moving_ctxts 2>/dev/null || true
+
+            kill -9 $scrub_pid
+            wait $scrub_pid 2>/dev/null || true
+            umount /mnt
+            exit 1
+        fi
+    done
+
+    wait $scrub_pid || true
+    local end=$(date +%s)
+    echo "Scrub exited in $((end - start)) seconds"
+
+    umount /mnt
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+# Start a scrub against the delay devices with the given read delay and
+# wait until all four device jobs have reads in flight; sets scrub_pid.
+# Callers take over from the SIGINT.
+#
+# The workload must be many small extents: scrub keeps up to
+# move_ios_in_flight (64) reads in flight per device, and anything that
+# fits in one submission burst completes after a single delay round no
+# matter how large the delay - a handful of big extents makes the whole
+# scrub finish in one round before we can interrupt it. 4k random
+# writes produce thousands of physically discontiguous (so unmergeable)
+# extents per device, sustaining delayed read rounds for minutes.
+start_delayed_scrub()
+{
+    local delay_ms=$1
+
+    setup_delay_devs
+    run_quiet "" bcachefs format -f "${delay_devs[@]}"
+    local devs="$(join_by : "${delay_devs[@]}")"
+    mount -t bcachefs $devs /mnt
+
+    run_fio_base				\
+	--name=frag				\
+	--rw=randwrite				\
+	--bs=4k					\
+	--filesize=32M
+    sync
+
+    set_read_delay $delay_ms
+
+    bcachefs scrub /mnt &
+    scrub_pid=$!
+    sleep 3
+
+    # A scrub that finished (needs a bigger workload or delay) and a
+    # scrub that died on startup (a broken CLI) both show up here as a
+    # dead pid but want opposite fixes; tell them apart by exit status.
+    if ! kill -0 $scrub_pid 2>/dev/null; then
+	if wait $scrub_pid; then
+	    echo "ERROR: scrub finished before it could be interrupted"
+	else
+	    echo "ERROR: scrub exited nonzero before it could be interrupted - it never started"
+	fi
+	return 1
+    fi
+}
+
+# Wait for the scrub command to exit; sets scrub_exit_s. If it is still
+# running after $1 seconds, dump its kernel stacks and the filesystem's
+# moving_ctxts - a wedged cancellation with no state dump is
+# undebuggable from a test log - then kill it so teardown can proceed.
+wait_scrub_exit()
+{
+    local timeout=$1
+    local start=$(date +%s)
+
+    while kill -0 $scrub_pid 2>/dev/null; do
+	if (($(date +%s) - start > timeout)); then
+	    echo "ERROR: scrub still running after ${timeout}s"
+	    echo "Thread state:"
+	    cat /proc/$scrub_pid/task/*/stack 2>/dev/null || true
+	    echo "Moving contexts:"
+	    cat /sys/fs/bcachefs/*/moving_ctxts 2>/dev/null || true
+	    kill -9 $scrub_pid 2>/dev/null || true
+	    wait $scrub_pid 2>/dev/null || true
+	    return 1
+	fi
+	sleep 0.1
+    done
+    wait $scrub_pid 2>/dev/null || true
+    scrub_exit_s=$(($(date +%s) - start))
+}
+
+finish_delayed_scrub()
+{
+    set_read_delay 0
+    umount /mnt
+    teardown_delay_devs
+    bcachefs fsck -ny $(scrub_delay_devs)
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_scrub_cancel_parallel_timing()
+{
+    set_watchdog 300
+
+    # Stopping one device's scrub job means draining its current batch
+    # of delayed reads, up to one full 8s round. The four jobs submit
+    # their bursts in lockstep (same start, same delay, same batch
+    # size), so batch boundaries stay aligned across devices: serial
+    # cancellation finishes one device's drain exactly when the others
+    # have just submitted fresh batches, cascading into further full
+    # rounds. Measured: parallel ~14s (signal poll + up to two rounds),
+    # serial ~47s; the 25s threshold sits between with >10s margin to
+    # each.
+    start_delayed_scrub 8000
+
+    local start_ms=$(date +%s%3N)
+    kill -INT $scrub_pid
+    if ! wait_scrub_exit 60; then
+	finish_delayed_scrub
+	return 1
+    fi
+    local elapsed_ms=$(($(date +%s%3N) - start_ms))
+    echo "cancellation took ${elapsed_ms}ms"
+
+    finish_delayed_scrub
+
+    if ((elapsed_ms > 25000)); then
+	echo "ERROR: cancellation took ${elapsed_ms}ms - serial kthread_stop?"
+	return 1
+    fi
+}
+
+# Going read-only must abort running data jobs: every job holds a
+# c->writes ref for its thread's lifetime, and the read-only transition
+# (asynchronous - the trigger returns immediately) blocks in the write
+# ref drain until the jobs are gone. With the abort, each job errors
+# out at its next loop iteration, drops its ref, and the scrub command
+# sees its jobs finish and exits within seconds. Without it, the jobs
+# run to completion - the dm-delay reads make that take minutes - and
+# the scrub outliving the trigger by 30s is the failure signature.
+test_scrub_emergency_ro()
+{
+    set_watchdog 300
+
+    start_delayed_scrub 3000
+
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+
+    if ! wait_scrub_exit 30; then
+	return 1
+    fi
+    echo "scrub exited ${scrub_exit_s}s after emergency read-only"
+
+    set_read_delay 0
+    umount /mnt
+    teardown_delay_devs
+
+    # Journal replay from the unclean shutdown, then verify:
+    local devs="$(join_by : $(scrub_delay_devs))"
+    mount -t bcachefs $devs /mnt
+    umount /mnt
+    bcachefs fsck -ny $(scrub_delay_devs)
+}
+
+test_scrub_cancel_parallel_stacks()
+{
+    set_watchdog 300
+
+    start_delayed_scrub 3000
+
+    kill -INT $scrub_pid
+
+    # Sample the scrub process's kernel stacks while it tears down: with
+    # parallel cancellation multiple threads block in kthread_stop() at
+    # once; the serial implementation can never show more than one.
+    local max_parallel=0 n
+    while kill -0 $scrub_pid 2>/dev/null; do
+	n=$(grep -l kthread_stop /proc/$scrub_pid/task/*/stack 2>/dev/null | wc -l || true)
+	if ((n > max_parallel)); then
+	    max_parallel=$n
+	fi
+	sleep 0.05
+    done
+    wait $scrub_pid || true
+    echo "max threads simultaneously in kthread_stop: $max_parallel"
+
+    finish_delayed_scrub
+
+    if ((max_parallel < 2)); then
+	echo "ERROR: never saw parallel kthread_stop - cancellation is serial"
+	return 1
+    fi
+}
+
+
+#
+# Scrub detection and repair of real on-disk data corruption: locate
+# extent/stripe pointers from key listings (dev:bucket:offset, fixed
+# 512k buckets so the sector math is static), overwrite the data with
+# the filesystem unmounted, then verify scrub's exit code: bit 2 =
+# errors corrected, bit 4 = uncorrectable errors found.
+#
+# Five cases:
+#   single_replica - no redundancy: scrub must report uncorrectable
+#   replicated     - four replicas, random subsets of copies corrupt
+#                    (including one extent with three of four gone):
+#                    scrub must repair everything from the survivors
+#   ec_data        - EC stripe data block corrupt: scrub must repair
+#                    via stripe reconstruction
+#   ec_parity      - EC stripe parity block corrupt: scrub must repair
+#                    it (parity is reconstructible from the intact data
+#                    blocks).
+#   ec_unreferenced - EC stripe data block corrupt where no live extent
+#                    references it any more: scrub must repair it, and
+#                    the file must read back with another block of the
+#                    stripe offline.
+
+BUCKET_SIZE_KB=512
+BUCKET_SIZE_SECTORS=$((BUCKET_SIZE_KB * 2))
+
+test_scrub_corrupt_single_replica()
+{
+    ktest_expect_device_errors=1
+    ktest_expect_sb_errors="data_read_(io|csum)_err(_recovered)?"
+    set_watchdog 120
+
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f --bucket_size=${BUCKET_SIZE_KB}k "$dev"
+    mount -t bcachefs "$dev" /mnt
+    dd if=/dev/urandom of=/mnt/testfile bs=1M count=16 oflag=direct
+    sync
+    umount /mnt
+
+    local nr=$(bcachefs list -b extents "$dev" |
+	bcachefs_ptr_sectors $BUCKET_SIZE_SECTORS 0 | head -8 |
+	bcachefs_corrupt_sectors "$dev")
+    if ((nr == 0)); then
+	echo "ERROR: found no extent locations to corrupt"
+	return 1
+    fi
+
+    mount -t bcachefs "$dev" /mnt
+    local rc=0
+    bcachefs scrub "$dev" || rc=$?
+    echo "scrub exit code: $rc"
+    umount /mnt
+
+    if (((rc & 4) == 0)); then
+	echo "ERROR: scrub did not report uncorrectable errors"
+	return 1
+    fi
+
+    bcachefs fsck -ny "$dev"
+    bcachefs_test_end_checks "$dev"
+}
+
+# Print "extent# dev sector" for every replica pointer in a bkey
+# listing on stdin, grouping pointers by the extent they belong to.
+extent_replica_locations()
+{
+    awk -v bsz="$1" '
+	/ type extent / { ext++ }
+	ext {
+	    for (i = 1; i < NF; i++) {
+		if ($i != "ptr:")
+		    continue
+		for (j = i + 1; j <= i + 2 && j <= NF; j++)
+		    if ($j ~ /^[0-9]+:[0-9]+:[0-9]+$/) {
+			split($j, p, ":")
+			print ext, p[1], p[2] * bsz + p[3]
+			break
+		    }
+	    }
+	}'
+}
+
+test_scrub_corrupt_replicated()
+{
+    ktest_expect_device_errors=1
+    ktest_expect_sb_errors="data_read_(io|csum)_err(_recovered)?"
+    set_watchdog 180
+
+    run_quiet "" bcachefs format -f --replicas=4	\
+	--bucket_size=${BUCKET_SIZE_KB}k		\
+	"${ktest_scratch_dev[@]}"
+    local devs="$(join_by : "${ktest_scratch_dev[@]}")"
+    mount -t bcachefs $devs /mnt
+    dd if=/dev/urandom of=/mnt/testfile bs=1M count=16 oflag=direct
+    cp /mnt/testfile /root/scrub-orig
+    sync
+    umount /mnt
+
+    local locations=$(bcachefs list -b extents "${ktest_scratch_dev[@]}" |
+	extent_replica_locations $BUCKET_SIZE_SECTORS)
+    local nr_extents=$(echo "$locations" |
+	awk '{ if ($1 > m) m = $1 } END { print m + 0 }')
+    if ((nr_extents < 6)); then
+	echo "ERROR: only $nr_extents extents to corrupt"
+	return 1
+    fi
+
+    # Corrupt random replicas of six random extents. The first victim
+    # loses three of its four copies - repair must work from a single
+    # surviving replica - and the rest lose a random one to three.
+    local ext k dev sector nr=0 first=1
+    for ext in $(seq 1 $nr_extents | shuf -n6); do
+	if ((first)); then
+	    k=3
+	    first=0
+	else
+	    k=$((RANDOM % 3 + 1))
+	fi
+	while read -r _ dev sector; do
+	    echo "corrupting extent $ext replica: dev $dev sector $sector"
+	    echo "$sector" |
+		bcachefs_corrupt_sectors ${ktest_scratch_dev[$dev]} > /dev/null
+	    nr=$((nr + 1))
+	done < <(echo "$locations" | awk -v e=$ext '$1 == e' | shuf -n$k)
+    done
+    echo "corrupted $nr replicas across 6 extents"
+
+    mount -t bcachefs $devs /mnt
+
+    # Scrub each device in turn - sequentially, so concurrent
+    # per-device repairs of the same extent can't race. Combined they
+    # must find and repair everything, nothing uncorrectable.
+    local rc=0 drc d
+    for d in "${ktest_scratch_dev[@]}"; do
+	drc=0
+	bcachefs scrub "$d" || drc=$?
+	echo "scrub $d exit code: $drc"
+	rc=$((rc | drc))
+    done
+
+    if (((rc & 2) == 0)); then
+	echo "ERROR: scrub did not report corrected errors"
+	return 1
+    fi
+    if (((rc & 4) != 0)); then
+	echo "ERROR: scrub reported uncorrectable errors with a good replica present"
+	return 1
+    fi
+
+    # Repair must converge: a second full pass runs clean.
+    rc=0
+    for d in "${ktest_scratch_dev[@]}"; do
+	drc=0
+	bcachefs scrub "$d" || drc=$?
+	rc=$((rc | drc))
+    done
+    if ((rc != 0)); then
+	echo "ERROR: second scrub pass still found errors (exit code $rc)"
+	return 1
+    fi
+
+    cmp /mnt/testfile /root/scrub-orig
+    umount /mnt
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+# Format with erasure coding, write data, wait for background reconcile
+# to build at least one stripe, and leave the fs unmounted. Sets
+# stripe_meta and stripe_block_lines from the first stripe found.
+setup_ec_corrupt()
+{
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	--bucket_size=${BUCKET_SIZE_KB}k	\
+	"${ktest_scratch_dev[@]}"
+    local devs="$(join_by : "${ktest_scratch_dev[@]}")"
+    mount -t bcachefs $devs /mnt
+
+    dd if=/dev/urandom of=/mnt/testfile bs=1M count=128 oflag=direct
+    cp /mnt/testfile /root/scrub-orig
+    sync
+
+    # Stripe creation is a background reconcile operation; kick it and
+    # poll the stripe_create counter until a stripe exists.
+    local created=0 i
+    for i in $(seq 1 60); do
+	echo 1 > /sys/fs/bcachefs/*/internal/trigger_reconcile_wakeup
+	created=$(awk '/since mount/ {print $3}' \
+	    /sys/fs/bcachefs/*/counters/stripe_create)
+	if ((created > 0)); then
+	    break
+	fi
+	sleep 1
+    done
+    if ((created == 0)); then
+	echo "ERROR: no stripes created after 60s"
+	return 1
+    fi
+    umount /mnt
+
+    local blocks=$(bcachefs list -b stripes "${ktest_scratch_dev[@]}" |
+	bcachefs_first_stripe_blocks $BUCKET_SIZE_SECTORS)
+    echo "first stripe:"
+    echo "$blocks"
+
+    stripe_meta=$(echo "$blocks" | awk '$1 == "meta" {print $2, $3}')
+    stripe_block_lines=$(echo "$blocks" | awk '$1 == "block"')
+    if [[ -z $stripe_meta || -z $stripe_block_lines ]]; then
+	echo "ERROR: could not parse stripe blocks"
+	return 1
+    fi
+}
+
+# Print "<dev> <sector>" for stripe block index $1.
+stripe_block()
+{
+    echo "$stripe_block_lines" | awk -v want="$1" '$2 == want {print $3, $4}'
+}
+
+test_scrub_corrupt_ec_data()
+{
+    ktest_expect_device_errors=1
+    # stripe_read_csum_err: repair reads the stripe, and finds the block bad too
+    ktest_expect_sb_errors="stripe_read_csum_err|data_read_(io|csum)_err(_recovered)?"
+    set_watchdog 300
+
+    setup_ec_corrupt
+
+    # Corrupt the first data block of the stripe.
+    local tdev tsector
+    read -r tdev tsector <<< "$(stripe_block 0)"
+    echo "corrupting stripe data block 0: dev $tdev sector $tsector"
+    echo "$tsector" | bcachefs_corrupt_sectors ${ktest_scratch_dev[$tdev]} > /dev/null
+
+    local devs="$(join_by : "${ktest_scratch_dev[@]}")"
+    mount -t bcachefs $devs /mnt
+
+    local rc=0
+    bcachefs scrub ${ktest_scratch_dev[$tdev]} || rc=$?
+    echo "scrub exit code: $rc"
+
+    if (((rc & 2) == 0)); then
+	echo "ERROR: scrub did not report corrected errors"
+	return 1
+    fi
+    if (((rc & 4) != 0)); then
+	echo "ERROR: scrub reported uncorrectable errors despite EC redundancy"
+	return 1
+    fi
+
+    cmp /mnt/testfile /root/scrub-orig
+    umount /mnt
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+test_scrub_corrupt_ec_parity()
+{
+    ktest_expect_device_errors=1
+    ktest_expect_sb_errors="data_read_(io|csum)_err(_recovered)?"
+    set_watchdog 300
+
+    setup_ec_corrupt
+
+    # Corrupt the first parity block (block index nr_data): three 4k
+    # spots spread across the block.
+    local nr_data nr_red
+    read -r nr_data nr_red <<< "$stripe_meta"
+
+    local tdev tsector
+    read -r tdev tsector <<< "$(stripe_block $nr_data)"
+    echo "corrupting stripe parity block $nr_data: dev $tdev sector $tsector"
+    printf '%s\n' $tsector $((tsector + 256)) $((tsector + 512)) |
+	bcachefs_corrupt_sectors ${ktest_scratch_dev[$tdev]} > /dev/null
+
+    local devs="$(join_by : "${ktest_scratch_dev[@]}")"
+    mount -t bcachefs $devs /mnt
+
+    local rc=0
+    bcachefs scrub ${ktest_scratch_dev[$tdev]} || rc=$?
+    echo "scrub exit code: $rc"
+    umount /mnt
+
+    if (((rc & 2) == 0)); then
+	echo "ERROR: scrub did not repair parity block corruption"
+	return 1
+    fi
+    if (((rc & 4) != 0)); then
+	echo "ERROR: scrub reported parity corruption as uncorrectable" \
+	     "despite intact data blocks"
+	return 1
+    fi
+
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+# Print "<offset in bucket> <sectors on disk> <file sector> <len> <whole>
+# <ptrs> <stripe idx>" for every key with a pointer into bucket $2 of
+# device $1, from a bkey listing on stdin. whole: the key spans its entire
+# checksummed region. ptrs: non-cached pointers.
+bucket_extents()
+{
+    awk -v dev="$1" -v bucket="$2" '
+	function flush(	i) {
+	    for (i = 0; i < nhit; i++)
+		print hit[i], nptrs, idx[i]
+	    nhit = nptrs = 0
+	}
+	$1 == "u64s" {
+	    flush()
+	    extent = $4 == "extent"
+	    split($5, pos, ":")
+	    len = c_size = size = $7
+	    crc_offset = 0
+	    stripe = "-"
+	    next
+	}
+	!extent { next }
+	$1 ~ /^crc(32|64|128):$/ {
+	    for (i = 2; i < NF; i++)
+		if ($i == "c_size")
+		    c_size = $(i + 1)
+		else if ($i == "size")
+		    size = $(i + 1)
+		else if ($i == "offset")
+		    crc_offset = $(i + 1)
+	}
+	# A stripe_ptr entry precedes the pointer it belongs to.
+	$1 == "stripe_ptr:" { stripe = $3 }
+	$1 == "ptr:" {
+	    if ($0 !~ / cached/)
+		nptrs++
+	    for (i = 2; i <= 3 && i <= NF; i++)
+		if ($i ~ /^[0-9]+:[0-9]+:[0-9]+$/) {
+		    split($i, p, ":")
+		    if (p[1] == dev && p[2] == bucket) {
+			idx[nhit] = stripe
+			hit[nhit++] = p[3] " " c_size " " (pos[2] - len) " " len " " \
+			    (crc_offset == 0 && len == size)
+		    }
+		    break
+		}
+	    stripe = "-"
+	}
+	END { flush() }' | sort -n
+}
+
+test_scrub_corrupt_ec_unreferenced()
+{
+    ktest_expect_device_errors=1
+    ktest_expect_sb_errors="stripe_read_csum_err|data_read_(io|csum)_err(_recovered)?"
+    set_watchdog 300
+
+    setup_ec_corrupt
+
+    local nr_data nr_red
+    read -r nr_data nr_red <<< "$stripe_meta"
+    if ((nr_red != 1)); then
+	echo "ERROR: stripe has $nr_red parity blocks; one bad block plus one"
+	echo "       offline device is only data loss with one"
+	return 1
+    fi
+
+    local vdev vsector ddev dsector
+    read -r vdev vsector <<< "$(stripe_block 0)"
+    read -r ddev dsector <<< "$(stripe_block 1)"
+    local vbucket=$((vsector / BUCKET_SIZE_SECTORS))
+    local dbucket=$((dsector / BUCKET_SIZE_SECTORS))
+
+    local layout=$(bcachefs list -b extents "${ktest_scratch_dev[@]}" |
+	bucket_extents $vdev $vbucket)
+    echo "stripe block 0, dev $vdev bucket $vbucket (off size start len whole ptrs stripe):"
+    echo "$layout"
+
+    # Scrub reads a key's whole checksummed region, so only deleting a
+    # whole key leaves sectors it never reads.
+    local off size start len whole stripe
+    read -r off size start len whole _ stripe <<< "$layout"
+    if [[ $whole != 1 || $stripe == - ]] || (($(wc -l <<< "$layout") < 2)); then
+	echo "ERROR: block 0 needs two erasure coded keys, the first a whole"
+	echo "       checksummed extent, so one can go while the other stays live"
+	return 1
+    fi
+    local end=$((off + size))
+
+    # The punch leaves a fragmented stripe bucket, and copygc moves those:
+    # it could take the live key out of block 0.
+    local devs="$(join_by : "${ktest_scratch_dev[@]}")"
+    mount -t bcachefs -o nocopygc_enabled $devs /mnt
+    fallocate -p -o $((start * 512)) -l $((len * 512)) /mnt/testfile
+    cp /mnt/testfile /root/scrub-orig
+    umount /mnt
+
+    local extents=$(bcachefs list -b extents "${ktest_scratch_dev[@]}")
+    echo "after punching file sectors $start-$((start + len - 1)):"
+    bucket_extents $vdev $vbucket <<< "$extents"
+    echo "stripe block 1, dev $ddev bucket $dbucket:"
+    bucket_extents $ddev $dbucket <<< "$extents"
+
+    if ! bucket_extents $vdev $vbucket <<< "$extents" |
+	    awk -v a=$off -v b=$end -v s=$stripe '
+		$1 < b && a < $1 + $2	{ overlap = 1 }
+		$7 == s			{ live = 1 }
+		END			{ exit overlap || !live }'; then
+	echo "ERROR: block 0 sectors $off-$((end - 1)) are still referenced, or"
+	echo "       block 0 has no live key of stripe $stripe left"
+	return 1
+    fi
+
+    # Reconstruct reads only the range being read, so the block taken
+    # offline has to hold data at the same offsets.
+    if ! bucket_extents $ddev $dbucket <<< "$extents" |
+	    awk -v a=$off -v b=$end -v s=$stripe '
+		$1 < b && a < $1 + $2 && $6 == 1 && $7 == s { found = 1 }
+		END { exit !found }'; then
+	echo "ERROR: block 1 (dev $ddev) has no single-pointer key of stripe"
+	echo "       $stripe over sectors $off-$((end - 1)), so taking it offline"
+	echo "       would not make a read reconstruct through the dead range"
+	return 1
+    fi
+
+    echo "corrupting unreferenced sectors $off-$((end - 1)) of stripe $stripe block 0: dev $vdev"
+    seq $((vbucket * BUCKET_SIZE_SECTORS + off)) 8 \
+	$((vbucket * BUCKET_SIZE_SECTORS + end - 8)) |
+	bcachefs_corrupt_sectors ${ktest_scratch_dev[$vdev]} > /dev/null
+
+    mount -t bcachefs -o nocopygc_enabled $devs /mnt
+
+    # Unlike the tests above, carry on after a scrub failure: the read below
+    # is where it turns into data loss.
+    local rc=0 failed=0
+    bcachefs scrub ${ktest_scratch_dev[$vdev]} || rc=$?
+    echo "scrub exit code: $rc"
+    if (((rc & 4) != 0)); then
+	echo "ERROR: scrub found the unreferenced corruption but left it"
+	echo "       uncorrected, and reconstructing block 1 still reads it"
+	failed=1
+    elif (((rc & 2) == 0)); then
+	echo "ERROR: scrub reported no corrected errors with sectors"
+	echo "       $off-$((end - 1)) of stripe $stripe block 0 (dev $vdev) corrupt"
+	failed=1
+    fi
+
+    # A repair may queue a rebuild. The tail of testfile that does not fill
+    # a stripe stays queued as erasure_code work, so skip that type.
+    timeout 60 bcachefs reconcile wait -t replicas,stripes /mnt || true
+
+    echo "offlining dev $ddev (stripe $stripe block 1)"
+    bcachefs device offline --force ${ktest_scratch_dev[$ddev]}
+
+    if ! cmp /mnt/testfile /root/scrub-orig; then
+	echo "ERROR: testfile does not read back with dev $ddev offline:"
+	echo "       reconstructing block 1 reads block 0 sectors $off-$((end - 1))"
+	failed=1
+    fi
+    umount /mnt
+
+    if ((failed)); then
+	return 1
+    fi
+
+    # No fsck: a member is still offline.
+    bcachefs_test_end_checks ${ktest_scratch_dev[$vdev]}
 }
 
 
