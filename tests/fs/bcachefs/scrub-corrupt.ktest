@@ -233,7 +233,8 @@ stripe_block()
 test_scrub_corrupt_ec_data()
 {
     ktest_expect_device_errors=1
-    ktest_expect_sb_errors="data_read_(io|csum)_err(_recovered)?"
+    # stripe_read_csum_err: repair reads the stripe, and finds the block bad too
+    ktest_expect_sb_errors="stripe_read_csum_err|data_read_(io|csum)_err(_recovered)?"
     set_watchdog 300
 
     setup_ec_corrupt
