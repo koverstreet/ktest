@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+#
+# fsck corruption injection tests for the passes in fs/fs/ (check*.c):
+# link counts, directory and subvolume structure.
+#
+# Each test builds a small filesystem, injects one precise corruption with
+# `bcachefs kvdb` on the unmounted image, and asserts:
+#
+#   - fsck -y detects it (exit != 0) and records the expected error in the
+#     superblock - by name: a clean second run can't tell a repair from a
+#     check that never looked. check_directory_structure visited no inodes
+#     for over a year, and an injected directory loop "converged" clean.
+#   - no errors recorded beyond the ones the test declares
+#   - a second fsck -n runs clean
+#   - the repaired filesystem mounts and is whole
+#
+# These are the regression tests for the passes' Rust conversions: every
+# converted pass gets its injections here.
+#
+# Inject states that are consistent apart from the corruption under test:
+# earlier passes repair whatever they can see first. A subvolume's
+# fs_path_parent is checked against its dirent by check_dirents, so a loop
+# made by editing fs_path_parent alone never reaches the structure pass.
+#
+# No bcachefs_test_end_checks: these tests intentionally stamp error
+# counters.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+
+dev()
+{
+    echo ${ktest_scratch_dev[0]}
+}
+
+kvdb_rw()
+{
+    bcachefs kvdb --rw $(dev) "$@"
+}
+
+new_fs()
+{
+    run_quiet "" bcachefs format -f $(dev)
+    mount -t bcachefs $(dev) /mnt
+}
+
+# "<inode>:<offset> <target>" of the dirent named $1, in the root subvolume's
+# snapshot. Names must be unique across the filesystem.
+dirent()
+{
+    bcachefs list -b dirents $(dev) |
+	sed -n "s/.*type dirent \([0-9]*:[0-9]*\):U32_MAX .*: $1 -> \([0-9]*\) .*/\1 \2/p"
+}
+
+recorded_errors()
+{
+    bcachefs show-super -f errors_v2 $(dev) |
+	sed -nE '/^errors(_v2)? /,${/^errors(_v2)? /!p;}' |
+	awk '{print $1}'
+}
+
+# check_fsck <error>: detected and recorded, nothing undeclared
+# (ktest_expect_sb_errors), repaired
+check_fsck()
+{
+    local expect=$1
+    local rc1=0 rc2=0
+
+    bcachefs fsck -y $(dev) || rc1=$?
+    echo "first fsck -y exited $rc1"
+
+    if (( rc1 == 0 )); then
+	echo "TEST FAILED: fsck missed injected corruption"
+	exit 1
+    fi
+
+    if ! recorded_errors | grep -qx "$expect"; then
+	echo "TEST FAILED: $expect not recorded (recorded: $(recorded_errors | xargs))"
+	exit 1
+    fi
+
+    if ! check_bcachefs_errors $(dev); then
+	echo "TEST FAILED: errors the test didn't declare" \
+	     "(ktest_expect_sb_errors='$ktest_expect_sb_errors')"
+	exit 1
+    fi
+
+    bcachefs fsck -n $(dev) || rc2=$?
+    echo "second fsck -n exited $rc2"
+
+    if (( rc2 != 0 )); then
+	echo "TEST FAILED: errors remain after fsck -y"
+	exit 1
+    fi
+}
+
+# ── check_nlinks ─────────────────────────────────────────────────────────
+
+# A file with two links whose inode says more. bi_nlink is the link count
+# less one for a non-directory (1 here); check_nlinks only counts inodes
+# with it nonzero.
+test_wrong_nlink()
+{
+    new_fs
+    echo foo > /mnt/f
+    ln /mnt/f /mnt/g
+    local inum=$(stat -c %i /mnt/f)
+    umount /mnt
+
+    kvdb_rw -c "update inodes 0:$inum:U32_MAX bi_nlink=5"
+
+    ktest_expect_sb_errors="inode_wrong_nlink"
+    check_fsck inode_wrong_nlink
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(stat -c %h /mnt/f) == 2 ]]
+    [[ $(cat /mnt/g) == foo ]]
+    umount /mnt
+}
+
+# ── check_directory_structure ────────────────────────────────────────────
+
+# Two directories, each the other's parent, cut off from the root. Built
+# from real dirents so that only the structure pass can see it: with
+# /a/b/c, b's dirent "c" is repointed at a, a's backpointer is pointed at
+# that dirent, and a's own dirent is removed. c, orphaned by the repoint,
+# is reattached on the way (the side errors).
+test_dir_loop()
+{
+    new_fs
+    mkdir -p /mnt/a/b/c
+    umount /mnt
+
+    local a=($(dirent a)) b=($(dirent b)) c=($(dirent c))
+
+    kvdb_rw -c "update dirents ${c[0]}:U32_MAX d_inum=${a[1]}" \
+	    -c "update inodes 0:${a[1]}:U32_MAX bi_dir=${b[1]} bi_dir_offset=${c[0]#*:}" \
+	    -c "set dirents ${a[0]}:U32_MAX deleted"
+
+    ktest_expect_sb_errors="dir_loop|inode_dir_wrong_nlink|inode_unreachable|inode_points_to_wrong_dirent"
+    check_fsck dir_loop
+
+    # The loop is broken: b is reachable again, wherever a was reattached
+    mount -t bcachefs $(dev) /mnt
+    [[ -n $(find /mnt -name b -type d) ]]
+    umount /mnt
+}
+
+main "$@"
