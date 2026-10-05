@@ -16,6 +16,11 @@
 #   the member instead; nothing is recorded against the file.
 # test_ec_read_around_fallback_reconstruct: the read-around and then the direct
 #   read fail; the full reconstruct still recovers the data.
+# test_ec_read_around_fallback_scrubs_stripe: a read-around that read a bad
+#   parity block queues a scrub of its stripe, which gets the block rebuilt;
+#   read-arounds of the stripe then succeed.
+# test_ec_read_around_nocsum_scrubs_stripe: the same with data_checksum=none,
+#   where the stripe's checksums name the bad block.
 # test_ec_read_around_small_extents: read-arounds of 4k extents read just 4k
 #   from each block.
 # test_ec_read_around_nocsum: data_checksum=none: read-arounds still work,
@@ -139,6 +144,49 @@ ec_ra_stripes_with_data_on()
 		}
 	}
 	END { flush() }'
+}
+
+# Stripes with a live data block on member <dev_idx>: their first parity block,
+# one per line, as "<dev>:<sector> <dev>:<bucket>:<offset>@<gen>".
+ec_ra_parity_of_stripes_with_data_on()
+{
+    ec_ra_stripe_keys | awk -v dev="$1" -v bsz=$((ec_ra_bucket_kb * 2)) '
+	function flush() { if (live) print par; live = 0; par = ""; idx = 0 }
+	/type stripe/ { flush() }
+	match($0, /blocks [0-9]+:[0-9]+/) {
+	    split(substr($0, RSTART + 7, RLENGTH - 7), b, ":")
+	    nd = b[1]
+	}
+	{
+	    for (i = 1; i < NF; i++)
+		if ($i ~ /^[0-9]+:[0-9]+:[0-9]+$/ && $(i + 1) == "gen") {
+		    split($i, p, ":")
+		    split($(i + 2), c, "#")
+		    if (p[1] == dev && idx < nd && c[2] > 0)
+			live = 1
+		    if (idx == nd)
+			par = p[1] ":" p[2] * bsz + p[3] " " $i "@" c[1]
+		    idx++
+		}
+	}
+	END { flush() }'
+}
+
+# How many of the blocks <dev>:<bucket>:<offset>@<gen>... are still in a stripe.
+# The generation tells a rebuilt stripe that reuses the bucket from the old one.
+ec_ra_blocks_present()
+{
+    ec_ra_stripe_keys | awk -v want="$*" '
+	BEGIN { n = split(want, w, " "); for (i = 1; i <= n; i++) W[w[i]] = 1 }
+	{
+	    for (i = 1; i < NF; i++)
+		if ($i ~ /^[0-9]+:[0-9]+:[0-9]+$/ && $(i + 1) == "gen") {
+		    split($(i + 2), c, "#")
+		    k = $i "@" c[1]
+		    if ((k in W) && !(k in seen)) { seen[k] = 1; found++ }
+		}
+	}
+	END { print found + 0 }'
 }
 
 ec_ra_write_file()
@@ -644,8 +692,84 @@ test_ec_read_around_fallback_reconstruct()
 	exit 1
     fi
     ktest_expect_device_errors=1
-    ktest_expect_sb_errors="data_read_csum_err_recovered"
+    # The read queues a scrub of the stripe, whose repair reads the bad blocks
+    # and re-keys the extents the read is self healing; a self heal that loses
+    # that race gives up, and four of them are past the counter check's slack.
+    ktest_expect_sb_errors="data_read_csum_err_recovered|stripe_read_csum_err"
+    ktest_expect_counters="data_update_key_fail"
     bcachefs_test_end_checks "${ktest_scratch_dev[2]}"
+}
+
+ec_ra_scrubs_stripe()
+{
+    set_watchdog 900
+
+    local devs
+    ec_ra_slow_setup 5
+
+    ec_ra_delay_dev 0 500
+    ec_ra_prewarm 0:500
+
+    local loc blk bad=()
+    while read -r loc blk; do
+	ec_ra_corrupt_block "$loc"
+	bad+=("$blk")
+	(( ${#bad[@]} == 3 )) && break
+    done < <(ec_ra_parity_of_stripes_with_data_on 0)
+    echo "corrupted the parity block of ${#bad[@]} stripes with data on device 0: ${bad[*]}"
+
+    local fail1
+    fail1=$(ec_ra_counter data_read_ec_read_around_fail)
+    ec_ra_read_loop
+    fail1=$(( $(ec_ra_counter data_read_ec_read_around_fail) - fail1 ))
+    ec_ra_check_read
+    echo "first pass: $fail1 read-arounds failed"
+
+    # Each failure queued a scrub of the stripe, which finds the bad parity
+    # block and repairs the stripe, rebuilding it elsewhere.
+    local left waited=0
+    while left=$(ec_ra_blocks_present "${bad[@]}"); (( left > 0 && waited < 300 )); do
+	sleep 1
+	waited=$((waited + 1))
+    done
+    echo "bad parity blocks still in a stripe after ${waited}s: $left"
+    dmesg | grep -E "scrub: stripe block|scrubbing stripe|queued for scrub" | head -6 || true
+
+    local around fail2
+    around=$(ec_ra_counter data_read_ec_read_around)
+    fail2=$(ec_ra_counter data_read_ec_read_around_fail)
+    ec_ra_read_loop
+    around=$(( $(ec_ra_counter data_read_ec_read_around) - around ))
+    fail2=$(( $(ec_ra_counter data_read_ec_read_around_fail) - fail2 ))
+    ec_ra_check_read
+    echo "second pass: $around read-arounds, $fail2 failed"
+
+    ec_ra_slow_teardown
+
+    if (( fail1 == 0 )); then
+	echo "ERROR: no read-around failed - this run tests nothing"
+	exit 1
+    fi
+    if (( left > 0 )); then
+	echo "ERROR: $left bad parity blocks weren't rebuilt"
+	exit 1
+    fi
+    if (( fail2 > 0 || around == 0 )); then
+	echo "ERROR: read-arounds of the rebuilt stripes still failed"
+	exit 1
+    fi
+    ktest_expect_device_errors=1
+    bcachefs_test_end_checks "${ktest_scratch_dev[2]}"
+}
+
+test_ec_read_around_fallback_scrubs_stripe()
+{
+    ec_ra_scrubs_stripe
+}
+
+test_ec_read_around_nocsum_scrubs_stripe()
+{
+    ec_ra_format_opts=--data_checksum=none ec_ra_scrubs_stripe
 }
 
 test_ec_read_around_small_extents()

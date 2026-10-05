@@ -569,6 +569,10 @@ get_slowpath_counters()
 	grep -v  ' 0$' || true
 }
 
+# Slowpath counters past their limit fail a test. A test whose design makes
+# some of them unavoidable, in numbers the limit's slack doesn't allow for,
+# declares them as a regex alternation before its end checks, e.g.:
+#     ktest_expect_counters="data_update_key_fail"
 _check_bcachefs_counters()
 {
     local dev=$1
@@ -602,6 +606,10 @@ _check_bcachefs_counters()
 
 	local event="${linea[0]}"
 	local nr="${linea[1]}"
+
+	if [[ $event =~ ^(${ktest_expect_counters:-no_counters_expected})$ ]]; then
+	    continue
+	fi
 
 	local max_fail=$((nr_commits / ratio))
 
