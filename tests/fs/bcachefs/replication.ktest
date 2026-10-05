@@ -1891,7 +1891,8 @@ test_replicas3_replace_failed_member()
     dd if=/dev/urandom of=/mnt/degraded bs=1M count=256 conv=fsync status=none
     reconcile_stage_status "after failing member 1"
 
-    bcachefs device add /mnt /dev/mapper/m3
+    # -f: m3 may still hold whatever an earlier subtest in this VM left on it
+    bcachefs device add -f /mnt /dev/mapper/m3
     reconcile_stage_status "after device add"
     bcachefs device remove 1 /mnt
     reconcile_stage_status "after device remove"
