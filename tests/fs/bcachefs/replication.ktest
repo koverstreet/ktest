@@ -743,6 +743,59 @@ test_write_degraded()
     (( ! failed ))
 }
 
+# The same, with durability=2 devices: one copy on either is both replicas, so
+# with the other device ro there's still room at replicas=2 - nothing should
+# fall back, and write_degraded=no should change nothing. Space accounting that
+# counted a copy as one replica found nothing placeable at 2x here and failed
+# every write with ENOSPC_disk_reservation; fallocate then sized a reservation
+# key from a sliver of a partial reservation, and the zero-length key it
+# committed shut the filesystem down in the journal write (TiCPU, 2026-10-05,
+# with one durability=2 device full rather than ro).
+test_write_durability2_one_device()
+{
+    set_watchdog 120
+
+    run_quiet "" bcachefs format -f		\
+	--replicas=2				\
+	--durability=2				\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+    bcachefs device set-state --force ro ${ktest_scratch_dev[1]}
+
+    local counter=$(echo /sys/fs/bcachefs/*/counters/disk_reservation_degraded)
+    local opt=$(echo /sys/fs/bcachefs/*/options/write_degraded)
+    local failed=0 kind
+
+    degraded_since_mount() { awk '/since mount/ { print $3 }' $counter; }
+
+    echo no > $opt
+    for kind in buffered direct fallocate; do
+	local before=$(degraded_since_mount) ret=0 err=$ktest_out/$kind-dur2.err
+
+	write_8m $kind $kind 2>$err || ret=$?
+
+	local size=$(stat -c %s /mnt/$kind 2>/dev/null || echo 0)
+	echo "$kind: exit $ret, size $size, degraded since mount: $before -> $(degraded_since_mount): $(grep -m1 -i "error\|failed" $err)"
+
+	if (( ret || size != 8 << 20 )); then
+	    echo "FAIL: $kind write failed with a durability=2 device rw at replicas=2"
+	    failed=1
+	elif [[ $(degraded_since_mount) != "$before" ]]; then
+	    echo "FAIL: $kind write took the degraded fallback it didn't need"
+	    failed=1
+	fi
+    done
+    echo degraded > $opt
+
+    bcachefs device set-state rw 1 /mnt
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    (( ! failed ))
+}
+
 test_device_set_state_offline()
 {
     set_watchdog 120
