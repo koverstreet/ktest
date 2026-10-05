@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+#
+# A reconstruct doesn't pin its stripe. When the extent it is reading is
+# overwritten and the stripe deleted, a block reads stale. A user read must
+# then retry with the current extent and succeed, as a direct read of a stale
+# pointer does.
+
+# shellcheck source=tests/fs/bcachefs/bcachefs-test-libs.sh
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+require-kernel-config BCACHEFS_ERASURE_CODING
+require-kernel-config DM_DELAY
+
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+
+# Member 0 goes offline, so its blocks are reconstructed from these; delaying
+# their reads holds each reconstruct open while the writer replaces the file.
+ecr_delay_ms=300
+ecr_file_mb=32
+# Without the fix about 1% of reads fail, and 150 s is 400-500 reads: a run
+# rarely misses it.
+ecr_seconds=150
+ecr_readers=8
+
+ecr_counter()
+{
+    awk '/since mount/ { print $NF }' /sys/fs/bcachefs/*/counters/"$1"
+}
+
+# ecr_delay <ms>: delay reads of the dm devices over members 1-3; 0 for none.
+ecr_delay()
+{
+    local i dev sz table
+    for i in 1 2 3; do
+	dev=${ktest_scratch_dev[i]}
+	sz=$(blockdev --getsz "$dev")
+	table="0 $sz linear $dev 0"
+	(( $1 )) && table="0 $sz delay $dev 0 $1 $dev 0 0"
+	if [[ -e /dev/mapper/ecr$i ]]; then
+	    echo "$table" | dmsetup reload ecr$i
+	    dmsetup suspend ecr$i
+	    dmsetup resume ecr$i
+	else
+	    dmsetup create ecr$i --table "$table"
+	fi
+    done
+}
+
+test_ec_reconstruct_stale_retry()
+{
+    set_watchdog 540
+    trap 'umount /mnt 2>/dev/null || true; for i in 1 2 3; do dmsetup remove --retry ecr$i >/dev/null 2>&1 || true; done; kill_descendants $BASHPID' EXIT
+
+    ecr_delay 0
+    local devs=("${ktest_scratch_dev[0]}" /dev/mapper/ecr1 /dev/mapper/ecr2 /dev/mapper/ecr3)
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	--bucket_size=512k			\
+	"${devs[@]}"
+    mount -t bcachefs "$(join_by : "${devs[@]}")" /mnt
+
+    dd if=/dev/urandom of=/mnt/data bs=1M count=$ecr_file_mb oflag=direct status=none
+    timeout 120 bcachefs reconcile wait /mnt || true
+
+    bcachefs device offline --force "${devs[0]}"
+    # Overwrites delete stripes without reconcile; left on, it spends the race
+    # failing to rebuild stripes the overwrites are deleting.
+    echo 0 > /sys/fs/bcachefs/*/options/reconcile_enabled
+    ecr_delay $ecr_delay_ms
+
+    local retries_before end
+    retries_before=$(ecr_counter data_read_retry)
+    end=$(( $(date +%s) + ecr_seconds ))
+
+    (
+	while (( $(date +%s) < end )); do
+	    dd if=/dev/urandom of=/mnt/data bs=1M count=$ecr_file_mb conv=notrunc oflag=direct status=none
+	done
+    ) &
+    local writer=$!
+
+    local r pids=()
+    for (( r = 0; r < ecr_readers; r++ )); do
+	(
+	    fails=0 reads=0
+	    while (( $(date +%s) < end )); do
+		i=$(( RANDOM % ecr_file_mb ))
+		dd if=/mnt/data of=/dev/null bs=1M skip=$i count=1 iflag=direct status=none 2>/dev/null ||
+		    fails=$((fails + 1))
+		reads=$((reads + 1))
+	    done
+	    echo "$reads $fails" > /tmp/ecr.$r
+	) &
+	pids+=($!)
+    done
+    wait "${pids[@]}"
+    wait $writer
+
+    local reads=0 fails=0 n f
+    for (( r = 0; r < ecr_readers; r++ )); do
+	read -r n f < /tmp/ecr.$r
+	reads=$((reads + n)) fails=$((fails + f))
+    done
+    echo "reads: $reads, failed: $fails; reconstructs and retries: $(( $(ecr_counter data_read_retry) - retries_before ))"
+    dmesg | grep -E 'data read error|stale' | tail -5 || true
+
+    ecr_delay 0
+    umount /mnt
+    mount -t bcachefs -o degraded "$(join_by : "${devs[@]}")" /mnt
+    umount /mnt
+    bcachefs fsck -ny "${devs[@]}"
+
+    if (( fails )); then
+	echo "ERROR: $fails reads failed"
+	exit 1
+    fi
+    bcachefs_test_end_checks "${devs[1]}"
+}
+
+main "$@"
