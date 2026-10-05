@@ -2596,5 +2596,73 @@ test_durability_zero_rereplicate()
     return $ret
 }
 
+# Reconcile work of one type, data column, as printed - "MISSING" if there's no
+# row, which must not read as "none".
+ec_reconcile_work()
+{
+    bcachefs reconcile status /mnt 2>/dev/null |
+	awk -v type="$1:" '$1 == type	{ print $2; found = 1 }
+			   END		{ if (!found) print "MISSING" }'
+}
+
+# tools#1085 (Lutz Euler): EC work parked as pending stayed pending after a
+# device add made it doable.
+#
+# Two devices at replicas=2 can't hold a stripe - redundancy 1 wants two data
+# blocks plus parity - so reconcile parks the EC conversion as pending. A third
+# device wakes it up, and it retries the pending extents through
+# bch2_can_do_data_update(), whose EC pre-check asked for a stripe at
+# data_replicas + extra_replicas. Reconcile sets extra_replicas = 1 for the new
+# copy, so the pre-check wanted redundancy 2 - four devices - where the write
+# itself would take a 2+1 stripe. The pending extents failed with insufficient
+# devices, while the same extents not marked pending were converted.
+test_ec_pending_after_device_add()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}
+
+    mount -t bcachefs "${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}" /mnt
+
+    # Reconcile sleeps min_member_capacity >> 6 of write IO between passes:
+    # 64M on 4G devices. Write past that so a pass runs mid-write and parks
+    # what it has seen as pending; the rest is left unmarked.
+    dd if=/dev/urandom of=/mnt/a bs=1M count=96
+    sync
+
+    bcachefs reconcile status /mnt
+    local pending=$(ec_reconcile_work pending)
+    if [[ $pending = MISSING || $pending = 0 ]]; then
+	echo "NOT ARMED: pending is $pending before the device add - nothing"
+	echo "goes through the pending retry, so this run tests nothing"
+	return 1
+    fi
+
+    bcachefs device add -f /mnt ${ktest_scratch_dev[2]}
+
+    # Only pending: erasure_code doesn't drain to 0, since the last extents
+    # sit in a stripe that's still open until more writes fill it.
+    timeout 120 bcachefs reconcile wait -t pending /mnt || true
+
+    bcachefs reconcile status /mnt
+    bcachefs fs usage -h /mnt
+
+    pending=$(ec_reconcile_work pending)
+    if [[ $pending != 0 ]]; then
+	echo "ERROR: after adding a third device, $pending of EC work is still"
+	echo "pending; 2+1 stripes fit on three devices, so the pending retry"
+	echo "should have converted it"
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]:0:3}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 
 main "$@"
