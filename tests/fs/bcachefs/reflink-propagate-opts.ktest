@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+#
+# Options reach a reflinked file's shared (indirect) extents through its
+# reflink_p keys: the propagate ioctl, and the reconcile scan that a setattr
+# queues. Both resolve the reflink_p's options with bch2_bkey_get_io_opts(),
+# and should get the referencing inode's. The filesystem default here is
+# data_replicas=2, which no file asks for.
+#
+# test_reflink_propagate_inode_opts: with the source removed, propagating
+#   the destination's data_replicas=3 records replicas=3 on the shared data.
+# test_reflink_setattr_keeps_shared_opts: a setattr on one of two clones in
+#   a data_replicas=1 directory leaves the shared data at replicas=1.
+
+# shellcheck source=tests/fs/bcachefs/bcachefs-test-libs.sh
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+
+# rpo_check_shared <replicas>: unmounts, then fails unless the shared extents
+# record data_replicas=<replicas> from an inode
+rpo_check_shared()
+{
+    local devs=("${ktest_scratch_dev[@]}") keys
+    umount /mnt
+    keys=$(bcachefs list -b reflink "${devs[@]}")
+    echo "$keys"
+    bcachefs fsck -ny "${devs[@]}"
+
+    if ! grep "replicas=$1 (inode)" <<< "$keys" >/dev/null; then
+	echo "ERROR: the shared extents don't record data_replicas=$1 from the inode"
+	exit 1
+    fi
+    bcachefs_test_end_checks "${devs[0]}"
+}
+
+test_reflink_propagate_inode_opts()
+{
+    set_watchdog 60
+
+    local devs=("${ktest_scratch_dev[@]}")
+    run_quiet "" bcachefs format -f --data_replicas=2 "${devs[@]}"
+    mount -t bcachefs "$(join_by : "${devs[@]}")" /mnt
+
+    mkdir /mnt/src /mnt/dst
+    bcachefs set-file-option --data_replicas=1 /mnt/src
+    bcachefs set-file-option --data_replicas=3 /mnt/dst
+
+    dd if=/dev/urandom of=/mnt/src/f bs=1M count=8 oflag=direct
+    cp --reflink=always /mnt/src/f /mnt/dst/f
+    rm /mnt/src/f
+
+    bcachefs reflink-option-propagate --set-may-update /mnt/dst/f
+    rpo_check_shared 3
+}
+
+test_reflink_setattr_keeps_shared_opts()
+{
+    set_watchdog 120
+
+    local devs=("${ktest_scratch_dev[@]}")
+    run_quiet "" bcachefs format -f --data_replicas=2 "${devs[@]}"
+    mount -t bcachefs "$(join_by : "${devs[@]}")" /mnt
+
+    mkdir /mnt/src
+    bcachefs set-file-option --data_replicas=1 /mnt/src
+
+    dd if=/dev/urandom of=/mnt/src/f bs=1M count=8 oflag=direct
+    cp --reflink=always /mnt/src/f /mnt/src/g
+
+    # An at-rest option, so the setattr queues a reconcile scan of g, which
+    # descends into the shared data through g's reflink_p.
+    bcachefs set-file-option --background_compression=lz4 /mnt/src/g
+    timeout 60 bcachefs reconcile wait /mnt
+    rpo_check_shared 1
+}
+
+main "$@"
