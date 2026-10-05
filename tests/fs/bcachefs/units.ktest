@@ -62,6 +62,7 @@ list_tests()
     echo extent_overwrite_all
     echo btree_ptr_stale_dirty
     echo snapshots
+    echo bkey_buf
 }
 
 main "$@"
