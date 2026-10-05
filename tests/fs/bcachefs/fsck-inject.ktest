@@ -147,4 +147,31 @@ test_dir_loop()
     umount /mnt
 }
 
+# The same, three directories round: with /a/b/c/d, c's dirent "d" is
+# repointed at a, so a -> c -> b -> a. Depths a=1, b=2, c=3: the walk from
+# a stops at c -> b, which isn't on its path - before "check_path_loop:
+# don't trust bi_depth past a wrong one" that renumbered a and c upwards
+# from b instead of reporting the loop, where the two-directory loop just
+# swapped its depths.
+test_dir_loop3()
+{
+    new_fs
+    mkdir -p /mnt/a/b/c/d
+    umount /mnt
+
+    local a=($(dirent a)) d=($(dirent d))
+
+    kvdb_rw -c "update dirents ${d[0]}:U32_MAX d_inum=${a[1]}" \
+	    -c "update inodes 0:${a[1]}:U32_MAX bi_dir=${d[0]%:*} bi_dir_offset=${d[0]#*:}" \
+	    -c "set dirents ${a[0]}:U32_MAX deleted"
+
+    ktest_expect_sb_errors="dir_loop|inode_dir_wrong_nlink|inode_unreachable|inode_points_to_wrong_dirent"
+    check_fsck dir_loop
+
+    mount -t bcachefs $(dev) /mnt
+    [[ -n $(find /mnt -name b -type d) ]]
+    [[ -n $(find /mnt -name c -type d) ]]
+    umount /mnt
+}
+
 main "$@"
