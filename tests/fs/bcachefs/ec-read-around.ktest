@@ -32,6 +32,8 @@
 #   cold estimate: stripe repair's reads of it bring the estimate up.
 # test_ec_reconstruct_skips_failed_block: after a read error, the reconstruct
 #   doesn't read the failed block again.
+# test_ec_read_around_promotes: with a promote target, read-arounds promote as
+#   direct reads do, so a second read of the file comes from the promote target.
 
 # shellcheck source=tests/fs/bcachefs/bcachefs-test-libs.sh
 . "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
@@ -160,6 +162,12 @@ ec_ra_write_small_extents()
 # built. Leaves /mnt mounted and sets ec_ra_md5.
 ec_ra_setup()
 {
+    # ec_ra_labels, if set, holds each device's label, in order
+    local fmt=() i
+    for (( i = 1; i <= $#; i++ )); do
+	[[ -n ${ec_ra_labels[i - 1]:-} ]] && fmt+=(--label="${ec_ra_labels[i - 1]}")
+	fmt+=("${!i}")
+    done
     # shellcheck disable=SC2086
     run_quiet "" bcachefs format -f			\
 	--erasure_code					\
@@ -167,7 +175,7 @@ ec_ra_setup()
 	--ec_max_data_blocks="${ec_ra_data_blocks:-3}"	\
 	--bucket_size=${ec_ra_bucket_kb}k		\
 	${ec_ra_format_opts:-}				\
-	"$@"
+	"${fmt[@]}"
     mount -t bcachefs "$(join_by : "$@")" /mnt
 
     "${ec_ra_write:-ec_ra_write_file}"
@@ -918,6 +926,72 @@ test_ec_reconstruct_skips_failed_block()
     fi
     if (( after - before > extents )); then
 	echo "ERROR: the reconstruct after each read error read the failed block again"
+	exit 1
+    fi
+    bcachefs_test_end_checks "${ktest_scratch_dev[2]}"
+}
+
+test_ec_read_around_promotes()
+{
+    set_watchdog 600
+
+    # Five members in group hdd, the first two behind dm-delay, and a promote
+    # target that holds no stripes.
+    local devs
+    local -a ec_ra_labels=(hdd.hdd0 hdd.hdd1 hdd.hdd2 hdd.hdd3 hdd.hdd4 ssd.ssd0)
+    ec_ra_format_opts="--foreground_target=hdd --background_target=hdd" ec_ra_slow_setup 6
+
+    ec_ra_delay_dev 0 500
+    ec_ra_prewarm 0:500
+
+    # Only now: the setup's reads and the prewarm would promote everything.
+    local sysfs ssd
+    sysfs=/sys/fs/bcachefs/$(ec_ra_uuid)
+    ssd=$(basename "$(readlink -f "${devs[5]}")")
+    echo ssd > "$sysfs/options/promote_target"
+
+    local around1 fail1
+    around1=$(ec_ra_counter data_read_ec_read_around)
+    fail1=$(ec_ra_counter data_read_ec_read_around_fail)
+    ec_ra_read_loop
+    around1=$(( $(ec_ra_counter data_read_ec_read_around) - around1 ))
+    fail1=$(( $(ec_ra_counter data_read_ec_read_around_fail) - fail1 ))
+    ec_ra_check_read
+
+    # Promotes are written asynchronously: wait for writes to the promote
+    # target to stop.
+    local w prev=-1 still=0 t
+    for (( t = 0; t < 60 && still < 3; t++ )); do
+	w=$(awk '{ print $7 }' "/sys/block/$ssd/stat")
+	if (( w == prev )); then still=$((still + 1)); else still=0; fi
+	prev=$w
+	sleep 1
+    done
+    echo "first pass: $around1 read-arounds ($fail1 failed); promoted:"
+    grep -h "since mount" "$sysfs/counters/data_read_promote" || true
+
+    local before around2 slow2
+    mapfile -t before < <(ec_ra_snapshot "${devs[@]}")
+    around2=$(ec_ra_counter data_read_ec_read_around)
+    ec_ra_read_loop
+    around2=$(( $(ec_ra_counter data_read_ec_read_around) - around2 ))
+    slow2=$(ec_ra_over 200)
+    echo "second pass: $around2 read-arounds; $slow2 of $ec_ra_file_mb reads took over 200 ms"
+    ec_ra_reads "${before[@]}" -- "${devs[@]}"
+    ec_ra_check_read
+
+    ec_ra_slow_teardown
+
+    if (( around1 == 0 )); then
+	echo "ERROR: no read-arounds in the first pass - this run tests nothing"
+	exit 1
+    fi
+    if (( around2 > 0 )); then
+	echo "ERROR: the second pass read around again: read-arounds weren't promoted"
+	exit 1
+    fi
+    if (( ec_ra_dev_kb[5] < ec_ra_file_mb * 1024 / 2 )); then
+	echo "ERROR: the second pass read only ${ec_ra_dev_kb[5]} KiB from the promote target"
 	exit 1
     fi
     bcachefs_test_end_checks "${ktest_scratch_dev[2]}"
