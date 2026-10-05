@@ -176,6 +176,7 @@ require-kernel-config BLK_DEV_WRITE_MOUNTED
 # replication.ktest:
 require-kernel-config BLK_DEV_DM
 require-kernel-config DM_FLAKEY
+require-kernel-config DM_DELAY		# the scrub tests' slow devices; also btree-bitmap-gc-crash.ktest
 
 require-kernel-config PROC_KCORE	# XXX Needed?
 
