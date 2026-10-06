@@ -173,13 +173,22 @@ check_fsck_declined()
     fi
 }
 
+# has_key <btree> <string>: a line of `bcachefs list -b <btree>` contains it
+has_key()
+{
+    [[ $(bcachefs list -b $1 $(dev)) == *"$2"* ]]
+}
+
+# A function, not `! has_key`: set -e ignores a negated command.
+no_key()
+{
+    ! has_key "$@"
+}
+
 # Whether the inode is on the deleted_inodes list
 on_deleted_list()
 {
-    # Captured, not piped to grep -q: an early exit SIGPIPEs the list, and
-    # under pipefail that fails the match
-    local list=$(bcachefs list -b deleted_inodes $(dev))
-    grep -q "type set 0:$1:" <<< "$list"
+    has_key deleted_inodes "type set 0:$1:"
 }
 
 # A function, not `! on_deleted_list`: set -e ignores a negated command.
@@ -346,7 +355,7 @@ test_inode_bi_subvol_missing()
     check_fsck inode_bi_subvol_missing
 
     [[ $(inode_field $inum bi_subvol) == 0 ]]
-    [[ -z $(bcachefs list -b subvolumes $(dev) | grep "0:7:") ]]
+    no_key subvolumes "0:7:"
 }
 
 # bi_subvol naming the root subvolume, which names the root directory: the
@@ -452,8 +461,8 @@ test_unlinked_inode_not_on_deleted_list()
     ktest_expect_sb_errors="unlinked_inode_not_on_deleted_list|deleted_inode_but_clean"
     check_fsck unlinked_inode_not_on_deleted_list
 
-    [[ -z $(bcachefs list -b inodes $(dev) | grep "0:$inum:") ]]
-    [[ -z $(bcachefs list -b extents $(dev) | grep " $inum:") ]]
+    no_key inodes "0:$inum:"
+    no_key extents " $inum:"
     not_on_deleted_list $inum
 
     mount -t bcachefs $(dev) /mnt
@@ -471,7 +480,7 @@ test_unlinked_inode_not_on_deleted_list_declined()
     check_fsck_declined unlinked_inode_not_on_deleted_list
 
     not_on_deleted_list $inum
-    [[ -n $(bcachefs list -b inodes $(dev) | grep "0:$inum:") ]]
+    has_key inodes "0:$inum:"
 }
 
 # ── check_extents ────────────────────────────────────────────────────────
@@ -534,6 +543,89 @@ test_extent_overlapping()
     [[ $(stat -c %s /mnt/f) == 131072 ]]
     cmp -n 32768 /mnt/f /tmp/f-orig
     cmp -n 98304 -i 32768:0 /mnt/f /tmp/f-orig
+    umount /mnt
+}
+
+# Keys of the wrong type for their inode: which side is wrong?
+#
+# A file with data, and a dirent copied in under it: the file's extents say
+# it's a file, so the dirent is the stray, and goes. Nothing else changes -
+# in particular not the dirent's target, which the deleted dirent used to
+# get rehashed back in and pointed at.
+test_key_in_wrong_inode_type_stray()
+{
+    new_fs
+    dd if=/dev/urandom of=/mnt/f bs=64k count=1 oflag=direct status=none
+    cp /mnt/f /tmp/f-orig
+    mkdir /mnt/d
+    echo x > /mnt/d/x
+    local f=$(stat -c %i /mnt/f) x=$(stat -c %i /mnt/d/x)
+    umount /mnt
+
+    local xd=($(dirent x))
+    local x_dir=$(inode_field $x bi_dir) x_off=$(inode_field $x bi_dir_offset)
+    kvdb_rw -c "copy dirents ${xd[0]}:U32_MAX $f:${xd[0]#*:}:U32_MAX"
+
+    ktest_expect_sb_errors="key_in_wrong_inode_type"
+    check_fsck key_in_wrong_inode_type
+
+    no_key dirents "type dirent $f:"
+    [[ $(inode_field $x bi_dir) == $x_dir ]]
+    [[ $(inode_field $x bi_dir_offset) == $x_off ]]
+
+    mount -t bcachefs $(dev) /mnt
+    [[ -f /mnt/f ]]
+    cmp /mnt/f /tmp/f-orig
+    [[ $(cat /mnt/d/x) == x ]]
+    umount /mnt
+}
+
+# An empty file with a dirent under it: it has no keys of its own type, so
+# its keys say what it is - a directory, with the entry in it.
+test_key_in_wrong_inode_type_takes_keys()
+{
+    new_fs
+    touch /mnt/e
+    mkdir /mnt/d
+    echo x > /mnt/d/x
+    local e=$(stat -c %i /mnt/e)
+    umount /mnt
+
+    local xd=($(dirent x))
+    kvdb_rw -c "copy dirents ${xd[0]}:U32_MAX $e:${xd[0]#*:}:U32_MAX"
+
+    ktest_expect_sb_errors="key_in_wrong_inode_type|dirent_d_type_wrong|hash_table_key_wrong_offset|inode_dir_wrong_nlink|inode_multiple_links_but_nlink_0"
+    check_fsck key_in_wrong_inode_type
+
+    mount -t bcachefs $(dev) /mnt
+    [[ -d /mnt/e ]]
+    [[ $(cat /mnt/e/x) == x ]]
+    [[ $(cat /mnt/d/x) == x ]]
+    umount /mnt
+}
+
+# A file whose mode says directory: check_inodes zeroes a directory's i_size
+# first, and the file's extents then say it's a file - which has to get an
+# i_size covering them back, or they're past the end and go. All 64k of it
+# used to.
+test_inode_dir_mode_on_file()
+{
+    new_fs
+    dd if=/dev/urandom of=/mnt/f bs=64k count=1 oflag=direct status=none
+    cp /mnt/f /tmp/f-orig
+    local inum=$(stat -c %i /mnt/f)
+    umount /mnt
+
+    kvdb_rw -c "update inodes 0:$inum:U32_MAX bi_mode=$(( 0040755 ))"
+
+    ktest_expect_sb_errors="key_in_wrong_inode_type|inode_dir_has_nonzero_i_size"
+    check_fsck key_in_wrong_inode_type
+
+    [[ $(inode_field $inum bi_size) == 65536 ]]
+
+    mount -t bcachefs $(dev) /mnt
+    [[ -f /mnt/f ]]
+    cmp /mnt/f /tmp/f-orig
     umount /mnt
 }
 
@@ -718,7 +810,7 @@ test_dirent_d_type_wrong()
     ktest_expect_sb_errors="dirent_d_type_wrong"
     check_fsck dirent_d_type_wrong
 
-    [[ -n $(bcachefs list -b dirents $(dev) | grep ": f -> ${f[1]} type reg") ]]
+    has_key dirents ": f -> ${f[1]} type reg"
 
     mount -t bcachefs $(dev) /mnt
     [[ $(cat /mnt/f) == foo ]]
