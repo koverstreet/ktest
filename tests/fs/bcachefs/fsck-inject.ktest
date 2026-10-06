@@ -457,6 +457,33 @@ test_dir_unlinked_but_not_empty()
     umount /mnt
 }
 
+# An empty directory with unlinked set and no name: what rmdir leaves when
+# the directory's open, or a crash comes before it's reaped. Legitimate - it's
+# waiting for deletion like any unlinked file, and handled as one: put back
+# on the deleted list, and reaped. It used to have the flag quietly cleared
+# and be reattached: an rmdir'd directory reappearing in lost+found. (The
+# root's wrong nlink is the injection's: removing the dirent didn't
+# decrement it, as rmdir does.)
+test_dir_unlinked_empty()
+{
+    new_fs
+    mkdir /mnt/e
+    echo foo > /mnt/keep
+    local e=$(orphan_unlinked /mnt/e)
+    kvdb_rw -c "set deleted_inodes 0:$e:U32_MAX deleted"
+
+    ktest_expect_sb_errors="unlinked_inode_not_on_deleted_list|deleted_inode_but_clean|inode_dir_wrong_nlink"
+    check_fsck unlinked_inode_not_on_deleted_list
+
+    no_key inodes "0:$e:"
+    not_on_deleted_list $e
+
+    mount -t bcachefs $(dev) /mnt
+    [[ -z $(ls /mnt/lost+found) ]]
+    [[ $(cat /mnt/keep) == foo ]]
+    umount /mnt
+}
+
 # Declined, it changes nothing: the C cleared the flag whether or not the
 # repair was taken.
 test_dir_unlinked_but_not_empty_declined()
@@ -498,6 +525,25 @@ test_unlinked_inode_not_on_deleted_list()
     mount -t bcachefs $(dev) /mnt
     [[ $(cat /mnt/keep) == foo ]]
     umount /mnt
+}
+
+# The same, an empty file: delete_dead_inodes' deleted_inode_but_clean
+# queues its log entry, and with no extents to delete nothing commits it
+# before bch2_inode_rm_snapshot()'s next iteration begins - and drops it
+# (bch2_trans_begin() WARNs).
+test_unlinked_inode_empty_not_on_deleted_list()
+{
+    new_fs
+    touch /mnt/empty
+    echo foo > /mnt/keep
+    local inum=$(orphan_unlinked /mnt/empty)
+    kvdb_rw -c "set deleted_inodes 0:$inum:U32_MAX deleted"
+
+    ktest_expect_sb_errors="unlinked_inode_not_on_deleted_list|deleted_inode_but_clean"
+    check_fsck unlinked_inode_not_on_deleted_list
+
+    no_key inodes "0:$inum:"
+    not_on_deleted_list $inum
 }
 
 test_unlinked_inode_not_on_deleted_list_declined()
