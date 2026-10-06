@@ -495,6 +495,89 @@ test_dir_nlink_after_dirent_repair()
     umount /mnt
 }
 
+# A dirent's d_type disagreeing with its inode: the inode wins.
+test_dirent_d_type_wrong()
+{
+    new_fs
+    echo foo > /mnt/f
+    umount /mnt
+
+    local f=($(dirent f))
+    kvdb_rw -c "update dirents ${f[0]}:U32_MAX d_type=4"	# DT_DIR
+
+    ktest_expect_sb_errors="dirent_d_type_wrong"
+    check_fsck dirent_d_type_wrong
+
+    [[ -n $(bcachefs list -b dirents $(dev) | grep ": f -> ${f[1]} type reg") ]]
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(cat /mnt/f) == foo ]]
+    umount /mnt
+}
+
+# An inode's backpointer naming another dirent - in the same directory, and in
+# another directory. check_inodes clears it, and check_dirents sets it from
+# the dirent that does point at the inode: it has to end up where it was.
+test_inode_backpointer_wrong()
+{
+    new_fs
+    mkdir /mnt/x /mnt/y
+    echo foo > /mnt/x/f
+    echo bar > /mnt/x/g
+    local f_inum=$(stat -c %i /mnt/x/f) g_inum=$(stat -c %i /mnt/x/g)
+    local y=$(stat -c %i /mnt/y)
+    umount /mnt
+
+    local f=($(dirent f)) g=($(dirent g))
+
+    # f's backpointer to g's dirent; g's to a dirent position in y
+    kvdb_rw -c "update inodes 0:$f_inum:U32_MAX bi_dir_offset=${g[0]#*:}" \
+	    -c "update inodes 0:$g_inum:U32_MAX bi_dir=$y"
+
+    ktest_expect_sb_errors="inode_points_to_wrong_dirent|inode_points_to_missing_dirent"
+    check_fsck inode_points_to_wrong_dirent
+    grep -qx inode_points_to_missing_dirent <<< "$(recorded_errors)"
+
+    [[ $(inode_field $f_inum bi_dir) == ${f[0]%:*} ]]
+    [[ $(inode_field $f_inum bi_dir_offset) == ${f[0]#*:} ]]
+    [[ $(inode_field $g_inum bi_dir) == ${g[0]%:*} ]]
+    [[ $(inode_field $g_inum bi_dir_offset) == ${g[0]#*:} ]]
+}
+
+# A directory's inode gone, its dirents still there: the inode is
+# reconstructed from them. The new inode has a new hash seed, so every dirent
+# in it is at the wrong offset and gets rehashed - the test is that names
+# still resolve afterwards, which a fsck that only converges doesn't show.
+# (A missing file with extents is reconstructed earlier, by check_extents.)
+#
+# With a subdirectory: a rehash can move its dirent behind the walk, out of
+# the new inode's subdirectory count, and i_nlink was left 0 until the next
+# fsck - the second fsck -n here caught it.
+test_missing_dir_with_contents()
+{
+    new_fs
+    mkdir -p /mnt/x/sub/deeper
+    local i
+    for i in $(seq 1 20); do echo $i > /mnt/x/sub/f$i; done
+    echo deep > /mnt/x/sub/deeper/z
+    local sub=$(stat -c %i /mnt/x/sub)
+    umount /mnt
+
+    kvdb_rw -c "set inodes 0:$sub:U32_MAX deleted"
+
+    ktest_expect_sb_errors="missing_inode_with_contents|hash_table_key_wrong_offset|inode_dir_missing_backpointer|inode_dir_wrong_nlink"
+    check_fsck missing_inode_with_contents
+
+    mount -t bcachefs $(dev) /mnt
+    [[ -d /mnt/x/sub ]]
+    for i in $(seq 1 20); do
+	[[ $(cat /mnt/x/sub/f$i) == $i ]]
+    done
+    [[ $(cat /mnt/x/sub/deeper/z) == deep ]]
+    [[ $(ls /mnt/x/sub | wc -l) == 21 ]]
+    umount /mnt
+}
+
 # ── check_directory_structure ────────────────────────────────────────────
 
 # Two directories, each the other's parent, cut off from the root. Built
