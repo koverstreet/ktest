@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+#
+# A scrub read that loses a race with a rewrite of the extent is not damage.
+#
+# Scrub reads an extent through a data update. If the extent is rewritten
+# while the read is in flight, the old bucket empties and its generation is
+# bumped in the same transaction; bch2_read_endio() then sees a stale
+# pointer and ends the read with data_read_ptr_stale_race. Nothing was
+# lost: the extent lives on in its new place. But move_write() counts any
+# rbio->ret as uncorrected, and bch2_data_update_read_done() records damage
+# against the file. The scrub exits 4 and `damage ls` names a healthy file.
+#
+# dm-delay holds the scrub's reads for long enough to rewrite the file
+# underneath them; data_read_reuse_race says the race fired.
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+require-kernel-config DM_DELAY
+
+config-scratch-devs 1G
+
+DELAY_NAME=scrubrace
+
+delay_dev_setup()
+{
+    local dev=${ktest_scratch_dev[0]}
+
+    umount /mnt 2>/dev/null || true
+    dmsetup remove --retry $DELAY_NAME 2>/dev/null || true
+    dmsetup create $DELAY_NAME --table "0 $(blockdev --getsz $dev) delay $dev 0 0"
+}
+
+# Reads delayed by $1 ms, writes not. Suspending flushes the reads already
+# queued, so a delay of 0 is also "complete everything in flight now".
+delay_dev_set_read()
+{
+    local dev=${ktest_scratch_dev[0]}
+
+    dmsetup reload $DELAY_NAME --table "0 $(blockdev --getsz $dev) delay $dev 0 $1 $dev 0 0"
+    dmsetup suspend $DELAY_NAME
+    dmsetup resume $DELAY_NAME
+}
+
+counter_since_mount()
+{
+    awk '/since mount/ {print $3}' /sys/fs/bcachefs/*/counters/$1
+}
+
+test_scrub_rewrite_under_read()
+{
+    set_watchdog 300
+
+    delay_dev_setup
+    local ddev=/dev/mapper/$DELAY_NAME
+
+    run_quiet "" bcachefs format -f $ddev
+    mount -t bcachefs $ddev /mnt
+
+    # Many small extents: scrub keeps up to 64 reads in flight per device,
+    # and every one of them has to still be in flight when the rewrite lands.
+    run_fio_base				\
+	--name=frag				\
+	--rw=randwrite				\
+	--bs=4k					\
+	--filesize=32M
+    sync
+
+    local races_before=$(counter_since_mount data_read_reuse_race)
+
+    delay_dev_set_read 3000
+
+    bcachefs scrub /mnt &
+    local scrub_pid=$!
+    sleep 1
+
+    if ! kill -0 $scrub_pid 2>/dev/null; then
+	echo "ERROR: scrub exited before the rewrite, nothing was in flight"
+	wait $scrub_pid || true
+	return 1
+    fi
+
+    # Every old extent goes, so every old bucket empties and its gen moves.
+    # The reads in flight complete against the bumped gens.
+    dd if=/dev/urandom of=/mnt/fiotest bs=1M count=32 conv=notrunc,fsync status=none
+
+    # The reads held so far complete now; the rest of the scrub runs at speed.
+    delay_dev_set_read 0
+
+    local scrub_rc=0
+    wait $scrub_pid || scrub_rc=$?
+
+    local races_after=$(counter_since_mount data_read_reuse_race)
+    echo "scrub exit $scrub_rc, data_read_reuse_race $races_before -> $races_after"
+
+    if (( races_after == races_before )); then
+	echo "ERROR: no scrub read saw a stale pointer: the rewrite landed"
+	echo "outside the reads' window, and this run proves nothing"
+	return 1
+    fi
+
+    local damage=$(bcachefs damage ls /mnt)
+    if [[ -n $damage ]]; then
+	echo "ERROR: a rewrite under the scrub's read was recorded as damage:"
+	echo "$damage"
+	return 1
+    fi
+
+    # 4: uncorrected sectors; 2: corrected. A read the extent moved out
+    # from under says nothing about the data either way.
+    if (( scrub_rc )); then
+	echo "ERROR: scrub exited $scrub_rc after a rewrite under its reads"
+	return 1
+    fi
+
+    umount /mnt
+    dmsetup remove --retry $DELAY_NAME
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+main "$@"
