@@ -254,6 +254,57 @@ test_inode_cached_flags_wrong()
     umount /mnt
 }
 
+# has_inode_opts, both ways: set with no options, clear with one. The packer
+# recomputes it and update would correct the injection, so these go in raw
+# (update -r), from the stored bi_flags - which also holds the packing
+# fields. Empty files, so an option set behind propagation's back has no
+# extents to disagree with.
+test_inode_opts_flag_wrong()
+{
+    new_fs
+    touch /mnt/f /mnt/g
+    local f=$(stat -c %i /mnt/f) g=$(stat -c %i /mnt/g)
+    umount /mnt
+
+    local bit=$(( 1 << ${INODE_FLAG[has_inode_opts]} ))
+    kvdb_rw -c "update inodes 0:$g:U32_MAX bi_compression=2"
+    local f_flags=$(kvdb -c "get -r inodes 0:$f:U32_MAX bi_flags" | tail -1)
+    local g_flags=$(kvdb -c "get -r inodes 0:$g:U32_MAX bi_flags" | tail -1)
+    kvdb_rw -c "update -r inodes 0:$f:U32_MAX bi_flags=$(( f_flags | bit ))" \
+	    -c "update -r inodes 0:$g:U32_MAX bi_flags=$(( g_flags & ~bit ))"
+    [[ $(inode_flag $f has_inode_opts) == 1 ]]
+    [[ $(inode_flag $g has_inode_opts) == 0 ]]
+
+    ktest_expect_sb_errors="inode_has_inode_opts_flag_wrong"
+    check_fsck inode_has_inode_opts_flag_wrong
+
+    [[ $(inode_flag $f has_inode_opts) == 0 ]]
+    [[ $(inode_flag $g has_inode_opts) == 1 ]]
+    [[ $(inode_field $g bi_compression) == 2 ]]
+}
+
+# bi_journal_seq past the journal: reset to the current sequence number. The
+# inode trigger stamps bi_journal_seq, so this goes in raw too.
+test_inode_journal_seq_in_future()
+{
+    new_fs
+    echo foo > /mnt/f
+    local inum=$(stat -c %i /mnt/f)
+    umount /mnt
+
+    kvdb_rw -c "update -r inodes 0:$inum:U32_MAX bi_journal_seq=1000000000"
+    [[ $(inode_field $inum bi_journal_seq) == 1000000000 ]]
+
+    ktest_expect_sb_errors="inode_journal_seq_in_future"
+    check_fsck inode_journal_seq_in_future
+
+    (( $(inode_field $inum bi_journal_seq) < 1000000000 ))
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(cat /mnt/f) == foo ]]
+    umount /mnt
+}
+
 # bi_parent_subvol on an inode that isn't a subvolume root.
 #
 # Not the only error: the backpointer check runs first and looks the dirent up
