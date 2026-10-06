@@ -1282,6 +1282,59 @@ test_reattach_descendant_whiteout()
     umount /mnt
 }
 
+# A chain of $1 snapshots of the root, f appended to before each: f has a
+# version at every interior node, and snapshot sK sees K lines. Leaves it
+# unmounted.
+snapshot_chain()
+{
+    new_fs
+    local i
+    for i in $(seq 1 $1); do
+	echo $i >> /mnt/f
+	bcachefs subvolume snapshot /mnt /mnt/s$i
+    done
+    umount /mnt
+}
+
+# Every version of f in the chain unreachable: the oldest is reattached and
+# the fixup points every version below at its dirent - more than one
+# transaction holds, so it commits partway (commit_lazy_if_full()), and the
+# re-drive has to adopt the reattach dirent it already made, and skip the
+# versions already fixed. Every snapshot still sees its own f, through the
+# one lost+found entry.
+test_reattach_partial_commit()
+{
+    local n=120
+    snapshot_chain $n
+
+    local d=$(dirent_pos f)
+    local inum=$(kvdb -c 'list dirents' | sed -n "s/.*: f -> \([0-9]*\) .*/\1/p" | head -1)
+
+    local cmds=(-c "set dirents $d deleted") s
+    for s in $(kvdb -c 'list -k inodes' | sed -n "s/.*type inode_v3 0:$inum:\([0-9A-Z_]*\) .*/\1/p"); do
+	cmds+=(-c "update inodes 0:$inum:$s bi_dir=0 bi_dir_offset=0")
+    done
+    kvdb_rw "${cmds[@]}"
+
+    local rc=0
+    bcachefs fsck -yv $(dev) > /tmp/fsck-v.log 2>&1 || rc=$?
+    echo "fsck -yv exited $rc"
+    (( rc != 0 ))
+    grep -q 'resuming reattach' /tmp/fsck-v.log
+
+    ktest_expect_sb_errors="inode_unreachable"
+    check_bcachefs_errors $(dev)
+    bcachefs fsck -n $(dev)
+
+    mount -t bcachefs $(dev) /mnt
+    local i
+    for i in $(seq 1 $n); do
+	[[ $(wc -l < /mnt/s$i/lost+found/$inum) == $i ]]
+    done
+    [[ $(wc -l < /mnt/lost+found/$inum) == $n ]]
+    umount /mnt
+}
+
 # An unreachable version whose descendant has a name in a directory the
 # older view also has: the name is carried up, rather than a lost+found
 # entry made - the snapshot sees the file under the name it was renamed to.
@@ -1328,6 +1381,45 @@ test_dirent_to_inode_in_descendant_snapshot()
     mount -t bcachefs $(dev) /mnt
     [[ $(cat /mnt/h) == z ]]
     [[ ! -e /mnt/snap/h ]]
+    umount /mnt
+}
+
+# The same, for moving a dirent down to the snapshots its inode is in: h's
+# dirent moved up to the snapshot above the chain, where h never existed,
+# and h with a version at every node of the chain below it - one copy of the
+# dirent per version, more than one transaction holds, and the re-drive has
+# to skip the copies already committed. The snapshot taken before h existed
+# still doesn't see it.
+#
+# Unverified that it does commit partway: the re-drive leaves no trace to
+# check for, unlike the reattach's "resuming reattach". A dirent copy costs
+# far less transaction memory than an inode write, hence the longer chain.
+test_dirent_to_descendant_partial_commit()
+{
+    local n=400
+    new_fs
+    bcachefs subvolume snapshot /mnt /mnt/before
+    local i
+    for i in $(seq 1 $n); do
+	echo $i >> /mnt/h
+	bcachefs subvolume snapshot /mnt /mnt/s$i
+    done
+    umount /mnt
+
+    local top=$(snap_field $(subvol_snapshot 2) parent)
+    local d=$(dirent_pos h)
+    kvdb_rw -c "copy dirents $d ${d%:*}:$top" \
+	    -c "set dirents $d deleted"
+
+    ktest_expect_sb_errors="dirent_to_inode_in_descendant_snapshot"
+    check_fsck dirent_to_inode_in_descendant_snapshot
+
+    mount -t bcachefs $(dev) /mnt
+    for i in $(seq 1 $n); do
+	[[ $(wc -l < /mnt/s$i/h) == $i ]]
+    done
+    [[ $(wc -l < /mnt/h) == $n ]]
+    [[ ! -e /mnt/before/h ]]
     umount /mnt
 }
 
