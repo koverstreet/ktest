@@ -1363,6 +1363,28 @@ test_lostfound_created()
     umount /mnt
 }
 
+# The name a reattach wants taken by another file: lost+found/<inum> made by
+# hand first. It's reattached at the next free name, <inum>.1, and the other
+# file keeps its own - it used to stop fsck, fsck_repair_unimplemented.
+test_lostfound_name_taken()
+{
+    new_fs
+    echo x > /mnt/f
+    local inum=$(stat -c %i /mnt/f)
+    echo other > /mnt/lost+found/$inum
+    umount /mnt
+
+    orphan_version $inum U32_MAX $(dirent_pos f)
+
+    ktest_expect_sb_errors="inode_unreachable"
+    check_fsck inode_unreachable
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(cat /mnt/lost+found/$inum) == other ]]
+    [[ $(cat /mnt/lost+found/$inum.1) == x ]]
+    umount /mnt
+}
+
 # lost+found deleted in a snapshot, and a file there to reattach: lost+found
 # is restored in that snapshot - the same inode, which rmdir deleted there
 # too, so it comes from the tree's root snapshot - and the other view is left
