@@ -755,6 +755,61 @@ test_xattrs_rehashed()
     umount /mnt
 }
 
+# ── check_extents_to_backpointers ────────────────────────────────────────
+
+# Two files' extents pointing at the same data: f's, copied into g (sparse,
+# the same size). Same extent twice, so one is dropped - g's: the
+# backpointer slot both map to holds the copy's, so f's is the extent being
+# checked when the duplicate's found, and sizes equal, the other goes. g's
+# extent becomes an error key; f keeps its data, and has to keep a
+# backpointer - deleting the dropped pointer's backpointer empties the slot
+# they share.
+test_bp_dup_same_extent()
+{
+    new_fs
+    dd if=/dev/urandom of=/mnt/f bs=64k count=1 oflag=direct status=none
+    cp /mnt/f /tmp/f-orig
+    truncate -s 64k /mnt/g
+    local f=$(stat -c %i /mnt/f) g=$(stat -c %i /mnt/g)
+    umount /mnt
+
+    local e=($(extents_of $f))
+    [[ ${e[0]} == 128 && ${e[1]} == 128 ]]
+    kvdb_rw -c "copy extents $f:128:U32_MAX $g:128:U32_MAX"
+
+    ktest_expect_sb_errors="data_lost_double_allocation|ptr_to_missing_backpointer|inode_i_sectors_wrong|backpointer_to_missing_ptr"
+    check_fsck data_lost_double_allocation
+
+    mount -t bcachefs $(dev) /mnt
+    cmp /mnt/f /tmp/f-orig
+    ! cat /mnt/g > /dev/null 2>&1
+    umount /mnt
+}
+
+# The same, into a directory with entries: the copy is the stray, twice
+# over - a double allocation, and an extent under a directory. It goes; f
+# and d are untouched.
+test_bp_dup_into_dir()
+{
+    new_fs
+    dd if=/dev/urandom of=/mnt/f bs=64k count=1 oflag=direct status=none
+    cp /mnt/f /tmp/f-orig
+    mkdir /mnt/d
+    echo x > /mnt/d/x
+    local f=$(stat -c %i /mnt/f) d=$(stat -c %i /mnt/d)
+    umount /mnt
+
+    kvdb_rw -c "copy extents $f:128:U32_MAX $d:128:U32_MAX"
+
+    ktest_expect_sb_errors="data_lost_double_allocation|ptr_to_missing_backpointer|key_in_wrong_inode_type|extent_past_end_of_inode|inode_i_sectors_wrong|backpointer_to_missing_ptr"
+    check_fsck_any
+
+    mount -t bcachefs $(dev) /mnt
+    cmp /mnt/f /tmp/f-orig
+    [[ $(cat /mnt/d/x) == x ]]
+    umount /mnt
+}
+
 # ── check_dirents ────────────────────────────────────────────────────────
 
 # Subdirectory counts are checked per directory as the walk leaves it, and
