@@ -344,12 +344,11 @@ test_inode_journal_seq_in_future()
     umount /mnt
 }
 
-# bi_parent_subvol on an inode that isn't a subvolume root.
-#
-# Not the only error: the backpointer check runs first and looks the dirent up
-# through bi_parent_subvol - subvolume 5 doesn't exist, so the dirent is
-# "missing" and the backpointer is cleared, for check_dirents to restore. The
-# test checks that it is restored, to the same dirent.
+# bi_parent_subvol on an inode that isn't a subvolume root - the only error:
+# it's checked before the backpointer, which is looked up through it. It used
+# to be after, and subvolume 5 not existing made the dirent "missing" and the
+# backpointer cleared (subvol_missing, inode_points_to_missing_dirent), for
+# check_dirents to put back. The backpointer is checked as unchanged.
 test_inode_bi_parent_nonzero()
 {
     new_fs
@@ -361,7 +360,7 @@ test_inode_bi_parent_nonzero()
 
     kvdb_rw -c "update inodes 0:$inum:U32_MAX bi_parent_subvol=5"
 
-    ktest_expect_sb_errors="inode_bi_parent_nonzero|subvol_missing|inode_points_to_missing_dirent"
+    ktest_expect_sb_errors="inode_bi_parent_nonzero"
     check_fsck inode_bi_parent_nonzero
 
     [[ $(inode_field $inum bi_parent_subvol) == 0 ]]
@@ -1149,10 +1148,11 @@ test_dirent_not_visible_in_parent_subvol()
     do_subvol_dirent_parent_wrong 1 dirent_not_visible_in_parent_subvol
 }
 
-# (subvol_missing: the subvolume lookup records it too, ahead of the repair.)
+# The only error - the lookup that finds the subvolume missing no longer
+# records subvol_missing ahead of the repair.
 test_dirent_to_missing_parent_subvol()
 {
-    do_subvol_dirent_parent_wrong 99 dirent_to_missing_parent_subvol subvol_missing
+    do_subvol_dirent_parent_wrong 99 dirent_to_missing_parent_subvol
 }
 
 # A subvolume dirent naming a subvolume that doesn't exist: the dirent goes,
