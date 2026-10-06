@@ -119,6 +119,68 @@ test_wrong_nlink()
     umount /mnt
 }
 
+# ── check_dirents ────────────────────────────────────────────────────────
+
+# Subdirectory counts are checked per directory as the walk leaves it, and
+# for the last directory after the loop: x is checked when the walk moves on
+# to d, d only by the final flush. Dirents exist only under /, x and d, and d
+# is created last, so it's the last directory the walk visits.
+test_dir_wrong_nlink()
+{
+    new_fs
+    mkdir /mnt/x
+    touch /mnt/x/f
+    mkdir -p /mnt/d/a /mnt/d/b
+    local x_nlink=$(stat -c %h /mnt/x) d_nlink=$(stat -c %h /mnt/d)
+    local x=$(stat -c %i /mnt/x) d=$(stat -c %i /mnt/d)
+    umount /mnt
+
+    kvdb_rw -c "update inodes 0:$x:U32_MAX bi_nlink=3" \
+	    -c "update inodes 0:$d:U32_MAX bi_nlink=7"
+
+    ktest_expect_sb_errors="inode_dir_wrong_nlink"
+    check_fsck inode_dir_wrong_nlink
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(stat -c %h /mnt/x) == $x_nlink ]]
+    [[ $(stat -c %h /mnt/d) == $d_nlink ]]
+    umount /mnt
+}
+
+# A repair partway through a directory's dirents commits, so the walker's
+# subdirectory count for it is partial and gets recounted from the btree
+# (recalculate_sums). The recount agrees with i_nlink here: nothing may be
+# reported against the directory. The Rust conversion lost the recheck after
+# the recount, and flagged every such directory "wrong i_nlink: got 3, should
+# be 3".
+#
+# The repair: a file whose inode is gone, so its dirent is removed. The file
+# with the lowest dirent offset, so other dirents in d come after it.
+test_dir_nlink_after_dirent_repair()
+{
+    new_fs
+    mkdir -p /mnt/d/a /mnt/d/b
+    touch /mnt/d/f{1..20}
+    local d=$(stat -c %i /mnt/d) d_nlink=$(stat -c %h /mnt/d)
+    umount /mnt
+
+    local victim=$(bcachefs list -b dirents $(dev) |
+	sed -n "s/.*type dirent $d:\([0-9]*\):U32_MAX .*: f[0-9]* -> \([0-9]*\) .*/\1 \2/p" |
+	sort -n | sed -n 1p)
+    local inum=${victim#* }
+    [[ -n $inum ]]
+
+    kvdb_rw -c "set inodes 0:$inum:U32_MAX deleted"
+
+    ktest_expect_sb_errors="dirent_to_missing_inode"
+    check_fsck dirent_to_missing_inode
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(stat -c %h /mnt/d) == $d_nlink ]]
+    [[ $(ls /mnt/d | wc -l) == 21 ]]
+    umount /mnt
+}
+
 # ── check_directory_structure ────────────────────────────────────────────
 
 # Two directories, each the other's parent, cut off from the root. Built
