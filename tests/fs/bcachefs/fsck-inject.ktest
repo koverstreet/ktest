@@ -814,4 +814,201 @@ test_dir_loop3()
     umount /mnt
 }
 
+
+# ── check_dirents: DT_SUBVOL ─────────────────────────────────────────────
+
+# "<pos> <parent subvol> <child subvol>" of the subvolume dirent named $1,
+# pos with its snapshot
+subvol_dirent()
+{
+    bcachefs list -b dirents $(dev) |
+	sed -n "s/.*type dirent \([0-9]*:[0-9]*:[0-9A-Z_]*\) .*: $1 -> \([0-9]*\) -> \([0-9]*\) type subvol.*/\1 \2 \3/p"
+}
+
+# /mnt/sv, a subvolume, and /mnt/sv/inner, a subvolume in it: inner's dirent
+# lives in sv's snapshot, with sv as its parent. Leaves it unmounted.
+subvol_setup()
+{
+    new_fs
+    bcachefs subvolume create /mnt/sv
+    bcachefs subvolume create /mnt/sv/inner
+    echo foo > /mnt/sv/inner/f
+    umount /mnt
+}
+
+# A subvolume dirent's parent_subvol is the subvolume it's in. Two ways to get
+# it wrong: a subvolume that exists but whose snapshot doesn't see the dirent
+# (the root subvolume - sv's snapshot isn't its ancestor), and one that
+# doesn't exist. Either way it's rewritten to the subvolume that does see it,
+# and the nested subvolume is where it was.
+do_subvol_dirent_parent_wrong()
+{
+    local bad_parent=$1 err=$2 side=${3:-}
+
+    subvol_setup
+    local d=($(subvol_dirent inner))
+    local parent=${d[1]} child=${d[2]}
+    [[ -n $child ]]
+
+    kvdb_rw -c "update dirents ${d[0]} d_parent_subvol=$bad_parent"
+
+    ktest_expect_sb_errors="$err${side:+|$side}"
+    check_fsck $err
+
+    d=($(subvol_dirent inner))
+    [[ ${d[1]} == $parent && ${d[2]} == $child ]]
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(cat /mnt/sv/inner/f) == foo ]]
+    umount /mnt
+}
+
+test_dirent_not_visible_in_parent_subvol()
+{
+    do_subvol_dirent_parent_wrong 1 dirent_not_visible_in_parent_subvol
+}
+
+# (subvol_missing: the subvolume lookup records it too, ahead of the repair.)
+test_dirent_to_missing_parent_subvol()
+{
+    do_subvol_dirent_parent_wrong 99 dirent_to_missing_parent_subvol subvol_missing
+}
+
+# A subvolume dirent naming a subvolume that doesn't exist: the dirent goes,
+# and the real subvolume it used to name, now with no dirent, is reattached -
+# its contents whole.
+test_dirent_to_missing_subvol()
+{
+    subvol_setup
+    local d=($(subvol_dirent inner))
+    local child=${d[2]}
+    [[ -n $child ]]
+
+    kvdb_rw -c "update dirents ${d[0]} d_child_subvol=99"
+
+    # The subvolume's root is reattached as an inode (its backpointer named
+    # the dirent that's gone), into lost+found as subvol-<id>
+    ktest_expect_sb_errors="dirent_to_missing_subvol|inode_unreachable|inode_points_to_wrong_dirent"
+    check_fsck dirent_to_missing_subvol
+
+    [[ -z $(subvol_dirent inner) ]]
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(cat /mnt/lost+found/subvol-$child/f) == foo ]]
+    umount /mnt
+}
+
+# ── snapshot versions ────────────────────────────────────────────────────
+
+subvol_snapshot()
+{
+    kvdb -c "get subvolumes 0:$1:0 snapshot" | tail -1
+}
+
+# A dirent whose inode was deleted in a descendant snapshot, where the dirent
+# still shows: rm in a snapshotted subvolume leaves whiteouts for both in the
+# subvolume's snapshot, and the dirent's is removed. The repair puts it back,
+# for the subvolume only - the snapshot keeps the file.
+test_dirent_to_overwritten_inode()
+{
+    new_fs
+    bcachefs subvolume create /mnt/sv
+    echo foo > /mnt/sv/f
+    local dir=$(stat -c %i /mnt/sv)
+    bcachefs subvolume snapshot /mnt/sv /mnt/snap
+    rm /mnt/sv/f
+    umount /mnt
+
+    local sv_snap=$(subvol_snapshot 2)
+    local wh=$(kvdb -c 'list dirents' |
+	sed -n "s/.*type whiteout \($dir:[0-9]*\):$sv_snap .*/\1/p")
+    [[ -n $wh ]]
+
+    kvdb_rw -c "set dirents $wh:$sv_snap deleted"
+
+    ktest_expect_sb_errors="dirent_to_overwritten_inode"
+    check_fsck dirent_to_overwritten_inode
+
+    mount -t bcachefs $(dev) /mnt
+    [[ ! -e /mnt/sv/f ]]
+    [[ $(cat /mnt/snap/f) == foo ]]
+    umount /mnt
+}
+
+# A directory's hash seed differing between its snapshot versions: every
+# version takes the snapshot root's, and names resolve in every view after -
+# old dirents, in the snapshot both share, and new ones, in the subvolume's.
+#
+# Never detected from June until "inode: bch2_inode_find_oldest_snapshot()
+# finds the oldest again": the "snapshot root" each version was checked
+# against was itself.
+test_inode_snapshot_hash_mismatch()
+{
+    new_fs
+    bcachefs subvolume create /mnt/sv
+    mkdir /mnt/sv/d
+    local i
+    for i in $(seq 1 20); do echo $i > /mnt/sv/d/f$i; done
+    local d=$(stat -c %i /mnt/sv/d)
+    bcachefs subvolume snapshot /mnt/sv /mnt/snap
+    for i in $(seq 1 5); do echo $i > /mnt/sv/d/g$i; done
+    umount /mnt
+
+    local sv_snap=$(subvol_snapshot 2)
+    echo "sv snapshot $sv_snap; versions of d:"
+    kvdb -c 'list -k inodes' | grep ":$d:"
+    local seed=$(kvdb -c "get inodes 0:$d:$sv_snap bi_hash_seed" | tail -1)
+    kvdb_rw -c "update inodes 0:$d:$sv_snap bi_hash_seed=12345"
+
+    ktest_expect_sb_errors="inode_snapshot_mismatch"
+    check_fsck inode_snapshot_mismatch
+
+    [[ $(kvdb -c "get inodes 0:$d:$sv_snap bi_hash_seed" | tail -1) == $seed ]]
+
+    mount -t bcachefs $(dev) /mnt
+    for i in $(seq 1 20); do
+	[[ $(cat /mnt/sv/d/f$i) == $i ]]
+	[[ $(cat /mnt/snap/d/f$i) == $i ]]
+    done
+    for i in $(seq 1 5); do
+	[[ $(cat /mnt/sv/d/g$i) == $i ]]
+	[[ ! -e /mnt/snap/d/g$i ]]
+    done
+    umount /mnt
+}
+
+# ── str_hash ─────────────────────────────────────────────────────────────
+
+# Two dirents with the same name: b's dirent renamed to a in place, so it's
+# also at the wrong offset. The move to where "a" hashes finds the real a
+# there; one of them is renamed. Both files have to survive, each under a
+# name that leads to it, with backpointers that agree.
+test_dirent_duplicate_name()
+{
+    new_fs
+    echo A > /mnt/a
+    echo B > /mnt/b
+    local a=$(stat -c %i /mnt/a) b=$(stat -c %i /mnt/b)
+    umount /mnt
+
+    local d=($(dirent b))
+    kvdb_rw -c "update dirents ${d[0]}:U32_MAX d_name=a"
+
+    ktest_expect_sb_errors="hash_table_key_wrong_offset|hash_table_key_duplicate"
+    check_fsck hash_table_key_duplicate
+
+    mount -t bcachefs $(dev) /mnt
+    ls -la /mnt
+    [[ $(ls /mnt | grep -c '^a') == 2 ]]
+    local f
+    for f in /mnt/a*; do
+	case $(stat -c %i $f) in
+	    $a) [[ $(cat $f) == A ]] ;;
+	    $b) [[ $(cat $f) == B ]] ;;
+	    *)  echo "TEST FAILED: $f is neither file"; exit 1 ;;
+	esac
+    done
+    umount /mnt
+}
+
 main "$@"
