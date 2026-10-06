@@ -128,6 +128,36 @@ check_fsck()
     fi
 }
 
+# check_fsck_any: as check_fsck, for injections where more than one of the
+# declared errors can be the one that finds it - which, depending on walk
+# order. Found, nothing undeclared, repaired; the test checks the state.
+check_fsck_any()
+{
+    local rc1=0 rc2=0
+
+    bcachefs fsck -y $(dev) || rc1=$?
+    echo "first fsck -y exited $rc1 (recorded: $(recorded_errors | xargs))"
+
+    if (( rc1 == 0 )); then
+	echo "TEST FAILED: fsck missed injected corruption"
+	exit 1
+    fi
+
+    if ! check_bcachefs_errors $(dev); then
+	echo "TEST FAILED: errors the test didn't declare" \
+	     "(ktest_expect_sb_errors='$ktest_expect_sb_errors')"
+	exit 1
+    fi
+
+    bcachefs fsck -n $(dev) || rc2=$?
+    echo "second fsck -n exited $rc2"
+
+    if (( rc2 != 0 )); then
+	echo "TEST FAILED: errors remain after fsck -y"
+	exit 1
+    fi
+}
+
 # ── check_nlinks ─────────────────────────────────────────────────────────
 
 # A file with two links whose inode says more. bi_nlink is the link count
@@ -1501,15 +1531,12 @@ test_dirent_duplicate_dangling_dup()
 # The same name in two snapshots: the descendant's wins in its own view - the
 # ancestor's is whited out there, and nowhere else.
 #
-# XXX broken_, so not run - fails today, on an open question: the surviving
-# dirent, in the leaf, names an inode whose only version is in the ancestor.
-# get_visible() scans only the dirent's snapshot and its descendants, so
-# check_dirents calls the inode missing and "reconstructs" it in the leaf
-# over the real one. Scanning ancestors too fixes that, but then
-# fsck_update_backpointers() (and check_target()) write the shared ancestor
-# version in place, which breaks the other view. Rename back to test_ when
-# that's decided.
-broken_dirent_duplicate_snapshots()
+# The surviving dirent, in the leaf, names an inode whose only version is in
+# the ancestor: check_dirents used to call it missing and "reconstruct" it in
+# the leaf over the real one, and once get_visible() saw the ancestor's
+# version, the backpointer repair wrote it in place - pointing the snapshot's
+# view of b at the leaf's dirent.
+test_dirent_duplicate_snapshots()
 {
     new_fs
     echo A > /mnt/a
@@ -1553,6 +1580,126 @@ test_rename_over_in_snapshot_clean()
     mount -t bcachefs $(dev) /mnt
     [[ $(cat /mnt/b) == A ]]
     [[ $(cat /mnt/snap/b) == B ]]
+    umount /mnt
+}
+
+# No damage: a dirent repeated, unchanged, in a snapshot below the one it was
+# made in, its inode only in the ancestor. Unusual - whatever makes a dirent
+# writes its inode there too - but valid: a lookup in the leaf finds the
+# ancestor's version, which names this dirent. fsck must call it clean, not
+# take the inode for missing and reconstruct it over the real one.
+test_dirent_in_snapshot_inode_in_ancestor()
+{
+    new_fs
+    echo B > /mnt/b
+    bcachefs subvolume snapshot /mnt /mnt/snap
+    umount /mnt
+
+    local leaf=$(subvol_snapshot 1)
+    local db=($(dirent b))
+    kvdb_rw -c "copy dirents ${db[0]}:U32_MAX ${db[0]}:$leaf"
+
+    bcachefs fsck -n $(dev)
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(cat /mnt/b) == B ]]
+    [[ $(cat /mnt/snap/b) == B ]]
+    umount /mnt
+}
+
+# A dirent in the leaf naming an inode whose only version is in the
+# ancestor, where it has a name already: in the leaf, c's dirent repointed at
+# b's inode. The leaf now sees two links to it, the snapshot one - and the
+# repair that adds the link has to give the leaf a version of its own, not
+# rewrite the ancestor's, which is the snapshot's b too.
+test_dirent_target_repair_in_snapshot()
+{
+    new_fs
+    echo B > /mnt/b
+    echo C > /mnt/c
+    local b=$(stat -c %i /mnt/b)
+    bcachefs subvolume snapshot /mnt /mnt/snap
+    umount /mnt
+
+    local ids=($(snap_ids)) interior leaf snap
+    interior=${ids[0]} leaf=${ids[1]} snap=${ids[2]}
+
+    local dc=($(dirent c))
+    kvdb_rw -c "copy dirents ${dc[0]}:U32_MAX ${dc[0]}:$leaf" \
+	    -c "update dirents ${dc[0]}:$leaf d_inum=$b"
+
+    local nlink=$(kvdb -c "get inodes 0:$b:$interior bi_nlink" | tail -1)
+    local dir=$(kvdb -c "get inodes 0:$b:$interior bi_dir_offset" | tail -1)
+
+    ktest_expect_sb_errors="inode_wrong_nlink|inode_multiple_links_but_nlink_0|inode_unreachable|inode_points_to_wrong_dirent"
+    check_fsck_any
+
+    # The ancestor's version - the snapshot's b - untouched:
+    [[ $(kvdb -c "get inodes 0:$b:$interior bi_nlink" | tail -1) == $nlink ]]
+    [[ $(kvdb -c "get inodes 0:$b:$interior bi_dir_offset" | tail -1) == $dir ]]
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(cat /mnt/c) == B ]]
+    [[ $(cat /mnt/b) == B ]]
+    [[ $(stat -c %h /mnt/b) == 2 ]]
+    [[ $(cat /mnt/snap/b) == B ]]
+    [[ $(cat /mnt/snap/c) == C ]]
+    [[ $(stat -c %h /mnt/snap/b) == 1 ]]
+    umount /mnt
+}
+
+# A dirent in a leaf whose inode was deleted in between: b removed in the
+# root, then snapshotted again, so the middle snapshot has whiteouts - and
+# b's dirent copied into the newest leaf. That leaf resolves the inode to
+# nothing, whatever the oldest snapshot still has: the dirent goes. Nothing
+# older changes.
+test_dirent_target_deleted_between()
+{
+    new_fs
+    echo B > /mnt/b
+    bcachefs subvolume snapshot /mnt /mnt/s1
+    rm /mnt/b
+    bcachefs subvolume snapshot /mnt /mnt/s2
+    umount /mnt
+
+    local leaf=$(subvol_snapshot 1)
+    local db=$(kvdb -c 'list dirents' | sed -n "s/.*type dirent \([0-9]*:[0-9]*\):U32_MAX .*: b -> .*/\1/p")
+    [[ -n $db ]]
+    kvdb_rw -c "copy dirents $db:U32_MAX $db:$leaf"
+
+    ktest_expect_sb_errors="dirent_to_missing_inode"
+    check_fsck dirent_to_missing_inode
+
+    mount -t bcachefs $(dev) /mnt
+    [[ ! -e /mnt/b ]]
+    [[ ! -e /mnt/s2/b ]]
+    [[ $(cat /mnt/s1/b) == B ]]
+    umount /mnt
+}
+
+# One version wrong, in a descendant, and the ancestor's right: the
+# descendant's backpointer is repaired, and the ancestor's left alone.
+test_dirent_target_descendant_version()
+{
+    local inum=$(snap_setup)
+    echo y >> /mnt/f
+    umount /mnt
+
+    local ids=($(snap_ids)) interior leaf snap
+    interior=${ids[0]} leaf=${ids[1]} snap=${ids[2]}
+
+    local off=$(kvdb -c "get inodes 0:$inum:$interior bi_dir_offset" | tail -1)
+    kvdb_rw -c "update inodes 0:$inum:$leaf bi_dir_offset=12345"
+
+    ktest_expect_sb_errors="inode_points_to_missing_dirent|inode_points_to_wrong_dirent"
+    check_fsck_any
+
+    [[ $(kvdb -c "get inodes 0:$inum:$leaf bi_dir_offset" | tail -1) == $off ]]
+    [[ $(kvdb -c "get inodes 0:$inum:$interior bi_dir_offset" | tail -1) == $off ]]
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(cat /mnt/f) == $'x\ny' ]]
+    [[ $(cat /mnt/snap/f) == x ]]
     umount /mnt
 }
 
