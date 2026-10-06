@@ -1132,4 +1132,383 @@ test_dirent_duplicate_name()
     umount /mnt
 }
 
+# ── lost+found and reattach ──────────────────────────────────────────────
+
+# Cut an inode version off from its name: its dirent at the dirent's own
+# snapshot removed (or, with -s, hidden from @snapshot only), and the version
+# at @snapshot without a backpointer. orphan_version [-s] <inum> <snapshot>
+# <dirent pos>
+orphan_version()
+{
+    local in_snapshot=""
+    [[ $1 == -s ]] && { in_snapshot="-s"; shift; }
+    local inum=$1 snapshot=$2 d=$3
+
+    if [[ -n $in_snapshot ]]; then
+	kvdb_rw -c "set -s dirents ${d%:*}:$snapshot deleted"
+    else
+	kvdb_rw -c "set dirents $d deleted"
+    fi
+    kvdb_rw -c "update inodes 0:$inum:$snapshot bi_dir=0 bi_dir_offset=0"
+}
+
+# "<inode>:<offset>:<snapshot>" of the dirent named $1, any snapshot
+dirent_pos()
+{
+    kvdb -c 'list dirents' |
+	sed -n "s/.*type dirent \([0-9]*:[0-9]*:[0-9A-Z_]*\) .*: $1 -> .*/\1/p" | head -1
+}
+
+snap_field()
+{
+    kvdb -c "get snapshots 0:$1:0 $2" | tail -1
+}
+
+# f, written, then the root subvolume snapshotted at /mnt/snap: f's keys are
+# in the interior snapshot both leaves inherit. Prints "<inum> <interior>
+# <root leaf> <snap leaf>"; leaves it mounted.
+snap_setup()
+{
+    new_fs >&2
+    echo x > /mnt/f
+    local inum=$(stat -c %i /mnt/f)
+    bcachefs subvolume snapshot /mnt /mnt/snap >&2
+    echo "$inum"
+}
+
+snap_ids()
+{
+    local leaf=$(subvol_snapshot 1)
+    echo "$(snap_field $leaf parent) $leaf $(subvol_snapshot 2)"
+}
+
+# An unreachable file with no lost+found: it's created, and the file put in
+# it.
+test_lostfound_created()
+{
+    new_fs
+    rmdir /mnt/lost+found
+    echo x > /mnt/f
+    local inum=$(stat -c %i /mnt/f)
+    umount /mnt
+
+    orphan_version $inum U32_MAX $(dirent_pos f)
+
+    ktest_expect_sb_errors="inode_unreachable"
+    check_fsck inode_unreachable
+
+    mount -t bcachefs $(dev) /mnt
+    [[ -d /mnt/lost+found ]]
+    [[ $(cat /mnt/lost+found/$inum) == x ]]
+    umount /mnt
+}
+
+# lost+found deleted in a snapshot, and a file there to reattach: lost+found
+# is restored in that snapshot - the same inode, which rmdir deleted there
+# too, so it comes from the tree's root snapshot - and the other view is left
+# as it was.
+test_lostfound_restored()
+{
+    local inum=$(snap_setup)
+    echo y >> /mnt/snap/f
+    rmdir /mnt/snap/lost+found
+    umount /mnt
+
+    local ids=($(snap_ids)) interior leaf snap
+    interior=${ids[0]} leaf=${ids[1]} snap=${ids[2]}
+
+    orphan_version -s $inum $snap $(dirent_pos f)
+
+    ktest_expect_sb_errors="inode_unreachable"
+    check_fsck inode_unreachable
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(cat /mnt/snap/lost+found/$inum) == $'x\ny' ]]
+    [[ $(cat /mnt/f) == x ]]
+    [[ ! -e /mnt/lost+found/$inum ]]
+    umount /mnt
+}
+
+# Reattaching a version with versions below it that are unreachable too: the
+# oldest is reattached, and the ones below pointed at its dirent - one entry
+# in lost+found, that each view sees its own version through.
+test_reattach_descendant_follows()
+{
+    local inum=$(snap_setup)
+    echo y >> /mnt/f
+    umount /mnt
+
+    local ids=($(snap_ids)) interior leaf snap
+    interior=${ids[0]} leaf=${ids[1]} snap=${ids[2]}
+
+    orphan_version $inum $interior $(dirent_pos f)
+    kvdb_rw -c "update inodes 0:$inum:$leaf bi_dir=0 bi_dir_offset=0"
+
+    ktest_expect_sb_errors="inode_unreachable"
+    check_fsck inode_unreachable
+
+    [[ $(kvdb -c "get inodes 0:$inum:$leaf bi_dir_offset" | tail -1) == \
+       $(kvdb -c "get inodes 0:$inum:$interior bi_dir_offset" | tail -1) ]]
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(cat /mnt/lost+found/$inum) == $'x\ny' ]]
+    [[ $(cat /mnt/snap/lost+found/$inum) == x ]]
+    umount /mnt
+}
+
+# Reattaching a version with a version below it that has a name of its own,
+# which can't be carried up - its directory doesn't exist in the older view:
+# the lost+found entry is whited out below, so that view has the file once,
+# under its own name.
+test_reattach_descendant_whiteout()
+{
+    local inum=$(snap_setup)
+    mkdir /mnt/d
+    mv /mnt/f /mnt/d/g
+    umount /mnt
+
+    local ids=($(snap_ids)) interior leaf snap
+    interior=${ids[0]} leaf=${ids[1]} snap=${ids[2]}
+
+    orphan_version $inum $interior $(dirent_pos f)
+
+    ktest_expect_sb_errors="inode_unreachable"
+    check_fsck inode_unreachable
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(cat /mnt/snap/lost+found/$inum) == x ]]
+    [[ $(cat /mnt/d/g) == x ]]
+    [[ ! -e /mnt/lost+found/$inum ]]
+    umount /mnt
+}
+
+# An unreachable version whose descendant has a name in a directory the
+# older view also has: the name is carried up, rather than a lost+found
+# entry made - the snapshot sees the file under the name it was renamed to.
+test_inode_unreachable_dirent_in_descendant()
+{
+    local inum=$(snap_setup)
+    mv /mnt/f /mnt/g
+    umount /mnt
+
+    local ids=($(snap_ids)) interior leaf snap
+    interior=${ids[0]} leaf=${ids[1]} snap=${ids[2]}
+
+    orphan_version $inum $interior $(dirent_pos f)
+
+    ktest_expect_sb_errors="inode_unreachable_dirent_in_descendant"
+    check_fsck inode_unreachable_dirent_in_descendant
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(cat /mnt/g) == x ]]
+    [[ $(cat /mnt/snap/g) == x ]]
+    [[ ! -e /mnt/snap/lost+found/$inum ]]
+    umount /mnt
+}
+
+# A dirent in an ancestor snapshot whose inode exists only in a descendant:
+# a view on another branch sees a name for a file that isn't there. The dirent
+# is moved down to the snapshot with the inode.
+test_dirent_to_inode_in_descendant_snapshot()
+{
+    snap_setup > /dev/null
+    echo z > /mnt/h
+    umount /mnt
+
+    local ids=($(snap_ids)) interior leaf snap
+    interior=${ids[0]} leaf=${ids[1]} snap=${ids[2]}
+
+    local d=$(dirent_pos h)
+    kvdb_rw -c "copy dirents $d ${d%:*}:$interior" \
+	    -c "set dirents $d deleted"
+
+    ktest_expect_sb_errors="dirent_to_inode_in_descendant_snapshot"
+    check_fsck dirent_to_inode_in_descendant_snapshot
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(cat /mnt/h) == z ]]
+    [[ ! -e /mnt/snap/h ]]
+    umount /mnt
+}
+
+# ── str_hash duplicates: which one wins ──────────────────────────────────
+
+# The same dirent twice, the copy one slot on: the copy goes.
+test_dirent_duplicate_identical()
+{
+    new_fs
+    echo A > /mnt/a
+    umount /mnt
+
+    local d=($(dirent a))
+    kvdb_rw -c "copy dirents ${d[0]}:U32_MAX ${d[0]%:*}:$(( ${d[0]#*:} + 1 )):U32_MAX"
+
+    ktest_expect_sb_errors="hash_table_key_duplicate|hash_table_key_wrong_offset"
+    check_fsck hash_table_key_duplicate
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(ls /mnt) == $'a\nlost+found' ]]
+    [[ $(cat /mnt/a) == A ]]
+    umount /mnt
+}
+
+# Two names the same, one pointing at nothing: the dangling one goes, both
+# when it's the one being checked (k) and when it's the one ahead in the
+# probe sequence (dup). The file the renamed dirent used to name is
+# reattached.
+#
+# The renamed dirent has to be the one with the lower offset: the walk has
+# to reach it, and find the duplicate, before it reaches the one it
+# duplicates - a dangling dirent reached first is just removed, and there's
+# no duplicate left to resolve. Offsets are hashes, so which of the two
+# that is is decided at run time.
+do_dirent_duplicate_dangling()
+{
+    local dangling=$1
+
+    new_fs
+    echo x > /mnt/x
+    echo y > /mnt/y
+    umount /mnt
+
+    local dx=($(dirent x)) dy=($(dirent y))
+    # As strings, padded: offsets are u64, bash arithmetic is signed
+    local lo=x hi=y
+    [[ $(printf %20s ${dx[0]#*:}) > $(printf %20s ${dy[0]#*:}) ]] && { lo=y; hi=x; }
+    local dlo=($(dirent $lo)) dhi=($(dirent $hi))
+
+    case $dangling in
+	k)   kvdb_rw -c "update dirents ${dlo[0]}:U32_MAX d_name=$hi d_inum=999999" ;;
+	dup) kvdb_rw -c "update dirents ${dlo[0]}:U32_MAX d_name=$hi" \
+		     -c "update dirents ${dhi[0]}:U32_MAX d_inum=999999" ;;
+    esac
+
+    ktest_expect_sb_errors="hash_table_key_duplicate|hash_table_key_wrong_offset|inode_unreachable|inode_points_to_wrong_dirent|inode_points_to_missing_dirent"
+    check_fsck hash_table_key_duplicate
+
+    mount -t bcachefs $(dev) /mnt
+    case $dangling in
+	k)   [[ $(cat /mnt/$hi) == $hi ]]
+	     [[ $(cat /mnt/lost+found/${dlo[1]}) == $lo ]] ;;
+	dup) [[ $(cat /mnt/$hi) == $lo ]]
+	     [[ $(cat /mnt/lost+found/${dhi[1]}) == $hi ]] ;;
+    esac
+    umount /mnt
+}
+
+test_dirent_duplicate_dangling_k()
+{
+    do_dirent_duplicate_dangling k
+}
+
+test_dirent_duplicate_dangling_dup()
+{
+    do_dirent_duplicate_dangling dup
+}
+
+# The same name in two snapshots: the descendant's wins in its own view - the
+# ancestor's is whited out there, and nowhere else.
+#
+# XXX broken_, so not run - fails today, on an open question: the surviving
+# dirent, in the leaf, names an inode whose only version is in the ancestor.
+# get_visible() scans only the dirent's snapshot and its descendants, so
+# check_dirents calls the inode missing and "reconstructs" it in the leaf
+# over the real one. Scanning ancestors too fixes that, but then
+# fsck_update_backpointers() (and check_target()) write the shared ancestor
+# version in place, which breaks the other view. Rename back to test_ when
+# that's decided.
+broken_dirent_duplicate_snapshots()
+{
+    new_fs
+    echo A > /mnt/a
+    echo B > /mnt/b
+    bcachefs subvolume snapshot /mnt /mnt/snap
+    umount /mnt
+
+    local ids=($(snap_ids)) interior leaf snap
+    interior=${ids[0]} leaf=${ids[1]} snap=${ids[2]}
+
+    local db=($(dirent b))
+    kvdb_rw -c "copy dirents ${db[0]}:U32_MAX ${db[0]}:$leaf" \
+	    -c "update dirents ${db[0]}:$leaf d_name=a"
+
+    ktest_expect_sb_errors="hash_table_key_duplicate|hash_table_key_wrong_offset|inode_points_to_wrong_dirent|inode_points_to_missing_dirent|inode_unreachable"
+    check_fsck hash_table_key_duplicate
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(cat /mnt/a) == B ]]
+    [[ $(cat /mnt/snap/a) == A ]]
+    [[ $(cat /mnt/snap/b) == B ]]
+    umount /mnt
+}
+
+# No injection: a rename over an existing file in a snapshot leaves a dirent
+# in the leaf shadowing the ancestor's at the same position, pointing at an
+# inode that lives only in the ancestor. That's a normal filesystem, and fsck
+# must find nothing - the target inode is visible from the dirent, whatever
+# overwrote the dirent's own position.
+test_rename_over_in_snapshot_clean()
+{
+    new_fs
+    echo A > /mnt/a
+    echo B > /mnt/b
+    bcachefs subvolume snapshot /mnt /mnt/snap
+    mv /mnt/a /mnt/b
+    umount /mnt
+
+    bcachefs fsck -n $(dev)
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(cat /mnt/b) == A ]]
+    [[ $(cat /mnt/snap/b) == B ]]
+    umount /mnt
+}
+
+# ── keys in deleted snapshots ────────────────────────────────────────────
+
+# The root subvolume snapshotted and the snapshot deleted: the interior node
+# above the root's leaf is parked no_keys, its keys moved down to the leaf.
+# Prints "<leaf> <interior>"; leaves it unmounted.
+parked_interior_setup()
+{
+    bcachefs subvolume snapshot /mnt /mnt/snap >&2
+    bcachefs subvolume delete /mnt/snap >&2
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_delete_dead_snapshots
+    umount /mnt
+
+    local leaf=$(subvol_snapshot 1)
+    local interior=$(snap_field $leaf parent)
+    if [[ $interior == 0 || $(snap_field $interior state) != $((0x372b5a01)) ]]; then
+	echo "TEST BROKEN: expected a no_keys interior above the root leaf" >&2
+	kvdb -c 'list snapshots' >&2
+	exit 1
+    fi
+    echo "$leaf $interior"
+}
+
+# A key the accounting knows about in a parked interior: the node has data,
+# so check_snapshots undeletes it rather than lose the key - and the file
+# reads back whole.
+test_deleted_interior_has_data()
+{
+    new_fs
+    dd if=/dev/urandom of=/mnt/g bs=64k count=1 oflag=direct status=none
+    cp /mnt/g /tmp/g-orig
+    local g=$(stat -c %i /mnt/g)
+    local ids=($(parked_interior_setup)) leaf interior
+    leaf=${ids[0]} interior=${ids[1]}
+
+    local e=$(kvdb -c 'list extents' | sed -n "s/.*type extent \($g:[0-9]*\):$leaf .*/\1/p")
+    [[ -n $e ]]
+    kvdb_rw -c "copy extents $e:$leaf $e:$interior" \
+	    -c "set extents $e:$leaf deleted"
+
+    ktest_expect_sb_errors="snapshot_deleted_but_has_data"
+    check_fsck snapshot_deleted_but_has_data
+
+    mount -t bcachefs $(dev) /mnt
+    cmp /mnt/g /tmp/g-orig
+    umount /mnt
+}
+
 main "$@"
