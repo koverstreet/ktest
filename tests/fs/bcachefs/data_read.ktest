@@ -160,4 +160,83 @@ test_unpoison()
     umount /mnt
 }
 
+# Scrub must report data we've already lost, after it's been moved.
+#
+# A move of a poisoned extent gives it a fresh checksum over the corrupt bytes
+# (bch2_data_update_read_done()) so it can be written out; the poison flag is
+# what still says the data is bad. After that the checksum verifies, so a scrub
+# that only checks checksums has nothing to find - while every read of the file
+# fails.
+#
+# Field report (#969): zstd, replicas=1, files lost to a power failure. Reads
+# returned EIO and dmesg showed the extents "flags: poisoned" with a new
+# checksum on the background target; scrub reported 0 uncorrected, twice.
+#
+# Compressed, scrub's decompress check does fail on the garbage - but the
+# error was counted from a read bio that a bounced read never set, so as zero
+# sectors. Uncompressed, the moved extent reads back clean, and only the
+# poison flag says otherwise.
+do_scrub_poisoned_moved()
+{
+    local compression=$1
+
+    ktest_expect_device_errors=1
+    ktest_expect_sb_errors="data_read_(io|csum)_err|data_decompress_err_zstd_[a-z_]+"
+    [[ ! -f /sys/module/bcachefs/parameters/write_corrupt_ratio ]] && return 0
+
+    set_watchdog 180
+
+    run_quiet "" bcachefs format -f			\
+	--compression=$compression			\
+	--foreground_target=ssd				\
+	--background_target=hdd				\
+	--label=ssd.ssd1 ${ktest_scratch_dev[0]}	\
+	--label=hdd.hdd1 ${ktest_scratch_dev[1]}
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+
+    # Compressible, so the zstd variant has something to choke on
+    echo 4 > /sys/module/bcachefs/parameters/write_corrupt_ratio
+    for i in $(seq 1 200); do
+	yes "file $i line" | head -c 32k > /mnt/f$i
+    done
+    sync
+    echo 0 > /sys/module/bcachefs/parameters/write_corrupt_ratio
+
+    # Moving to the background target poisons the corrupt extents and
+    # rechecksums them
+    timeout 120 bcachefs reconcile wait /mnt
+
+    echo 3 > /proc/sys/vm/drop_caches
+    local lost=()
+    for i in $(seq 1 200); do
+	cat /mnt/f$i > /dev/null 2>&1 || lost+=(f$i)
+    done
+    echo "${#lost[@]} files unreadable"
+    [[ ${#lost[@]} -gt 0 ]]
+
+    local extents=$(bcachefs list -b extents ${ktest_scratch_dev[0]})
+    grep -q poisoned <<< "$extents"
+
+    # exit status bit 2 (4): uncorrected errors
+    local ret=0
+    bcachefs scrub /mnt || ret=$?
+    if (( !(ret & 4) )); then
+	echo "ERROR: scrub reported no uncorrected errors (exit $ret), but ${#lost[@]} files are unreadable"
+	exit 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+}
+
+test_scrub_poisoned_moved_zstd()
+{
+    do_scrub_poisoned_moved zstd
+}
+
+test_scrub_poisoned_moved_uncompressed()
+{
+    do_scrub_poisoned_moved none
+}
+
 main "$@"
