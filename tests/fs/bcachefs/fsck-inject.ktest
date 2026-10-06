@@ -34,9 +34,42 @@ dev()
     echo ${ktest_scratch_dev[0]}
 }
 
+kvdb()
+{
+    bcachefs kvdb $(dev) "$@"
+}
+
 kvdb_rw()
 {
     bcachefs kvdb --rw $(dev) "$@"
+}
+
+# A field of the root subvolume's version of an inode, as update names it:
+# inode_field <inum> <field>
+inode_field()
+{
+    kvdb -c "get inodes 0:$1:U32_MAX $2" | tail -1
+}
+
+# Inode flag bits, from BCH_INODE_FLAGS() (fs/fs/inode_format.h); inode
+# flags are only reachable through bi_flags as a whole.
+declare -A INODE_FLAG=(
+    [unlinked]=7 [has_child_snapshot]=9 [has_inode_opts]=12
+    [has_access_acl]=13 [has_default_acl]=14
+)
+
+# inode_flag <inum> <flag>: 1 if set
+inode_flag()
+{
+    echo $(( ($(inode_field $1 bi_flags) >> ${INODE_FLAG[$2]}) & 1 ))
+}
+
+# inode_flag_set <inum> <flag> <0|1>
+inode_flag_set()
+{
+    local flags=$(inode_field $1 bi_flags) bit=$(( 1 << ${INODE_FLAG[$2]} ))
+    (( $3 )) && flags=$(( flags | bit )) || flags=$(( flags & ~bit ))
+    kvdb_rw -c "update inodes 0:$1:U32_MAX bi_flags=$flags"
 }
 
 new_fs()
@@ -119,12 +152,285 @@ test_wrong_nlink()
     umount /mnt
 }
 
+# check_fsck_declined <error>: fsck -n reports it, and changes nothing - the
+# caller checks the state it cares about
+check_fsck_declined()
+{
+    local expect=$1 rc=0
+
+    bcachefs fsck -n $(dev) > /tmp/fsck-n.log 2>&1 || rc=$?
+    cat /tmp/fsck-n.log
+    echo "fsck -n exited $rc"
+
+    if (( rc == 0 )); then
+	echo "TEST FAILED: fsck -n missed injected corruption"
+	exit 1
+    fi
+
+    if ! grep -qw "$expect" /tmp/fsck-n.log; then
+	echo "TEST FAILED: fsck -n didn't report $expect"
+	exit 1
+    fi
+}
+
+# Whether the inode is on the deleted_inodes list
+on_deleted_list()
+{
+    # Captured, not piped to grep -q: an early exit SIGPIPEs the list, and
+    # under pipefail that fails the match
+    local list=$(bcachefs list -b deleted_inodes $(dev))
+    grep -q "type set 0:$1:" <<< "$list"
+}
+
+# A function, not `! on_deleted_list`: set -e ignores a negated command.
+not_on_deleted_list()
+{
+    ! on_deleted_list "$@"
+}
+
+# Make a file or directory an unlinked orphan: no dirent, no backpointer,
+# unlinked set. Prints the inode number. orphan_unlinked <path in /mnt>,
+# with the filesystem mounted; leaves it unmounted.
+orphan_unlinked()
+{
+    local name=$(basename $1) inum=$(stat -c %i $1)
+    umount /mnt
+
+    local d=($(dirent $name))
+    local flags=$(inode_field $inum bi_flags)
+    kvdb_rw -c "set dirents ${d[0]}:U32_MAX deleted" \
+	    -c "update inodes 0:$inum:U32_MAX bi_dir=0 bi_dir_offset=0 bi_flags=$(( flags | 1 << ${INODE_FLAG[unlinked]} ))" >&2
+    echo $inum
+}
+
+# ── check_inodes ─────────────────────────────────────────────────────────
+
+test_dir_nonzero_i_size()
+{
+    new_fs
+    mkdir /mnt/x
+    touch /mnt/x/f
+    local x=$(stat -c %i /mnt/x)
+    umount /mnt
+
+    kvdb_rw -c "update inodes 0:$x:U32_MAX bi_size=4096"
+
+    ktest_expect_sb_errors="inode_dir_has_nonzero_i_size"
+    check_fsck inode_dir_has_nonzero_i_size
+
+    [[ $(inode_field $x bi_size) == 0 ]]
+}
+
+# The flags that cache the answer to a question about other btrees, set with
+# nothing behind them: no versions in descendant snapshots, no ACL xattrs.
+# (The other direction of the ACL flags - xattr present, flag clear - is
+# check_xattrs'.)
+test_inode_cached_flags_wrong()
+{
+    new_fs
+    echo foo > /mnt/f
+    local inum=$(stat -c %i /mnt/f)
+    umount /mnt
+
+    local flags=$(inode_field $inum bi_flags)
+    local bit
+    for bit in has_child_snapshot has_access_acl has_default_acl; do
+	flags=$(( flags | 1 << ${INODE_FLAG[$bit]} ))
+    done
+    kvdb_rw -c "update inodes 0:$inum:U32_MAX bi_flags=$flags"
+
+    ktest_expect_sb_errors="inode_has_child_snapshots_wrong|inode_has_access_acl_flag_wrong|inode_has_default_acl_flag_wrong"
+    check_fsck inode_has_child_snapshots_wrong
+    local recorded=$(recorded_errors)
+    grep -qx inode_has_access_acl_flag_wrong  <<< "$recorded"
+    grep -qx inode_has_default_acl_flag_wrong <<< "$recorded"
+
+    for bit in has_child_snapshot has_access_acl has_default_acl; do
+	[[ $(inode_flag $inum $bit) == 0 ]]
+    done
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(cat /mnt/f) == foo ]]
+    umount /mnt
+}
+
+# bi_parent_subvol on an inode that isn't a subvolume root.
+#
+# Not the only error: the backpointer check runs first and looks the dirent up
+# through bi_parent_subvol - subvolume 5 doesn't exist, so the dirent is
+# "missing" and the backpointer is cleared, for check_dirents to restore. The
+# test checks that it is restored, to the same dirent.
+test_inode_bi_parent_nonzero()
+{
+    new_fs
+    echo foo > /mnt/f
+    local inum=$(stat -c %i /mnt/f)
+    umount /mnt
+
+    local dir=$(inode_field $inum bi_dir) offset=$(inode_field $inum bi_dir_offset)
+
+    kvdb_rw -c "update inodes 0:$inum:U32_MAX bi_parent_subvol=5"
+
+    ktest_expect_sb_errors="inode_bi_parent_nonzero|subvol_missing|inode_points_to_missing_dirent"
+    check_fsck inode_bi_parent_nonzero
+
+    [[ $(inode_field $inum bi_parent_subvol) == 0 ]]
+    [[ $(inode_field $inum bi_dir) == $dir ]]
+    [[ $(inode_field $inum bi_dir_offset) == $offset ]]
+}
+
+# bi_subvol naming a subvolume that doesn't exist, on an inode that isn't a
+# subvolume root: the reference is stripped, not reconstructed - the snapshot
+# names subvolume 1, not 7, so nothing else says subvolume 7 was there.
+test_inode_bi_subvol_missing()
+{
+    new_fs
+    echo foo > /mnt/f
+    local inum=$(stat -c %i /mnt/f)
+    umount /mnt
+
+    kvdb_rw -c "update inodes 0:$inum:U32_MAX bi_subvol=7"
+
+    ktest_expect_sb_errors="inode_bi_subvol_missing"
+    check_fsck inode_bi_subvol_missing
+
+    [[ $(inode_field $inum bi_subvol) == 0 ]]
+    [[ -z $(bcachefs list -b subvolumes $(dev) | grep "0:7:") ]]
+}
+
+# bi_subvol naming the root subvolume, which names the root directory: the
+# file's reference is stripped, the root directory's left alone.
+test_inode_bi_subvol_wrong()
+{
+    new_fs
+    echo foo > /mnt/f
+    local inum=$(stat -c %i /mnt/f)
+    umount /mnt
+
+    kvdb_rw -c "update inodes 0:$inum:U32_MAX bi_subvol=1"
+
+    ktest_expect_sb_errors="inode_bi_subvol_wrong"
+    check_fsck inode_bi_subvol_wrong
+
+    [[ $(inode_field $inum bi_subvol) == 0 ]]
+    [[ $(inode_field 4096 bi_subvol) == 1 ]]
+}
+
+# unlinked set on a file that has dirents - two, a hardlink. The flag clear
+# is the whole repair: bi_nlink counts links beyond the first, so it stays 1,
+# and the inode trigger takes it off the deleted list. Nothing may be lost.
+test_inode_unlinked_but_has_dirent()
+{
+    new_fs
+    echo foo > /mnt/f
+    ln /mnt/f /mnt/g
+    local inum=$(stat -c %i /mnt/f)
+    umount /mnt
+
+    inode_flag_set $inum unlinked 1
+    on_deleted_list $inum
+
+    ktest_expect_sb_errors="inode_unlinked_but_has_dirent"
+    check_fsck inode_unlinked_but_has_dirent
+
+    [[ $(inode_flag $inum unlinked) == 0 ]]
+    [[ $(inode_field $inum bi_nlink) == 1 ]]
+    not_on_deleted_list $inum
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(stat -c %h /mnt/f) == 2 ]]
+    [[ $(cat /mnt/g) == foo ]]
+    umount /mnt
+}
+
+# An orphaned directory with unlinked set, and contents: unlinked on a
+# directory is only valid on the root of an unlinked subvolume, so the flag
+# is cleared and the directory reattached, contents and all. (The rest of the
+# errors are from the orphaning: / loses a subdirectory, lost+found gains
+# one.)
+test_dir_unlinked_but_not_empty()
+{
+    new_fs
+    mkdir /mnt/x
+    echo foo > /mnt/x/f
+    ln /mnt/x/f /mnt/x/g
+    local x=$(orphan_unlinked /mnt/x)
+
+    ktest_expect_sb_errors="inode_dir_unlinked_but_not_empty|inode_unreachable|inode_dir_wrong_nlink"
+    check_fsck inode_dir_unlinked_but_not_empty
+
+    [[ $(inode_flag $x unlinked) == 0 ]]
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(cat /mnt/lost+found/$x/f) == foo ]]
+    [[ $(stat -c %h /mnt/lost+found/$x/g) == 2 ]]
+    umount /mnt
+}
+
+# Declined, it changes nothing: the C cleared the flag whether or not the
+# repair was taken.
+test_dir_unlinked_but_not_empty_declined()
+{
+    new_fs
+    mkdir /mnt/x
+    touch /mnt/x/f
+    local x=$(orphan_unlinked /mnt/x)
+
+    check_fsck_declined inode_dir_unlinked_but_not_empty
+
+    [[ $(inode_flag $x unlinked) == 1 ]]
+}
+
+# An unlinked orphan that isn't on the deleted list. Offline, fsck only puts
+# it there - a logged op might still refer to it - and delete_dead_inodes,
+# later in the same run, deletes it: inode and data. (deleted_inode_but_clean:
+# delete_dead_inodes finding work on a clean shutdown.)
+#
+# The deleted_inodes btree is write-buffered: the inode trigger's insert,
+# from making it unlinked, lands after anything else in the same kvdb
+# session - so the list entry is removed in a second one.
+test_unlinked_inode_not_on_deleted_list()
+{
+    new_fs
+    dd if=/dev/urandom of=/mnt/big bs=64k count=4 status=none
+    echo foo > /mnt/keep
+    local inum=$(orphan_unlinked /mnt/big)
+    kvdb_rw -c "set deleted_inodes 0:$inum:U32_MAX deleted"
+    not_on_deleted_list $inum
+
+    ktest_expect_sb_errors="unlinked_inode_not_on_deleted_list|deleted_inode_but_clean"
+    check_fsck unlinked_inode_not_on_deleted_list
+
+    [[ -z $(bcachefs list -b inodes $(dev) | grep "0:$inum:") ]]
+    [[ -z $(bcachefs list -b extents $(dev) | grep " $inum:") ]]
+    not_on_deleted_list $inum
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(cat /mnt/keep) == foo ]]
+    umount /mnt
+}
+
+test_unlinked_inode_not_on_deleted_list_declined()
+{
+    new_fs
+    echo foo > /mnt/big
+    local inum=$(orphan_unlinked /mnt/big)
+    kvdb_rw -c "set deleted_inodes 0:$inum:U32_MAX deleted"
+
+    check_fsck_declined unlinked_inode_not_on_deleted_list
+
+    not_on_deleted_list $inum
+    [[ -n $(bcachefs list -b inodes $(dev) | grep "0:$inum:") ]]
+}
+
 # ── check_dirents ────────────────────────────────────────────────────────
 
 # Subdirectory counts are checked per directory as the walk leaves it, and
-# for the last directory after the loop: x is checked when the walk moves on
-# to d, d only by the final flush. Dirents exist only under /, x and d, and d
-# is created last, so it's the last directory the walk visits.
+# for the last directory after the loop. Dirents exist only under /, x and d:
+# whichever of x and d has the higher inode number (sharded, so not creation
+# order) is checked by the final flush, the other as the walk moves on.
+#
+# A directory's bi_nlink is its subdirectory count.
 test_dir_wrong_nlink()
 {
     new_fs
@@ -141,21 +447,28 @@ test_dir_wrong_nlink()
     ktest_expect_sb_errors="inode_dir_wrong_nlink"
     check_fsck inode_dir_wrong_nlink
 
+    [[ $(inode_field $x bi_nlink) == 0 ]]
+    [[ $(inode_field $d bi_nlink) == 2 ]]
+
     mount -t bcachefs $(dev) /mnt
     [[ $(stat -c %h /mnt/x) == $x_nlink ]]
     [[ $(stat -c %h /mnt/d) == $d_nlink ]]
     umount /mnt
 }
 
-# A repair partway through a directory's dirents commits, so the walker's
-# subdirectory count for it is partial and gets recounted from the btree
+# A repair partway through a directory's dirents commits, and the walker
+# refetches the directory's inode after a commit, starting its subdirectory
+# count over - so the count is partial and gets recounted from the btree
 # (recalculate_sums). The recount agrees with i_nlink here: nothing may be
 # reported against the directory. The Rust conversion lost the recheck after
 # the recount, and flagged every such directory "wrong i_nlink: got 3, should
 # be 3".
 #
-# The repair: a file whose inode is gone, so its dirent is removed. The file
-# with the lowest dirent offset, so other dirents in d come after it.
+# The repair: a file whose inode is gone, so its dirent is removed. It has to
+# come after a subdirectory's dirent, or the count it restarts loses nothing,
+# and before another dirent, or nothing sees the commit before the directory
+# is checked: the first file after a subdirectory, by dirent offset (hash
+# order - twenty files make one after a subdirectory a certainty in practice).
 test_dir_nlink_after_dirent_repair()
 {
     new_fs
@@ -164,10 +477,11 @@ test_dir_nlink_after_dirent_repair()
     local d=$(stat -c %i /mnt/d) d_nlink=$(stat -c %h /mnt/d)
     umount /mnt
 
-    local victim=$(bcachefs list -b dirents $(dev) |
-	sed -n "s/.*type dirent $d:\([0-9]*\):U32_MAX .*: f[0-9]* -> \([0-9]*\) .*/\1 \2/p" |
-	sort -n | sed -n 1p)
-    local inum=${victim#* }
+    # "offset name target type" for each dirent in d, in walk order
+    local inum=$(bcachefs list -b dirents $(dev) |
+	sed -n "s/.*type dirent $d:\([0-9]*\):U32_MAX .*: \([a-z0-9]*\) -> \([0-9]*\) type \([a-z]*\).*/\1 \2 \3 \4/p" |
+	sort -n |
+	awk '$4 == "dir" { seen = 1; next } seen && $4 == "reg" { print $3; exit }')
     [[ -n $inum ]]
 
     kvdb_rw -c "set inodes 0:$inum:U32_MAX deleted"
