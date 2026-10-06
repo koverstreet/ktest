@@ -547,6 +547,63 @@ test_missing_file_with_extents()
     umount /mnt
 }
 
+# ── check_xattrs ─────────────────────────────────────────────────────────
+
+# An ACL xattr with the inode's flag for it clear - the direction that
+# matters: bch2_get_acl() trusts a clear flag and skips the lookup, so the
+# ACL is ignored. check_xattrs sets it from the xattr side.
+test_inode_acl_flag_clear()
+{
+    new_fs
+    echo foo > /mnt/f
+    mkdir /mnt/d
+    setfacl -m u:nobody:r /mnt/f
+    setfacl -d -m u:nobody:r /mnt/d
+    local f=$(stat -c %i /mnt/f) d=$(stat -c %i /mnt/d)
+    umount /mnt
+
+    inode_flag_set $f has_access_acl 0
+    inode_flag_set $d has_default_acl 0
+
+    ktest_expect_sb_errors="inode_has_access_acl_flag_wrong|inode_has_default_acl_flag_wrong"
+    check_fsck inode_has_access_acl_flag_wrong
+    grep -qx inode_has_default_acl_flag_wrong <<< "$(recorded_errors)"
+
+    [[ $(inode_flag $f has_access_acl) == 1 ]]
+    [[ $(inode_flag $d has_default_acl) == 1 ]]
+
+    mount -t bcachefs $(dev) /mnt
+    grep -qx 'user:nobody:r--' <<< "$(getfacl -c /mnt/f)"
+    grep -qx 'user:nobody:r--' <<< "$(getfacl -cd /mnt/d)"
+    umount /mnt
+}
+
+# An inode's hash seed changed under its xattrs: every one is at the wrong
+# offset for the new seed, and gets moved. Lookups by name have to work
+# afterwards - the repair moving them somewhere fsck accepts isn't enough.
+test_xattrs_rehashed()
+{
+    new_fs
+    touch /mnt/f
+    local i
+    for i in $(seq 1 20); do setfattr -n user.x$i -v v$i /mnt/f; done
+    local inum=$(stat -c %i /mnt/f)
+    umount /mnt
+
+    kvdb_rw -c "update inodes 0:$inum:U32_MAX bi_hash_seed=12345"
+
+    ktest_expect_sb_errors="hash_table_key_wrong_offset"
+    check_fsck hash_table_key_wrong_offset
+
+    [[ $(inode_field $inum bi_hash_seed) == 12345 ]]
+
+    mount -t bcachefs $(dev) /mnt
+    for i in $(seq 1 20); do
+	[[ $(getfattr --only-values -n user.x$i /mnt/f) == v$i ]]
+    done
+    umount /mnt
+}
+
 # ── check_dirents ────────────────────────────────────────────────────────
 
 # Subdirectory counts are checked per directory as the walk leaves it, and
