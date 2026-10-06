@@ -965,6 +965,35 @@ test_missing_dir_with_contents()
     umount /mnt
 }
 
+# An empty file and an empty directory with xattrs, their inodes gone: the
+# xattrs are contents too, so each is reconstructed where its dirent is, as
+# what the dirent says it was - xattrs don't say. Not left for check_xattrs
+# to reconstruct after the dirent's gone, nameless, into lost+found.
+test_missing_inode_with_xattrs()
+{
+    new_fs
+    touch /mnt/f
+    mkdir /mnt/d
+    setfattr -n user.a -v A /mnt/f
+    setfattr -n user.b -v B /mnt/d
+    local f=$(stat -c %i /mnt/f) d=$(stat -c %i /mnt/d)
+    umount /mnt
+
+    kvdb_rw -c "set inodes 0:$f:U32_MAX deleted" \
+	    -c "set inodes 0:$d:U32_MAX deleted"
+
+    ktest_expect_sb_errors="missing_inode_with_contents|hash_table_key_wrong_offset|inode_dir_missing_backpointer|inode_dir_wrong_nlink"
+    check_fsck missing_inode_with_contents
+
+    mount -t bcachefs $(dev) /mnt
+    [[ -f /mnt/f ]]
+    [[ -d /mnt/d ]]
+    [[ $(getfattr --only-values -n user.a /mnt/f) == A ]]
+    [[ $(getfattr --only-values -n user.b /mnt/d) == B ]]
+    [[ -z $(ls /mnt/lost+found) ]]
+    umount /mnt
+}
+
 # ── check_directory_structure ────────────────────────────────────────────
 
 # Two directories, each the other's parent, cut off from the root. Built
