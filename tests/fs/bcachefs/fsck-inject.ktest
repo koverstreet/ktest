@@ -508,6 +508,35 @@ test_extent_past_end_of_inode()
     umount /mnt
 }
 
+# Two extents overlapping, in one snapshot: a 128k file's extent copied to
+# end 32k later, so the copy covers [32k,160k). In one snapshot the extent
+# later in key order wins: the file reads the original's first 32k, then the
+# original's first 96k again - the copy's view of [32k,128k). The copy's
+# tail is past i_size and goes, and the two extents left sharing data become
+# a reflink. Byte-for-byte, because "converges" says nothing about which
+# extent won.
+test_extent_overlapping()
+{
+    new_fs
+    dd if=/dev/urandom of=/mnt/f bs=128k count=1 oflag=direct status=none
+    cp /mnt/f /tmp/f-orig
+    local inum=$(stat -c %i /mnt/f)
+    umount /mnt
+
+    local e=($(extents_of $inum))
+    [[ ${e[0]} == 256 && ${e[1]} == 256 ]]
+    kvdb_rw -c "copy extents $inum:256:U32_MAX $inum:320:U32_MAX"
+
+    ktest_expect_sb_errors="extent_overlapping|extent_past_end_of_inode|dup_extents_to_reflink"
+    check_fsck extent_overlapping
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(stat -c %s /mnt/f) == 131072 ]]
+    cmp -n 32768 /mnt/f /tmp/f-orig
+    cmp -n 98304 -i 32768:0 /mnt/f /tmp/f-orig
+    umount /mnt
+}
+
 test_inode_i_sectors_wrong()
 {
     new_fs
