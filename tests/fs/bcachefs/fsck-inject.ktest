@@ -474,6 +474,79 @@ test_unlinked_inode_not_on_deleted_list_declined()
     [[ -n $(bcachefs list -b inodes $(dev) | grep "0:$inum:") ]]
 }
 
+# ── check_extents ────────────────────────────────────────────────────────
+
+# "<offset> <size>" of each extent of an inode, in the root snapshot
+extents_of()
+{
+    bcachefs list -b extents $(dev) |
+	sed -n "s/.*type extent $1:\([0-9]*\):U32_MAX len \([0-9]*\) .*/\1 \2/p"
+}
+
+# i_size short of the data: i_size is what the inode says the file is, so
+# the extents past it go - the first 4k stays, byte for byte - and i_sectors
+# follows.
+test_extent_past_end_of_inode()
+{
+    new_fs
+    dd if=/dev/urandom of=/mnt/f bs=64k count=1 oflag=direct status=none
+    head -c 4096 /mnt/f > /tmp/f-head
+    local inum=$(stat -c %i /mnt/f)
+    umount /mnt
+
+    kvdb_rw -c "update inodes 0:$inum:U32_MAX bi_size=4096"
+
+    ktest_expect_sb_errors="extent_past_end_of_inode|inode_i_sectors_wrong"
+    check_fsck extent_past_end_of_inode
+
+    [[ $(extents_of $inum) == "8 8" ]]
+    [[ $(inode_field $inum bi_sectors) == 8 ]]
+
+    mount -t bcachefs $(dev) /mnt
+    [[ $(stat -c %s /mnt/f) == 4096 ]]
+    cmp /mnt/f /tmp/f-head
+    umount /mnt
+}
+
+test_inode_i_sectors_wrong()
+{
+    new_fs
+    dd if=/dev/urandom of=/mnt/f bs=64k count=1 oflag=direct status=none
+    local inum=$(stat -c %i /mnt/f) sectors
+    umount /mnt
+
+    sectors=$(inode_field $inum bi_sectors)
+    kvdb_rw -c "update inodes 0:$inum:U32_MAX bi_sectors=7"
+
+    ktest_expect_sb_errors="inode_i_sectors_wrong"
+    check_fsck inode_i_sectors_wrong
+
+    [[ $(inode_field $inum bi_sectors) == $sectors ]]
+}
+
+# A file's inode gone, its extents and dirent still there: check_extents
+# reconstructs it, i_size from the last extent - so the data comes back
+# whole, and the dirent finds it again.
+test_missing_file_with_extents()
+{
+    new_fs
+    dd if=/dev/urandom of=/mnt/f bs=64k count=1 oflag=direct status=none
+    cp /mnt/f /tmp/f-orig
+    local inum=$(stat -c %i /mnt/f)
+    umount /mnt
+
+    kvdb_rw -c "set inodes 0:$inum:U32_MAX deleted"
+
+    ktest_expect_sb_errors="key_in_missing_inode|inode_i_sectors_wrong"
+    check_fsck key_in_missing_inode
+
+    [[ $(inode_field $inum bi_size) == 65536 ]]
+
+    mount -t bcachefs $(dev) /mnt
+    cmp /mnt/f /tmp/f-orig
+    umount /mnt
+}
+
 # ── check_dirents ────────────────────────────────────────────────────────
 
 # Subdirectory counts are checked per directory as the walk leaves it, and
