@@ -1440,6 +1440,32 @@ test_rereplicate2()
     umount /mnt
 }
 
+# With a metadata_replicas change pending (its scan not yet run) the btree
+# ptrs are allowed to mismatch: the metadata cookie says so. The check read
+# the cookie at the node key's inode field instead and reported them.
+test_reconcile_btree_ptr_metadata_cookie()
+{
+    set_watchdog 120
+    local devs=("${ktest_scratch_dev[0]}" "${ktest_scratch_dev[1]}")
+
+    run_quiet "" bcachefs format -f --metadata_replicas=1 "${devs[@]}"
+    mount -t bcachefs -o reconcile_enabled=0 "$(join_by : "${devs[@]}")" /mnt
+    for i in $(seq 500); do echo $i > /mnt/f$i; done
+    sync
+
+    echo 2 > /sys/fs/bcachefs/*/options/metadata_replicas
+    umount /mnt
+
+    local out rc=0
+    out=$(bcachefs fsck -n "${devs[@]}" 2>&1) || rc=$?
+    echo "fsck -n exited $rc"
+    if grep "incorrect/missing reconcile opts" <<<"$out" >/dev/null; then
+	grep -A6 "incorrect/missing reconcile opts" <<<"$out" | head -40
+	echo "ERROR: btree ptrs reported while the metadata scan is pending"
+	return 1
+    fi
+}
+
 # Bumping data_replicas on a single file (set-file-option, not the fs-wide
 # sysfs knob) must re-replicate that file's existing extents: it queues an
 # inum reconcile scan that re-derives need_rb=data_replicas per extent and
