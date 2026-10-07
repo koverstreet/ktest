@@ -33,6 +33,8 @@
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
 
 config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
 
 # "The thread is running" and "we couldn't tell" are different answers, and the
 # obvious spelling conflates them:
@@ -204,6 +206,79 @@ test_reconcile_survives_disable_during_scan()
     umount /mnt
     bcachefs fsck -ny "$dev"
     bcachefs_test_end_checks "$dev"
+}
+
+# pending reconcile work in bytes, from fs usage
+reconcile_pending_bytes()
+{
+    bcachefs fs usage -f rebalance_work /mnt |
+	awk '$1 == "pending:" { print $2; exit }'
+}
+
+# A device add queues a pending scan so the extents parked for lack of
+# devices are retried. If the pass is interrupted before the pending phase
+# the cookie must still be there for the next pass; it was deleted in the
+# scan phase, the first of the pass, so the work was lost.
+test_reconcile_pending_cookie_kept()
+{
+    set_watchdog 600
+    local devs=("${ktest_scratch_dev[0]}" "${ktest_scratch_dev[1]}")
+
+    run_quiet "" bcachefs format -f --replicas=2 "${devs[@]}"
+    mount -t bcachefs "$(join_by : "${devs[@]}")" /mnt
+    dd if=/dev/urandom of=/mnt/data bs=1M count=1024 oflag=direct status=none
+
+    # three replicas on two devices: every extent parks on the pending list
+    echo 3 > /sys/fs/bcachefs/*/options/data_replicas
+    timeout 300 bcachefs reconcile wait /mnt
+    local pending=$(reconcile_pending_bytes)
+    echo "pending after data_replicas=3: $pending"
+    if ((pending == 0)); then
+	echo "ERROR: no extents parked on the pending list"
+	return 1
+    fi
+
+    # Queue the device add's pending scan with reconcile stopped, so the pass
+    # starts when we start watching it.
+    echo 0 > /sys/fs/bcachefs/*/options/reconcile_enabled
+    bcachefs device add -f /mnt ${ktest_scratch_dev[2]}
+    echo 1 > /sys/fs/bcachefs/*/options/reconcile_enabled
+
+    # The scan phase comes first; stop the pass once it's past it and still
+    # working, before the pending phases complete.
+    local i status
+    for i in $(seq 1200); do
+	status=$(cat /sys/fs/bcachefs/*/reconcile_status)
+	grep "^processing" <<<"$status" >/dev/null && break
+	if grep "^waiting" <<<"$status" >/dev/null && ((i > 40)); then
+	    echo "$status"
+	    echo "ERROR: the pass finished before the test could interrupt it"
+	    return 1
+	fi
+	sleep 0.05
+    done
+    echo "$status"
+    echo 0 > /sys/fs/bcachefs/*/options/reconcile_enabled
+    sleep 1
+
+    local cookies=$(bcachefs list -b reconcile_scan /mnt)
+    echo "$cookies"
+    if ! grep "cookie 0:2:" <<<"$cookies" >/dev/null; then
+	echo "ERROR: the pending scan cookie was deleted before the pending phase ran"
+	return 1
+    fi
+
+    echo 1 > /sys/fs/bcachefs/*/options/reconcile_enabled
+    timeout 300 bcachefs reconcile wait /mnt
+    pending=$(reconcile_pending_bytes)
+    echo "pending after the retry: $pending"
+    if ((pending != 0)); then
+	echo "ERROR: pending work wasn't retried after the interrupted pass"
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs_test_end_checks ${devs[0]}
 }
 
 # Suspend and hibernate failed with "Freezing of tasks failed ... bch-reconcile"
