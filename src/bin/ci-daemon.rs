@@ -350,7 +350,11 @@ async fn run_ktest_job(
     // IN PROGRESS would stick them forever (job_wanted skips a live
     // Inprogress); deleting them would re-emit on every refill until a
     // VM finally landed, which buries a systematically-broken subtest.
-    if result.is_err() {
+    //
+    // The reason goes next to the verdict, as failed_to_run: otherwise it's
+    // only in the executor log, and the dashboard says FAILED TO RUN with
+    // nothing to say why.
+    if let Err(e) = &result {
         let now = Utc::now();
         let mut updates = TestResultsMap::new();
         for j in batch {
@@ -359,8 +363,13 @@ async fn run_ktest_job(
             );
             if results.lookup(&p.commit, &key) == Some(TestStatus::Inprogress) {
                 let d = commit_dir.join(&key);
-                let _ = std::fs::create_dir_all(&d)
-                    .and_then(|()| std::fs::write(d.join("status"), "FAILED TO RUN\n"));
+                handle.log_line(format!("{}: FAILED TO RUN: {e}", j.payload.subtest));
+                if let Err(err) = std::fs::create_dir_all(&d)
+                    .and_then(|()| std::fs::write(d.join("status"), "FAILED TO RUN\n"))
+                    .and_then(|()| std::fs::write(d.join("failed_to_run"), format!("{e}\n")))
+                {
+                    handle.log_line(format!("writing FAILED TO RUN for {}: {err}", d.display()));
+                }
                 updates.insert(key, TestResult {
                     status: TestStatus::FailedToRun,
                     starttime: now,
