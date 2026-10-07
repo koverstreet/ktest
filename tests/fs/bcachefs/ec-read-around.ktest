@@ -607,25 +607,26 @@ test_ec_read_around_fallback_reconstruct()
     local devs
     ec_ra_slow_setup 6 4 3
 
-    # Device 1 slower than the rest, so a read-around of device 0 leaves it
-    # out and reads every other block:
+    # Devices 0 and 1 slower than the rest, so a read-around of device 1
+    # leaves out both and reads every other block; device 0 is slower, so it
+    # doesn't read device 0's block either.
     ec_ra_delay_dev 0 500
     ec_ra_delay_dev 1 20
     ec_ra_prewarm 0:500 1:20
 
-    # In one stripe with data on device 0, device 0's block and another data
-    # block are bad, and device 1's is good. The read-around reads the bad one
-    # and fails, the direct read gets device 0's bad block, and the full
-    # reconstruct has two bad blocks and two parity blocks.
-    local f i dev0 other
-    read -r -a f < <(ec_ra_stripes_with_data_on 0)
+    # In one stripe with data on device 1, device 1's block and another data
+    # block are bad. The read-around of device 1 reads the bad one and fails,
+    # the direct read gets device 1's bad block, and the full reconstruct has
+    # two bad blocks and two parity blocks.
+    local f i dev1 other
+    read -r -a f < <(ec_ra_stripes_with_data_on 1)
     for (( i = 1; i <= f[0]; i++ )); do
-	[[ ${f[i]%%:*} == 0 ]] && dev0=${f[i]}
+	[[ ${f[i]%%:*} == 1 ]] && dev1=${f[i]}
 	[[ ${f[i]%%:*} != [01] ]] && other=${f[i]}
     done
-    ec_ra_corrupt_block "$dev0"
+    ec_ra_corrupt_block "$dev1"
     ec_ra_corrupt_block "$other"
-    echo "corrupted data blocks $dev0 and $other of one stripe"
+    echo "corrupted data blocks $dev1 and $other of one stripe"
 
     local fail
     fail=$(ec_ra_counter data_read_ec_read_around_fail)
