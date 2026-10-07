@@ -131,6 +131,46 @@ fn job_env_prefix(env: &str, ws: &str) -> String {
     prefix
 }
 
+/// Where a supervisor run records its process group, so a later run on
+/// the slot can kill it. Relative to the remote $HOME.
+fn run_pgid_file(ws: &str) -> String {
+    format!("{ws}/run.pgid")
+}
+
+/// Shell snippet: kill the slot's previous supervisor run, if it's still
+/// alive, and wait for it to exit.
+///
+/// A dropped ssh mux connection ("Shared connection to ... closed")
+/// returns from run_command while the remote session lives on — its pty
+/// isn't hung up, so nothing reaps the VM. Starting the next run on top
+/// of it collides on everything under {ws}: virtiofsd's pid file, the
+/// supervisor's full_log, the scratch devices — and the old VM, its
+/// rootfs gone, records bogus verdicts.
+///
+/// Nothing under the supervisor changes process group (no setsid or
+/// setpgid in ktest), so the ssh session's group is the whole run:
+/// supervisor, ktest, virtiofsd, qemu. The leader's cmdline is checked
+/// before signalling, so a stale file whose pgid has since been reused
+/// can't kill an unrelated group.
+fn kill_stale_run(ws: &str) -> String {
+    format!(
+        "f=$HOME/{pgid_file}; \
+         if [ -f $f ]; then \
+             read pg < $f; \
+             if [ -n \"$pg\" ] && [ \"$pg\" != $$ ] && \
+                grep -qF {pgid_file} /proc/$pg/cmdline 2>/dev/null; then \
+                 echo \"killing stale run, process group $pg\" >&2; \
+                 kill -TERM -- -$pg 2>/dev/null; \
+                 for i in $(seq 30); do kill -0 -- -$pg 2>/dev/null || break; sleep 1; done; \
+                 kill -KILL -- -$pg 2>/dev/null; \
+                 for i in $(seq 10); do kill -0 -- -$pg 2>/dev/null || break; sleep 1; done; \
+             fi; \
+             rm -f $f; \
+         fi; true",
+        pgid_file = run_pgid_file(ws),
+    )
+}
+
 /// Run one ssh step that must succeed; non-zero exit or a spawn failure
 /// is infrastructure failure → retry the job.
 async fn run_step(
@@ -256,9 +296,11 @@ async fn run_ktest_job(
     // up, but doesn't fire on SIGKILL / parent-reaped — that's the
     // mechanism the /tmp/ktest-* leaks were going through. Always
     // ssh+rm here so the daemon is the source of truth for that dir.
+    // Kill a run that outlived its ssh first: removing the dir under a
+    // live VM doesn't stop it.
     let ws = format!("ktest-ci/{}", slot);
     let _ = handle.run_command(
-        ssh_cmd(host, &format!("rm -rf {}/ktest-tmp", ws), false),
+        ssh_cmd(host, &format!("{}; rm -rf {}/ktest-tmp", kill_stale_run(&ws), ws), false),
     ).await;
 
     let p = &batch[0].payload;
@@ -466,6 +508,8 @@ async fn run_ktest_job_inner(
         // earlier subtest's full_log.br links to.
         let iter_stamp = Utc::now().format("%Y%m%d-%H%M%S").to_string();
 
+        run_step(handle, host, &kill_stale_run(&ws), "kill stale run").await?;
+
         // 5. Run the supervisor over `remaining`, one VM. Its exit
         //    status is ignored — verdicts are in the result files; only
         //    a failure to *run* it is an error.
@@ -512,7 +556,13 @@ async fn run_ktest_job_inner(
         // VM never reached are retried (the resume loop), and the
         // corrupt-incremental-build case is handled below via git-clean
         // on a zero-progress iteration.
-        let run = format!("( {run} )", run = run);
+        // Record the session's process group for kill_stale_run, and
+        // drop it once the run has finished on its own.
+        let run = format!(
+            "ps -o pgid= -p $$ > {pgid_file}; ( {run} ); rm -f {pgid_file}",
+            pgid_file = run_pgid_file(&ws),
+            run = run,
+        );
         // -tt: force a pty so a dropped ssh hangs up and SIGHUP reaps
         // the supervisor, the kernel build, and the VM together.
         handle.run_command(ssh_cmd(host, &run, true))
