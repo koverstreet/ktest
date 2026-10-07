@@ -1267,6 +1267,67 @@ test_quota_chown_counts_once()
     bcachefs_test_end_checks $dev
 }
 
+# Quotas count master subvolume inodes only, but evict still charged snapshot
+# inodes: deleting a snapshot's copy of a file whose master copy was chowned
+# away took the old owner's usage negative and hit a BUG_ON. In the snapshot,
+# a project id change and a rename whiteout must not move usage either, the
+# inode must report its new project id, and the usage in memory must match
+# what a remount reads back.
+test_quota_snapshot_inode_uncounted()
+{
+    set_watchdog 120
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount -t bcachefs -o usrquota,prjquota $dev /mnt
+
+    set_as_user
+    chmod 777 /mnt
+    $as_user dd if=/dev/zero of=/mnt/f bs=1M count=64 oflag=direct status=none
+    bcachefs subvolume snapshot /mnt /mnt/snap
+    chown 1001 /mnt/f
+
+    rm /mnt/snap/f
+    sync
+
+    echo w > /mnt/snap/w
+    python3 -c '
+import ctypes, sys
+libc = ctypes.CDLL(None, use_errno=True)
+if libc.renameat2(-100, b"/mnt/snap/w", -100, b"/mnt/snap/w2", 4):
+    sys.exit("renameat2 RENAME_WHITEOUT: errno %d" % ctypes.get_errno())'
+    [[ -c /mnt/snap/w ]]
+
+    chattr -p 42 /mnt/snap/w2
+    lsattr -p /mnt/snap/w2
+    local p=$(lsattr -p /mnt/snap/w2 | awk '{ print $1 }')
+    if [[ $p != 42 ]]; then
+	echo "ERROR: the snapshot inode reports project $p after it was set to 42"
+	return 1
+    fi
+
+    rm -f /mnt/snap/w /mnt/snap/w2
+    sync
+
+    local ids="0:0 0:65534 0:1001 2:0 2:42" before=() after=() i n=0
+    for i in $ids; do before+=("$(quotactl $dev ${i%:*} ${i#*:})"); done
+    umount /mnt
+    mount -t bcachefs -o usrquota,prjquota $dev /mnt
+    for i in $ids; do after+=("$(quotactl $dev ${i%:*} ${i#*:})"); done
+
+    for i in $ids; do
+	echo "quota $i: in memory ${before[n]}, after remount ${after[n]}"
+	if [[ ${before[n]} != "${after[n]}" ]]; then
+	    echo "ERROR: quota usage in memory differs from what a remount reads"
+	    return 1
+	fi
+	n=$((n + 1))
+    done
+
+    umount /mnt
+    bcachefs_test_end_checks $dev
+}
+
 # test nfs exports:
 require-kernel-config NFSD
 require-kernel-config NFSD_V4
