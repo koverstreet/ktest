@@ -54,7 +54,6 @@ config-scratch-devs 1G
 config-scratch-devs 1G
 config-scratch-devs 1G
 config-scratch-devs 1G
-config-scratch-devs 1G
 
 ec_ra_bucket_kb=512
 ec_ra_file_mb=96
@@ -1070,10 +1069,8 @@ test_ec_repair_bad_block_no_slow_read()
 {
     set_watchdog 900
 
-    # Seven members, so that evacuating one leaves room to rebuild each stripe
-    # in place; with six, repair narrows every stripe and moves its data.
     local devs
-    ec_ra_slow_setup 7 4 3
+    ec_ra_slow_setup 6 4 3
 
     # Repair reads around the two slowest members of each stripe, device 0 and
     # usually device 1: with a bad block among the four it reads, the faster
