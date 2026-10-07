@@ -202,6 +202,32 @@ static const char *str_starts_with(const char *str, const char *prefix)
 	return str + len;
 }
 
+/*
+ * Skip ANSI CSI sequences (ESC [ params final-byte) at the start of a line.
+ *
+ * A program that redraws in place on the console - mount.bcachefs's recovery
+ * display - erases its block with a cursor-up and clear and no newline, so the
+ * sequence prefixes whatever line comes next. The markers below are matched
+ * by prefix; when "========= TEST" came out as "\e[4F\e[J========= TEST", the
+ * test was never started, its PASSED never recorded, and the daemon retried it
+ * three times and called it FAILED TO RUN.
+ */
+static const char *skip_csi(const char *line)
+{
+	while (line[0] == '\x1b' && line[1] == '[') {
+		const char *p = line + 2;
+
+		while (*p >= 0x30 && *p <= 0x3f)	/* parameter bytes */
+			p++;
+		while (*p >= 0x20 && *p <= 0x2f)	/* intermediate bytes */
+			p++;
+		if (*p < 0x40 || *p > 0x7e)		/* no final byte: not a CSI */
+			break;
+		line = p + 1;
+	}
+	return line;
+}
+
 static char *test_is_starting(const char *line)
 {
 	const char *testname = str_starts_with(line, "========= TEST   ");
@@ -218,7 +244,7 @@ static char *test_is_starting(const char *line)
 	return ret;
 }
 
-static bool test_is_ending(char *line)
+static bool test_is_ending(const char *line)
 {
 	return  str_starts_with(line, "========= PASSED ") ||
 		str_starts_with(line, "========= FAILED ") ||
@@ -628,9 +654,12 @@ again:
 
 		strim(line);
 
-		read_watchdog(line);
+		/* markers are matched past any cursor control: see skip_csi() */
+		const char *text = skip_csi(line);
 
-		char *new_test = test_is_starting(line);
+		read_watchdog(text);
+
+		char *new_test = test_is_starting(text);
 
 		/* If a test is starting, close logfile for previous test: */
 		if (current_test_log && new_test)
@@ -644,18 +673,28 @@ again:
 		/* after logging the line, so a reply follows its command: */
 		read_monitor_cmd(line);
 
-		if (current_test_log && test_is_ending(line)) {
-			write_test_file("status", "%s\n", line);
-			test_end(now);
+		if (test_is_ending(text)) {
+			if (current_test_log) {
+				write_test_file("status", "%s\n", text);
+				test_end(now);
+			} else {
+				/*
+				 * Nothing to record it against: its start
+				 * marker was missed, and the test will come
+				 * out as never having run.
+				 */
+				log_line("supervisor: test end with no test running, not recorded: %s",
+					 text);
+			}
 		}
 
-		if (exit_on_failure && str_starts_with(line, "TEST FAILED"))
+		if (exit_on_failure && str_starts_with(text, "TEST FAILED"))
 			break;
 
 		if (exit_on_failure && strstr(line, "FAILED TIMEOUT"))
 			break;
 
-		if (exit_on_success && str_starts_with(line, "TEST SUCCESS")) {
+		if (exit_on_success && str_starts_with(text, "TEST SUCCESS")) {
 			ret = 0;
 			break;
 		}
