@@ -1203,6 +1203,70 @@ test_quota()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# quotactl(Q_SETQUOTA) a block hard limit in KiB, or with no limit print
+# quotactl(Q_GETQUOTA)'s "<space> <inodes>"; the VM has no quota tools.
+# quotactl <device> <type: 0 user, 1 group, 2 project> <id> [<kib>]
+quotactl()
+{
+    python3 - "$@" <<'PYEOF'
+import ctypes, os, sys
+
+class dqblk(ctypes.Structure):
+    _fields_ = [(n, ctypes.c_uint64) for n in
+                ("bhard", "bsoft", "curspace", "ihard", "isoft", "curinodes", "btime", "itime")] \
+               + [("valid", ctypes.c_uint32)]
+
+dev, qtype, qid = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+Q_GETQUOTA, Q_SETQUOTA, QIF_BLIMITS = 0x800007, 0x800008, 1
+if len(sys.argv) > 4:
+    cmd, d = Q_SETQUOTA, dqblk(bhard=int(sys.argv[4]), valid=QIF_BLIMITS)
+else:
+    cmd, d = Q_GETQUOTA, dqblk()
+libc = ctypes.CDLL(None, use_errno=True)
+if libc.quotactl((cmd << 8) | qtype, dev.encode(), qid, ctypes.byref(d)):
+    e = ctypes.get_errno()
+    raise OSError(e, os.strerror(e))
+if cmd == Q_GETQUOTA:
+    print(d.curspace, d.curinodes)
+PYEOF
+}
+
+# A chgrp into a group whose usage plus the file fits under its hard limit
+# must succeed; one that would exceed it must fail. bch2_quota_transfer()
+# counted the group's usage twice, so the first chgrp failed whenever
+# 2 * usage + size was over the limit. Done by the file's owner, as a member
+# of the group: root ignores hard limits.
+test_quota_chown_counts_once()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount -t bcachefs -o grpquota $dev /mnt
+
+    set_as_user
+    chmod 777 /mnt
+    local gid=$as_user_gid
+    local user="setpriv --reuid=$as_user_uid --regid=100 --groups=$gid"
+    quotactl $dev 1 $gid $((1024 * 1024))
+
+    $user dd if=/dev/zero of=/mnt/g600 bs=1M count=600 oflag=direct status=none
+    $user chgrp $gid /mnt/g600
+
+    $user dd if=/dev/zero of=/mnt/g100 bs=1M count=100 oflag=direct status=none
+    $user dd if=/dev/zero of=/mnt/g500 bs=1M count=500 oflag=direct status=none
+
+    # 600M used + 100M fits under 1G; 700M used + 500M doesn't
+    if ! $user chgrp $gid /mnt/g100; then
+	echo "ERROR: chgrp of a 100M file to a group with 600M of a 1G limit was refused"
+	return 1
+    fi
+    assert_fails_with "Disk quota exceeded" $user chgrp $gid /mnt/g500
+
+    umount /mnt
+    bcachefs_test_end_checks $dev
+}
+
 # test nfs exports:
 require-kernel-config NFSD
 require-kernel-config NFSD_V4
