@@ -199,8 +199,10 @@ fn format_full_log(
 fn brotli_compress(path: &std::path::Path) -> std::io::Result<()> {
     use std::io::Write;
     let data = std::fs::read(path)?;
+    let mut br = path.as_os_str().to_owned();
+    br.push(".br");
     let mut w = brotli::CompressorWriter::new(
-        std::fs::File::create(path.with_extension("br"))?,
+        std::fs::File::create(br)?,
         4096,
         9,
         22,
@@ -458,6 +460,11 @@ async fn run_ktest_job_inner(
         // Mark this iter's window in the executor log so the post-pull
         // full_log write splices in exactly what we did this iter.
         let iter_offset = handle.log_offset();
+        // Names this iter's full_log. remaining[0] is retried when the VM
+        // never reached it, and it's the primary again next iter —
+        // without a per-iter name it would overwrite the log every
+        // earlier subtest's full_log.br links to.
+        let iter_stamp = Utc::now().format("%Y%m%d-%H%M%S").to_string();
 
         // 5. Run the supervisor over `remaining`, one VM. Its exit
         //    status is ignored — verdicts are in the result files; only
@@ -551,23 +558,26 @@ async fn run_ktest_job_inner(
         }
 
         // Compose this iter's full_log: batch header + iter slice of
-        // executor log + supervisor body (the pulled file). Write to
-        // remaining[0]'s dir as the canonical, brotli, then symlink
-        // every other subtest's full_log.br to it.
+        // executor log + supervisor body (the pulled file). Write it to
+        // remaining[0]'s dir as full_log.<iter_stamp>, brotli, then
+        // symlink every subtest's full_log.br to it.
         let primary_key = subtest_result_key(&p.test, &remaining[0], &p.kernel, &p.env);
         let primary_dir = commit_dir.join(&primary_key);
-        let primary_path = primary_dir.join("full_log");
-        let supervisor_body = std::fs::read(&primary_path).unwrap_or_default();
+        let pulled_path = primary_dir.join("full_log");
+        let iter_log = format!("full_log.{iter_stamp}");
+        let iter_path = primary_dir.join(&iter_log);
+        let supervisor_body = std::fs::read(&pulled_path).unwrap_or_default();
+        let _ = std::fs::remove_file(&pulled_path);
         let content = format_full_log(
             host, slot, p,
             &remaining.iter().map(String::as_str).collect::<Vec<_>>(),
             exec_log_path, iter_offset,
             &supervisor_body,
         );
-        if let Err(e) = std::fs::write(&primary_path, &content) {
-            handle.log_line(format!("write full_log {}: {}", primary_path.display(), e));
-        } else if let Err(e) = brotli_compress(&primary_path) {
-            handle.log_line(format!("brotli {}: {}", primary_path.display(), e));
+        if let Err(e) = std::fs::write(&iter_path, &content) {
+            handle.log_line(format!("write full_log {}: {}", iter_path.display(), e));
+        } else if let Err(e) = brotli_compress(&iter_path) {
+            handle.log_line(format!("brotli {}: {}", iter_path.display(), e));
         }
 
         // Brotli per-subtest "log" files (one per test the supervisor
@@ -582,14 +592,14 @@ async fn run_ktest_job_inner(
             }
         }
 
-        // Every other subtest in this iter shares the same VM run —
-        // symlink each one's full_log.br to the primary's.
-        for st in remaining.iter().skip(1) {
+        // Every subtest in this iter shares the same VM run — the
+        // primary included — so each one's full_log.br links to it.
+        for st in &remaining {
             let link = commit_dir
                 .join(subtest_result_key(&p.test, st, &p.kernel, &p.env))
                 .join("full_log.br");
             if let Err(e) =
-                std::os::unix::fs::symlink(format!("../{primary_key}/full_log.br"), &link)
+                std::os::unix::fs::symlink(format!("../{primary_key}/{iter_log}.br"), &link)
             {
                 handle.log_line(format!("full_log link for {st}: {e}"));
             }
