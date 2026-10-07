@@ -3089,6 +3089,30 @@ test_passes_no_ratelimit_set()
     fi
 }
 
+# recovery_passes_exclude is a bitfield; it was masked with a pass number,
+# which cleared the scan_for_btree_nodes bit from the exclusion.
+test_passes_exclude_bitmask()
+{
+    local dev=${ktest_scratch_dev[0]}
+
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f $dev
+    mount -t bcachefs $dev /mnt
+    umount /mnt
+
+    dmesg_mark passes_exclude
+    mount -t bcachefs -o recovery_passes=scan_for_btree_nodes,recovery_passes_exclude=scan_for_btree_nodes $dev /mnt
+    umount /mnt
+
+    if dmesg_since passes_exclude | grep "scan_for_btree_nodes\.\.\." >/dev/null; then
+	echo "ERROR: scan_for_btree_nodes ran although recovery_passes_exclude named it"
+	return 1
+    fi
+
+    bcachefs_test_end_checks $dev
+}
+
 # The passphrase lifecycle on an existing filesystem: adding one, changing
 # one, and taking one off.
 #
