@@ -205,6 +205,52 @@ test_extent_merge2()
     true
 }
 
+# A buffered write into a fallocated range whose folios are cached must not
+# add the sectors to i_blocks a second time: fallocate already accounted them,
+# and bch2_mark_pagecache_reserved() is what flips the cached folios' sectors
+# to reserved. It advanced *start before computing the range, so it marked
+# nothing.
+test_fallocate_pagecache_reserved()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount -t bcachefs $dev /mnt
+
+    # cache zero folios over the hole, then fallocate under them
+    truncate -s 32M /mnt/f
+    cat /mnt/f > /dev/null
+    fallocate -l 32M /mnt/f
+
+    local blocks=$(stat -c %b /mnt/f)
+    echo "st_blocks after fallocate: $blocks"
+    if [[ $blocks != 65536 ]]; then
+	echo "ERROR: expected 65536 blocks after fallocate, got $blocks"
+	return 1
+    fi
+
+    dd if=/dev/urandom of=/mnt/f bs=1M count=32 conv=notrunc status=none
+
+    blocks=$(stat -c %b /mnt/f)
+    echo "st_blocks after a buffered write into the fallocated range: $blocks"
+    if [[ $blocks != 65536 ]]; then
+	echo "ERROR: the write was counted again: $blocks blocks"
+	return 1
+    fi
+
+    sync
+    blocks=$(stat -c %b /mnt/f)
+    echo "st_blocks after sync: $blocks"
+    if [[ $blocks != 65536 ]]; then
+	echo "ERROR: expected 65536 blocks after sync, got $blocks"
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs_test_end_checks $dev
+}
+
 test_extent_repair_overlapping()
 {
     set_watchdog 30
