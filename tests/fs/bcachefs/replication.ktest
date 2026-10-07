@@ -3809,5 +3809,83 @@ test_scrub_corrupt_ec_unreferenced()
     bcachefs_test_end_checks ${ktest_scratch_dev[$vdev]}
 }
 
+# The leaf nodes of a btree that have a replica on <dev_idx>, one line each:
+# btree_leaf_lines <btree> <dev_idx> <devs>...
+btree_leaf_lines()
+{
+    local btree=$1 dev_idx=$2
+    shift 2
+    # a key's value continues on indented lines: join them
+    bcachefs list -m nodes -b $btree "$@" |
+	awk '{ gsub(/[ \t]+/, " ") }
+	     /^u64s/ { if (line) print line; line = $0; next }
+	     { line = line " " $0 }
+	     END { if (line) print line }' |
+	grep "btree_ptr" | grep -E "ptr: ([^ ]+ )?$dev_idx:[0-9]+:[0-9]+"
+}
+
+# A replica that holds another node's data (an older node left by a lost
+# write) has valid checksums and a wrong seq. Scrub must rewrite the node;
+# it compared nothing but the checksums and called the replica good.
+test_btree_scrub_stale_replica()
+{
+    ktest_expect_device_errors=1
+    set_watchdog 300
+    local devs=("${ktest_scratch_dev[0]}" "${ktest_scratch_dev[1]}")
+
+    run_quiet "" bcachefs format -f		\
+	--metadata_replicas=2			\
+	--bucket_size=${BUCKET_SIZE_KB}k	\
+	--btree_node_size=64k			\
+	"${devs[@]}"
+    mount -t bcachefs "$(join_by : "${devs[@]}")" /mnt
+
+    for i in $(seq 2000); do echo $i > /mnt/f$i; done
+    sync
+    umount /mnt
+
+    local before=$(btree_leaf_lines inodes 1 "${devs[@]}")
+    local nr=$(echo "$before" | wc -l)
+    echo "inodes btree: $nr nodes with a dev 1 replica"
+    if ((nr < 2)); then
+	echo "ERROR: need two inodes leaves, got $nr"
+	return 1
+    fi
+
+    local n_line=$(echo "$before" | sed -n 1p)
+    local m_line=$(echo "$before" | sed -n 2p)
+    local n_sector=$(echo "$n_line" | bcachefs_ptr_sectors $BUCKET_SIZE_SECTORS 1)
+    local m_sector=$(echo "$m_line" | bcachefs_ptr_sectors $BUCKET_SIZE_SECTORS 1)
+    echo "node N: $n_line"
+    echo "node M: $m_line"
+
+    # Cache every inodes leaf first, so the kernel never reads the stale
+    # replica itself: only scrub reads it, from disk. noatime, so nothing
+    # but a rewrite changes N.
+    mount -t bcachefs -o noatime "$(join_by : "${devs[@]}")" /mnt
+    ls -l /mnt > /dev/null
+
+    # M's replica over N's
+    dd if=${devs[1]} of=${devs[1]} bs=512 skip=$m_sector seek=$n_sector	\
+	count=$((64 * 2)) iflag=direct oflag=direct conv=notrunc status=none
+
+    local rc=0
+    bcachefs scrub /mnt || rc=$?
+    echo "scrub exit code: $rc"
+    umount /mnt
+
+    local n_pos=$(echo "$n_line" | awk '{ for (i = 1; i < NF; i++) if ($i == "btree_ptr_v2") print $(i + 1) }')
+    local n_after=$(btree_leaf_lines inodes 1 "${devs[@]}" |
+	awk -v pos="$n_pos" '{ for (i = 1; i < NF; i++) if ($i == "btree_ptr_v2" && $(i + 1) == pos) print }')
+    local n_sector_after=$(echo "$n_after" | bcachefs_ptr_sectors $BUCKET_SIZE_SECTORS 1)
+    echo "N's dev 1 replica: sector $n_sector, after scrub ${n_sector_after:-none}"
+    if [[ $n_sector_after == "$n_sector" ]]; then
+	echo "ERROR: scrub left the stale replica of node N in place"
+	return 1
+    fi
+
+    bcachefs fsck -ny "${devs[@]}"
+}
+
 
 main "$@"
