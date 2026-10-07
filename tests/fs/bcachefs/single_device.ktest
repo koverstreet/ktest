@@ -1639,6 +1639,28 @@ test_debugfs()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# A write of an unknown name to logged_op_fail_next is EINVAL and must leave
+# the filesystem unmountable as before. The error return skipped the
+# c->writes put, so umount waited forever for the ref.
+test_sysfs_fail_next_write_ref()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount -t bcachefs $dev /mnt
+
+    assert_fails_with "Invalid argument" \
+	bash -c 'echo nonsense > /sys/fs/bcachefs/*/internal/logged_op_fail_next'
+
+    if ! timeout 30 umount /mnt; then
+	echo "ERROR: umount hung after a rejected logged_op_fail_next write"
+	return 1
+    fi
+
+    bcachefs_test_end_checks $dev
+}
+
 test_set_option()
 {
     set_watchdog 60
