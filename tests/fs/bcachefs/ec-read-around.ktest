@@ -634,9 +634,10 @@ test_ec_read_around_fallback()
 	exit 1
     fi
     # A scrub of the stripe (with the stripe scrub patch) counts the parity
-    # blocks' checksum errors against their devices; nothing else may count
-    # any: the file was read without error.
+    # blocks' checksum errors against their devices, and its repair reads
+    # them; nothing else may count any: the file was read without error.
     ktest_expect_device_errors=1
+    ktest_expect_sb_errors="stripe_read_csum_err"
     bcachefs_test_end_checks "${ktest_scratch_dev[2]}"
 }
 
@@ -759,6 +760,7 @@ ec_ra_scrubs_stripe()
 	exit 1
     fi
     ktest_expect_device_errors=1
+    ktest_expect_sb_errors="stripe_read_csum_err"
     bcachefs_test_end_checks "${ktest_scratch_dev[2]}"
 }
 
