@@ -811,6 +811,45 @@ test_reflink_option_propagate_replicas()
     bcachefs_test_end_checks ${ktest_scratch_dev[2]}
 }
 
+# The may_update_opts ioctl commits a reflink_p update on the extents btree;
+# with CONFIG_BCACHEFS_DEBUG the commit path warns when that comes without a
+# disk reservation.
+test_reflink_may_update_disk_res()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount -t bcachefs $dev /mnt
+
+    # A clone made by a user who doesn't own the source gets reflink_p keys
+    # without may_update_opts: the ioctl then has keys to update.
+    set_as_user
+    chmod 777 /mnt
+    dd if=/dev/urandom of=/mnt/orig bs=1M count=8 oflag=direct status=none
+    chmod 644 /mnt/orig
+    $as_user cp --reflink=always /mnt/orig /mnt/clone
+    sync
+
+    local ino=$(stat -c %i /mnt/clone)
+    if ! bcachefs list -b extents /mnt |
+	    awk -v p="reflink_p $ino:" 'index($0, p) && !/may_update_opts/ { n++ } END { exit !n }'; then
+	echo "ERROR: the clone has no reflink_p key without may_update_opts"
+	return 1
+    fi
+
+    dmesg_mark reflink_may_update
+    bcachefs reflink-option-propagate --set-may-update /mnt/clone
+
+    if dmesg_since reflink_may_update | grep "without a disk reservation" >/dev/null; then
+	echo "ERROR: set_reflink_p_may_update_opts committed without a disk reservation"
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs_test_end_checks $dev
+}
+
 # When an extent is made indirect, bch2_make_extent_indirect() must snapshot
 # the source inode's IO options onto the new reflink_v: a non-degraded data
 # extent carries no bch_extent_reconcile entry (the reconciler re-derives the
