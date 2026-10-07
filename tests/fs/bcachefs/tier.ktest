@@ -1122,6 +1122,61 @@ test_reconcile_data_target_overfull()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# user data bytes on a device: usage_dev_user <dev idx>
+usage_dev_user()
+{
+    bcachefs fs usage -f devices /mnt |
+	awk -v hdr="(device $1):" '
+	    $2 == "(device" || $3 == "(device" { in_dev = index($0, hdr) > 0; next }
+	    in_dev && $1 == "user:" { print $2; exit }'
+}
+
+# Relabelling a device out of the background target must move its data to
+# the target. Only a pending scan was queued, which never looks at it.
+test_label_change_rescans_device()
+{
+    set_watchdog 300
+    local devs=(${ktest_scratch_dev[0]} ${ktest_scratch_dev[2]} ${ktest_scratch_dev[3]})
+
+    run_quiet "" bcachefs format -f			\
+	--label=ssd.a ${ktest_scratch_dev[0]}		\
+	--label=hdd.b ${ktest_scratch_dev[2]}		\
+	--label=hdd.c ${ktest_scratch_dev[3]}		\
+	--foreground_target=ssd				\
+	--background_target=hdd
+    mount -t bcachefs "$(join_by : "${devs[@]}")" /mnt
+
+    dd if=/dev/urandom of=/mnt/data bs=1M count=256 oflag=direct status=none
+    timeout 120 bcachefs reconcile wait /mnt
+
+    local b_before=$(usage_dev_user 1)
+    echo "user data on b after reconcile: $b_before"
+    if ((b_before < 32 << 20)); then
+	echo "ERROR: the background target didn't give b its share: $b_before"
+	return 1
+    fi
+
+    echo ssd.b > /sys/fs/bcachefs/*/dev-1/label
+
+    local i b_now
+    for i in $(seq 90); do
+	b_now=$(usage_dev_user 1)
+	((b_now < 8 << 20)) && break
+	sleep 1
+    done
+    echo "user data on b ${i}s after the relabel: $b_now"
+
+    if ((b_now >= 8 << 20)); then
+	cat /sys/fs/bcachefs/*/reconcile_status
+	echo "ERROR: data stayed on the relabelled device"
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${devs[@]}"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 # Disk reservations at replicas > 1 - GH #1221. Here for the devices, not the
 # tiering: raw sectors free say nothing about whether N copies fit on N
 # distinct devices, and this file already has four unequal ones.
