@@ -3062,6 +3062,33 @@ test_recovery_pass_offline()
     fi
 }
 
+# A subvolume unlink asks for check_subvols to run unratelimited next time;
+# the setter wrote false, so the flag never appeared in the superblock.
+test_passes_no_ratelimit_set()
+{
+    local dev=${ktest_scratch_dev[0]}
+
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f $dev
+
+    # the flag is only shown for a pass with a last_run: run them once
+    mount -t bcachefs -o fsck $dev /mnt
+    umount /mnt
+
+    mount -t bcachefs $dev /mnt
+    bcachefs subvolume create /mnt/sub
+    bcachefs subvolume delete /mnt/sub
+    umount /mnt
+
+    local passes=$(bcachefs show-super -f recovery_passes $dev)
+    echo "$passes"
+    if ! grep "no ratelimit" <<<"$passes" >/dev/null; then
+	echo "ERROR: no recovery pass is marked (no ratelimit) after a subvolume unlink"
+	return 1
+    fi
+}
+
 # The passphrase lifecycle on an existing filesystem: adding one, changing
 # one, and taking one off.
 #
