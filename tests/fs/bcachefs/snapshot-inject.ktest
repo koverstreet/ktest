@@ -2106,20 +2106,23 @@ test_interrupted_collapse_replaced_file_churn_userspace()
 # that interior snapshot, which lives inside the inode itself, the root of
 # every snapshot in the family ("loop at" in the reported path).
 #
-# From there fsck alternates and never converges: the reattach dirent is
-# visible to the snapshot subvolumes' root versions, which share the inum,
-# so check_dirents rewrites their backpointers at it and retypes it to
-# DT_SUBVOL; check_inodes resolves the backpointer through the parent
-# subvolume's leaf, which is in the root subvolume's tree, and finds
-# nothing there. Field report: 204 subvolume roots cycling run after run.
-test_deleted_original_after_snapshots()
+# The reattach's child fixup then whiteouts that dirent in the snapshot
+# roots' leaves (they have their real backpointers), so this converges -
+# into a filesystem whose every snapshot carries a lost+found naming the
+# tree's own root.
+
+ROOT_INUM=
+
+# orig (subvol 2, root ROOT_INUM) snapshotted to snap-a (3) and snap-b (4),
+# then deleted; unmounted with the stale root version checked to be there.
+build_deleted_original()
 {
     run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
 
     bcachefs subvolume create /mnt/orig
     echo orig-data > /mnt/orig/file
-    local inum=$(stat -c %i /mnt/orig)
+    ROOT_INUM=$(stat -c %i /mnt/orig)
 
     # snap-* so walk_subvols lists them as subvolume roots:
     bcachefs subvolume snapshot /mnt/orig /mnt/snap-a
@@ -2132,12 +2135,11 @@ test_deleted_original_after_snapshots()
     capture_state $MANIFEST
     umount /mnt
 
-    # ids: main 1, orig 2, snap-a 3, snap-b 4. bi_subvol is varint-packed,
-    # so no field path - parse the display:
+    # bi_subvol is varint-packed, so no field path - parse the display:
     local interior=$(snap_field $(subvol_snapshot 3) parent)
-    local stale=$(kvdb -c "get inodes 0:$inum:$interior" |
+    local stale=$(kvdb -c "get inodes 0:$ROOT_INUM:$interior" |
 	sed -n 's/.*bi_subvol=\([0-9]*\).*/\1/p' | head -1)
-    echo "root inum $inum, interior node $interior, stale bi_subvol $stale"
+    echo "root inum $ROOT_INUM, interior node $interior, stale bi_subvol $stale"
 
     # The deletion has to have completed and the stale version has to be
     # there, or fsck runs against a healthy tree and tests nothing. get
@@ -2153,6 +2155,25 @@ test_deleted_original_after_snapshots()
 
     skip_snaps=""
     skip_paths=""
+    ktest_expect_sb_errors=""
+}
+
+dump_root_versions()
+{
+    echo "=== dirents:"
+    kvdb -c 'list dirents' || true
+    echo "=== versions of the root inode:"
+    local s
+    for s in $(all_snap_ids); do
+	kvdb -c "get inodes 0:$ROOT_INUM:$s" |
+	    grep -E "type inode|bi_dir=|bi_dir_offset=|bi_subvol=|bi_parent_subvol=" || true
+    done
+}
+
+test_deleted_original_after_snapshots()
+{
+    build_deleted_original
+
     # inode_unreachable and inode_dir_wrong_nlink are the self-reattach and
     # its lost+found showing up under every snapshot root; the assertion
     # below is what rejects that, not the counters.
@@ -2160,13 +2181,60 @@ test_deleted_original_after_snapshots()
 
     check_fsck repair
 
-    echo "=== post-repair dirents:"
-    kvdb -c 'list dirents' || true
-    echo "=== post-repair versions of the root inode:"
-    kvdb -c 'list inodes' | grep -E "type inode_v3 0:$inum:|bi_dir=|bi_subvol=" || true
+    dump_root_versions
 
     # The family root must not end up inside its own lost+found:
-    assert_output_lacks ": $inum ->" kvdb -c 'list dirents'
+    assert_output_lacks ": $ROOT_INUM ->" kvdb -c 'list dirents'
+}
+
+# ── and with the snapshot roots pointed at the reattach dirent ───────────
+#
+# The field report's 204 cycling roots have backpointers naming the reattach
+# dirent, not their DT_SUBVOL names. bch2_reattach_inode()'s child fixup
+# writes exactly that when the descendant versions have no backpointer:
+# instead of whiteouting the new dirent in their snapshot it points them at
+# it - and check_inodes clearing a root's backpointer earlier in the same
+# run (inode_points_to_missing_dirent, 204 of them in the report) is what
+# leaves them that way. Model that outcome on top of the repaired image:
+# drop the two whiteouts and point both roots at the reattach dirent.
+#
+# From there fsck alternates and never converges. check_inodes resolves a
+# root's backpointer through its parent subvolume's leaf, which is in
+# another tree, finds nothing and clears it. check_dirents walks the
+# dirent's descendant versions, restores the backpointer
+# (inode_dir_missing_backpointer) and retypes the dirent DT_SUBVOL for a
+# target whose parent subvolume can't see it, so the next run clears it
+# again.
+test_deleted_original_after_snapshots_repointed()
+{
+    build_deleted_original
+
+    bcachefs fsck -y ${ktest_scratch_dev[0]} || true
+
+    local pos=$(dirent_pos $ROOT_INUM)
+    if [[ -z $pos ]]; then
+	echo "TEST FAILED: fsck didn't reattach the root version - nothing to model"
+	exit 1
+    fi
+    local lostfound=${pos%%:*}
+    local rest=${pos#*:}
+    local off=${rest%%:*}
+
+    local leaf
+    for leaf in $(subvol_snapshot 3) $(subvol_snapshot 4); do
+	kvdb_rw -c "set dirents $lostfound:$off:$leaf deleted" \
+		-c "update inodes 0:$ROOT_INUM:$leaf bi_dir=$lostfound bi_dir_offset=$off"
+    done
+
+    echo "=== post-surgery:"
+    dump_root_versions
+    assert_output_lacks "type whiteout $lostfound:$off:" kvdb -c 'list dirents'
+
+    ktest_expect_sb_errors="inode_bi_subvol_missing|inode_unreachable|inode_dir_wrong_nlink|inode_points_to_missing_dirent|inode_dir_missing_backpointer|dirent_d_type_wrong|dirent_not_visible_in_parent_subvol|subvol_fs_path_parent_wrong"
+
+    check_fsck repair
+
+    dump_root_versions
 }
 
 # creation_parent: genealogy metadata, but live - deletion reparents
