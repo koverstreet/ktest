@@ -1328,6 +1328,37 @@ if libc.renameat2(-100, b"/mnt/snap/w", -100, b"/mnt/snap/w2", 4):
     bcachefs_test_end_checks $dev
 }
 
+# A subvolume created inside a snapshot is the master of a new snapshot tree,
+# so quota_read counts its root inode - create must charge it, although the
+# directory it's created in is a snapshot inode.
+test_quota_subvol_in_snapshot()
+{
+    set_watchdog 60
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f $dev
+    mount -t bcachefs -o usrquota $dev /mnt
+
+    bcachefs subvolume snapshot /mnt /mnt/snap
+    bcachefs subvolume create /mnt/snap/sv
+    echo foo > /mnt/snap/sv/f
+    sync
+
+    local before=$(quotactl $dev 0 0)
+    umount /mnt
+    mount -t bcachefs -o usrquota $dev /mnt
+    local after=$(quotactl $dev 0 0)
+
+    echo "quota 0:0: in memory $before, after remount $after"
+    if [[ $before != "$after" ]]; then
+	echo "ERROR: quota usage in memory differs from what a remount reads"
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs_test_end_checks $dev
+}
+
 # test nfs exports:
 require-kernel-config NFSD
 require-kernel-config NFSD_V4
