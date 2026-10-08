@@ -469,7 +469,12 @@ start_vm()
 
     checkdep socat
     checkdep $QEMU_BIN $QEMU_PACKAGE
-    checkdep virtiofsd
+    # Debian and Arch install virtiofsd off $PATH, in /usr/libexec and /usr/lib.
+    local virtiofsd
+    if ! virtiofsd=$(PATH=$PATH:/usr/libexec:/usr/lib command -v virtiofsd); then
+	echo "virtiofsd not found in \$PATH, /usr/libexec or /usr/lib" >&2
+	exit 1
+    fi
     check_root_image_exists
 
     if [[ -z $ktest_kernel_binary ]]; then
@@ -844,7 +849,7 @@ start_vm()
 	local sock="$ktest_out/vm/$1" dir=$2 pid
 
 	rm -f "$sock"
-	virtiofsd	--socket-path="$sock"				\
+	"$virtiofsd"	--socket-path="$sock"				\
 			--shared-dir "$dir" --sandbox none		\
 			--translate-uid map:0:$(id -u):1		\
 			--translate-gid map:0:$(id -g):1		\

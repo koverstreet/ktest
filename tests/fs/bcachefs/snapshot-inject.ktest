@@ -182,7 +182,7 @@ walk_tree()
 walk_subvols()
 {
     local d
-    for d in . $(ls -d snap-* other 2>/dev/null | sed 's|^|./|'); do
+    for d in . ./snap-* ./other; do
 	[[ -d $d ]] || continue
 	echo "d $d"
 	walk_tree $d
@@ -1828,13 +1828,10 @@ test_no_keys_interior_owns_keys()
 # exactly while a collapse is unfinished - which is the state this test
 # builds. The recount wins, the inode is untouched, fsck exits 0. Tracked
 # separately; if those lines disappear, that bug got fixed, not this test.
-test_interrupted_deletion()
+# Delete subvolumes under /mnt and run the deletion, stopped before the inode
+# keys move: interrupt_snapshot_deletion <subvol>...
+interrupt_snapshot_deletion()
 {
-    setup_snapshot_tree
-
-    # Before the delete: afterwards there's no subvolume 4 to ask.
-    local victim=$(subvol_snapshot 4)
-
     local bail=/sys/module/bcachefs/parameters/snapshot_delete_bail_before_inodes
     if [[ ! -w $bail ]]; then
 	echo "TEST FAILED: $bail missing - needs CONFIG_BCACHEFS_DEBUG"
@@ -1848,7 +1845,10 @@ test_interrupted_deletion()
     echo 1 > $bail
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
-    bcachefs subvolume delete /mnt/snap-2
+    local s
+    for s in "$@"; do
+	bcachefs subvolume delete /mnt/$s
+    done
     # Synchronous, so the interruption is deterministic rather than a race
     # with the background pass.
     echo 1 > /sys/fs/bcachefs/*/internal/trigger_delete_dead_snapshots
@@ -1856,6 +1856,16 @@ test_interrupted_deletion()
 
     echo 0 > $bail
     trap - EXIT
+}
+
+test_interrupted_deletion()
+{
+    setup_snapshot_tree
+
+    # Before the delete: afterwards there's no subvolume 4 to ask.
+    local victim=$(subvol_snapshot 4)
+
+    interrupt_snapshot_deletion snap-2
 
     # Confirm the deletion really did stop partway. If it ran to completion
     # the node is gone, fsck has nothing to do, and the test would pass
@@ -1908,6 +1918,323 @@ test_interrupted_deletion()
 
     skip_snaps="snap-2"
     verify_fs_state must-mount
+}
+
+# ── interrupted collapse under a container layer tree ────────────────────
+#
+# The podman bcachefs graph driver's shape: every layer is a read-write
+# snapshot of its parent, and unpacking a layer replaces a file by unlink and
+# create. A base-image file then has one inode whited out in some descendant
+# layers and alive in others. Field report 2026-09-28: after snapshot deletion
+# was interrupted mid-collapse, fsck reported key_in_missing_inode for such
+# files, deleted their extents, and the layers still reading them got zeros.
+
+LAYER_INUM=
+
+# Rewrite a file the way a layer unpack does: new inode, one extent.
+replace_file()
+{
+    rm $1
+    dd if=/dev/urandom of=$1 bs=4k count=1 oflag=direct status=none
+}
+
+# CI container churn on a layer: create and delete $2 snapshots of it, so the
+# layer's chain deepens and snapshot ids spread past the is_ancestor bitmap.
+churn_containers()
+{
+    local i
+    for i in $(seq $2); do
+	bcachefs subvolume snapshot /mnt/$1 /mnt/ctr
+	bcachefs subvolume delete /mnt/ctr
+    done
+}
+
+# snap-l0 base layer with world (replaced below) and keep (never touched);
+# snap-l1 and snap-x replace world, snap-l2 keeps and touches it, snap-z is
+# snap-l2's child that replaces it again. $1: containers churned on snap-l2.
+build_layer_tree()
+{
+    local churn=${1:-0}
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    bcachefs subvolume create /mnt/snap-l0
+    dd if=/dev/urandom of=/mnt/snap-l0/world bs=4k count=1 oflag=direct status=none
+    dd if=/dev/urandom of=/mnt/snap-l0/keep bs=4k count=1 oflag=direct status=none
+    LAYER_INUM=$(stat -c %i /mnt/snap-l0/world)
+
+    bcachefs subvolume snapshot /mnt/snap-l0 /mnt/snap-l1
+    replace_file /mnt/snap-l1/world
+
+    bcachefs subvolume snapshot /mnt/snap-l0 /mnt/snap-l2
+    bcachefs subvolume snapshot /mnt/snap-l2 /mnt/snap-x
+    replace_file /mnt/snap-x/world
+    churn_containers snap-l2 $churn
+
+    # Gives snap-l2 its own version of the inode, as in the field report:
+    touch /mnt/snap-l2/world
+    bcachefs subvolume snapshot /mnt/snap-l2 /mnt/snap-z
+    replace_file /mnt/snap-z/world
+    churn_containers snap-l2 $churn
+
+    capture_state $MANIFEST
+    umount /mnt
+
+    skip_snaps=""
+    skip_paths=""
+    ktest_expect_sb_errors=""
+}
+
+# inum:snapshot pairs holding an extent but no inode version: the
+# half-migrated state the interruption must leave behind.
+extents_without_inode()
+{
+    local ext=$(kvdb -c 'list extents' |
+	sed -n 's/.*type extent \([0-9]*\):[0-9]*:\([0-9]*\) .*/\1:\2/p' | sort -u)
+    local ino=$(kvdb -c 'list inodes' |
+	sed -n 's/.*type inode_v3 0:\([0-9]*\):\([0-9]*\) .*/\1:\2/p' | sort -u)
+    comm -23 <(echo "$ext") <(echo "$ino") | grep .
+}
+
+# fsck must finish the collapse without dropping data any layer still reads.
+# $@: extra fsck arguments.
+check_layer_tree_fsck()
+{
+    local skew=$(extents_without_inode)
+    if [[ -z $skew ]]; then
+	echo "TEST FAILED: no extent was left without its inode - the" \
+	     "interruption exercised nothing"
+	kvdb -c 'list extents' || true
+	kvdb -c 'list inodes' || true
+	exit 1
+    fi
+    echo "half-migrated (inum:snapshot, world is $LAYER_INUM):" $skew
+
+    local out=/tmp/fsck-layer-tree.out
+    local rc1=0 rc2=0
+    bcachefs fsck "$@" -y ${ktest_scratch_dev[0]} 2>&1 | tee $out || rc1=$?
+    echo "fsck -y exited $rc1"
+
+    if grep -q "key in missing inode" $out; then
+	echo "TEST FAILED: fsck treated a migrated extent as orphaned"
+	exit 1
+    fi
+    if (( rc1 > 1 )); then
+	echo "TEST FAILED: fsck errored on a legitimately interrupted deletion"
+	exit 1
+    fi
+
+    bcachefs fsck -n ${ktest_scratch_dev[0]} || rc2=$?
+    echo "second fsck -n exited $rc2"
+    if (( rc2 != 0 )); then
+	echo "TEST FAILED: errors remain after the deletion completed"
+	exit 1
+    fi
+
+    verify_fs_state must-mount
+}
+
+# Base layer and the sibling that replaced world go: the base-image node
+# collapses into snap-l2's, content first, and stops there.
+test_interrupted_collapse_replaced_file()
+{
+    build_layer_tree
+
+    interrupt_snapshot_deletion snap-l1 snap-l0
+
+    skip_snaps="snap-l0 snap-l1"
+    check_layer_tree_fsck
+}
+
+# The field report's aborts came repeatedly: a second interrupted round,
+# after the replacing child layer snap-x goes too, moves the collapse terminal.
+test_interrupted_collapse_replaced_file_twice()
+{
+    build_layer_tree
+
+    interrupt_snapshot_deletion snap-l1 snap-l0
+    interrupt_snapshot_deletion snap-x
+
+    skip_snaps="snap-l0 snap-l1 snap-x"
+    check_layer_tree_fsck
+}
+
+# Field snapshot ids were hundreds of thousands apart, so is_ancestor ran on
+# skiplists; the variants above stay within the 128-id bitmap.
+test_interrupted_collapse_replaced_file_churn()
+{
+    build_layer_tree 150
+
+    interrupt_snapshot_deletion snap-l1 snap-l0
+    interrupt_snapshot_deletion snap-x
+
+    local ids=($(all_snap_ids | sort -n))
+    echo "snapshot ids span ${ids[0]}..${ids[-1]}"
+
+    skip_snaps="snap-l0 snap-l1 snap-x"
+    check_layer_tree_fsck
+}
+
+# The field report ran userspace fsck; the variants above get the in-kernel one.
+test_interrupted_collapse_replaced_file_churn_userspace()
+{
+    build_layer_tree 150
+
+    interrupt_snapshot_deletion snap-l1 snap-l0
+    interrupt_snapshot_deletion snap-x
+
+    skip_snaps="snap-l0 snap-l1 snap-x"
+    # BCACHEFS_KERNEL_ONLY, exported by the test libs, overrides -K:
+    (unset BCACHEFS_KERNEL_ONLY; check_layer_tree_fsck -K)
+}
+
+# ── original deleted after two snapshots: fsck reattaches the family root ──
+#
+# bcachefs-tools issue #1109. Snapshot a subvolume twice, delete the
+# original. Its root inode's version at the node that became interior
+# still names the deleted subvolume, and nothing deletes that key: the
+# interior node has two live children, so the sweep leaves it alone.
+#
+# check_inode then takes the stale bi_subvol for damage. The subvolume is
+# gone and the interior node's backref was cleared when it stopped being a
+# leaf (bch2_snapshot_node_create), so inode_bi_subvol_missing strips
+# bi_subvol and bi_parent_subvol, and the version is now a plain directory
+# at an interior snapshot with no dirent naming it there. check_inodes
+# clears its backpointer (its dirent was in the root subvolume's tree),
+# check_unreachable_inodes reattaches it - into lost+found resolved at
+# that interior snapshot, which lives inside the inode itself, the root of
+# every snapshot in the family ("loop at" in the reported path).
+#
+# The reattach's child fixup then whiteouts that dirent in the snapshot
+# roots' leaves (they have their real backpointers), so this converges -
+# into a filesystem whose every snapshot carries a lost+found naming the
+# tree's own root.
+
+ROOT_INUM=
+
+# orig (subvol 2, root ROOT_INUM) snapshotted to snap-a (3) and snap-b (4),
+# then deleted; unmounted with the stale root version checked to be there.
+build_deleted_original()
+{
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    bcachefs subvolume create /mnt/orig
+    echo orig-data > /mnt/orig/file
+    ROOT_INUM=$(stat -c %i /mnt/orig)
+
+    # snap-* so walk_subvols lists them as subvolume roots:
+    bcachefs subvolume snapshot /mnt/orig /mnt/snap-a
+    bcachefs subvolume snapshot /mnt/orig /mnt/snap-b
+
+    bcachefs subvolume delete /mnt/orig
+    sleep 1
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_delete_dead_snapshots
+
+    capture_state $MANIFEST
+    umount /mnt
+
+    # bi_subvol is varint-packed, so no field path - parse the display:
+    local interior=$(snap_field $(subvol_snapshot 3) parent)
+    local stale=$(kvdb -c "get inodes 0:$ROOT_INUM:$interior" |
+	sed -n 's/.*bi_subvol=\([0-9]*\).*/\1/p' | head -1)
+    echo "root inum $ROOT_INUM, interior node $interior, stale bi_subvol $stale"
+
+    # The deletion has to have completed and the stale version has to be
+    # there, or fsck runs against a healthy tree and tests nothing. get
+    # prints the deleted slot too, so match the type:
+    if kvdb -c "get subvolumes 0:2:0" | grep "type subvolume" > /dev/null; then
+	echo "TEST FAILED: subvolume 2 still exists - deletion didn't complete"
+	exit 1
+    fi
+    if [[ $stale != 2 ]]; then
+	echo "TEST FAILED: root version at $interior doesn't name subvolume 2"
+	exit 1
+    fi
+
+    skip_snaps=""
+    skip_paths=""
+    ktest_expect_sb_errors=""
+}
+
+dump_root_versions()
+{
+    echo "=== dirents:"
+    kvdb -c 'list dirents' || true
+    echo "=== versions of the root inode:"
+    local s
+    for s in $(all_snap_ids); do
+	kvdb -c "get inodes 0:$ROOT_INUM:$s" |
+	    grep -E "type inode|bi_dir=|bi_dir_offset=|bi_subvol=|bi_parent_subvol=" || true
+    done
+}
+
+test_deleted_original_after_snapshots()
+{
+    build_deleted_original
+
+    # inode_unreachable and inode_dir_wrong_nlink are the self-reattach and
+    # its lost+found showing up under every snapshot root; the assertion
+    # below is what rejects that, not the counters.
+    ktest_expect_sb_errors="inode_bi_subvol_missing|inode_unreachable|inode_dir_wrong_nlink"
+
+    check_fsck repair
+
+    dump_root_versions
+
+    # The family root must not end up inside its own lost+found:
+    assert_output_lacks ": $ROOT_INUM ->" kvdb -c 'list dirents'
+}
+
+# ── and with the snapshot roots pointed at the reattach dirent ───────────
+#
+# The field report's 204 cycling roots have backpointers naming the reattach
+# dirent, not their DT_SUBVOL names. bch2_reattach_inode()'s child fixup
+# writes exactly that when the descendant versions have no backpointer:
+# instead of whiteouting the new dirent in their snapshot it points them at
+# it - and check_inodes clearing a root's backpointer earlier in the same
+# run (inode_points_to_missing_dirent, 204 of them in the report) is what
+# leaves them that way. Model that outcome on top of the repaired image:
+# drop the two whiteouts and point both roots at the reattach dirent.
+#
+# From there fsck alternates and never converges. check_inodes resolves a
+# root's backpointer through its parent subvolume's leaf, which is in
+# another tree, finds nothing and clears it. check_dirents walks the
+# dirent's descendant versions, restores the backpointer
+# (inode_dir_missing_backpointer) and retypes the dirent DT_SUBVOL for a
+# target whose parent subvolume can't see it, so the next run clears it
+# again.
+test_deleted_original_after_snapshots_repointed()
+{
+    build_deleted_original
+
+    bcachefs fsck -y ${ktest_scratch_dev[0]} || true
+
+    local pos=$(dirent_pos $ROOT_INUM)
+    if [[ -z $pos ]]; then
+	echo "TEST FAILED: fsck didn't reattach the root version - nothing to model"
+	exit 1
+    fi
+    local lostfound=${pos%%:*}
+    local rest=${pos#*:}
+    local off=${rest%%:*}
+
+    local leaf
+    for leaf in $(subvol_snapshot 3) $(subvol_snapshot 4); do
+	kvdb_rw -c "set dirents $lostfound:$off:$leaf deleted" \
+		-c "update inodes 0:$ROOT_INUM:$leaf bi_dir=$lostfound bi_dir_offset=$off"
+    done
+
+    echo "=== post-surgery:"
+    dump_root_versions
+    assert_output_lacks "type whiteout $lostfound:$off:" kvdb -c 'list dirents'
+
+    ktest_expect_sb_errors="inode_bi_subvol_missing|inode_unreachable|inode_dir_wrong_nlink|inode_points_to_missing_dirent|inode_dir_missing_backpointer|dirent_d_type_wrong|dirent_not_visible_in_parent_subvol|subvol_fs_path_parent_wrong"
+
+    check_fsck repair
+
+    dump_root_versions
 }
 
 # creation_parent: genealogy metadata, but live - deletion reparents
