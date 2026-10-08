@@ -182,7 +182,7 @@ walk_tree()
 walk_subvols()
 {
     local d
-    for d in . $(ls -d snap-* other 2>/dev/null | sed 's|^|./|'); do
+    for d in . ./snap-* ./other; do
 	[[ -d $d ]] || continue
 	echo "d $d"
 	walk_tree $d
