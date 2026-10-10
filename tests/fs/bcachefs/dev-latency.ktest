@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+#
+# A device's read latency estimate (cur_latency, sysfs dev-0/io_latency_read)
+# when every read takes seconds, as when a drive retries a bad sector.
+#
+# test_dev_latency_multisecond: reads delayed 5 s by dm-delay; after 12 of
+#   them the estimate, an EWMA weighting each sample 1/32, must be past 1.2 s
+#   (5 s * (1 - (31/32)^12) = 1.58 s).
+
+# shellcheck source=tests/fs/bcachefs/bcachefs-test-libs.sh
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+require-kernel-config DM_DELAY
+
+config-scratch-devs 1G
+
+lat_dm_table()
+{
+    dmsetup reload lat --table "$1"
+    dmsetup suspend --nolockfs lat
+    dmsetup resume lat
+}
+
+test_dev_latency_multisecond()
+{
+    set_watchdog 300
+
+    local raw=${ktest_scratch_dev[0]} sz
+    sz=$(blockdev --getsz "$raw")
+    modprobe dm-delay
+    dmsetup create lat --table "0 $sz linear $raw 0"
+    trap 'umount /mnt 2>/dev/null; dmsetup remove --retry lat >/dev/null 2>&1; kill_descendants $BASHPID' EXIT
+
+    run_quiet "" bcachefs format -f /dev/mapper/lat
+    mount -t bcachefs /dev/mapper/lat /mnt
+    dd if=/dev/urandom of=/mnt/data bs=1M count=12 conv=fsync status=none
+    # Btree nodes into the cache while the device is fast:
+    cat /mnt/data > /dev/null
+
+    local f
+    f=$(echo /sys/fs/bcachefs/*/dev-0/io_latency_read)
+    echo "estimate before: $(cat "$f") ns"
+
+    lat_dm_table "0 $sz delay $raw 0 5000 $raw 0 0 $raw 0 0"
+    local i
+    for (( i = 0; i < 12; i++ )); do
+	dd if=/mnt/data of=/dev/null bs=4k skip=$((i * 256)) count=1 iflag=direct status=none
+    done
+    lat_dm_table "0 $sz linear $raw 0"
+
+    local est
+    est=$(cat "$f")
+    echo "estimate after 12 reads of 5 s: $est ns"
+
+    umount /mnt
+    dmsetup remove --retry lat
+    trap 'kill_descendants $BASHPID' EXIT
+
+    if (( est < 1200000000 )); then
+	echo "ERROR: the estimate stalled at $est ns: samples 2.1 s or more"
+	echo "       off the estimate were taken for close ones and skipped"
+	exit 1
+    fi
+    bcachefs_test_end_checks "$raw"
+}
+
+main "$@"
