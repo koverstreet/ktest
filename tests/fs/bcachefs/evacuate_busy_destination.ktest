@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+require-kernel-config BCACHEFS_FS=y
+config-mem 4G
+config-cpus 2
+config-scratch-devs 2G 'iops=300,bps=104857600'
+config-scratch-devs 2G 'iops=300,bps=104857600'
+config-scratch-devs 2G 'iops=300,bps=104857600'
+
+busy_destination_source_extents()
+{
+    local inode=$1
+    awk -v inode="$inode" '
+        /^u64s / {
+            split($5, position, ":")
+            selected = $4 == "extent" && ("x" position[1]) == ("x" inode)
+        }
+        selected
+    '
+}
+
+busy_destination_dev_sectors()
+{
+    awk -v device="$1" '
+        /^u64s / { sectors = $7 }
+        $1 == "ptr:" {
+            split($3, position, ":")
+            if (position[1] == device)
+                total += sectors
+        }
+        END { print total + 0 }
+    '
+}
+
+test_evacuate_moves_away_from_busy_destination()
+{
+    local inode device sectors deadline warm=0 drained=0
+    local hot_buckets cool_buckets hot_user_sectors cool_user_sectors
+    local source_sectors hot_sectors cool_sectors
+    local fio_pid start end
+    set_watchdog 900
+    run_quiet "" bcachefs format -f --block_size=4k --bucket_size=256k \
+        --replicas=1 --compression=none --foreground_target=src \
+        --background_target=src --metadata_target=dst \
+        --rotational=1 --label=src "${ktest_scratch_dev[0]}" \
+        --rotational=1 --label=dst.hot "${ktest_scratch_dev[1]}" \
+        --rotational=1 --label=dst.cool "${ktest_scratch_dev[2]}"
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+    echo 0 > /sys/fs/bcachefs/*/options/reconcile_enabled
+    dd if=/dev/zero of=/mnt/source bs=4M count=128 oflag=direct status=none
+    inode=$(stat -c %i /mnt/source)
+    sha256sum /mnt/source > "$ktest_out/source.sha256"
+    touch /mnt/cool-prefill /mnt/hot-pressure
+    bcachefs set-file-option --foreground_target=dst.cool --background_target=dst.cool /mnt/cool-prefill
+    bcachefs set-file-option --foreground_target=dst.hot --background_target=dst.hot /mnt/hot-pressure
+    dd if=/dev/zero of=/mnt/cool-prefill bs=4M count=256 oflag=direct status=none
+    dd if=/dev/zero of=/mnt/hot-pressure bs=4M count=32 oflag=direct status=none
+    sync
+    sectors=$(bcachefs_dev_user_sectors 0) || return 1
+    test "$sectors" -ge 1048576
+    hot_user_sectors=$(bcachefs_dev_user_sectors 1) || return 1
+    cool_user_sectors=$(bcachefs_dev_user_sectors 2) || return 1
+    test "$hot_user_sectors" -gt 0
+    test "$cool_user_sectors" -gt "$hot_user_sectors"
+    for device in 0 1 2; do
+        cat /sys/fs/bcachefs/*/dev-"$device"/alloc_debug > "$ktest_out/device-$device-before.txt"
+    done
+    echo none > /sys/fs/bcachefs/*/options/foreground_target
+    echo none > /sys/fs/bcachefs/*/options/background_target
+    fio --name=hot-pressure --filename=/mnt/hot-pressure --filesize=128M \
+        --ioengine=libaio --direct=1 --iodepth=64 --iodepth_batch=16 \
+        --rw=randwrite --bs=256k --fsync=1 --randseed=686 --randrepeat=1 \
+        --time_based=1 --runtime=180 --exitall_on_error=1 \
+        --clocksource=clock_gettime --log_alternate_epoch_clock_id=7 --log_unix_epoch=1 \
+        --write_iops_log="$ktest_out/hot-pressure" --log_avg_msec=1000 \
+        --output-format=json --output="$ktest_out/fio.json" &
+    fio_pid=$!
+    while kill -0 "$fio_pid"; do
+        cat /sys/fs/bcachefs/*/dev-1/open_buckets > "$ktest_out/hot-buckets-before.txt"
+        cat /sys/fs/bcachefs/*/dev-2/open_buckets > "$ktest_out/cool-buckets-before.txt"
+        hot_buckets=$(awk '$4 == "user" { count++ } END { print count + 0 }' "$ktest_out/hot-buckets-before.txt")
+        cool_buckets=$(awk '$4 == "user" { count++ } END { print count + 0 }' "$ktest_out/cool-buckets-before.txt")
+        if (( hot_buckets > 0 && cool_buckets == 0 )); then
+            warm=1
+            break
+        fi
+        sleep .1
+    done
+    if (( warm == 0 )); then
+        echo 'Workload did not expose a busy hot destination and an idle cool alternative'
+        cat "$ktest_out/hot-buckets-before.txt" "$ktest_out/cool-buckets-before.txt"
+        return 1
+    fi
+    start=$(cut -d' ' -f1 /proc/uptime)
+    printf 'start\t%s\n' "$start" > "$ktest_out/window.tsv"
+    echo evacuating > /sys/fs/bcachefs/*/dev-0/state
+    echo 1 > /sys/fs/bcachefs/*/options/reconcile_enabled
+    printf 'uptime_seconds\tsource_user_sectors\n' > "$ktest_out/movement.tsv"
+    deadline=$((SECONDS + 600))
+    while (( SECONDS < deadline )); do
+        sectors=$(bcachefs_dev_user_sectors 0) || return 1
+        printf '%s\t%s\n' "$(cut -d' ' -f1 /proc/uptime)" "$sectors" >> "$ktest_out/movement.tsv"
+        if (( sectors == 0 )); then
+            drained=1
+            break
+        fi
+        sleep .1
+    done
+    end=$(cut -d' ' -f1 /proc/uptime)
+    printf 'drained\t%s\n' "$end" >> "$ktest_out/window.tsv"
+    test "$drained" = 1
+    bcachefs reconcile wait -t high_priority /mnt
+    wait "$fio_pid"
+    awk -F, -v start="$start" -v end="$end" '
+        $1 - 1000 >= start * 1000 && $1 <= end * 1000 && $2 > 0 && $3 == 1 { bins++ }
+        END { print "positive foreground overlap bins:", bins + 0; exit bins < 2 }
+    ' "$ktest_out/hot-pressure_iops.1.log"
+    sha256sum -c "$ktest_out/source.sha256"
+    umount /mnt
+    bcachefs list -b extents "${ktest_scratch_dev[@]}" > "$ktest_out/all-extents.txt"
+    busy_destination_source_extents "$inode" < "$ktest_out/all-extents.txt" > "$ktest_out/source-extents.txt"
+    source_sectors=$(busy_destination_dev_sectors 0 < "$ktest_out/source-extents.txt")
+    hot_sectors=$(busy_destination_dev_sectors 1 < "$ktest_out/source-extents.txt")
+    cool_sectors=$(busy_destination_dev_sectors 2 < "$ktest_out/source-extents.txt")
+    printf 'source sectors %s hot sectors %s cool sectors %s\n' "$source_sectors" "$hot_sectors" "$cool_sectors" > "$ktest_out/placement.txt"
+    cat "$ktest_out/placement.txt"
+    test "$source_sectors" = 0
+    test "$((hot_sectors + cool_sectors))" = 1048576
+    test "$cool_sectors" -ge 2048
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+    sha256sum -c "$ktest_out/source.sha256"
+    umount /mnt
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+    if (( hot_sectors >= cool_sectors )); then
+        echo 'Evacuation kept preferring the busy destination'
+        return 1
+    fi
+}
+
+main "$@"
