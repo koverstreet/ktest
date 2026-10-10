@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+#
+# Install bcachefs the way a Debian user does - Debian's kernel, Debian's
+# headers package, Debian's toolchain - and check that the module it builds
+# loads and works.
+#
+#   ktest run -k debian/unstable-stock debian_dkms.ktest
+#
+# The kernel is Debian's stock package: a distro-kernel-fetcher source with
+# rebuild: false (~/.ktest/distro-sources.json5). The fetcher's default for
+# Debian rebuilds the kernel so its headers keep rust/, which no user has.
+#
+# WHAT A DEBIAN USER HAS
+# Debian builds its kernel with CONFIG_RUST=y but ships none of rust/ in
+# linux-headers, nor scripts/rust_is_available.sh or
+# scripts/generate_rust_target.rs. So bcachefs can't use the kernel's Rust and
+# has to build its own vendored copy, with Debian's rustc, rust-src and
+# bindgen - which the root image, being Debian sid, has as Debian packages.
+# koverstreet/bcachefs-tools#1133 was this configuration: a prebuilt module
+# fetched fine, then the Rust checks failed the build anyway; and with those
+# fixed, the vendored stack needed generate_rust_target.rs, which Debian
+# doesn't ship.
+#
+# WHERE THE HEADERS COME FROM
+# apt, in the VM, from deb.debian.org: Debian's real packages, installed where
+# Debian installs them - /usr/src, with the -common split and linux-kbuild -
+# and pinned to the booted kernel's exact package version. Not the kernel
+# store's copy, which the fetcher relocated and rewrote to build from
+# anywhere: testrunner points /lib/modules/<kver>/build at that one, and
+# installing the package repoints it.
+#
+# NOT COVERED YET
+# The prebuilt-module path. fetch-module.sh only asks for one when dpkg owns
+# the running kernel, and a kernel booted from the store isn't dpkg-installed,
+# so every build here is a local one.
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/../../test-libs.sh"
+
+config-timeout $((45 * 60))
+config-scratch-devs 4G
+
+require-git https://evilpiepirate.org/git/bcachefs-tools.git
+
+# Only the tools - bcachefs format, to have something to mount. The module is
+# the test. Not bcachefs-test-libs.sh, whose build cache this would share: it
+# exports BCACHEFS_DEBUG and BCACHEFS_TESTS, which install_dkms writes into
+# the module's build.vars, and its init hook builds the module itself, before
+# this test has installed Debian's headers.
+init_install_bcachefs_tools()
+{
+    local jobs=$(( $(nproc) / 2 ))
+    (( jobs < 1 )) && jobs=1
+
+    git config --system --add safe.directory '*'
+    make -j$jobs -C "$ktest_deps_dir/bcachefs-tools" PREFIX=/usr install
+}
+
+test_debian_dkms()
+{
+    local kver=$(uname -r)
+    local store=/host/$ktest_kernel_binary
+
+    if ! grep -q '"distro": "debian"' "$store/manifest.json" 2>/dev/null; then
+	echo "FAIL: not booted on a Debian kernel from the kernel store"
+	echo "($store/manifest.json missing, or not distro debian)"
+	echo "run with -k debian/unstable-stock"
+	return 1
+    fi
+    # The store keys a Debian kernel by its package version (7.2.9-1) - the
+    # version the headers have to be.
+    local pkgver=$(basename "$ktest_kernel_binary")
+    echo "kernel $kver, package version $pkgver"
+
+    # qemu's user-mode network is up (ssh goes through it), but the root
+    # image's resolv.conf is empty; qemu's DNS forwarder is always 10.0.2.3.
+    if ! grep -q '^nameserver' /etc/resolv.conf 2>/dev/null; then
+	echo "nameserver 10.0.2.3" >> /etc/resolv.conf
+    fi
+
+    export DEBIAN_FRONTEND=noninteractive
+    if ! apt-get -q update; then
+	echo "FAIL: apt-get update failed - no network in the VM?"
+	echo "this test needs deb.debian.org (ktest's default user networking)"
+	return 1
+    fi
+    if ! apt-get -q install -y "linux-headers-$kver=$pkgver"; then
+	echo "FAIL: could not install linux-headers-$kver=$pkgver"
+	echo "if sid has moved past this kernel, its headers are gone from the"
+	echo "archive: refetch the stock kernel (distro-kernel-fetch --only"
+	echo "unstable-stock) so the store's newest matches sid"
+	return 1
+    fi
+
+    # The package's build symlink has to have replaced testrunner's, or every
+    # claim below is about the store's relocated headers rather than Debian's.
+    local kdir=$(readlink -f "/lib/modules/$kver/build")
+    if [[ $kdir != "/usr/src/linux-headers-$kver" ]]; then
+	echo "FAIL: /lib/modules/$kver/build resolves to $kdir,"
+	echo "not the installed package's /usr/src/linux-headers-$kver"
+	return 1
+    fi
+    echo "headers: $kdir ($(dpkg-query -W -f='${Version}' "linux-headers-$kver"))"
+
+    # Stage the DKMS source the way the bcachefs-kernel-dkms package does. No
+    # BCACHEFS_* build options here: a user's build has none.
+    local tools="$ktest_deps_dir/bcachefs-tools"
+    # bind-mounted from the host, owned by another uid - and VERSION is git
+    # describe
+    git config --system --add safe.directory '*'
+    if ! make -s -C "$tools" install_dkms > /tmp/install_dkms.log 2>&1; then
+	echo "FAIL: install_dkms failed"
+	tail -20 /tmp/install_dkms.log
+	return 1
+    fi
+    local srcs=(/usr/src/bcachefs-*)
+    if [[ ${#srcs[@]} -ne 1 || ! -f ${srcs[0]}/dkms.conf ]]; then
+	echo "FAIL: expected one staged DKMS tree with a dkms.conf, found: ${srcs[*]}"
+	return 1
+    fi
+    local ver=${srcs[0]#/usr/src/bcachefs-}
+
+    # dkms sizes its parallelism from nproc; budget memory instead, as
+    # bcachefs-tools' dkms-reload does
+    local jobs=$(( $(awk '/^MemTotal:/ {print $2}' /proc/meminfo) / 1024 / 512 ))
+    (( jobs > $(nproc) )) && jobs=$(nproc)
+    (( jobs < 1 )) && jobs=1
+
+    # Where dkms leaves make.log: in the build tree when the build fails, but
+    # a successful one deletes the build tree and keeps only the log, under
+    # the kernel's directory (dkms 3.x do_build).
+    local log=/var/lib/dkms/bcachefs/$ver/build/make.log
+    dump_make_log()
+    {
+	echo "--- tail of $log ---"
+	if [[ -f $log ]]; then
+	    tail -40 "$log"
+	else
+	    echo "(no make.log)"
+	fi
+	echo "--- end ---"
+    }
+
+    dkms add -m bcachefs -v "$ver"
+    if ! dkms build -m bcachefs -v "$ver" -k "$kver" -j $jobs; then
+	echo "FAIL: dkms build of bcachefs $ver failed against Debian's headers"
+	dump_make_log
+	return 1
+    fi
+    log=/var/lib/dkms/bcachefs/$ver/$kver/$(uname -m)/log/make.log
+    dkms install -m bcachefs -v "$ver" -k "$kver"
+
+    # Rust is required, so a module means Rust was built - the question is
+    # which stack. Debian's headers have no rust/, so it has to be the
+    # vendored one, which compiles its own core into vrust/; anything else
+    # means this build wasn't what a Debian user's is. The build tree is gone
+    # by now, so ask the log - kbuild names every object it builds.
+    if ! grep -q 'vrust/core\.o' "$log" 2>/dev/null; then
+	echo "FAIL: no vrust/core.o in $log - the module was not built with"
+	echo "the vendored Rust stack, which is the only one Debian's headers allow"
+	dump_make_log
+	return 1
+    fi
+    local why
+    if why=$(grep -m1 "can't use the kernel's Rust" "$log"); then
+	echo "${why#bcachefs: }"
+    fi
+
+    if ! modprobe bcachefs; then
+	echo "FAIL: bcachefs.ko built and installed, but did not load"
+	echo "check dmesg for unresolved symbols or a vermagic mismatch"
+	return 1
+    fi
+    echo "loaded: bcachefs $(cat /sys/module/bcachefs/version)," \
+	 "taint $(cat /proc/sys/kernel/tainted)"
+
+    # A module that loads has run none of its Rust: the key validate and
+    # to_text hooks for dirents, inodes and xattrs are, and they run when
+    # btree nodes are read back. Write some of each, remount so they're read
+    # from disk, and check they came back.
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    mkdir /mnt/dir
+    echo hello > /mnt/dir/file
+    ln -s file /mnt/dir/link
+    setfattr -n user.debian_dkms -v xattr /mnt/dir/file
+    cp -a /usr/include /mnt/include
+    umount /mnt
+
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    local got
+    got=$(cat /mnt/dir/link)
+    if [[ $got != hello ]]; then
+	echo "FAIL: after remount, /mnt/dir/link reads '$got', wrote 'hello'"
+	return 1
+    fi
+    got=$(getfattr --only-values -n user.debian_dkms /mnt/dir/file)
+    if [[ $got != xattr ]]; then
+	echo "FAIL: after remount, xattr user.debian_dkms is '$got', set 'xattr'"
+	return 1
+    fi
+    # --no-dereference: compare symlinks as symlinks. Debian's /usr/include is
+    # full of relative ones that point out of it (linux-libc-dev's
+    # asm/foo.h -> ../../../lib/linux/uapi/...), which dangle in the copy.
+    if ! diff -r --no-dereference /usr/include /mnt/include; then
+	echo "FAIL: after remount, /mnt/include differs from the /usr/include it was copied from"
+	return 1
+    fi
+    umount /mnt
+
+    echo "PASS: bcachefs $ver built with Debian's headers and toolchain" \
+	 "(vendored Rust), loaded on Debian's $kver, and mounted"
+}
+
+main "$@"
