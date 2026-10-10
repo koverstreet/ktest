@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+#
+# A stripe reuse re-keys the extents of the blocks it carries over from the old
+# stripe first, then those of the new blocks. If it's interrupted in between,
+# the old stripe is already empty, and recovery may delete it before the
+# logged op resumes the update.
+#
+# test_ec_stripe_update_resume_old_gone: interrupt a reuse that carries an old
+#   block whose index is also one of the new blocks', delete the old stripe,
+#   then mount: the resumed update must not move any extent, and the data
+#   reads back. logged_op_fail_next=stripe_update stops a reuse after its
+#   carried blocks and takes the filesystem emergency read-only, as a crash
+#   there would.
+
+# shellcheck source=tests/fs/bcachefs/bcachefs-test-libs.sh
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+require-kernel-config BCACHEFS_ERASURE_CODING
+
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+
+# Extents with a pointer into one of the buckets <bucket>... (dev:bucket:) and
+# no stripe pointer to stripe <idx>, from an extents listing on stdin
+esur_unconverted()
+{
+    local idx=$1; shift
+    awk -v idx="$idx" -v want="$*" '
+	BEGIN { n = split(want, w, " "); for (i = 1; i <= n; i++) W[w[i]] = 1 }
+	function flush() { if (in_w && !ec) nr++; in_w = ec = 0 }
+	/ type (extent|reflink_v) / { flush(); next }
+	$1 == "stripe_ptr:" && $3 == idx { ec = 1 }
+	$1 == "ptr:" {
+	    for (i = 2; i <= NF; i++)
+		if ($i ~ /^[0-9]+:[0-9]+:[0-9]+$/) {
+		    split($i, p, ":")
+		    if ((p[1] ":" p[2] ":") in W) in_w = 1
+		}
+	}
+	END { flush(); print nr + 0 }'
+}
+
+# Stripe pointers into stripe <idx>, from an extents listing on stdin
+esur_stripe_ptrs()
+{
+    awk -v idx="$1" '$1 == "stripe_ptr:" && $3 == idx { nr++ } END { print nr + 0 }'
+}
+
+# esur_fresh_buckets <stripe idx> <old_blocks_nr>: dev:bucket: of each of the
+# stripe's new data blocks (from index old_blocks_nr on), from a stripes
+# listing on stdin
+esur_fresh_buckets()
+{
+    awk -v idx="$1" -v nr="$2" '
+	/ type stripe / { on = $0 ~ (" type stripe 0:" idx ":0 "); b = 0 }
+	on && match($0, /blocks [0-9]+:/) { nd = substr($0, RSTART + 7, RLENGTH - 8) }
+	on {
+	    for (i = 1; i < NF; i++)
+		if ($i ~ /^[0-9]+:[0-9]+:[0-9]+$/ && $(i + 1) == "gen") {
+		    split($i, p, ":")
+		    if (b >= nr && b < nd) printf "%s:%s: ", p[1], p[2]
+		    b++
+		}
+	}'
+}
+
+# esur_moves_down <old_blocks_nr> <map>: does the map carry an old block whose
+# index is also one of the new blocks' (>= old_blocks_nr)?
+esur_moves_down()
+{
+    local nr=$1 j
+    local -a m
+    IFS=, read -r -a m <<< "$2"
+    for j in "${m[@]}"; do
+	(( j >= nr )) && return 0
+    done
+    return 1
+}
+
+esur_umount()
+{
+    local i
+    for (( i = 0; i < 30; i++ )); do
+	umount /mnt && return 0
+	sleep 1
+    done
+    return 1
+}
+
+test_ec_stripe_update_resume_old_gone()
+{
+    # The op is still there when a clean filesystem is mounted: kvdb --rw
+    # shuts down cleanly.
+    ktest_expect_sb_errors="logged_op_but_clean"
+    set_watchdog 600
+
+    local devs=("${ktest_scratch_dev[@]}")
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	--fs_size=256M				\
+	"${devs[@]}"
+    mount -t bcachefs "$(join_by : "${devs[@]}")" /mnt
+
+    local sysfs
+    sysfs=$(echo /sys/fs/bcachefs/*-*-*-*-*)
+    fill_device /mnt/fiotest
+    echo 65536 > /sys/kernel/tracing/buffer_size_kb
+    echo 1 > /sys/kernel/tracing/events/bcachefs/stripe_delete/enable
+
+    # Truncating frees blocks out from under stripes, and rewriting into a
+    # full filesystem reuses them, as in ec.ktest's ec_stripe_reuse. The knob
+    # stops the first reuse to get past its carried blocks, and fio then fails
+    # on the read-only filesystem. The shutdown interrupts every stripe update
+    # in flight. The bug needs one whose old stripe is empty, whose map carries
+    # an old block whose index is also a new block's, and whose new blocks
+    # still have extents to re-key (fio may have overwritten them all). Until
+    # one does, let recovery finish the ops and try again.
+    local i fio op="" old new nr map fresh="" unconverted=0 nops size0
+    local ext str
+    ext=$(mktemp)
+    str=$(mktemp)
+    size0=$(stat -c %s /mnt/fiotest)
+    for (( i = 0; i < 20; i++ )); do
+	echo > /sys/kernel/tracing/trace
+	(( $(stat -c %s /mnt/fiotest) > size0 / 2 )) &&
+	    truncate --size=$(( $(stat -c %s /mnt/fiotest) - 33554432 )) /mnt/fiotest
+	echo stripe_update > "$sysfs/internal/logged_op_fail_next"
+	run_fio_base --name=randwrite --rw=randwrite --bsrange=4k-128k	\
+	    --runtime=15 --time_based > /dev/null 2>&1 &
+	fio=$!
+	while kill -0 $fio 2>/dev/null &&
+	      [[ $(cat "$sysfs/internal/logged_op_fail_next") != "(none)" ]]; do
+	    sleep 0.1
+	done
+	kill $fio 2>/dev/null || true
+	wait $fio || true
+	# Disarms the knob if fio finished first. Once it has fired, the
+	# filesystem is read-only and sysfs refuses the write.
+	echo > "$sysfs/internal/logged_op_fail_next" 2>/dev/null || true
+	esur_umount
+
+	bcachefs list -b extents "${devs[@]}" > "$ext"
+	bcachefs list -b stripes "${devs[@]}" > "$str"
+	op="" nops=0
+	while read -r old new nr map; do
+	    nops=$((nops + 1))
+	    esur_moves_down "$nr" "$map" || continue
+	    (( $(esur_stripe_ptrs "$old" < "$ext") == 0 )) || continue
+	    fresh=$(esur_fresh_buckets "$new" "$nr" < "$str")
+	    [[ -n $fresh ]] || continue
+	    unconverted=$(esur_unconverted "$new" $fresh < "$ext")
+	    if (( unconverted )); then
+		op="old_idx=$old new_idx=$new old_blocks_nr=$nr old_block_map=$map"
+		break
+	    fi
+	done < <(bcachefs kvdb -c "list logged_ops POS_MIN SPOS_MAX" "${devs[@]}" |
+		 sed -nE 's/.*old_idx=([0-9]+) new_idx=([0-9]+) old_blocks_nr=([0-9]+) old_block_map=([0-9,]+).*/\1 \2 \3 \4/p')
+	if [[ -n $op ]]; then
+	    echo "attempt $i: $nops interrupted reuses; $op, new blocks in buckets $fresh: $unconverted extents not re-keyed"
+	    break
+	fi
+	echo "attempt $i: $nops interrupted reuses, none usable"
+	mount -t bcachefs "$(join_by : "${devs[@]}")" /mnt
+	sysfs=$(echo /sys/fs/bcachefs/*-*-*-*-*)
+    done
+    if [[ -z $op ]]; then
+	echo "ERROR: no interrupted reuse left new blocks to re-key - this run tests nothing"
+	exit 1
+    fi
+    echo "traced deletes of stripes $old and $new:"
+    grep -v '^#' /sys/kernel/tracing/trace |
+	grep -E "stripe_delete: .* type stripe 0:($old|$new):0 " |
+	sed -E 's/.* ([0-9]+\.[0-9]+): stripe_delete: .*(type stripe 0:[0-9]+:0).*/  \1 \2/' || true
+    echo "stripes $old and $new before kvdb --rw:"
+    bcachefs kvdb -c "list stripes POS_MIN SPOS_MAX" "${devs[@]}" |
+	grep -A6 -E "type stripe 0:($old|$new):0 " || echo "  (neither)"
+
+    # Recovery kicks the stripe delete worker before it resumes logged ops,
+    # and the old stripe is empty by now. kvdb --rw goes read-write too, so
+    # the worker usually deletes it there; make that race's outcome certain:
+    bcachefs kvdb --rw -c "set stripes 0:$old:0 deleted" "${devs[@]}" || true
+    if bcachefs list -b stripes "${devs[@]}" | grep -E "type stripe 0:$old:0 " >/dev/null; then
+	echo "ERROR: stripe $old is still there - this run tests nothing"
+	exit 1
+    fi
+
+    echo "stripes $old and $new after:"
+    bcachefs list -b stripes "${devs[@]}" | grep -A6 -E " type stripe 0:($old|$new):0 " || echo "  (neither)"
+
+    local e
+    for e in stripe_update_bucket stripe_update_extent_fail; do
+	echo 1 > "/sys/kernel/tracing/events/bcachefs/$e/enable"
+    done
+    echo > /sys/kernel/tracing/trace
+
+    mount -t bcachefs "$(join_by : "${devs[@]}")" /mnt
+    echo "--- what the resume of stripe $new's update did ---"
+    grep -v '^#' /sys/kernel/tracing/trace | awk -v want=" type stripe 0:$new:0 " '
+	/: stripe_update_(bucket|extent_fail): / { if (ev ~ want) printf "%s", ev; ev = "" }
+	{ ev = ev $0 "\n" }
+	END { if (ev ~ want) printf "%s", ev }' | cut -c1-200 || true
+    # A moved extent points at another block's data: its checksum fails,
+    # and so does the reconstruct of the block it now names.
+    local rc=0
+    cat /mnt/fiotest > /dev/null || rc=$?
+    bcachefs scrub /mnt || true
+    umount /mnt
+    bcachefs fsck -ny "${devs[@]}"
+
+    if (( rc )); then
+	echo "ERROR: the file doesn't read back after the resumed stripe update"
+	exit 1
+    fi
+    bcachefs_test_end_checks "${devs[0]}"
+}
+
+main "$@"
