@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+#
+# A read promotes by the reader's promote_target. A reflinked file's shared
+# extents carry another inode's options; the promoted copy must still be kept.
+#
+# test_reflink_promote_sticks: a file written in a directory that inherits the
+#   filesystem's promote_target=fast is cloned into one with
+#   promote_target=cache, and the clone is read twice. The first read promotes
+#   to cache; the second reads the cached copy without promoting again.
+# test_reflink_promote_sticks_over_replicated: the same, with the shared data
+#   at two replicas after the filesystem's data_replicas drops to one, so the
+#   promote's own update also drops a replica.
+
+# shellcheck source=tests/fs/bcachefs/bcachefs-test-libs.sh
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+
+# rp_written <dev>: sectors written to <dev>
+rp_written()
+{
+    awk '{ print $7 }' "/sys/block/$(basename "$(readlink -f "$1")")/stat"
+}
+
+# rp_settle <dev>: wait for writes to <dev> to stop; promotes are asynchronous
+rp_settle()
+{
+    local w prev=-1 still=0 t
+    for (( t = 0; t < 30 && still < 3; t++ )); do
+	w=$(rp_written "$1")
+	if (( w == prev )); then still=$((still + 1)); else still=0; fi
+	prev=$w
+	sleep 1
+    done
+}
+
+# rp_setup <format args>...: src inherits promote_target=fast, dst has
+# promote_target=cache, and dst/f is a clone of src/f
+rp_setup()
+{
+    local devs=("${ktest_scratch_dev[@]}")
+    run_quiet "" bcachefs format -f			\
+	--foreground_target=slow			\
+	--background_target=slow			\
+	--promote_target=fast				\
+	"$@"						\
+	--label=slow.slow0 "${devs[0]}"			\
+	--label=fast.fast0 "${devs[1]}"			\
+	--label=cache.cache0 "${devs[2]}"		\
+	--label=slow.slow1 "${devs[3]}"
+    mount -t bcachefs "$(join_by : "${devs[@]}")" /mnt
+
+    mkdir /mnt/src /mnt/dst
+    bcachefs set-file-option --promote_target=cache /mnt/dst
+
+    dd if=/dev/urandom of=/mnt/src/f bs=1M count=8 oflag=direct
+    cp --reflink=always /mnt/src/f /mnt/dst/f
+    timeout 60 bcachefs reconcile wait /mnt
+}
+
+# rp_check: reads dst/f twice; the first read must promote to cache, the
+# second must not, and the copy must still be there
+rp_check()
+{
+    local devs=("${ktest_scratch_dev[@]}") w0 w1 w2
+    w0=$(rp_written "${devs[2]}")
+    dd if=/mnt/dst/f of=/dev/null bs=1M iflag=direct status=none
+    rp_settle "${devs[2]}"
+    w1=$(rp_written "${devs[2]}")
+    dd if=/mnt/dst/f of=/dev/null bs=1M iflag=direct status=none
+    rp_settle "${devs[2]}"
+    w2=$(rp_written "${devs[2]}")
+    echo "written to the cache device: first read $(( (w1 - w0) / 2 )) KiB, second read $(( (w2 - w1) / 2 )) KiB"
+
+    local keys cached
+    umount /mnt
+    keys=$(bcachefs list -b reflink "${devs[@]}")
+    echo "$keys" | head -30
+    bcachefs fsck -ny "${devs[@]}"
+    cached=$(grep -E "ptr:[[:space:]]*$(basename "${devs[2]}") " <<< "$keys" | grep -c cached || true)
+    echo "cached pointers on the cache device: $cached"
+
+    if (( w1 - w0 < 8192 )); then
+	echo "ERROR: the first read didn't promote - this run tests nothing"
+	exit 1
+    fi
+    if (( w2 - w1 >= 1024 )); then
+	echo "ERROR: the second read promoted again: the first read's copy wasn't kept"
+	exit 1
+    fi
+    if (( cached == 0 )); then
+	echo "ERROR: no cached copy on the promote target"
+	exit 1
+    fi
+    bcachefs_test_end_checks "${devs[0]}"
+}
+
+test_reflink_promote_sticks()
+{
+    set_watchdog 120
+
+    rp_setup
+    rp_check
+}
+
+test_reflink_promote_sticks_over_replicated()
+{
+    set_watchdog 120
+
+    local sysfs
+    rp_setup --data_replicas=2
+    sysfs=$(echo /sys/fs/bcachefs/*-*-*-*-*)
+    echo 0 > "$sysfs/options/reconcile_enabled"
+    echo 1 > "$sysfs/options/data_replicas"
+    rp_check
+}
+
+main "$@"
