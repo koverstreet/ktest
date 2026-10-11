@@ -2868,9 +2868,11 @@ test_scrub_journal_btree_node()
     ktest_expect_device_errors=1
     # Losing the nodes: reading them (the corruption overwrote their
     # headers), topology repair, and what the lost nodes' keys referenced
-    # left stale - backpointers, pointer gens, alloc info
+    # left stale - backpointers, pointer gens, alloc info. A lost node of
+    # the backpointers btree leaves the other side stale instead: extents
+    # whose backpointers it held.
     ktest_expect_sb_errors="btree_node_bad_magic|btree_node_topology_[a-z_]+"
-    ktest_expect_sb_errors+="|backpointer_to_missing_ptr|stale_dirty_ptr"
+    ktest_expect_sb_errors+="|backpointer_to_missing_ptr|ptr_to_missing_backpointer|stale_dirty_ptr"
     ktest_expect_sb_errors+="|lru_entry_bad|alloc_key_to_missing_lru_entry"
     ktest_expect_sb_errors+="|freespace_key_wrong|need_discard_freespace_key_bad"
     set_watchdog 300
