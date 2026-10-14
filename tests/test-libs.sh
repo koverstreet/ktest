@@ -4,6 +4,15 @@
 # ktest framework.
 #
 
+# Load once per shell. A variant overlay (tests/<variant>-base.sh) sources
+# this, adds its require-kernel-config/-append lines, then call_base_test
+# sources the base test, which sources this again: that second load reset
+# prelude.sh's accumulator arrays - kasan-* ran without KASAN, lockdep-*
+# without PROVE_LOCKING - and re-ran kconfig.sh's appends. Keyed on $$, so a
+# test started as a new process always loads it.
+[[ ${ktest_test_libs_loaded:-} = $$ ]] && return 0
+ktest_test_libs_loaded=$$
+
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/prelude.sh
 . $(dirname $(readlink -e ${BASH_SOURCE[0]}))/kconfig.sh
 
