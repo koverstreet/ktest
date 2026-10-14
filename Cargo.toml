@@ -29,7 +29,6 @@ brotli = "8"
 # The distro kernel fetcher is its own crate now (single source of truth,
 # consumed by ktest and bcachefs-module-server). Its deps (reqwest, the
 # decompression/archive crates, etc.) come with it, so they're dropped here.
-distro-kernel-fetcher = { git = "https://evilpiepirate.org/git/distro-kernel-fetcher.git" }
 jobkit = { git = "https://evilpiepirate.org/git/jobkit.git" }
 
 [build-dependencies]

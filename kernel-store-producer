@@ -144,9 +144,16 @@ main() {
     local -a degraded=()
 
     if $do_pack; then
+        # distro-kernel-fetch from PATH: farm-nixos deploys it with the
+        # producer's unit (the distro-kernel-fetcher flake), one pin for the
+        # fleet - ktest no longer builds its own.
         log "fetching distro kernels"
-        "$ktest_dir/target/release/distro-kernel-fetch" --output "$new" ||
+        if ! command -v distro-kernel-fetch >/dev/null; then
+            log "ERROR: no distro-kernel-fetch on PATH - farm-nixos installs it on farm1"
             degraded+=("distro fetch")
+        elif ! distro-kernel-fetch --output "$new"; then
+            degraded+=("distro fetch")
+        fi
 
         log "building upstream kernels"
         "$ktest_dir/upstream-kernel-build" -o "$new" ||
