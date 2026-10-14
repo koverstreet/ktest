@@ -228,6 +228,43 @@ static const char *skip_csi(const char *line)
 	return line;
 }
 
+/*
+ * Skip a printk caller tag, "[ T1294] " or "[    C3] ", at the start of a line.
+ *
+ * A kernel built with CONFIG_PRINTK_CALLER - openSUSE's, for one - tags every
+ * console line with the task or CPU that printed it, the markers included:
+ * "[ T1294] ========= TEST   grpquota" missed the match below the same way a
+ * cursor-control prefix did, and every subtest came out FAILED TO RUN - the
+ * DKMS build failure that actually happened among them.
+ */
+static const char *skip_printk_caller(const char *line)
+{
+	const char *p = line;
+
+	if (*p++ != '[')
+		return line;
+	while (*p == ' ')
+		p++;
+	if (*p != 'T' && *p != 'C')
+		return line;
+	p++;
+	if (*p < '0' || *p > '9')
+		return line;
+	while (*p >= '0' && *p <= '9')
+		p++;
+	if (*p++ != ']')
+		return line;
+	if (*p == ' ')
+		p++;
+	return p;
+}
+
+/* What a marker is matched against: the line past cursor control and a caller tag */
+static const char *marker_text(const char *line)
+{
+	return skip_csi(skip_printk_caller(skip_csi(line)));
+}
+
 static char *test_is_starting(const char *line)
 {
 	const char *testname = str_starts_with(line, "========= TEST   ");
@@ -654,8 +691,8 @@ again:
 
 		strim(line);
 
-		/* markers are matched past any cursor control: see skip_csi() */
-		const char *text = skip_csi(line);
+		/* markers are matched past cursor control and a printk caller tag */
+		const char *text = marker_text(line);
 
 		read_watchdog(text);
 
