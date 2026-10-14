@@ -1,17 +1,5 @@
 {
   "nodes": {
-    "buildRoot": {
-      "flake": false,
-      "locked": {
-        "path": "dummy-kernel-build",
-        "type": "path"
-      },
-      "original": {
-        "path": "dummy-kernel-build",
-        "type": "path"
-      },
-      "parent": []
-    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1785097226,
@@ -29,22 +17,8 @@
     },
     "root": {
       "inputs": {
-        "buildRoot": "buildRoot",
         "nixpkgs": "nixpkgs",
-        "src": "src",
         "utils": "utils"
-      }
-    },
-    "src": {
-      "flake": false,
-      "locked": {
-        "narHash": "sha256-o8+xKpZYB4R1g4Z3agA6x65oZajSkSSf9obOHnZSz+k=",
-        "type": "file",
-        "url": "https://evilpiepirate.org/git/bcachefs.git"
-      },
-      "original": {
-        "type": "file",
-        "url": "https://evilpiepirate.org/git/bcachefs.git"
       }
     },
     "utils": {
