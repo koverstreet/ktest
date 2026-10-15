@@ -164,6 +164,25 @@ require-kernel-config-soft()
     ktest_kernel_config_require_soft+=("$1")
 }
 
+# Drop every requirement for option $1 (FOO, FOO=y, FOO=n, ...), hard or soft:
+# for an overlay - a variant's *-base.sh - turning off what kconfig.sh turns
+# on. Both would otherwise be checked, and one always fails.
+unrequire-kernel-config()
+{
+    local opt keep=()
+
+    for opt in "${ktest_kernel_config_require[@]}"; do
+	[[ ${opt%%=*} = "$1" ]] || keep+=("$opt")
+    done
+    ktest_kernel_config_require=("${keep[@]}")
+
+    keep=()
+    for opt in "${ktest_kernel_config_require_soft[@]}"; do
+	[[ ${opt%%=*} = "$1" ]] || keep+=("$opt")
+    done
+    ktest_kernel_config_require_soft=("${keep[@]}")
+}
+
 # True if dotted-numeric version $1 >= $2 (sort -V ordering). An empty $1 — e.g.
 # $ktest_kernel_version outside a kernel build — sorts below everything, so it
 # compares as false.
