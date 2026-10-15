@@ -897,6 +897,116 @@ test_reflink_inode_opts()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# Shared (indirect) extents take their options from a record of the inode's,
+# overlaid on the filesystem's. Some of an inode's values are derived from its
+# other options - background_target from foreground_target, and
+# background_compression from compression, when unset - and those must stay
+# with the shared data too: without them, reconcile moves or rewrites it by the
+# filesystem's options soon after the clone (tools#1104). Each test then writes
+# a filesystem option, which queues a scan of every extent, so the record is
+# checked again.
+
+# reflink_derived_rescan <promote_target>: set the filesystem's promote_target,
+# which queues a reconcile scan of every extent, and let reconcile finish
+reflink_derived_rescan()
+{
+    local sysfs i
+    sysfs=$(echo /sys/fs/bcachefs/*-*-*-*-*)
+    echo "$1" > "$sysfs/options/promote_target"
+    for (( i = 0; i < 3; i++ )); do
+	echo 1 > "$sysfs/internal/trigger_reconcile_wakeup"
+	timeout 60 bcachefs reconcile wait /mnt
+	sleep 2
+    done
+}
+
+# reflink_derived_keys <devs>...: unmounts, then prints the reflink btree
+reflink_derived_keys()
+{
+    umount /mnt
+    bcachefs list -b reflink "$@"
+    bcachefs fsck -ny "$@" >&2
+}
+
+# A directory with only foreground_target=ssd, on a filesystem with
+# foreground_target=hdd and no background_target: after a reflink, the data
+# stays on ssd.
+test_reflink_keeps_derived_background_target()
+{
+    set_watchdog 120
+
+    local devs=("${ktest_scratch_dev[@]:0:3}")
+    run_quiet "" bcachefs format -f		\
+	--foreground_target=hdd			\
+	--label=ssd.ssd0 "${devs[0]}"		\
+	--label=hdd.hdd0 "${devs[1]}"		\
+	--label=hdd.hdd1 "${devs[2]}"
+    mount -t bcachefs "$(join_by : "${devs[@]}")" /mnt
+
+    mkdir /mnt/fast
+    bcachefs set-file-option --foreground_target=ssd /mnt/fast
+
+    dd if=/dev/urandom of=/mnt/fast/f bs=1M count=8 oflag=direct
+    cp --reflink=always /mnt/fast/f /mnt/fast/g
+    reflink_derived_rescan ssd
+
+    local keys ssd hdd
+    keys=$(reflink_derived_keys "${devs[@]}")
+    echo "$keys"
+    ssd=$(grep -cE "ptr:[[:space:]]*$(basename "${devs[0]}") " <<< "$keys" || true)
+    hdd=$(grep -cE "ptr:[[:space:]]*($(basename "${devs[1]}")|$(basename "${devs[2]}")) " <<< "$keys" || true)
+    echo "shared data pointers: $ssd on ssd, $hdd on hdd"
+
+    if (( hdd > 0 )); then
+	echo "ERROR: reconcile moved shared data to the filesystem's foreground_target"
+	exit 1
+    fi
+    if (( ssd == 0 )); then
+	echo "ERROR: no shared data found - this run tests nothing"
+	exit 1
+    fi
+    bcachefs_test_end_checks "${devs[0]}"
+}
+
+# A directory with only compression=lz4, on a filesystem without compression:
+# after a reflink, the shared data stays compressed.
+test_reflink_keeps_derived_background_compression()
+{
+    set_watchdog 120
+
+    local devs=("${ktest_scratch_dev[@]:0:3}")
+    run_quiet "" bcachefs format -f		\
+	--label=hdd.hdd0 "${devs[0]}"		\
+	--label=hdd.hdd1 "${devs[1]}"		\
+	--label=hdd.hdd2 "${devs[2]}"
+    mount -t bcachefs "$(join_by : "${devs[@]}")" /mnt
+
+    mkdir /mnt/c
+    bcachefs set-file-option --compression=lz4 /mnt/c
+
+    awk 'BEGIN { for (i = 0; i < 230000; i++) print "bcachefs reflink derived compression" }' > /mnt/c/f
+    sync /mnt/c/f
+    cp --reflink=always /mnt/c/f /mnt/c/g
+    reflink_derived_rescan hdd
+
+    local keys lz4 none
+    keys=$(reflink_derived_keys "${devs[@]}")
+    echo "$keys" | head -40
+    lz4=$(grep -c "compress lz4" <<< "$keys" || true)
+    none=$(grep -c "compress none" <<< "$keys" || true)
+    echo "shared extents: $lz4 lz4, $none uncompressed"
+
+    if (( lz4 + none == 0 )); then
+	echo "ERROR: no shared extents - this run tests nothing"
+	exit 1
+    fi
+    if (( none > 0 )); then
+	echo "ERROR: reconcile rewrote shared data uncompressed"
+	exit 1
+    fi
+    bcachefs_test_end_checks "${devs[0]}"
+}
+
 # ---- reconcile target placement tests ----
 #
 # A target with less durability than data_replicas/metadata_replicas (e.g.
