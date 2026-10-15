@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 #
-# A read promotes by the reader's promote_target. A reflinked file's shared
-# extents carry another inode's options; the promoted copy must still be kept.
+# A reflinked file's shared extents have options of their own, and a read of
+# them promotes by those, not the reader's: the promote's index update judges
+# the copy by the shared data's options, so a copy made to the reader's
+# promote_target would be dropped and written again on every read (tools#1105).
 #
 # test_reflink_promote_sticks: a file written in a directory that inherits the
 #   filesystem's promote_target=fast is cloned into one with
 #   promote_target=cache, and the clone is read twice. The first read promotes
-#   to cache; the second reads the cached copy without promoting again.
+#   to fast, the shared data's target; the second reads the cached copy without
+#   promoting again.
 # test_reflink_promote_sticks_over_replicated: the same, with the shared data
 #   at two replicas after the filesystem's data_replicas drops to one, so the
 #   promote's own update also drops a replica.
@@ -61,27 +64,28 @@ rp_setup()
     timeout 60 bcachefs reconcile wait /mnt
 }
 
-# rp_check: reads dst/f twice; the first read must promote to cache, the
-# second must not, and the copy must still be there
+# rp_check: reads dst/f twice; the first read must promote to fast - the
+# shared data's promote target, not dst's cache - the second must not, and
+# the copy must still be there
 rp_check()
 {
     local devs=("${ktest_scratch_dev[@]}") w0 w1 w2
-    w0=$(rp_written "${devs[2]}")
+    w0=$(rp_written "${devs[1]}")
     dd if=/mnt/dst/f of=/dev/null bs=1M iflag=direct status=none
-    rp_settle "${devs[2]}"
-    w1=$(rp_written "${devs[2]}")
+    rp_settle "${devs[1]}"
+    w1=$(rp_written "${devs[1]}")
     dd if=/mnt/dst/f of=/dev/null bs=1M iflag=direct status=none
-    rp_settle "${devs[2]}"
-    w2=$(rp_written "${devs[2]}")
-    echo "written to the cache device: first read $(( (w1 - w0) / 2 )) KiB, second read $(( (w2 - w1) / 2 )) KiB"
+    rp_settle "${devs[1]}"
+    w2=$(rp_written "${devs[1]}")
+    echo "written to the promote target: first read $(( (w1 - w0) / 2 )) KiB, second read $(( (w2 - w1) / 2 )) KiB"
 
     local keys cached
     umount /mnt
     keys=$(bcachefs list -b reflink "${devs[@]}")
     echo "$keys" | head -30
     bcachefs fsck -ny "${devs[@]}"
-    cached=$(grep -E "ptr:[[:space:]]*$(basename "${devs[2]}") " <<< "$keys" | grep -c cached || true)
-    echo "cached pointers on the cache device: $cached"
+    cached=$(grep -E "ptr:[[:space:]]*$(basename "${devs[1]}") " <<< "$keys" | grep -c cached || true)
+    echo "cached pointers on the promote target: $cached"
 
     if (( w1 - w0 < 8192 )); then
 	echo "ERROR: the first read didn't promote - this run tests nothing"
