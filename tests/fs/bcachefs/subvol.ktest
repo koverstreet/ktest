@@ -1664,8 +1664,21 @@ falloc_snap_setup_deleted_ancestors()
     echo /mnt/w/f
 }
 
+# A read-only snapshot, then two whole 256k extents punched out past the
+# operation's range (pages 512-639): our own whiteouts on top of the
+# ancestor's extents, at the same positions. A backward search must take each
+# as hiding the extent under it - where it starts, and after stepping past a
+# whiteout.
+falloc_snap_setup_punched()
+{
+    local f
+    f=$(falloc_snap_setup_ro_snapshot)
+    fallocate -p -o $((512 * 4096)) -l $((128 * 4096)) $f
+    echo $f
+}
+
 for op in insert collapse punch punch1 zero; do
-    for history in plain ro_snapshot snapshot_of_snapshot deleted_ancestors; do
+    for history in plain ro_snapshot snapshot_of_snapshot deleted_ancestors punched; do
 	eval "test_falloc_snap_${op}_${history}() { falloc_snap_run $op falloc_snap_setup_$history; }"
     done
 done
