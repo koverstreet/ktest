@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+require-kernel-config BCACHEFS_FS=y
+
+config-mem 4G
+config-cpus 2
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+
+phys_source_sectors()
+{
+    local device sectors total=0
+    for device in 0 1 2 3; do
+        sectors=$(bcachefs_dev_user_sectors "$device") || return 1
+        total=$((total + sectors))
+    done
+    printf '%s\n' "$total"
+}
+
+test_reconcile_phys_distinct_writepoint_tags()
+{
+    local device source_file pattern sectors deadline drained=0 tags_observed=0
+    local format_args=()
+    set_watchdog 600
+    for device in 0 1 2 3; do
+        format_args+=(--rotational=1 --label="src$device" "${ktest_scratch_dev[$device]}")
+    done
+    for device in 4 5 6 7; do
+        format_args+=(--rotational=1 --label=dst "${ktest_scratch_dev[$device]}")
+    done
+    run_quiet "" bcachefs format -f --block_size=4k --bucket_size=256k \
+        --replicas=1 --compression=none --background_compression=lz4 \
+        --foreground_target=src0 --background_target=dst "${format_args[@]}"
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+    echo 0 > /sys/fs/bcachefs/*/options/reconcile_enabled
+    for device in 0 1 2 3; do
+        source_file="/mnt/source-$device"
+        touch "$source_file"
+        bcachefs set-file-option --foreground_target="src$device" --background_target=dst "$source_file"
+        printf -v pattern '\\%03o' "$((device + 1))"
+        dd if=/dev/zero bs=4M count=64 status=none | tr '\000' "$pattern" |
+            dd of="$source_file" bs=4M oflag=direct iflag=fullblock status=none
+    done
+    sync
+    sha256sum /mnt/source-* > /ktest-out/data-before.sha256
+    for device in 0 1 2 3; do
+        sectors=$(bcachefs_dev_user_sectors "$device") || return 1
+        test "$sectors" -ge 524288
+    done
+    for device in 0 1 2 3; do
+        echo evacuating > /sys/fs/bcachefs/*/dev-"$device"/state
+    done
+    echo 1 > /sys/fs/bcachefs/*/options/reconcile_enabled
+    printf 'uptime_seconds\tsource_user_sectors\n' > /ktest-out/movement.tsv
+    : > /ktest-out/status-samples.txt
+    deadline=$((SECONDS + 180))
+    while (( SECONDS < deadline )); do
+        sectors=$(phys_source_sectors) || return 1
+        printf '%s\t%s\n' "$(cut -d' ' -f1 /proc/uptime)" "$sectors" >> /ktest-out/movement.tsv
+        cat /sys/fs/bcachefs/*/reconcile_status > /ktest-out/current-status.txt
+        cat /ktest-out/current-status.txt >> /ktest-out/status-samples.txt
+        if (( sectors > 0 )) && awk '
+            /^phys workers last phase: considered [0-9]+ started [0-9]+ distinct writepoint-tags [0-9]+$/ {
+                if ($8 >= 4 && $11 == $8 && $8 <= $6)
+                    found = 1
+            }
+            END { exit !found }
+        ' /ktest-out/current-status.txt; then
+            tags_observed=1
+        fi
+        if (( sectors == 0 )); then
+            drained=1
+            break
+        fi
+        sleep .1
+    done
+    test "$drained" = 1
+    sha256sum -c /ktest-out/data-before.sha256
+    umount /mnt
+    bcachefs list -b extents "${ktest_scratch_dev[@]}" > /ktest-out/extents-after.txt
+    grep -q 'compress lz4' /ktest-out/extents-after.txt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+    sha256sum -c /ktest-out/data-before.sha256
+    umount /mnt
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+    if (( tags_observed == 0 )); then
+        echo 'No active physical phase exposed distinct per-worker writepoint tags'
+        cat /ktest-out/status-samples.txt
+        return 1
+    fi
+}
+
+main "$@"
