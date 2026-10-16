@@ -1526,4 +1526,148 @@ test_subvol_batch_snapshot_delete_all_sources()
     return 1
 }
 
+# fallocate range operations on a file whose extents are shared with
+# snapshots, each checked against the result rebuilt from a copy taken before
+# the operation, mounted and after a clean remount, then fsck -n (tools#1156).
+#
+# Found by snapshot-rotation-reverse on v1.39.7: inserting 17 pages at page 419
+# of an 8 MB file in a writable snapshot left the file wrong past the insert,
+# while ext4 matched the expected shift. rsync -S --inplace, the field report's
+# replay, punches holes with FALLOC_FL_PUNCH_HOLE|KEEP_SIZE, some of them 1
+# byte at unaligned offsets, so every mode is covered, punch1 being that rsync
+# case.
+#
+# Tests are test_falloc_snap_<op>_<history>: each history adds one ingredient
+# of the field file's past, so the first one to fail for an op names what
+# matters. A mismatch is recorded and the test carries on to the remount and
+# fsck, so every failure also says whether it persists and whether fsck sees
+# it.
+
+FALLOC_SNAP_SEEK=419
+FALLOC_SNAP_COUNT=17
+
+# The file as it must be after $op on copy $pre.
+falloc_snap_expected()
+{
+    local op=$1 pre=$2 exp=$3 seek=$FALLOC_SNAP_SEEK count=$FALLOC_SNAP_COUNT
+
+    case $op in
+    insert)
+	dd if=$pre of=$exp bs=4k count=$seek status=none
+	truncate -s $(( (seek + count) * 4096 )) $exp
+	dd if=$pre of=$exp bs=4k skip=$seek seek=$((seek + count)) status=none
+	;;
+    collapse)
+	dd if=$pre of=$exp bs=4k count=$seek status=none
+	dd if=$pre of=$exp bs=4k skip=$((seek + count)) seek=$seek status=none
+	;;
+    punch|zero)
+	cp $pre $exp
+	dd if=/dev/zero of=$exp bs=4k seek=$seek count=$count conv=notrunc status=none
+	;;
+    punch1)
+	cp $pre $exp
+	dd if=/dev/zero of=$exp bs=1 seek=$((seek * 4096 + 123)) count=1 conv=notrunc status=none
+	;;
+    esac
+}
+
+falloc_snap_do_op()
+{
+    local op=$1 f=$2 seek=$FALLOC_SNAP_SEEK count=$FALLOC_SNAP_COUNT
+
+    case $op in
+    insert)	fallocate -i -o $((seek * 4096)) -l $((count * 4096)) $f ;;
+    collapse)	fallocate -c -o $((seek * 4096)) -l $((count * 4096)) $f ;;
+    punch)	fallocate -p -o $((seek * 4096)) -l $((count * 4096)) $f ;;
+    zero)	fallocate -z -o $((seek * 4096)) -l $((count * 4096)) $f ;;
+    punch1)	fallocate -p -o $((seek * 4096 + 123)) -l 1 $f ;;
+    esac
+}
+
+falloc_snap_check()
+{
+    local f=$1 when=$2
+
+    cmp -s /tmp/expected $f && return 0
+
+    echo "FAIL ($when): $f differs from the expected result:"
+    echo "sizes: expected $(stat -c %s /tmp/expected) got $(stat -c %s $f)"
+    cmp -l /tmp/expected $f | awk 'NR == 1 { first = $1 } { n++; last = $1 }
+	END { printf "%d bytes differ, first at page %d, last at page %d\n",
+	      n, (first - 1) / 4096, (last - 1) / 4096 }' || true
+    return 1
+}
+
+# $2 sets up the subvolumes and prints the path of the file to operate on.
+falloc_snap_run()
+{
+    local op=$1 setup=$2 f ret=0
+
+    run_quiet "" bcachefs format -f --compression=lz4 ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    f=$($setup)
+    cp $f /tmp/pre
+    falloc_snap_expected $op /tmp/pre /tmp/expected
+    falloc_snap_do_op $op $f
+    falloc_snap_check $f mounted || ret=1
+
+    umount /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    falloc_snap_check $f remounted || ret=1
+    umount /mnt
+
+    bcachefs fsck -n ${ktest_scratch_dev[0]} || ret=1
+    return $ret
+}
+
+falloc_snap_seed()
+{
+    head -c $((8 << 20)) /dev/urandom > $1
+    sync
+}
+
+falloc_snap_setup_plain()
+{
+    falloc_snap_seed /mnt/f
+    echo /mnt/f
+}
+
+falloc_snap_setup_ro_snapshot()
+{
+    bcachefs subvolume create /mnt/a >&2
+    falloc_snap_seed /mnt/a/f
+    bcachefs subvolume snapshot -r /mnt/a /mnt/a-ro >&2
+    echo /mnt/a/f
+}
+
+falloc_snap_setup_snapshot_of_snapshot()
+{
+    bcachefs subvolume create /mnt/a >&2
+    falloc_snap_seed /mnt/a/f
+    bcachefs subvolume snapshot -r /mnt/a /mnt/a-ro >&2
+    bcachefs subvolume snapshot /mnt/a-ro /mnt/w >&2
+    echo /mnt/w/f
+}
+
+falloc_snap_setup_deleted_ancestors()
+{
+    bcachefs subvolume create /mnt/a >&2
+    falloc_snap_seed /mnt/a/f
+    bcachefs subvolume snapshot -r /mnt/a /mnt/a-ro >&2
+    bcachefs subvolume delete /mnt/a >&2
+    bcachefs subvolume snapshot /mnt/a-ro /mnt/home >&2
+    bcachefs subvolume snapshot -r /mnt/home /mnt/b >&2
+    bcachefs subvolume delete /mnt/a-ro >&2
+    bcachefs subvolume snapshot /mnt/b /mnt/w >&2
+    echo /mnt/w/f
+}
+
+for op in insert collapse punch punch1 zero; do
+    for history in plain ro_snapshot snapshot_of_snapshot deleted_ancestors; do
+	eval "test_falloc_snap_${op}_${history}() { falloc_snap_run $op falloc_snap_setup_$history; }"
+    done
+done
+
 main "$@"
