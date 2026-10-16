@@ -117,6 +117,23 @@ tools_cache_key() {
     printf '%s\0' "$rev" "$(uname -m)" | sha256sum | cut -d' ' -f1
 }
 
+# A distro kernel's build tree can pin the compiler it was built with -
+# Ubuntu's Makefile has `CC = $(CROSS_COMPILE)gcc-13` and `HOSTCC = gcc-13`,
+# and its linux-headers package pulls that gcc in. Booted under this Debian
+# root, the module is built with Debian's compiler by design (see
+# distro-dkms-libs.sh), so stand in for a versioned gcc the image doesn't
+# have, and say so.
+distro_compiler_shims() {
+    local kdir=/lib/modules/$(uname -r)/build cc
+
+    for cc in $(sed -nE 's/^(HOST)?CC[[:space:]]*:?=.*\<(gcc-[0-9]+)\>.*/\2/p' \
+		    "$kdir/Makefile" 2>/dev/null | sort -u); do
+	command -v "$cc" > /dev/null && continue
+	echo "init_build_bcachefs_tools: $kdir/Makefile wants $cc; building with $(gcc --version | head -1)"
+	ln -sf "$(command -v gcc)" "/usr/local/bin/$cc"
+    done
+}
+
 # Build + install bcachefs-tools and the bcachefs DKMS module. The module
 # compile is by far the slowest part of test bringup, so it is cached
 # host-side (keyed by dkms_cache_key) and shared across slots — the cache
@@ -198,6 +215,8 @@ init_build_bcachefs_tools() {
 		fi
 		return
 	fi
+
+	distro_compiler_shims
 
 	local kver=$(uname -r)
 	local ko="/lib/modules/$kver/updates/dkms/bcachefs.ko"
