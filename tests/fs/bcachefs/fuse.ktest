@@ -46,7 +46,10 @@ run_tests()
     # generic/731: mounts its scsi_debug device with a bare _mount, without
     #   BCACHEFS_MOUNT_OPTIONS - so it asks for the kernel driver, which isn't
     #   loaded here
-    run_fstests -e generic/108,generic/294,generic/306,generic/409,generic/410,generic/411,generic/416,generic/441,generic/452,generic/484,generic/589,generic/731,generic/732 "$@"
+    # the quota group: quotactl() is a VFS call into the superblock's quota
+    #   ops, and a FUSE superblock has none - quotaon fails with "not found or
+    #   has no quota enabled". _require_quota doesn't check, for bcachefs.
+    run_fstests -x quota -e generic/108,generic/294,generic/306,generic/409,generic/410,generic/411,generic/416,generic/441,generic/452,generic/484,generic/589,generic/731,generic/732 "$@"
 }
 
 main "$@"
