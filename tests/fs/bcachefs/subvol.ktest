@@ -1698,6 +1698,39 @@ for op in insert collapse punch punch1 zero; do
     done
 done
 
+# A read-only snapshot must not change, dedupe included. The VFS lets the
+# owner or root dedupe into a destination opened read-only, so refusing writes
+# at open isn't enough: the remap path has to check too (tools#1156).
+test_ro_snapshot_dedupe()
+{
+    local out before after
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    bcachefs subvolume create /mnt/a
+    head -c $((1 << 20)) /dev/urandom > /mnt/a/f
+    cp /mnt/a/f /mnt/a/g
+    sync
+    bcachefs subvolume snapshot -r /mnt/a /mnt/a-ro
+
+    before=$(filefrag -v /mnt/a-ro/f)
+    out=$(xfs_io -r -c "dedupe /mnt/a/g 0 0 $((1 << 20))" /mnt/a-ro/f 2>&1) || true
+    echo "$out"
+    after=$(filefrag -v /mnt/a-ro/f)
+
+    grep -q "Read-only file system" <<< "$out"
+    [[ "$before" == "$after" ]]
+
+    # and dedupe into a writable subvolume still works
+    out=$(xfs_io -c "dedupe /mnt/a/g 0 0 $((1 << 20))" /mnt/a/f 2>&1)
+    echo "$out"
+    grep -q "deduped" <<< "$out"
+
+    umount /mnt
+    bcachefs fsck -n ${ktest_scratch_dev[0]}
+}
+
 # tools#1156, the field workload: older and older generations of a set of
 # files rewritten in place into one subvolume (rsync --inplace: scattered
 # unaligned rewrites, zero runs punched out, files shortened), a read-only
