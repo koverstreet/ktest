@@ -2713,7 +2713,32 @@ scsi_debug_disk()
     echo "$disk"
 }
 
+# with_scsi_debug <fn> [args...]
+#
+# Run a test body that uses scsi_debug_disk, then unload scsi_debug however
+# the body exited: left loaded, its disk is in /sys/block for every later test
+# in the VM. The body runs in its own set -e subshell - errexit is off around
+# it, not via `|| ret=$?`, which would switch errexit off inside it too.
+with_scsi_debug()
+{
+    local ret
+
+    set +e
+    ( set -e; "$@" )
+    ret=$?
+    set -e
+
+    umount /mnt 2>/dev/null || true
+    modprobe -r scsi_debug
+    return $ret
+}
+
 test_device_model_stored_partition()
+{
+    with_scsi_debug device_model_stored_partition
+}
+
+device_model_stored_partition()
 {
     set_watchdog 120
 
@@ -2748,6 +2773,11 @@ test_device_model_stored_partition()
 # koverstreet/bcachefs#144 - and --quiet suppresses it.
 test_format_warns_when_replicas_share_parent_disk()
 {
+    with_scsi_debug format_warns_when_replicas_share_parent_disk
+}
+
+format_warns_when_replicas_share_parent_disk()
+{
     set_watchdog 120
 
     local disk out
@@ -2767,8 +2797,6 @@ test_format_warns_when_replicas_share_parent_disk()
 	echo "FAIL: --quiet didn't suppress the parent disk warning"
 	return 1
     fi
-
-    modprobe -r scsi_debug
 }
 
 # Replace-in-place via O_TRUNC (`date | tee f`, editors, config writers): the
