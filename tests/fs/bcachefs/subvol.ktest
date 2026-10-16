@@ -1677,8 +1677,23 @@ falloc_snap_setup_punched()
     echo $f
 }
 
+# Unwritten extents in the ancestor, in the range an insert or collapse
+# shifts: pages 600-699 punched and fallocated back before the snapshot. Their
+# space moves to the file's snapshot, and the ancestor's keys go - zeroes
+# either way.
+falloc_snap_setup_unwritten()
+{
+    bcachefs subvolume create /mnt/a >&2
+    falloc_snap_seed /mnt/a/f
+    fallocate -p -o $((600 * 4096)) -l $((100 * 4096)) /mnt/a/f
+    fallocate -o $((600 * 4096)) -l $((100 * 4096)) /mnt/a/f
+    sync
+    bcachefs subvolume snapshot -r /mnt/a /mnt/a-ro >&2
+    echo /mnt/a/f
+}
+
 for op in insert collapse punch punch1 zero; do
-    for history in plain ro_snapshot snapshot_of_snapshot deleted_ancestors punched; do
+    for history in plain ro_snapshot snapshot_of_snapshot deleted_ancestors punched unwritten; do
 	eval "test_falloc_snap_${op}_${history}() { falloc_snap_run $op falloc_snap_setup_$history; }"
     done
 done
