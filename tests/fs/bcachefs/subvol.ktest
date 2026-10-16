@@ -1698,4 +1698,172 @@ for op in insert collapse punch punch1 zero; do
     done
 done
 
+# tools#1156, the field workload: older and older generations of a set of
+# files rewritten in place into one subvolume (rsync --inplace: scattered
+# unaligned rewrites, zero runs punched out, files shortened), a read-only
+# snapshot after each pass, then the working subvolume deleted. In the field
+# snapshots lost some of a pass's writes: the next older generation showed
+# through at those ranges.
+#
+# Each pass's keys are in the working subvolume's snapshot node, which becomes
+# an interior node when the snapshot is taken - and the next pass then splits
+# them, from the child, while reconcile is still recompressing and moving
+# them. Tests are test_inplace_snap_<opts>; each opts set adds one source of
+# data updates on those keys, so the first to fail names what matters.
+
+INPLACE_SNAP_FILES=4
+INPLACE_SNAP_SIZE=$((4 << 20))
+INPLACE_SNAP_GENS=7
+INPLACE_SNAP_REF=/tmp/inplace_snap
+
+inplace_snap_rand()
+{
+    echo $(( ((RANDOM << 15) | RANDOM) % $1 ))
+}
+
+# Apply one change to the file in the filesystem and to its reference copy.
+inplace_snap_write()
+{
+    local i=$1 off=$2 len=$3
+
+    head -c $len /dev/urandom > $INPLACE_SNAP_REF/chunk
+    for f in /mnt/w/f$i $INPLACE_SNAP_REF/cur/f$i; do
+	dd if=$INPLACE_SNAP_REF/chunk of=$f bs=$len count=1 seek=$off \
+	    oflag=seek_bytes conv=notrunc status=none
+    done
+}
+
+inplace_snap_punch()
+{
+    local i=$1 off=$2 len=$3
+
+    for f in /mnt/w/f$i $INPLACE_SNAP_REF/cur/f$i; do
+	fallocate -p -o $off -l $len $f
+    done
+}
+
+inplace_snap_truncate()
+{
+    local i=$1 size=$2
+
+    for f in /mnt/w/f$i $INPLACE_SNAP_REF/cur/f$i; do
+	truncate -s $size $f
+    done
+}
+
+# One rsync-like pass over every file.
+inplace_snap_pass()
+{
+    local i k size
+
+    for i in $(seq 1 $INPLACE_SNAP_FILES); do
+	size=$(stat -c %s $INPLACE_SNAP_REF/cur/f$i)
+
+	for k in $(seq 1 40); do
+	    inplace_snap_write $i $(inplace_snap_rand $size) $((1 + $(inplace_snap_rand 32768)))
+	done
+
+	for k in $(seq 1 3); do
+	    inplace_snap_punch $i $(( $(inplace_snap_rand $((size / 4096))) * 4096 )) \
+		$(( (1 + $(inplace_snap_rand 4)) * 4096 ))
+	done
+
+	(( RANDOM % 3 )) || inplace_snap_truncate $i $((size - $(inplace_snap_rand $((size / 8)))))
+    done
+}
+
+# Check every snapshot taken so far against its reference; $1 says when.
+inplace_snap_check()
+{
+    local when=$1 g i ret=0
+
+    for g in $(seq 1 $2); do
+	[[ -d /mnt/snap-$g ]] || continue
+
+	for i in $(seq 1 $INPLACE_SNAP_FILES); do
+	    cmp -s $INPLACE_SNAP_REF/gen-$g/f$i /mnt/snap-$g/f$i && continue
+
+	    echo "FAIL ($when): snap-$g/f$i differs from its generation:"
+	    echo "sizes: expected $(stat -c %s $INPLACE_SNAP_REF/gen-$g/f$i) got $(stat -c %s /mnt/snap-$g/f$i)"
+	    cmp -l $INPLACE_SNAP_REF/gen-$g/f$i /mnt/snap-$g/f$i 2>/dev/null |
+		awk 'BEGIN { last = -2 } { p = int(($1 - 1) / 4096) }
+		     p == last { next }
+		     p == last + 1 && n { end = p; last = p; next }
+		     { if (n) out = out " " start (end > start ? "-" end : ""); start = end = last = p; n++ }
+		     END { if (n) out = out " " start (end > start ? "-" end : ""); print "pages:" out }' || true
+	    ret=1
+	done
+    done
+
+    return $ret
+}
+
+inplace_snap_run()
+{
+    local g i ret=0 seed=${INPLACE_SNAP_SEED:-1156}
+
+    echo "seed $seed"
+    RANDOM=$seed
+
+    run_quiet "" bcachefs format -f		\
+	--encoded_extent_max=64k		\
+	--compression=lz4			\
+	--label=hdd.hdd1 ${ktest_scratch_dev[0]}	\
+	--label=ssd.ssd1 ${ktest_scratch_dev[1]}	\
+	"$@"
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+
+    rm -rf $INPLACE_SNAP_REF
+    mkdir -p $INPLACE_SNAP_REF/cur
+
+    bcachefs subvolume create /mnt/w
+    for i in $(seq 1 $INPLACE_SNAP_FILES); do
+	head -c $INPLACE_SNAP_SIZE /dev/urandom > $INPLACE_SNAP_REF/cur/f$i
+	cp $INPLACE_SNAP_REF/cur/f$i /mnt/w/f$i
+    done
+
+    for g in $(seq 1 $INPLACE_SNAP_GENS); do
+	inplace_snap_pass
+	bcachefs subvolume snapshot -r /mnt/w /mnt/snap-$g
+	cp -r $INPLACE_SNAP_REF/cur $INPLACE_SNAP_REF/gen-$g
+	inplace_snap_check "after snap-$g" $g || ret=1
+    done
+
+    timeout 300 bcachefs reconcile wait /mnt || true
+    inplace_snap_check "reconcile done" $INPLACE_SNAP_GENS || ret=1
+
+    bcachefs subvolume delete /mnt/w
+    sleep 5
+    inplace_snap_check "working subvolume deleted" $INPLACE_SNAP_GENS || ret=1
+
+    umount /mnt
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+    inplace_snap_check "remounted" $INPLACE_SNAP_GENS || ret=1
+    umount /mnt
+
+    bcachefs fsck -n ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} || ret=1
+    return $ret
+}
+
+test_inplace_snap_plain()
+{
+    inplace_snap_run
+}
+
+test_inplace_snap_bg_compression()
+{
+    inplace_snap_run --background_compression=zstd
+}
+
+test_inplace_snap_bg_target()
+{
+    inplace_snap_run --foreground_target=ssd --background_target=hdd
+}
+
+test_inplace_snap_field()
+{
+    inplace_snap_run --foreground_target=ssd --background_target=hdd \
+	--background_compression=zstd
+}
+
 main "$@"
