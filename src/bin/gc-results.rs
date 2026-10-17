@@ -75,7 +75,7 @@ fn get_live_commits(rc: &CiConfig) -> HashSet<String> {
     ret
 }
 
-fn result_is_live(commits: &HashSet<String>, d: &DirEntry) -> bool {
+fn result_is_live(commits: &HashSet<String>, d: &DirEntry, touch: bool) -> bool {
     let fname = d.file_name().into_string().ok();
 
     if let Some(fname) = fname {
@@ -85,9 +85,12 @@ fn result_is_live(commits: &HashSet<String>, d: &DirEntry) -> bool {
         }
 
         if commits.contains(&fname[..40].to_string()) {
-            let f = std::fs::File::open(d.path());
-            if let Ok(f) = f {
-                let _ = f.set_modified(std::time::SystemTime::now());
+            // Not in a dry run: the age check reads mtimes, so touching
+            // them would change what the next run removes
+            if touch {
+                if let Ok(f) = std::fs::File::open(d.path()) {
+                    let _ = f.set_modified(std::time::SystemTime::now());
+                }
             }
             true
         } else {
@@ -118,7 +121,7 @@ fn main() {
         .read_dir()
         .unwrap()
         .filter_map(|d| d.ok())
-        .filter(|d| !result_is_live(&commits, &d))
+        .filter(|d| !result_is_live(&commits, &d, !args.dry_run))
         .map(|d| d.path())
         .filter(|d| d.metadata().unwrap().modified().unwrap() < older_than)
     {
