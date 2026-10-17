@@ -109,6 +109,12 @@ pub struct Ktestrc {
     /// for (used by gc-results and the cgi viewer). Defaults to 500.
     #[serde(default)]
     pub keep_results_commits: Option<u64>,
+    /// Past this much of output_dir's filesystem used, in percent, gc-results
+    /// goes on to remove results keep_results_commits keeps: oldest first -
+    /// farthest from the nearest branch tip - and never those the CI still
+    /// tests, within a branch's test groups' max_commits. Unset: no limit.
+    #[serde(default)]
+    pub results_max_used_percent: Option<u64>,
     #[serde(default)]
     pub verbose: bool,
     #[serde(default)]

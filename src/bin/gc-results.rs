@@ -1,8 +1,11 @@
 extern crate libc;
 use ci_cgi::{ciconfig_read, git_get_commit, CiConfig};
 use clap::Parser;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::ffi::CString;
 use std::fs::DirEntry;
+use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
 use std::process;
 
 #[derive(Parser)]
@@ -34,8 +37,18 @@ fn branch_get_commits(repo: &git2::Repository, branch: &str, max_commits: u64) -
         .collect()
 }
 
-fn get_live_commits(rc: &CiConfig) -> HashSet<String> {
-    let mut ret: HashSet<String> = HashSet::new();
+/// The commits whose results stay: each within keep_results_commits of a
+/// branch tip, by its distance from the nearest; and of those, the ones the
+/// CI still tests - within the max_commits of a branch's test groups - whose
+/// results would only be run again.
+#[derive(Default)]
+struct Live {
+    depth:  HashMap<String, usize>,
+    tested: HashSet<String>,
+}
+
+fn get_live_commits(rc: &CiConfig) -> Live {
+    let mut ret = Live::default();
     let depth = rc.ktest.keep_results_commits.unwrap_or(500);
 
     for (user, userconfig) in rc
@@ -65,9 +78,19 @@ fn get_live_commits(rc: &CiConfig) -> HashSet<String> {
                 }
             };
 
+            let tested = branch_config.test_groups.iter()
+                .filter_map(|g| userconfig.test_groups.get(g))
+                .map(|g| g.max_commits as usize)
+                .max()
+                .unwrap_or(0);
+
             let userbranch = format!("{}/{}", user, branch);
-            for commit in branch_get_commits(&repo, &userbranch, depth) {
-                ret.insert(commit);
+            for (i, commit) in branch_get_commits(&repo, &userbranch, depth).into_iter().enumerate() {
+                if i < tested {
+                    ret.tested.insert(commit.clone());
+                }
+                let d = ret.depth.entry(commit).or_insert(i);
+                *d = (*d).min(i);
             }
         }
     }
@@ -75,7 +98,7 @@ fn get_live_commits(rc: &CiConfig) -> HashSet<String> {
     ret
 }
 
-fn result_is_live(commits: &HashSet<String>, d: &DirEntry, touch: bool) -> bool {
+fn result_is_live(live: &Live, d: &DirEntry, touch: bool) -> bool {
     let fname = d.file_name().into_string().ok();
 
     if let Some(fname) = fname {
@@ -84,7 +107,7 @@ fn result_is_live(commits: &HashSet<String>, d: &DirEntry, touch: bool) -> bool 
             return true;
         }
 
-        if commits.contains(&fname[..40].to_string()) {
+        if live.depth.contains_key(&fname[..40]) {
             // Not in a dry run: the age check reads mtimes, so touching
             // them would change what the next run removes
             if touch {
@@ -111,7 +134,7 @@ fn main() {
     }
     let rc = rc.unwrap();
 
-    let commits = get_live_commits(&rc);
+    let live = get_live_commits(&rc);
     let now = std::time::SystemTime::now();
     let older_than = now.checked_sub(std::time::Duration::new(3600, 0)).unwrap();
 
@@ -121,7 +144,7 @@ fn main() {
         .read_dir()
         .unwrap()
         .filter_map(|d| d.ok())
-        .filter(|d| !result_is_live(&commits, &d, !args.dry_run))
+        .filter(|d| !result_is_live(&live, &d, !args.dry_run))
         .map(|d| d.path())
         .filter(|d| d.metadata().unwrap().modified().unwrap() < older_than)
     {
@@ -133,6 +156,70 @@ fn main() {
             } else {
                 std::fs::remove_file(d).ok();
             }
+        }
+    }
+
+    if let Some(max) = rc.ktest.results_max_used_percent {
+        shrink_to(&rc.ktest.output_dir, &live, max, args.dry_run);
+    }
+}
+
+/// df's Use%: used, over used and what's available to an unprivileged
+/// user, rounded up.
+fn used_percent(path: &Path) -> Option<u64> {
+    let path = CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(path.as_ptr(), &mut s) } != 0 {
+        return None;
+    }
+    let used = (s.f_blocks - s.f_bfree) as u128;
+    let total = used + s.f_bavail as u128;
+    (total != 0).then(|| (used * 100).div_ceil(total) as u64)
+}
+
+/// Remove live results, oldest first - farthest from the nearest branch tip
+/// - until @dir's filesystem is no more than @max percent used: never those
+/// the CI still tests. Not by age, as the pass above: it has just touched
+/// every live result.
+fn shrink_to(dir: &Path, live: &Live, max: u64, dry_run: bool) {
+    let Some(used) = used_percent(dir) else {
+        eprintln!("statvfs {}: {}", dir.display(), std::io::Error::last_os_error());
+        return;
+    };
+    if used <= max {
+        return;
+    }
+
+    let mut oldest: Vec<(&String, usize)> = live.depth.iter()
+        .filter(|(commit, _)| !live.tested.contains(*commit))
+        .map(|(commit, depth)| (commit, *depth))
+        .collect();
+    oldest.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // A dry run lists every candidate: it can't see where removing would stop
+    println!("{} is {}% used, over {}%: removing results, oldest first", dir.display(), used, max);
+
+    for (commit, depth) in oldest {
+        let result = dir.join(commit);
+        let summary = dir.join(format!("{commit}.capnp"));
+        if !result.exists() && !summary.exists() {
+            continue;
+        }
+
+        if !dry_run && used_percent(dir).is_some_and(|u| u <= max) {
+            return;
+        }
+        println!("Removing: {} ({} commits from a branch tip)", result.display(), depth);
+
+        if !dry_run {
+            std::fs::remove_dir_all(&result).ok();
+            std::fs::remove_file(&summary).ok();
+        }
+    }
+
+    if !dry_run {
+        if let Some(u) = used_percent(dir).filter(|u| *u > max) {
+            eprintln!("{} still {}% used: what's left is results the CI still tests", dir.display(), u);
         }
     }
 }
