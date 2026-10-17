@@ -1599,6 +1599,19 @@ falloc_snap_check()
     return 1
 }
 
+# Every other file - the snapshots' copies - is as it was: the op works on
+# keys that ancestor snapshots share, and a wrong range there shows only in
+# the snapshots that still see them.
+falloc_snap_check_others()
+{
+    local when=$1
+
+    md5sum --quiet -c /tmp/others && return 0
+
+    echo "FAIL ($when): files the op didn't touch changed"
+    return 1
+}
+
 # $2 sets up the subvolumes and prints the path of the file to operate on.
 falloc_snap_run()
 {
@@ -1609,13 +1622,16 @@ falloc_snap_run()
 
     f=$($setup)
     cp $f /tmp/pre
+    find /mnt -type f ! -path $f -print0 | xargs -0 -r md5sum > /tmp/others
     falloc_snap_expected $op /tmp/pre /tmp/expected
     falloc_snap_do_op $op $f
     falloc_snap_check $f mounted || ret=1
+    falloc_snap_check_others mounted || ret=1
 
     umount /mnt
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     falloc_snap_check $f remounted || ret=1
+    falloc_snap_check_others remounted || ret=1
     umount /mnt
 
     bcachefs fsck -n ${ktest_scratch_dev[0]} || ret=1
@@ -1677,13 +1693,15 @@ falloc_snap_setup_punched()
     echo $f
 }
 
-# Unwritten extents in the ancestor, in the range an insert or collapse
-# shifts: pages 600-699 punched and fallocated back before the snapshot. Their
-# space moves to the file's snapshot, and the ancestor's keys go - zeroes
-# either way.
-falloc_snap_setup_unwritten()
+# Fallocated space in the ancestor, in the range an insert or collapse
+# shifts: pages 600-699 punched and fallocated back before the snapshot. $1
+# is set-file-option's options for the subvolume, if any.
+falloc_snap_setup_fallocated()
 {
     bcachefs subvolume create /mnt/a >&2
+    if [[ $# -gt 0 ]]; then
+	bcachefs set-file-option "$@" /mnt/a >&2
+    fi
     falloc_snap_seed /mnt/a/f
     fallocate -p -o $((600 * 4096)) -l $((100 * 4096)) /mnt/a/f
     fallocate -o $((600 * 4096)) -l $((100 * 4096)) /mnt/a/f
@@ -1692,8 +1710,23 @@ falloc_snap_setup_unwritten()
     echo /mnt/a/f
 }
 
+# Without nocow fallocate only reserves: reservations, which the shift copies.
+falloc_snap_setup_reserved()
+{
+    falloc_snap_setup_fallocated
+}
+
+# With nocow it allocates: unwritten extents, whose space moves to the file's
+# snapshot, the ancestor's keys deleted over the range that moved - zeroes
+# either way. The ancestor's data after them, pages 700 on, is the snapshot's
+# still: a deletion counted from the extent's end once took it.
+falloc_snap_setup_unwritten()
+{
+    falloc_snap_setup_fallocated --nocow
+}
+
 for op in insert collapse punch punch1 zero; do
-    for history in plain ro_snapshot snapshot_of_snapshot deleted_ancestors punched unwritten; do
+    for history in plain ro_snapshot snapshot_of_snapshot deleted_ancestors punched reserved unwritten; do
 	eval "test_falloc_snap_${op}_${history}() { falloc_snap_run $op falloc_snap_setup_$history; }"
     done
 done
