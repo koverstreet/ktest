@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e ${BASH_SOURCE[0]}))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+
+test_multidevice_same_second()
+{
+    set_watchdog 180
+    bcachefs_antagonist
+
+    run_quiet "" bcachefs format -f		\
+	--fs_size=1G				\
+	${ktest_scratch_dev[0]}			\
+	${ktest_scratch_dev[1]}
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+
+    df -h /mnt
+
+    bcachefs device resize ${ktest_scratch_dev[0]} &
+    local pid0=$!
+    bcachefs device resize ${ktest_scratch_dev[1]} &
+    local pid1=$!
+
+    wait $pid0
+    wait $pid1
+
+    df -h /mnt
+
+    fio --eta=always			\
+	--exitall_on_error=1		\
+	--randrepeat=0			\
+	--ioengine=libaio		\
+	--iodepth=16			\
+	--direct=1			\
+	--filename=/mnt/resize-io	\
+	--filesize=256M			\
+	--name=randwrite		\
+	--rw=randwrite			\
+	--bs=64k			\
+	--runtime=10
+
+    sync
+    umount /mnt
+
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
+main "$@"
