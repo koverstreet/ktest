@@ -50,6 +50,7 @@ list_tests()
 {
     echo iterate
     echo iterate_extents
+    echo iterate_extents_trim
     echo iterate_slots
     echo iterate_slots_extents
     echo peek_end
