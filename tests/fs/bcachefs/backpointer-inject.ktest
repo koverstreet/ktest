@@ -24,10 +24,9 @@
 # editing what they point to. Validation errors (backpointer_level_bad,
 # backpointer_dev_bad) can't be injected: kvdb's writes are validated.
 #
-# Not here yet: stripe_backpointers (an erasure coded extent's pointers'),
-# which need data already moved into stripes - written replicated, it's
-# converted later; and check_bp_dup()'s repairs, two extents pointing at
-# the same space.
+# Not here yet: missing stripe_backpointers, for which an extent has to have
+# an erasure coded pointer to a removed device; and check_bp_dup()'s
+# repairs, two extents pointing at the same space.
 #
 # fsck contract per test (as alloc-inject.ktest): fsck -y must detect (exit
 # != 0) and report each expected error; a second fsck -n must run clean;
@@ -289,6 +288,31 @@ test_bp_wrong_target()
 
     fsck_finds -o recovery_passes=check_backpointers_to_extents -- backpointer_to_missing_ptr
     fsck_finds -- ptr_to_missing_backpointer
+    check_clean
+}
+
+# A stripe backpointer - an erasure coded pointer's, whose device was
+# removed - to an extent that isn't there. Its position is synthetic: dev
+# (stripe idx << 8) | block. Only check_backpointers_to_extents looks; its
+# delete has to go to stripe_backpointers, not backpointers, or it's
+# reported again on every run.
+test_stripe_bp_dangling()
+{
+    setup_fs 1
+
+    kvdb_rw -c "set -r stripe_backpointers $(( 2 << 8 )):$(( 4096 << 16 )) backpointer \
+		btree_id=0 level=0 data_type=7 bucket_len=8 pos.inode=4096 pos.offset=8 \
+		flags.erasure_coded=1 flags.stripe_ptr=1"
+
+    fsck_finds -o recovery_passes=check_backpointers_to_extents -- backpointer_to_missing_ptr
+
+    local rc=0
+    bcachefs fsck -n -o recovery_passes=check_backpointers_to_extents "${FS_DEVS[@]}" || rc=$?
+    if (( rc != 0 )); then
+	echo "TEST FAILED: stripe backpointer still there after fsck -y"
+	exit 1
+    fi
+
     check_clean
 }
 
