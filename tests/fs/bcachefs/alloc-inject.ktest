@@ -1,0 +1,388 @@
+#!/usr/bin/env bash
+#
+# Alloc btree corruption injection: the fsck contract for check_alloc_info
+# and check_alloc_to_lru_refs (alloc/check.c), one test per error it repairs.
+#
+# The alloc btree is authoritative for its buckets; need_discard,
+# freespace, bucket_gens and the lru btree are indexes derived from it, and
+# check_alloc_info repairs them both ways - entries an alloc key says should
+# be there and aren't, and entries no alloc key accounts for. Keys for
+# buckets that don't exist, in any of them, are deleted.
+#
+# Injection is `bcachefs kvdb --rw` on the unmounted filesystem, with -r:
+# no triggers, so nothing derived is updated to match. Editing what gc
+# recomputes - an alloc key's data type or sector counts against the
+# extents that point into the bucket - is repaired by check_allocations
+# before check_alloc_info sees it, so the injections here go around that:
+# alloc keys for buckets nothing points into, fields gc doesn't own
+# (generations), and the derived btrees directly.
+#
+# kvdb takes an alloc key's data_type as its number: free 0, user 4,
+# need_discard 9.
+#
+# kvdb can't build a sized key, and freespace keys are extents: a missing
+# freespace entry is made by moving an alloc key's generation, so its entry
+# is expected at other genbits - which also leaves the old entry bad.
+#
+# fsck contract per test (as lru-inject.ktest):
+#   - fsck -y must detect (exit != 0) and report each expected error name
+#   - a second fsck -n must run clean (repair converged)
+#   - file data must survive repair
+#
+# No bcachefs_test_end_checks: these tests intentionally stamp error
+# counters.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+
+MANIFEST=/tmp/alloc-inject-manifest
+
+# The filesystem's devices, set by setup_fs
+FS_DEVS=()
+
+kvdb()
+{
+    bcachefs kvdb "${FS_DEVS[@]}" "$@"
+}
+
+kvdb_rw()
+{
+    bcachefs kvdb --rw "${FS_DEVS[@]}" "$@"
+}
+
+fill_fs()
+{
+    mount -t bcachefs $(join_by : "${FS_DEVS[@]}") /mnt
+
+    for i in $(seq 0 9); do
+	dd if=/dev/urandom of=/mnt/data-$i bs=1M count=4 oflag=direct
+    done
+    (cd /mnt && md5sum data-*) > $MANIFEST
+
+    umount /mnt
+}
+
+# setup_fs <nr devices> [format options]: format the first @nr scratch
+# devices, with data
+setup_fs()
+{
+    local nr=$1; shift
+
+    FS_DEVS=("${ktest_scratch_dev[@]:0:$nr}")
+    run_quiet "" bcachefs format -f "$@" "${FS_DEVS[@]}"
+    fill_fs
+}
+
+# Device 0's bucket count, from the superblock
+nbuckets()
+{
+    local sb=$(bcachefs show-super -f members_v2 ${FS_DEVS[0]})
+    awk '/^Device 0:/ { d = 1 } d && /Buckets:/ { print $2; exit }' <<< "$sb"
+}
+
+# A free bucket on device 0 with no alloc key: in the first freespace
+# extent, a bucket the alloc btree has nothing for
+hole_bucket()
+{
+    local keys=$(kvdb -c 'list -k freespace') end len
+    read -r end len < <(sed -n '/type set 0:/{s/.*type set 0:\([0-9]*\):0 len \([0-9]*\).*/\1 \2/p;q}' <<< "$keys")
+    [[ -n $end ]] || return 1
+
+    local start=$((end - len))
+    keys=$(kvdb -c "list -k alloc 0:$start 0:$end")
+    local present=$(sed -n 's/.*type alloc_v4 0:\([0-9]*\):0.*/\1/p' <<< "$keys")
+
+    local b
+    for ((b = start + 1; b < end; b++)); do
+	if ! grep -qx $b <<< "$present"; then
+	    echo $b
+	    return
+	fi
+    done
+    return 1
+}
+
+# The first bucket on device 0 whose alloc key says @1 (a data type name)
+bucket_of_type()
+{
+    local keys=$(kvdb -c 'list alloc')
+    awk -v t="$1" '/type alloc_v4 0:/ { split($5, p, ":"); b = p[2] }
+		   $0 ~ "data_type " t "$" { print b; exit }' <<< "$keys"
+}
+
+# set_bucket_gen <bucket> <gen>: device 0's bucket's gen in the bucket_gens
+# btree, creating the key - the rest of its gens 0 - if there isn't one
+set_bucket_gen()
+{
+    local pos=0:$(($1 >> 8)) i=$(($1 & 255))
+
+    if kvdb -c "get bucket_gens $pos" | grep -q "type bucket_gens"; then
+	kvdb_rw -c "update -r bucket_gens $pos gens[$i]=$2"
+    else
+	kvdb_rw -c "set -r bucket_gens $pos bucket_gens gens[$i]=$2"
+    fi
+}
+
+# check_fsck_alloc <error name>...: fsck -y finds and reports each, then
+# fsck -n is clean and the data is intact
+check_fsck_alloc()
+{
+    local rc1=0 rc2=0 out errname
+
+    out=$(bcachefs fsck -y "${FS_DEVS[@]}" 2>&1) || rc1=$?
+    echo "$out"
+    echo "first fsck -y exited $rc1"
+
+    if (( rc1 == 0 )); then
+	echo "TEST FAILED: fsck missed injected corruption"
+	exit 1
+    fi
+
+    for errname in "$@"; do
+	if ! grep -q "$errname" <<< "$out"; then
+	    echo "TEST FAILED: fsck errored but never reported $errname"
+	    exit 1
+	fi
+    done
+
+    bcachefs fsck -n "${FS_DEVS[@]}" || rc2=$?
+    echo "second fsck -n exited $rc2"
+
+    if (( rc2 != 0 )); then
+	echo "TEST FAILED: errors remain after fsck -y"
+	exit 1
+    fi
+
+    mount -t bcachefs $(join_by : "${FS_DEVS[@]}") /mnt
+    (cd /mnt && md5sum -c $MANIFEST)
+    umount /mnt
+}
+
+# ── alloc keys for buckets that don't exist ──────────────────────────────
+
+test_alloc_key_missing_dev()
+{
+    setup_fs 1
+
+    kvdb_rw -c "set -r alloc 5:10 alloc_v4 data_type=4 dirty_sectors=8"
+
+    check_fsck_alloc alloc_key_to_missing_dev_bucket
+}
+
+test_alloc_key_past_last_bucket()
+{
+    setup_fs 1
+
+    kvdb_rw -c "set -r alloc 0:$(( $(nbuckets) + 100 )) alloc_v4 data_type=4 dirty_sectors=8"
+
+    check_fsck_alloc alloc_key_to_missing_dev_bucket
+}
+
+# ── need_discard ─────────────────────────────────────────────────────────
+
+# A bucket that needs discarding, with no need_discard entry - and still
+# in the freespace btree, where a need_discard bucket isn't
+test_need_discard_missing()
+{
+    setup_fs 1
+
+    local b=$(hole_bucket)
+    [[ -n $b ]]
+
+    kvdb_rw -c "set -r alloc 0:$b alloc_v4 data_type=9"
+
+    check_fsck_alloc need_discard_key_wrong freespace_key_wrong
+}
+
+# A need_discard entry for a bucket that doesn't need discarding
+test_need_discard_stray()
+{
+    setup_fs 1
+
+    local b=$(bucket_of_type btree)
+    [[ -n $b ]]
+
+    kvdb_rw -c "set -r need_discard 0:$b set"
+
+    check_fsck_alloc need_discard_freespace_key_bad
+}
+
+# need_discard positions are journal_seq_empty:bucket_to_u64(), device in
+# the top 16 bits
+test_need_discard_missing_dev()
+{
+    setup_fs 1
+
+    kvdb_rw -c "set -r need_discard 0:$(( (5 << 48) | 10 )) set"
+
+    check_fsck_alloc need_discard_freespace_key_to_invalid_dev_bucket
+}
+
+# ── freespace ────────────────────────────────────────────────────────────
+
+# A need_discard bucket, with its need_discard entry, but in the freespace
+# btree
+test_freespace_wrongly_set()
+{
+    setup_fs 1
+
+    local b=$(hole_bucket)
+    [[ -n $b ]]
+
+    kvdb_rw -c "set -r alloc 0:$b alloc_v4 data_type=9" \
+	    -c "set -r need_discard 0:$b set"
+
+    check_fsck_alloc freespace_key_wrong
+}
+
+# A free bucket whose gc gen (generation - oldest_gen) puts its freespace
+# entry at genbits 2: there isn't one there, and the one at genbits 0 is
+# bad. Its bucket_gens gen moved to match, so only freespace is wrong.
+test_freespace_genbits()
+{
+    setup_fs 1
+
+    local b=$(hole_bucket)
+    [[ -n $b ]]
+
+    kvdb_rw -c "set -r alloc 0:$b alloc_v4 data_type=0 generation=32"
+    set_bucket_gen $b 32
+
+    check_fsck_alloc freespace_key_wrong need_discard_freespace_key_bad
+}
+
+# A hole in the alloc btree, its freespace extent gone
+test_freespace_hole_missing()
+{
+    setup_fs 1
+
+    local keys=$(kvdb -c 'list -k freespace')
+    local pos=$(sed -n '/type set 0:/{s/.*type set \(0:[0-9]*:0\) len.*/\1/p;q}' <<< "$keys")
+    [[ -n $pos ]]
+
+    kvdb_rw -c "set -r freespace $pos deleted"
+
+    check_fsck_alloc freespace_hole_missing
+}
+
+# ── bucket_gens ──────────────────────────────────────────────────────────
+
+test_bucket_gens_wrong()
+{
+    setup_fs 1
+
+    local b=$(bucket_of_type btree)
+    [[ -n $b ]]
+
+    set_bucket_gen $b 7
+
+    check_fsck_alloc bucket_gens_key_wrong
+}
+
+# A nonzero gen for a bucket in an alloc btree hole
+test_bucket_gens_hole_wrong()
+{
+    setup_fs 1
+
+    local b=$(hole_bucket)
+    [[ -n $b ]]
+
+    set_bucket_gen $b 7
+
+    check_fsck_alloc bucket_gens_hole_wrong
+}
+
+test_bucket_gens_missing_dev()
+{
+    setup_fs 1
+
+    kvdb_rw -c "set -r bucket_gens 5:0 bucket_gens gens[5]=3"
+
+    check_fsck_alloc bucket_gens_to_invalid_dev
+}
+
+# A bucket_gens key all of whose buckets are past the device's last
+test_bucket_gens_past_last_bucket()
+{
+    setup_fs 1
+
+    kvdb_rw -c "set -r bucket_gens 0:$(( ($(nbuckets) >> 8) + 2 )) bucket_gens gens[5]=3"
+
+    check_fsck_alloc bucket_gens_to_invalid_buckets
+}
+
+# The device's last bucket_gens key, partly past its last bucket: a nonzero
+# gen there. Needs a bucket count that isn't a multiple of 256.
+test_bucket_gens_nonzero_past_last_bucket()
+{
+    setup_fs 1 --fs_size=1000M
+
+    local nr=$(nbuckets)
+    (( (nr & 255) != 0 && (nr & 255) < 250 ))
+
+    kvdb_rw -c "set -r bucket_gens 0:$((nr >> 8)) bucket_gens gens[$(( (nr & 255) + 5 ))]=3"
+
+    check_fsck_alloc bucket_gens_nonzero_for_invalid_buckets
+}
+
+# ── stripes ──────────────────────────────────────────────────────────────
+
+test_stripe_refcount_wrong()
+{
+    setup_fs 4 --erasure_code --replicas=2
+
+    local b=$(bucket_of_type stripe)
+    [[ -n $b ]]
+
+    kvdb_rw -c "update -r alloc 0:$b stripe_refcount=5"
+
+    check_fsck_alloc alloc_key_stripe_refcount_wrong
+}
+
+# ── check_alloc_to_lru_refs: the read lru, for cached data ───────────────
+
+# Writethrough: data written to a durability=0 device is cached there
+setup_cached_fs()
+{
+    FS_DEVS=("${ktest_scratch_dev[@]:0:2}")
+    run_quiet "" bcachefs format -f			\
+	--durability=0 --label=ssd ${FS_DEVS[0]}	\
+	--durability=1 --label=hdd ${FS_DEVS[1]}	\
+	--foreground_target=ssd				\
+	--promote_target=ssd				\
+	--background_target=hdd
+    fill_fs
+}
+
+# A cached bucket's read lru entry, deleted: the read lru for device 0 is
+# lru id 0, its positions read_time:bucket_to_u64()
+test_read_lru_entry_missing()
+{
+    setup_cached_fs
+
+    local keys=$(kvdb -c 'list -k lru 0:0 281474976710655:0')
+    local entry=$(sed -n '/type set /{s/.*type set \([0-9]*:[0-9]*:0\) .*/\1/p;q}' <<< "$keys")
+    [[ -n $entry ]]
+
+    kvdb_rw -c "set -r lru $entry deleted"
+
+    check_fsck_alloc alloc_key_to_missing_lru_entry
+}
+
+test_cached_read_time_zero()
+{
+    setup_cached_fs
+
+    local b=$(bucket_of_type cached)
+    [[ -n $b ]]
+
+    kvdb_rw -c "update -r alloc 0:$b io_time[0]=0"
+
+    check_fsck_alloc alloc_key_cached_but_read_time_zero
+}
+
+main "$@"
