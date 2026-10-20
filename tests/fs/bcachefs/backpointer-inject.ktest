@@ -291,6 +291,40 @@ test_bp_wrong_target()
     check_clean
 }
 
+# An erasure coded extent's pointer to a removed device - BCH_SB_MEMBER_INVALID,
+# still readable through its stripe - has its backpointer in
+# stripe_backpointers: one deleted. Data is written replicated and moved into
+# stripes later, so wait for that; and the device has to be gone when it's
+# removed - removing one that's there evacuates it instead.
+test_stripe_bp_missing()
+{
+    setup_fs 4 --erasure_code --replicas=2
+
+    # reconcile waits on the io clock: give it the IO to go on
+    mount -t bcachefs $(join_by : "${FS_DEVS[@]}") /mnt
+    dd if=/dev/zero of=/mnt/io-clock bs=1M count=160 oflag=direct status=none
+    timeout 120 bcachefs reconcile wait /mnt || true
+    umount /mnt
+
+    # Gone, not just left out of the mount: members are found by uuid
+    dd if=/dev/zero of=${FS_DEVS[3]} bs=1M oflag=direct status=none || true
+
+    # Removal leaves the pointers that had a stripe pointing nowhere, for
+    # reconcile to rewrite: keep it from doing that before we look
+    FS_DEVS=("${FS_DEVS[@]:0:3}")
+    mount -t bcachefs -o degraded,noreconcile_enabled $(join_by : "${FS_DEVS[@]}") /mnt
+    bcachefs device remove --force 3 /mnt
+    umount /mnt
+
+    local keys=$(kvdb -c "list -k stripe_backpointers")
+    local pos=$(sed -n '/type backpointer /{s/.*type backpointer \([0-9]*:[0-9]*:0\) .*/\1/p;q}' <<< "$keys")
+    [[ -n $pos ]]
+
+    kvdb_rw -c "set -r stripe_backpointers $pos deleted"
+
+    check_fsck_bp ptr_to_missing_backpointer
+}
+
 # A stripe backpointer - an erasure coded pointer's, whose device was
 # removed - to an extent that isn't there. Its position is synthetic: dev
 # (stripe idx << 8) | block. Only check_backpointers_to_extents looks; its
