@@ -540,15 +540,19 @@ test_ptr_into_journal_bucket()
 
 # A pointer into a superblock bucket, the extent's only one: every
 # superblock write overwrites it, so it's dropped, and the extent - nothing
-# left to read - becomes an error key
+# left to read - becomes an error key. Format keeps the superblocks below the
+# first bucket, so the backup is moved to the start of the extent, as a
+# resize can leave one in a bucket data may use (#785) - sb set writes it
+# there.
 test_ptr_into_sb_bucket()
 {
     setup_fs 1 --bucket_size=512k
 
-    local pos=$(file_extent data-0) b=$(bucket_of_type sb)
-    [[ -n $pos && -n $b ]]
+    local pos=$(file_extent data-0) dev b off gen
+    read -r dev b off gen _ < <(key_ptrs extents $pos)
+    [[ -n $b ]]
 
-    kvdb_rw -c "update -r extents $pos ptrs[0].offset=$((b * BUCKET_SECTORS)) ptrs[0].gen=$(bucket_gen $b)"
+    kvdb_rw -c "sb set -d 0 layout.sb_offset[1]=$((b * BUCKET_SECTORS + off))"
     forget data-0
 
     check_fsck_alloc ptr_bucket_data_type_mismatch
@@ -675,10 +679,11 @@ test_btree_ptr_gen_newer_than_bucket_gen()
 # check_extents_to_backpointers finds the double allocation, and it's the
 # node's replica that doesn't verify - not a btree node - so it's dropped
 # (bkey_drop_device_and_update()), the node still readable from its other.
-# 4k btree nodes, so the extents btree has a level above its leaves to edit.
+# A new filesystem's extents btree is presplit at its shard boundaries, so it
+# has a level above its leaves to edit.
 test_btree_node_replica_into_data_bucket()
 {
-    setup_fs 2 --bucket_size=512k --btree_node_size=4k --metadata_replicas=2
+    setup_fs 2 --bucket_size=512k --metadata_replicas=2
 
     local bp=$(kvdb -c 'list -L 1 -k extents' | sed -n 's/.*type btree_ptr_v2 \([^ ]*\) .*/\1/p' | head -1)
     [[ -n $bp ]]
@@ -730,7 +735,7 @@ dup_extent_elsewhere()
     setup_fs 1 "$@"
 
     mount -t bcachefs $(join_by : "${FS_DEVS[@]}") /mnt
-    yes bcachefs | head -c 64k > /mnt/f
+    head -c 64k < <(yes bcachefs) > /mnt/f
     truncate -s 128k /mnt/g
     cp /mnt/f /tmp/f-orig
     local g=$(stat -c %i /mnt/g)
