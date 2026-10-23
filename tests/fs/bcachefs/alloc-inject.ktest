@@ -90,22 +90,24 @@ nbuckets()
 # extent, a bucket the alloc btree has nothing for
 hole_bucket()
 {
-    local keys=$(kvdb -c 'list -k freespace') end len
-    read -r end len < <(sed -n '/type set 0:/{s/.*type set 0:\([0-9]*\):0 len \([0-9]*\).*/\1 \2/p;q}' <<< "$keys")
-    [[ -n $end ]] || return 1
+    local freespace alloc b
+    freespace=$(kvdb -c 'list -k freespace') || return
+    alloc=$(kvdb -c 'list -k alloc') || return
 
-    local start=$((end - len))
-    keys=$(kvdb -c "list -k alloc 0:$start 0:$end")
-    local present=$(sed -n 's/.*type alloc_v4 0:\([0-9]*\):0.*/\1/p' <<< "$keys")
+    # A freespace extent ends at its key's offset; offsets past 2^56 carry
+    # genbits, and those buckets (gen >= 16) all have alloc keys
+    b=$(awk 'NR == FNR { split($5, p, ":"); if (p[1] == 0) have[p[2]]; next }
+	     $4 == "set" { split($5, p, ":"); end = p[2]
+		 if (p[1] != 0 || length(end) > 16) next
+		 for (b = end - $7 + 1; b < end; b++)
+		     if (!(b in have)) { print b; exit } }' \
+	<(echo "$alloc") <(echo "$freespace"))
 
-    local b
-    for ((b = start + 1; b < end; b++)); do
-	if ! grep -qx $b <<< "$present"; then
-	    echo $b
-	    return
-	fi
-    done
-    return 1
+    if [[ -z $b ]]; then
+	echo "hole_bucket: every free bucket on dev 0 has an alloc key" >&2
+	return 1
+    fi
+    echo $b
 }
 
 # The first bucket on device 0 whose alloc key says @1 (a data type name)
