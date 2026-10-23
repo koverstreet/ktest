@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 #
 # Alloc btree corruption injection: the fsck contract for check_alloc_info
-# and check_alloc_to_lru_refs (alloc/check.c), one test per error it repairs.
+# and check_alloc_to_lru_refs (alloc/check.c), one test per error it repairs
+# - and for check_allocations' check of each pointer against the bucket it
+# points into (alloc/check_data.rs), at the end.
 #
 # The alloc btree is authoritative for its buckets; need_discard,
 # freespace, bucket_gens and the lru btree are indexes derived from it, and
@@ -383,6 +385,234 @@ test_cached_read_time_zero()
     kvdb_rw -c "update -r alloc 0:$b io_time[0]=0"
 
     check_fsck_alloc alloc_key_cached_but_read_time_zero
+}
+
+# ── check_allocations: pointers against the buckets they point into ─────
+#
+# gc rebuilds each bucket from the keys that point into it - its gen from
+# its alloc key, its data type from what's marked there before - and checks
+# each pointer as it marks it (check_fix_ptr()). The injections edit a
+# pointer with kvdb's ptrs[N].field, or the alloc key it's checked against.
+# A test whose repair loses data drops that file from the manifest.
+
+# The tests that point an extent into another bucket format with 512k
+# buckets: a pointer's offset is bucket * 1024 sectors
+BUCKET_SECTORS=1024
+
+# file_extent <file>: the position of @file's first extent
+file_extent()
+{
+    mount -t bcachefs $(join_by : "${FS_DEVS[@]}") /mnt
+    local ino=$(stat -c %i /mnt/$1)
+    umount /mnt
+
+    kvdb -c "list -k extents $ino:0 $((ino + 1)):0" |
+	sed -n "s/.*type extent \($ino:[0-9]*:U32_MAX\) .*/\1/p" | head -1
+}
+
+# extent_ptrs <pos>: the extent at @pos's pointers, a line each: device,
+# bucket, gen, and "cached" if it is
+extent_ptrs()
+{
+    kvdb -c "get extents $1" | awk '/ptr:/ {
+	sub(/.*ptr: */, ""); split($2, p, ":")
+	print p[1], p[2], $4, (/ cached/ ? "cached" : "") }'
+}
+
+# cached_extent: the first extent with a cached pointer - its position, and
+# the pointer's index, device, bucket and gen
+cached_extent()
+{
+    kvdb -c 'list extents' | awk '
+	/type extent / { for (i = 1; i < NF; i++) if ($i == "extent") pos = $(i + 1); n = 0 }
+	/ptr:/ {
+	    sub(/.*ptr: */, ""); split($2, p, ":")
+	    if (/ cached/) { print pos, n, p[1], p[2], $4; exit }
+	    n++ }'
+}
+
+# bucket_gen <bucket>: device 0's bucket's gen, from its alloc key
+bucket_gen()
+{
+    kvdb -c "get alloc 0:$1" | sed -n 's/^ *gen \([0-9]*\) .*/\1/p' | head -1
+}
+
+# set_alloc_gen <bucket> <gen>: device 0's bucket's gen, in its alloc key
+# and bucket_gens - oldest_gen too, so the bucket doesn't need gc_gens
+set_alloc_gen()
+{
+    kvdb_rw -c "update -r alloc 0:$1 generation=$2 oldest_gen=$2"
+    set_bucket_gen $1 $2
+}
+
+# forget <file>: drop @file from the manifest, for a repair that loses it
+forget()
+{
+    sed -i "/  $1\$/d" $MANIFEST
+}
+
+# A pointer into a bucket the alloc btree has no key for: the bucket takes
+# the pointer's gen, and gc writes its alloc key back
+test_ptr_to_missing_alloc_key()
+{
+    setup_fs 1
+
+    local pos=$(file_extent data-0) dev b gen
+    read -r dev b gen _ < <(extent_ptrs $pos)
+    [[ -n $b ]]
+
+    kvdb_rw -c "set -r alloc $dev:$b deleted"
+
+    check_fsck_alloc ptr_to_missing_alloc_key
+}
+
+# A pointer's gen ahead of its bucket's: reset to the bucket's
+test_ptr_gen_newer_than_bucket_gen()
+{
+    setup_fs 1
+
+    local pos=$(file_extent data-0) dev b gen
+    read -r dev b gen _ < <(extent_ptrs $pos)
+    [[ -n $b ]]
+
+    set_alloc_gen $b $(( (gen + 255) & 255 ))
+
+    check_fsck_alloc ptr_gen_newer_than_bucket_gen
+}
+
+# A dirty pointer behind its bucket's gen: reset to the bucket's
+test_stale_dirty_ptr()
+{
+    setup_fs 1
+
+    local pos=$(file_extent data-0) dev b gen
+    read -r dev b gen _ < <(extent_ptrs $pos)
+    [[ -n $b ]]
+
+    set_alloc_gen $b $(( (gen + 1) & 255 ))
+
+    check_fsck_alloc stale_dirty_ptr
+}
+
+# A cached pointer more than BUCKET_GC_GEN_MAX (96) gens behind its bucket:
+# dropped, the dirty replica kept
+test_cached_ptr_too_stale()
+{
+    setup_cached_fs
+
+    local pos n dev b gen
+    read -r pos n dev b gen < <(cached_extent)
+    [[ -n $pos && $dev == 0 ]]
+
+    set_alloc_gen $b $(( (gen + 97) & 255 ))
+
+    check_fsck_alloc ptr_gen_newer_than_bucket_gen
+}
+
+# A pointer to a device the filesystem doesn't have - which validate lets
+# through, for this to repair: dropped, the other replica kept
+test_ptr_to_missing_device()
+{
+    setup_fs 2 --replicas=2
+
+    local pos=$(file_extent data-0)
+    [[ -n $pos ]]
+
+    kvdb_rw -c "update -r extents $pos ptrs[0].dev=5"
+
+    check_fsck_alloc ptr_to_invalid_device
+}
+
+# A pointer into a journal bucket: the bucket leaves the journal, for the
+# pointer's data type. The file's data there is the journal's.
+test_ptr_into_journal_bucket()
+{
+    setup_fs 1 --bucket_size=512k
+
+    local pos=$(file_extent data-0) b=$(bucket_of_type journal)
+    [[ -n $pos && -n $b ]]
+
+    kvdb_rw -c "update -r extents $pos ptrs[0].offset=$((b * BUCKET_SECTORS)) ptrs[0].gen=$(bucket_gen $b)"
+    forget data-0
+
+    check_fsck_alloc ptr_bucket_data_type_mismatch
+}
+
+# A pointer into a superblock bucket, the extent's only one: every
+# superblock write overwrites it, so it's dropped, and the extent - nothing
+# left to read - becomes an error key
+test_ptr_into_sb_bucket()
+{
+    setup_fs 1 --bucket_size=512k
+
+    local pos=$(file_extent data-0) b=$(bucket_of_type sb)
+    [[ -n $pos && -n $b ]]
+
+    kvdb_rw -c "update -r extents $pos ptrs[0].offset=$((b * BUCKET_SECTORS)) ptrs[0].gen=$(bucket_gen $b)"
+    forget data-0
+
+    check_fsck_alloc ptr_bucket_data_type_mismatch
+}
+
+# A pointer into a btree node's bucket: gc makes the bucket multiple, and
+# check_extents_to_backpointers finds the double allocation. The extent is
+# the bad replica - its checksum fails over the node's bytes - and is dropped
+# (kill_replica_if_checksum_bad()), leaving an error key.
+test_ptr_into_btree_bucket()
+{
+    setup_fs 1 --bucket_size=512k
+
+    local pos=$(file_extent data-0) b=$(bucket_of_type btree)
+    [[ -n $pos && -n $b ]]
+
+    kvdb_rw -c "update -r extents $pos ptrs[0].offset=$((b * BUCKET_SECTORS)) ptrs[0].gen=$(bucket_gen $b)"
+    forget data-0
+
+    check_fsck_alloc ptr_bucket_data_type_mismatch dup_backpointer_to_bad_csum_extent
+}
+
+# An extent whose only pointer is cached and stale - validate passes it, off
+# the commit path: nothing to read, and no good cached pointer to make
+# dirty, so it's an error key, with no pointers to check
+test_extent_ptrs_all_invalid()
+{
+    setup_fs 1
+
+    local pos=$(file_extent data-0) dev b gen
+    read -r dev b gen _ < <(extent_ptrs $pos)
+    [[ -n $b ]]
+
+    kvdb_rw -c "update -r extents $pos ptrs[0].cached=1 ptrs[0].gen=$(( (gen + 255) & 255 ))"
+    forget data-0
+
+    check_fsck_alloc extent_ptrs_all_invalid
+}
+
+# The same, its cached pointer still good: made dirty again
+test_extent_ptrs_all_invalid_but_cached()
+{
+    setup_fs 1
+
+    local pos=$(file_extent data-0)
+    [[ -n $pos ]]
+
+    kvdb_rw -c "update -r extents $pos ptrs[0].cached=1"
+
+    check_fsck_alloc extent_ptrs_all_invalid_but_cached
+}
+
+# A pointer's stripe deleted: the extent's stripe pointer dropped, its data
+# pointer kept
+test_ptr_to_missing_stripe()
+{
+    setup_fs 4 --erasure_code --replicas=2
+
+    local idx=$(kvdb -c 'list -k stripes' | sed -n 's/.*type stripe 0:\([0-9]*\):0 .*/\1/p' | head -1)
+    [[ -n $idx ]]
+
+    kvdb_rw -c "set -r stripes 0:$idx deleted"
+
+    check_fsck_alloc ptr_to_missing_stripe
 }
 
 main "$@"
