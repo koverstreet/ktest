@@ -2875,6 +2875,9 @@ test_scrub_journal_btree_node()
     ktest_expect_sb_errors+="|backpointer_to_missing_ptr|ptr_to_missing_backpointer|stale_dirty_ptr"
     ktest_expect_sb_errors+="|lru_entry_bad|alloc_key_to_missing_lru_entry"
     ktest_expect_sb_errors+="|freespace_key_wrong|need_discard_freespace_key_bad"
+    # The lost nodes are whichever the workload wrote last - an extents leaf
+    # among them loses file data, and fsck records the damage
+    ktest_expect_sb_errors+="|data_lost_btree_node_read_error"
     set_watchdog 300
 
     local nr_corrupted
