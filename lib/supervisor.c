@@ -725,13 +725,18 @@ again:
 			}
 		}
 
-		if (exit_on_failure && str_starts_with(text, "TEST FAILED"))
+		/*
+		 * The run's end markers are whole lines, as testrunner prints
+		 * them; a test's "TEST FAILED: <reason>" is one subtest failing
+		 * and the run going on to the next
+		 */
+		if (exit_on_failure && !strcmp(text, "TEST FAILED"))
 			break;
 
 		if (exit_on_failure && strstr(line, "FAILED TIMEOUT"))
 			break;
 
-		if (exit_on_success && str_starts_with(text, "TEST SUCCESS")) {
+		if (exit_on_success && !strcmp(text, "TEST SUCCESS")) {
 			ret = 0;
 			break;
 		}
