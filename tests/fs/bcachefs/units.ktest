@@ -64,6 +64,7 @@ list_tests()
     echo btree_ptr_stale_dirty
     echo snapshots
     echo bkey_buf
+    echo cuckoo
 }
 
 main "$@"
