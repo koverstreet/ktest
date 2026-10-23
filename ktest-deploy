@@ -53,15 +53,25 @@ workers=$(json5_to_json "$CONFIG_PATH" | jq -r '.executors | keys[]')
 # ~/.ktest/deps/ for non-CI runs; refresh both. fstests.sh builds and runs
 # xfstests from ~/ktest/tests/fs/xfstests, though, not the clone require-git
 # made - untracked inside ktest, so the reset above doesn't touch it: refresh
-# that too. Unmatched globs / missing checkouts are skipped by the -d guard.
+# that too. linuxquota likewise: quota.ktest's require-make finds the clone
+# beside it before the deps dir's. Unmatched globs / missing checkouts are
+# skipped by the -d guard.
+#
+# linuxquota is autotools, and testrunner only runs autogen.sh/configure when
+# their output is missing: a reset that moves a clone also cleans it, so the
+# next run configures the new tree rather than building it with the old
+# generated Makefiles.
 read -r -d '' remote_cmd <<'REMOTE' || true
 set -e
 cd ktest && git fetch -q origin && git reset --hard -q origin/master
 git log -1 --format='    ktest    %h %s'
-for d in ~/ktest-ci/*/xfstests ~/.ktest/deps/xfstests ~/ktest/tests/fs/xfstests; do
+for d in ~/ktest-ci/*/xfstests ~/.ktest/deps/xfstests ~/ktest/tests/fs/xfstests \
+	 ~/ktest-ci/*/linuxquota ~/.ktest/deps/linuxquota ~/ktest/tests/fs/bcachefs/linuxquota; do
     [ -d "$d/.git" ] || continue
+    old=$(git -C "$d" rev-parse HEAD)
     git -C "$d" fetch -q origin && git -C "$d" reset --hard -q origin/master
-    echo "    xfstests $d -> $(git -C "$d" rev-parse --short HEAD)"
+    [ "$(git -C "$d" rev-parse HEAD)" = "$old" ] || git -C "$d" clean -fdxq
+    echo "    $(basename "$d") $d -> $(git -C "$d" rev-parse --short HEAD)"
 done
 REMOTE
 
