@@ -675,10 +675,14 @@ test_btree_ptr_gen_newer_than_bucket_gen()
     check_fsck_alloc ptr_gen_newer_than_bucket_gen
 }
 
-# One replica of a btree node, pointed at the start of a file's extent:
-# check_extents_to_backpointers finds the double allocation, and it's the
-# node's replica that doesn't verify - not a btree node - so it's dropped
-# (bkey_drop_device_and_update()), the node still readable from its other.
+# One replica of a btree node, pointed at the start of a file's extent. gc
+# marks it into the extent's bucket, and reads the node - every leaf, in
+# fsck. If the read tries that replica, it fails, retries from the other, and
+# rewrites the node elsewhere; if it tries the other first, the double
+# allocation reaches check_extents_to_backpointers, where the node's replica
+# is the one that doesn't verify and is dropped (bkey_drop_device_and_update(),
+# its btree branch), the node still readable. Either way the node and the file
+# survive, and which runs isn't the test's to choose.
 # A new filesystem's extents btree is presplit at its shard boundaries, so it
 # has a level above its leaves to edit.
 test_btree_node_replica_into_data_bucket()
@@ -698,7 +702,7 @@ test_btree_node_replica_into_data_bucket()
 
     kvdb_rw -c "update -L 1 -r extents $bp ptrs[$i].offset=$((b * BUCKET_SECTORS + off)) ptrs[$i].gen=$gen"
 
-    check_fsck_alloc dup_backpointer_to_bad_csum_extent
+    check_fsck_alloc ptr_bucket_data_type_mismatch
 }
 
 # An indirect extent with nothing to read: an error key, as an extent's is -
