@@ -1205,7 +1205,10 @@ test_quota()
 
 # quotactl(Q_SETQUOTA) a block hard limit in KiB, or with no limit print
 # quotactl(Q_GETQUOTA)'s "<space> <inodes>"; the VM has no quota tools.
-# quotactl <device> <type: 0 user, 1 group, 2 project> <id> [<kib>]
+# quotactl <mountpoint> <type: 0 user, 1 group, 2 project> <id> [<kib>]
+#
+# By the mountpoint, through quotactl_fd(), as quota-tools does for bcachefs:
+# a multi-device filesystem has no one block device to name it by.
 quotactl()
 {
     python3 - "$@" <<'PYEOF'
@@ -1216,14 +1219,16 @@ class dqblk(ctypes.Structure):
                 ("bhard", "bsoft", "curspace", "ihard", "isoft", "curinodes", "btime", "itime")] \
                + [("valid", ctypes.c_uint32)]
 
-dev, qtype, qid = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+mnt, qtype, qid = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 Q_GETQUOTA, Q_SETQUOTA, QIF_BLIMITS = 0x800007, 0x800008, 1
+SYS_quotactl_fd = 443       # the same on every architecture
 if len(sys.argv) > 4:
     cmd, d = Q_SETQUOTA, dqblk(bhard=int(sys.argv[4]), valid=QIF_BLIMITS)
 else:
     cmd, d = Q_GETQUOTA, dqblk()
 libc = ctypes.CDLL(None, use_errno=True)
-if libc.quotactl((cmd << 8) | qtype, dev.encode(), qid, ctypes.byref(d)):
+fd = os.open(mnt, os.O_RDONLY | os.O_DIRECTORY)
+if libc.syscall(SYS_quotactl_fd, fd, (cmd << 8) | qtype, qid, ctypes.byref(d)):
     e = ctypes.get_errno()
     raise OSError(e, os.strerror(e))
 if cmd == Q_GETQUOTA:
@@ -1248,7 +1253,7 @@ test_quota_chown_counts_once()
     chmod 777 /mnt
     local gid=$as_user_gid
     local user="setpriv --reuid=$as_user_uid --regid=100 --groups=$gid"
-    quotactl $dev 1 $gid $((1024 * 1024))
+    quotactl /mnt 1 $gid $((1024 * 1024))
 
     $user dd if=/dev/zero of=/mnt/g600 bs=1M count=600 oflag=direct status=none
     $user chgrp $gid /mnt/g600
@@ -1310,10 +1315,10 @@ if libc.renameat2(-100, b"/mnt/snap/w", -100, b"/mnt/snap/w2", 4):
     sync
 
     local ids="0:0 0:65534 0:1001 2:0 2:42" before=() after=() i n=0
-    for i in $ids; do before+=("$(quotactl $dev ${i%:*} ${i#*:})"); done
+    for i in $ids; do before+=("$(quotactl /mnt ${i%:*} ${i#*:})"); done
     umount /mnt
     mount -t bcachefs -o usrquota,prjquota $dev /mnt
-    for i in $ids; do after+=("$(quotactl $dev ${i%:*} ${i#*:})"); done
+    for i in $ids; do after+=("$(quotactl /mnt ${i%:*} ${i#*:})"); done
 
     for i in $ids; do
 	echo "quota $i: in memory ${before[n]}, after remount ${after[n]}"
@@ -1344,10 +1349,10 @@ test_quota_subvol_in_snapshot()
     echo foo > /mnt/snap/sv/f
     sync
 
-    local before=$(quotactl $dev 0 0)
+    local before=$(quotactl /mnt 0 0)
     umount /mnt
     mount -t bcachefs -o usrquota $dev /mnt
-    local after=$(quotactl $dev 0 0)
+    local after=$(quotactl /mnt 0 0)
 
     echo "quota 0:0: in memory $before, after remount $after"
     if [[ $before != "$after" ]]; then
