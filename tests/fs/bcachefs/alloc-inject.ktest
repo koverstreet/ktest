@@ -410,13 +410,13 @@ file_extent()
 	sed -n "s/.*type extent \($ino:[0-9]*:U32_MAX\) .*/\1/p" | head -1
 }
 
-# extent_ptrs <pos>: the extent at @pos's pointers, a line each: device,
-# bucket, gen, and "cached" if it is
-extent_ptrs()
+# key_ptrs [-L <level>] <btree> <pos>: the pointers of the key at @pos, a
+# line each: device, bucket, offset in the bucket, gen, and "cached" if it is
+key_ptrs()
 {
-    kvdb -c "get extents $1" | awk '/ptr:/ {
+    kvdb -c "get $*" | awk '/ptr:/ {
 	sub(/.*ptr: */, ""); split($2, p, ":")
-	print p[1], p[2], $4, (/ cached/ ? "cached" : "") }'
+	print p[1], p[2], p[3], $4, (/ cached/ ? "cached" : "") }'
 }
 
 # cached_extent: the first extent with a cached pointer - its position, and
@@ -457,8 +457,8 @@ test_ptr_to_missing_alloc_key()
 {
     setup_fs 1
 
-    local pos=$(file_extent data-0) dev b gen
-    read -r dev b gen _ < <(extent_ptrs $pos)
+    local pos=$(file_extent data-0) dev b off gen
+    read -r dev b off gen _ < <(key_ptrs extents $pos)
     [[ -n $b ]]
 
     kvdb_rw -c "set -r alloc $dev:$b deleted"
@@ -471,8 +471,8 @@ test_ptr_gen_newer_than_bucket_gen()
 {
     setup_fs 1
 
-    local pos=$(file_extent data-0) dev b gen
-    read -r dev b gen _ < <(extent_ptrs $pos)
+    local pos=$(file_extent data-0) dev b off gen
+    read -r dev b off gen _ < <(key_ptrs extents $pos)
     [[ -n $b ]]
 
     set_alloc_gen $b $(( (gen + 255) & 255 ))
@@ -485,8 +485,8 @@ test_stale_dirty_ptr()
 {
     setup_fs 1
 
-    local pos=$(file_extent data-0) dev b gen
-    read -r dev b gen _ < <(extent_ptrs $pos)
+    local pos=$(file_extent data-0) dev b off gen
+    read -r dev b off gen _ < <(key_ptrs extents $pos)
     [[ -n $b ]]
 
     set_alloc_gen $b $(( (gen + 1) & 255 ))
@@ -554,13 +554,14 @@ test_ptr_into_sb_bucket()
     check_fsck_alloc ptr_bucket_data_type_mismatch
 }
 
-# A pointer into a btree node's bucket: gc makes the bucket multiple, and
-# check_extents_to_backpointers finds the double allocation. The extent is
-# the bad replica - its checksum fails over the node's bytes - and is dropped
-# (kill_replica_if_checksum_bad()), leaving an error key.
-test_ptr_into_btree_bucket()
+# ptr_into_btree_bucket [format options]: a pointer into a btree node's
+# bucket. gc makes the bucket multiple, and check_extents_to_backpointers
+# finds the double allocation: the node verifies (btree_node_bad()), and the
+# extent is the bad replica - its checksum fails over the node's bytes - so
+# it's dropped (kill_replica_if_checksum_bad()), leaving an error key.
+ptr_into_btree_bucket()
 {
-    setup_fs 1 --bucket_size=512k
+    setup_fs 1 --bucket_size=512k "$@"
 
     local pos=$(file_extent data-0) b=$(bucket_of_type btree)
     [[ -n $pos && -n $b ]]
@@ -571,6 +572,17 @@ test_ptr_into_btree_bucket()
     check_fsck_alloc ptr_bucket_data_type_mismatch dup_backpointer_to_bad_csum_extent
 }
 
+test_ptr_into_btree_bucket()
+{
+    ptr_into_btree_bucket
+}
+
+# The node's checksum an encrypted one, over its bset's nonce
+test_ptr_into_btree_bucket_encrypted()
+{
+    ptr_into_btree_bucket --encrypted --no_passphrase
+}
+
 # An extent whose only pointer is cached and stale - validate passes it, off
 # the commit path: nothing to read, and no good cached pointer to make
 # dirty, so it's an error key, with no pointers to check
@@ -578,8 +590,8 @@ test_extent_ptrs_all_invalid()
 {
     setup_fs 1
 
-    local pos=$(file_extent data-0) dev b gen
-    read -r dev b gen _ < <(extent_ptrs $pos)
+    local pos=$(file_extent data-0) dev b off gen
+    read -r dev b off gen _ < <(key_ptrs extents $pos)
     [[ -n $b ]]
 
     kvdb_rw -c "update -r extents $pos ptrs[0].cached=1 ptrs[0].gen=$(( (gen + 255) & 255 ))"
@@ -613,6 +625,153 @@ test_ptr_to_missing_stripe()
     kvdb_rw -c "set -r stripes 0:$idx deleted"
 
     check_fsck_alloc ptr_to_missing_stripe
+}
+
+# The cached pointer variants: what a dirty pointer gets reset, a cached one
+# loses - the dirty replica kept
+
+test_cached_ptr_to_missing_alloc_key()
+{
+    setup_cached_fs
+
+    local pos n dev b gen
+    read -r pos n dev b gen < <(cached_extent)
+    [[ -n $pos && $dev == 0 ]]
+
+    kvdb_rw -c "set -r alloc 0:$b deleted"
+
+    check_fsck_alloc ptr_to_missing_alloc_key
+}
+
+test_cached_ptr_gen_newer_than_bucket_gen()
+{
+    setup_cached_fs
+
+    local pos n dev b gen
+    read -r pos n dev b gen < <(cached_extent)
+    [[ -n $pos && $dev == 0 ]]
+
+    set_alloc_gen $b $(( (gen + 255) & 255 ))
+
+    check_fsck_alloc ptr_gen_newer_than_bucket_gen
+}
+
+# A btree node pointer's gen ahead of its bucket's - which doesn't stop the
+# node being read: reset, as a key above the leaves is, by updating the
+# node's key and restarting
+test_btree_ptr_gen_newer_than_bucket_gen()
+{
+    setup_fs 1
+
+    local b=$(bucket_of_type btree)
+    [[ -n $b ]]
+
+    set_alloc_gen $b $(( ($(bucket_gen $b) + 255) & 255 ))
+
+    check_fsck_alloc ptr_gen_newer_than_bucket_gen
+}
+
+# One replica of a btree node, pointed at the start of a file's extent:
+# check_extents_to_backpointers finds the double allocation, and it's the
+# node's replica that doesn't verify - not a btree node - so it's dropped
+# (bkey_drop_device_and_update()), the node still readable from its other.
+# 4k btree nodes, so the extents btree has a level above its leaves to edit.
+test_btree_node_replica_into_data_bucket()
+{
+    setup_fs 2 --bucket_size=512k --btree_node_size=4k --metadata_replicas=2
+
+    local bp=$(kvdb -c 'list -L 1 -k extents' | sed -n 's/.*type btree_ptr_v2 \([^ ]*\) .*/\1/p' | head -1)
+    [[ -n $bp ]]
+
+    local pos=$(file_extent data-0) dev b off gen
+    read -r dev b off gen _ < <(key_ptrs extents $pos)
+    [[ -n $b ]]
+
+    # the node's replica on the extent's device
+    local i=$(key_ptrs -L 1 extents $bp | awk -v d=$dev '$1 == d { print NR - 1; exit }')
+    [[ -n $i ]]
+
+    kvdb_rw -c "update -L 1 -r extents $bp ptrs[$i].offset=$((b * BUCKET_SECTORS + off)) ptrs[$i].gen=$gen"
+
+    check_fsck_alloc dup_backpointer_to_bad_csum_extent
+}
+
+# An indirect extent with nothing to read: an error key, as an extent's is -
+# but its position names no inode, so the loss is reported, not recorded
+# against a file
+test_reflink_v_all_invalid()
+{
+    setup_fs 1
+
+    mount -t bcachefs $(join_by : "${FS_DEVS[@]}") /mnt
+    cp --reflink=always /mnt/data-0 /mnt/data-0-copy
+    umount /mnt
+
+    local pos=$(kvdb -c 'list -k reflink' | sed -n 's/.*type reflink_v \([^ ]*\) .*/\1/p' | head -1)
+    [[ -n $pos ]]
+
+    local dev b off gen
+    read -r dev b off gen _ < <(key_ptrs reflink $pos)
+    [[ -n $b ]]
+
+    kvdb_rw -c "update -r reflink $pos ptrs[0].cached=1 ptrs[0].gen=$(( (gen + 255) & 255 ))"
+    forget data-0
+
+    check_fsck_alloc extent_ptrs_all_invalid
+}
+
+# dup_extent_elsewhere [format options]: a 64k file f, its extent copied to
+# 64k into g - the same space at another logical position, so not the same
+# extent (extents_match()). Both replicas verify, or can't be checked, so
+# neither is dropped: the overlap becomes a reflink_v both point to, and
+# both files read back f's data.
+dup_extent_elsewhere()
+{
+    setup_fs 1 "$@"
+
+    mount -t bcachefs $(join_by : "${FS_DEVS[@]}") /mnt
+    yes bcachefs | head -c 64k > /mnt/f
+    truncate -s 128k /mnt/g
+    cp /mnt/f /tmp/f-orig
+    local g=$(stat -c %i /mnt/g)
+    umount /mnt
+
+    local pos=$(file_extent f)
+    [[ -n $pos ]]
+
+    kvdb_rw -c "copy extents $pos $g:256:U32_MAX"
+
+    check_fsck_alloc dup_extents_to_reflink
+
+    mount -t bcachefs $(join_by : "${FS_DEVS[@]}") /mnt
+    cmp /mnt/f /tmp/f-orig
+    cmp <(tail -c 64k /mnt/g) /tmp/f-orig
+    umount /mnt
+}
+
+test_dup_extent_elsewhere()
+{
+    dup_extent_elsewhere
+}
+
+# Checksums of encrypted data take the extent's nonce (extent_nonce()): a
+# wrong one would find both replicas bad
+test_dup_extent_elsewhere_encrypted()
+{
+    dup_extent_elsewhere --encrypted --no_passphrase
+}
+
+# ... and of compressed data, the compression type and size in the nonce
+test_dup_extent_elsewhere_encrypted_compressed()
+{
+    dup_extent_elsewhere --encrypted --no_passphrase --compression=lz4
+}
+
+# No checksum to check a replica against: kill_replica_if_checksum_bad()
+# says neither is bad
+test_dup_extent_elsewhere_no_checksum()
+{
+    dup_extent_elsewhere --data_checksum=none
 }
 
 main "$@"
