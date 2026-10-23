@@ -1606,6 +1606,9 @@ falloc_snap_check_others()
 {
     local when=$1
 
+    # a setup with no snapshots has no other files, and md5sum -c of an
+    # empty list fails:
+    [[ -s /tmp/others ]] || return 0
     md5sum --quiet -c /tmp/others && return 0
 
     echo "FAIL ($when): files the op didn't touch changed"
