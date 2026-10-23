@@ -1719,10 +1719,11 @@ falloc_snap_setup_reserved()
     falloc_snap_setup_fallocated
 }
 
-# With nocow it allocates: unwritten extents, whose space moves to the file's
-# snapshot, the ancestor's keys deleted over the range that moved - zeroes
-# either way. The ancestor's data after them, pages 700 on, is the snapshot's
-# still: a deletion counted from the extent's end once took it.
+# With nocow it allocates: unwritten extents. The snapshot keeps them - it
+# doesn't change under an op in a descendant - and what the shift moves into
+# the file's snapshot is a reservation. Deleting them from the snapshot reads
+# as zeroes all the same: fsck, finding the snapshot's i_sectors counting
+# extents it no longer has, is what sees it.
 falloc_snap_setup_unwritten()
 {
     falloc_snap_setup_fallocated --nocow
