@@ -135,8 +135,11 @@ require-make()
 {
     local req=$(dirname $(readlink -e ${BASH_SOURCE[1]}))/$1
 
+    # Beside the test, or where require-git clones it:
+    [[ -d $req ]] || req=$ktest_deps_dir/$1
+
     if [[ ! -d $req ]]; then
-	echo "require-make: $req not found"
+	echo "require-make: $1 not found beside $(basename ${BASH_SOURCE[1]}) or in $ktest_deps_dir"
 	exit 1
     fi
 
