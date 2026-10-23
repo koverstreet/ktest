@@ -254,7 +254,10 @@ ktest_supervise_self()
 
     local supervisor="$ktest_dir/lib/supervisor"
 
-    [[ -x $supervisor ]] || make -s -C "$ktest_dir/lib" supervisor
+    # Every run, not only when it's missing: make is a no-op when the binary
+    # is current, and a binary older than supervisor.c is a fix not running
+    make -s -C "$ktest_dir/lib" supervisor ||
+	echo "rebuilding $supervisor failed; it may be out of date" >&2
     if [[ ! -x $supervisor ]]; then
 	echo "$supervisor missing and could not be built" >&2
 	echo "TEST FAILED"
