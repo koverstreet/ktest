@@ -62,8 +62,10 @@ run_fstests()
 
 	mkdir -p /mnt/test /mnt/scratch
 
-	if $ktest_interactive; then
-	    run_quiet "building $(basename $i)" make -j $ktest_cpus -C "$ktest_dir/tests/fs/xfstests"
+	# Rebuilt interactively, for edits to it; otherwise only if it was never
+	# built - require-git clones it, and nothing else builds it
+	if $ktest_interactive || [[ ! -x $ktest_dir/tests/fs/xfstests/ltp/fsstress ]]; then
+	    run_quiet "building xfstests" make -j $ktest_cpus -C "$ktest_dir/tests/fs/xfstests"
 	fi
 
 	rm -rf /ktest-out/xfstests
