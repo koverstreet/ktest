@@ -42,7 +42,7 @@ test_ec_gc()
     umount /mnt
 
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
-    bcachefs_test_end_checks "${devs[0]}" "$ratio"
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
 }
 
 test_ec_mixed_tiers()
@@ -92,7 +92,7 @@ test_ec_mixed_tiers()
     umount /mnt
 
     bcachefs fsck -ny "${ktest_scratch_dev[@]}"
-    bcachefs_test_end_checks "${devs[0]}" "$ratio"
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
 }
 
 main "$@"

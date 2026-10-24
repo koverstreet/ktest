@@ -591,9 +591,9 @@ get_slowpath_counters()
 _check_bcachefs_counters()
 {
     local dev=$1
+    local ratio=$2
     local nr_commits=$(bcachefs show-super --field-only counters "$dev"|awk '/\<transaction_commit\>/ {print $2}')
     local nr_data_update=$(bcachefs show-super --field-only counters "$dev"|awk '/\<data_update\>/ {print $2}')
-    local ratio=20
     local ret=0
 
     # Both bail-outs below mean "couldn't read the data", not "the data was
@@ -606,8 +606,6 @@ _check_bcachefs_counters()
 	echo "$dev: no transaction_commit counter - slowpath counter check SKIPPED"
 	return 0
     fi
-
-    [[ $# -ge 2 ]] && ratio=$2
 
     local counters=$(set +e; set +o pipefail; get_slowpath_counters $dev)
 
@@ -659,19 +657,41 @@ _check_bcachefs_counters()
     return $ret
 }
 
+# check_bcachefs_counters [--ratio=N] <dev>...
+#
+# Each slowpath event may happen once per N transaction commits (data update
+# sectors, for data update events), plus 100; N is 20 by default. A named
+# option, not a positional one: every other argument is a device.
 check_bcachefs_counters()
 {
-    for dev in $@; do
-	_check_bcachefs_counters $dev
+    local ratio=20
+
+    if [[ ${1:-} = --ratio=* ]]; then
+	ratio=${1#--ratio=}
+	shift
+    fi
+
+    for dev in "$@"; do
+	_check_bcachefs_counters "$dev" "$ratio"
     done
 }
 
+# bcachefs_test_end_checks [--ratio=N] <dev>...
+#
+# --ratio is check_bcachefs_counters'.
 bcachefs_test_end_checks()
 {
+    local ratio=()
+
+    if [[ ${1:-} = --ratio=* ]]; then
+	ratio=("$1")
+	shift
+    fi
+
     check_bcachefs_leaks
-    check_bcachefs_errors $@
-    check_bcachefs_device_errors $@
-    check_bcachefs_counters $@
+    check_bcachefs_errors "$@"
+    check_bcachefs_device_errors "$@"
+    check_bcachefs_counters "${ratio[@]}" "$@"
 }
 
 # On-disk corruption injection: parse physical pointer locations out of
@@ -841,7 +861,7 @@ run_basic_fio_test_counter_threshold()
     #umount /mnt
 
     bcachefs fsck -ny "${devs[@]}"
-    bcachefs_test_end_checks "${devs[0]}" "$ratio"
+    bcachefs_test_end_checks --ratio="$ratio" "${devs[0]}"
 }
 
 run_basic_fio_test()
