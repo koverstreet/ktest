@@ -53,9 +53,13 @@ run_tests()
 
     # Variant configs (e.g. fstests-largebs) add their own expunges via
     # $FSTESTS_EXPUNGE, exported before sourcing this file:
-    run_fstests -e generic/064,generic/065,generic/102,generic/104,generic/275,generic/336,generic/343,generic/371,generic/376,generic/414,generic/441,generic/510,generic/558,generic/559,generic/219,generic/328,generic/484,generic/622,generic/733,generic/762,generic/757${FSTESTS_EXPUNGE:+,$FSTESTS_EXPUNGE} "$@"
+    # Not a run_test_isolated() subtest, so not under set -e: an error is
+    # this function's to return, or it returns the end checks' status
+    local ret=0
+    run_fstests -e generic/064,generic/065,generic/102,generic/104,generic/275,generic/336,generic/343,generic/371,generic/376,generic/414,generic/441,generic/510,generic/558,generic/559,generic/219,generic/328,generic/484,generic/622,generic/733,generic/762,generic/757${FSTESTS_EXPUNGE:+,$FSTESTS_EXPUNGE} "$@" || ret=$?
 
-    bcachefs_test_end_checks ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} || ret=$?
+    return $ret
 }
 
 main "$@"
