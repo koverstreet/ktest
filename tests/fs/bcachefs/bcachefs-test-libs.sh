@@ -579,13 +579,14 @@ bcachefs_antagonist()
     fi
 }
 
+# Every slowpath counter show-super has for @dev - zeroes too, so that none
+# read can be told from none that happened
 get_slowpath_counters()
 {
     local dev=$1
 
     bcachefs show-super --field-only counters "$dev"|
-	bcachefs_slowpath_event_filter|
-	grep -v  ' 0$' || true
+	bcachefs_slowpath_event_filter || true
 }
 
 _check_bcachefs_counters()
@@ -607,14 +608,18 @@ _check_bcachefs_counters()
 	return 0
     fi
 
-    local counters=$(set +e; set +o pipefail; get_slowpath_counters $dev)
+    local slowpath=$(set +e; set +o pipefail; get_slowpath_counters $dev)
 
-    if [[ -z $counters ]]; then
+    if [[ -z $slowpath ]]; then
 	echo "$dev: no slowpath counters read - counter check SKIPPED"
 	return 0
     fi
 
+    # Those that happened; all zero is a clean pass
+    local counters=$(grep -v ' 0$' <<< "$slowpath" || true)
+
     while IFS= read -r line; do
+	[[ -n $line ]] || continue
 	linea=($line)
 
 	local event="${linea[0]}"
