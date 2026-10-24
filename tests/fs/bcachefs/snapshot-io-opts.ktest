@@ -61,8 +61,10 @@ uncompressed_extents()
 # cookie has gone produces this, with nothing left to rewrite the data.
 assert_no_opts_mismatch()
 {
-    if dmesg | grep "incorrect/missing reconcile opts" >/dev/null; then
-	echo "FAIL: extents disagree with their inode's options:"
+    local nr
+    nr=$(bch_sb_error_count extent_io_opts_not_set)
+    if (( nr )); then
+	echo "FAIL: extents disagree with their inode's options (extent_io_opts_not_set counted $nr times):"
 	dmesg | grep "incorrect/missing reconcile opts" | head -5
 	return 1
     fi

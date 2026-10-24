@@ -2441,7 +2441,9 @@ test_scrub_journal_clean()
 	exit 1
     fi
 
-    if grep -q 'marked clean but journal not empty' <<< "$mount_output"; then
+    local nr
+    nr=$(bch_sb_error_count clean_but_journal_not_empty)
+    if (( nr )); then
 	echo "ERROR: spurious clean_but_journal_not_empty on a clean filesystem"
 	exit 1
     fi

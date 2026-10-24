@@ -2130,12 +2130,11 @@ ec_repair_no_space_setup()
     fill_device /mnt/fiotest || true
 }
 
-# reconcile_stripe counts the stripe repair work attempted, in sectors, printed
-# human-readable ("29.4G"); as bytes, for arithmetic:
+# reconcile_stripe counts the stripe repair work attempted, in sectors; as
+# bytes, for arithmetic:
 ec_stripe_repair_bytes()
 {
-    awk '/since mount/ {print $3}' /sys/fs/bcachefs/*/counters/reconcile_stripe |
-	sed 's/k$/K/' | numfmt --from=iec
+    bch_counter reconcile_stripe
 }
 
 # Buckets of data still on dev-$1; 0 once an evacuate has drained it.
@@ -2281,9 +2280,10 @@ test_ec_repair_wait_copygc()
     done
 
     echo 0 > $T/tracing_on
-    local repairs=$(grep -c 'reconcile_stripe:' $T/trace || true)
-    local narrowed=$(grep -c 'ret stripe_needs_block_evacuate' $T/trace || true)
-    echo "stripe repairs traced: $repairs, narrowed: $narrowed"
+    local repairs narrowed
+    repairs=$(ec_stripe_repair_bytes)
+    narrowed=$(grep -c 'ret stripe_needs_block_evacuate' $T/trace || true)
+    echo "stripe repair work: $repairs bytes, narrowed: $narrowed"
     bcachefs fs usage -h /mnt
 
     if (( repairs == 0 )); then

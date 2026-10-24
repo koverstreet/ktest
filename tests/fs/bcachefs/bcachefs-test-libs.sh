@@ -393,6 +393,48 @@ check_bcachefs_stripe_labels()
     echo "check_bcachefs_stripe_labels: $nr stripes, all labelled and resolving"
 }
 
+# What the mounted filesystem has counted, for a test to assert on - never the
+# text of a log message or trace, which nothing keeps stable: rename the text
+# and a check that it's absent passes on nothing.
+#
+# Under set -e call these as plain assignments, x=$(bch_counter NAME): a
+# "local x=$(...)" swallows their failure.
+
+# bch_counter NAME: counter NAME's count since mount, from
+# /sys/fs/bcachefs/*/counters/NAME - a sectors counter in bytes, from sysfs's
+# human readable form, so approximate past 1k. With no such counter - not
+# mounted, renamed, removed - it fails and prints nothing: a counter that
+# isn't there must never read as 0.
+bch_counter()
+{
+    local f=$(echo /sys/fs/bcachefs/*/counters/$1) v=
+
+    [[ -r $f ]] && v=$(awk '/since mount/ {print $3}' "$f" | sed 's/k$/K/' | numfmt --from=iec)
+    if [[ ! $v =~ ^[0-9]+$ ]]; then
+	echo "bch_counter: no counter $1 at $f" >&2
+	return 1
+    fi
+    echo $v
+}
+
+# bch_sb_error_count ID: how many times the mounted filesystem has counted
+# superblock error ID - an fsck error's name, as show-super prints it - since
+# it was made, not since mount: the counts are the superblock's. From
+# /sys/fs/bcachefs/*/errors, which lists the ones that have happened.
+#
+# XXX: nothing enumerates the error ids, so a misspelled ID reads 0, the same
+# as one that never happened. Copy it from the source.
+bch_sb_error_count()
+{
+    local f=$(echo /sys/fs/bcachefs/*/errors)
+
+    if [[ ! -r $f ]]; then
+	echo "bch_sb_error_count: no errors file at $f" >&2
+	return 1
+    fi
+    awk -v id="$1" '$1 == id {n = $2} END {print n + 0}' "$f"
+}
+
 # Superblock error counters after a test mean something went wrong - except
 # when losing or corrupting data was the point. Tests that deliberately
 # trigger data errors declare the counters they expect as a regex
