@@ -1902,7 +1902,7 @@ test_replace_replica()
     # We expect more btree_path_upgrade_fail events than usual in this test,
     # due to the way the btree node rewrite path works and the fact that we're
     # rewriting every btree node
-    bcachefs_test_end_checks ${ktest_scratch_dev[0]} 4
+    bcachefs_test_end_checks --ratio=4 ${ktest_scratch_dev[0]}
 }
 
 # Any "Pending reconcile" counter that has wrapped negative, from fs usage's
