@@ -42,7 +42,7 @@ parse_test_deps()
 	if ! $ktest_tests_unknown; then
 	    found=""
 	    for t in $ktest_testargs; do
-		if echo "$ktest_tests"|grep -wq "$t"; then
+		if [[ " $ktest_tests " == *" $t "* ]]; then
 		    found="$found $t"
 		else
 		    echo "Test $t not found - skipping (stale job matrix?)"
