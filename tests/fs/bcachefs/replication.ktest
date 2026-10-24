@@ -2366,31 +2366,32 @@ test_journal_flush_clean_devices()
 # Journal scrub
 #
 
-#
-# Whether recovery messages reach dmesg depends on the mount having a terminal.
-#
-# RecoveryDisplay::new() (src/recovery_display.rs) picks its sink in order:
-# stderr if stderr is a terminal, else plymouth, else /dev/console opened
-# directly. Measured in a VM: with a terminal, the scrub's messages are in dmesg;
-# run from a plain non-interactive shell they are not - they go to the console,
-# which the ktest log shows and dmesg never sees.
-#
-# So the pty is load-bearing, not cosmetic. Without it every assertion below
-# reads an empty dmesg, which is silent for the absent-string ones and only
-# visible because test_scrub_journal asserts the same string positively.
-#
-# The pty's own output is not the place to look - it is the redrawing progress
-# display, about a screenful. dmesg is: mark it first and read what follows.
-#
-mount_capture()
+# What the journal scrub at this mount did and found, from what the filesystem
+# counts - not the mount's messages - into the caller's scrub_* variables. Read
+# while it's mounted:
+#   scrub_ran        journal_scrub: it looked, flush entries in its window or not
+#   scrub_ranges     journal_scrub_range: flush ranges it checked - without one,
+#                    its finding nothing means nothing
+#   scrub_rewound    device_bad_flush_forced_rewind: data with no good replica,
+#                    so it rewound
+#   scrub_bad        device_bad_flush_repaired_from_replica: bad replicas, to
+#                    repair from good ones
+#   scrub_lost_nodes journal_scrub_lost_btree_nodes: btree nodes with no good
+#                    replica
+#   scrub_repaired   journal_scrub_repaired: what it repaired from good replicas
+#   scrub_found      any of rewound, bad, lost_nodes: what it reports as a
+#                    device not honoring flush/FUA
+# The two that are errors count from the format, not the mount: a test that
+# asserts on them formats its own filesystem.
+scrub_journal_counts()
 {
-    local ret
-
-    dmesg_mark mount_capture
-    script -qefc "mount $*" /dev/null < /dev/null && ret=0 || ret=$?
-
-    mount_output=$(dmesg_since mount_capture)
-    return $ret
+    bch_counter scrub_ran journal_scrub
+    bch_counter scrub_ranges journal_scrub_range
+    bch_counter scrub_lost_nodes journal_scrub_lost_btree_nodes
+    bch_counter scrub_repaired journal_scrub_repaired
+    bch_sb_error_count scrub_rewound device_bad_flush_forced_rewind
+    bch_sb_error_count scrub_bad device_bad_flush_repaired_from_replica
+    scrub_found=$((scrub_rewound + scrub_bad + scrub_lost_nodes))
 }
 
 #
@@ -2428,38 +2429,39 @@ test_scrub_journal_clean()
     fi
 
     echo "Mounting cleanly-unmounted fs with scrub_recent_journal_entries=always..."
-    if ! mount_capture -t bcachefs -o scrub_recent_journal_entries=always,verbose "$dev" /mnt; then
+    if ! mount -t bcachefs -o scrub_recent_journal_entries=always,verbose "$dev" /mnt; then
 	echo "ERROR: mount failed on a clean filesystem with =always"
 	exit 1
     fi
 
+    local scrub_ran scrub_ranges scrub_rewound scrub_bad scrub_lost_nodes scrub_repaired scrub_found
+    scrub_journal_counts
+
     # Every check here is a check for absence, so first establish that the scrub
     # ran at all - on a clean fs it may legitimately find no flush entries to
     # check, but it must have looked.
-    if ! grep -qE 'journal scrub: checking|scrub_journal.*No journal flushes' <<< "$mount_output"; then
+    if (( !scrub_ran )); then
 	echo "ERROR: scrub did not run - the checks below would be vacuous"
 	exit 1
     fi
 
     local nr
-    nr=$(bch_sb_error_count clean_but_journal_not_empty)
+    bch_sb_error_count nr clean_but_journal_not_empty
     if (( nr )); then
 	echo "ERROR: spurious clean_but_journal_not_empty on a clean filesystem"
 	exit 1
     fi
 
-    if grep -qi 'emergency read only' <<< "$mount_output"; then
+    # Nothing was corrupted, so nothing should have rewound.
+    if (( scrub_found )); then
+	echo "ERROR: scrub found flush/FUA errors on a clean, uncorrupted filesystem"
+	exit 1
+    fi
+
+    if ! echo hello > /mnt/still-writable; then
 	echo "ERROR: went emergency read-only mounting a clean filesystem"
 	exit 1
     fi
-
-    # Nothing was corrupted, so nothing should have rewound.
-    if grep -q 'not honoring flush/FUA' <<< "$mount_output"; then
-	echo "ERROR: rewound a clean, uncorrupted filesystem"
-	exit 1
-    fi
-
-    echo hello > /mnt/still-writable
     umount /mnt
 
     bcachefs fsck -ny "$dev"
@@ -2506,26 +2508,31 @@ test_scrub_journal_option_values()
 
     local dev=${ktest_scratch_dev[0]}
 
+    local scrub_ran scrub_ranges scrub_rewound scrub_bad scrub_lost_nodes scrub_repaired scrub_found
+
     unclean_shutdown_with_data "$dev"
-    mount_capture -t bcachefs -o scrub_recent_journal_entries=no,verbose "$dev" /mnt
+    mount -t bcachefs -o scrub_recent_journal_entries=no,verbose "$dev" /mnt
+    scrub_journal_counts
     umount /mnt
-    if grep -q 'journal scrub: checking' <<< "$mount_output"; then
+    if (( scrub_ran )); then
 	echo "ERROR: =no scrubbed"
 	exit 1
     fi
 
     unclean_shutdown_with_data "$dev"
-    mount_capture -t bcachefs -o scrub_recent_journal_entries=unclean,verbose "$dev" /mnt
+    mount -t bcachefs -o scrub_recent_journal_entries=unclean,verbose "$dev" /mnt
+    scrub_journal_counts
     umount /mnt
-    if ! grep -q 'journal scrub: checking' <<< "$mount_output"; then
+    if (( !scrub_ranges )); then
 	echo "ERROR: =unclean did not scrub an unclean filesystem"
 	exit 1
     fi
 
     unclean_shutdown_with_data "$dev"
-    mount_capture -t bcachefs -o scrub_recent_journal_entries=always,verbose "$dev" /mnt
+    mount -t bcachefs -o scrub_recent_journal_entries=always,verbose "$dev" /mnt
+    scrub_journal_counts
     umount /mnt
-    if ! grep -q 'journal scrub: checking' <<< "$mount_output"; then
+    if (( !scrub_ranges )); then
 	echo "ERROR: =always did not scrub an unclean filesystem"
 	exit 1
     fi
@@ -2564,21 +2571,24 @@ test_scrub_journal_no_corruption()
     umount /mnt
 
     echo "Mounting uncorrupted unclean fs with scrub_recent_journal_entries=always..."
-    mount_capture -t bcachefs -o scrub_recent_journal_entries=always,verbose "$dev" /mnt
+    mount -t bcachefs -o scrub_recent_journal_entries=always,verbose "$dev" /mnt
 
-    # The scrub has to have actually run, or the two checks below pass for the
-    # wrong reason:
-    if ! grep -q 'journal scrub: checking' <<< "$mount_output"; then
-	echo "ERROR: scrub did not run - the checks below would be vacuous"
+    local scrub_ran scrub_ranges scrub_rewound scrub_bad scrub_lost_nodes scrub_repaired scrub_found
+    scrub_journal_counts
+
+    # The scrub has to have actually checked something, or the two checks
+    # below pass for the wrong reason:
+    if (( !scrub_ranges )); then
+	echo "ERROR: scrub checked no flush ranges - the checks below would be vacuous"
 	exit 1
     fi
 
-    if grep -q 'not honoring flush/FUA' <<< "$mount_output"; then
+    if (( scrub_found )); then
 	echo "ERROR: scrub reported flush/FUA errors with nothing corrupted"
 	exit 1
     fi
 
-    if grep -qi 'rewinding from seq' <<< "$mount_output"; then
+    if (( scrub_rewound )); then
 	echo "ERROR: scrub rewound with nothing corrupted"
 	exit 1
     fi
@@ -2656,15 +2666,18 @@ test_scrub_journal()
     # Mount with scrub_recent_journal_entries — should detect corruption
     # and automatically rewind
     echo "Mounting with scrub_recent_journal_entries=always..."
-    mount_capture -t bcachefs -o scrub_recent_journal_entries=always,verbose "$dev" /mnt
+    mount -t bcachefs -o scrub_recent_journal_entries=always,verbose "$dev" /mnt
+
+    local scrub_ran scrub_ranges scrub_rewound scrub_bad scrub_lost_nodes scrub_repaired scrub_found
+    scrub_journal_counts
 
     # Verify scrub detected the corruption
-    if ! grep -q 'not honoring flush/FUA' <<< "$mount_output"; then
+    if (( !scrub_found )); then
 	echo "ERROR: Scrub did not detect flush/FUA corruption"
 	exit 1
     fi
 
-    if ! grep -q 'rewinding from seq' <<< "$mount_output"; then
+    if (( !scrub_rewound )); then
 	echo "ERROR: Scrub detected corruption but did not rewind"
 	exit 1
     fi
@@ -2727,23 +2740,24 @@ test_scrub_journal_replicated()
     echo "Corrupted $nr_corrupted member 0 replicas"
     (( nr_corrupted > 0 ))
 
-    mount_capture -t bcachefs -o scrub_recent_journal_entries=always,verbose \
+    mount -t bcachefs -o scrub_recent_journal_entries=always,verbose \
 	"$dev0:$dev1" /mnt
 
-    if ! grep -q 'bad replicas, to repair from good ones' <<< "$mount_output"; then
+    local scrub_ran scrub_ranges scrub_rewound scrub_bad scrub_lost_nodes scrub_repaired scrub_found
+    scrub_journal_counts
+
+    if (( !scrub_bad )); then
 	echo "FAIL: scrub didn't find the bad replicas"
 	exit 1
     fi
 
-    if grep 'rewinding from seq' <<< "$mount_output"; then
+    if (( scrub_rewound )); then
 	echo "FAIL: scrub rewound when every extent had a good replica"
 	exit 1
     fi
 
-    local repaired=$(grep -o 'repairing [0-9]* extents/btree nodes from good replicas' <<< "$mount_output" |
-		     awk '{print $2}')
-    echo "repaired from good replicas: ${repaired:-none}"
-    if (( ${repaired:-0} == 0 )); then
+    echo "repaired from good replicas: $scrub_repaired"
+    if (( !scrub_repaired )); then
 	echo "FAIL: nothing repaired from the good replicas"
 	exit 1
     fi
@@ -2890,21 +2904,24 @@ test_scrub_journal_btree_node()
     # (default 10) of the newest: widen it, so the flush ranges decide what's
     # checked and not how fast the VM ran the workload
     local mount_ret=0
-    mount_capture -t bcachefs -o scrub_recent_journal_entries=always,scrub_journal_max_rewind_secs=3600,verbose \
+    mount -t bcachefs -o scrub_recent_journal_entries=always,scrub_journal_max_rewind_secs=3600,verbose \
 	${ktest_scratch_dev[0]} /mnt || mount_ret=$?
 
-    if ! grep -q 'btree nodes with no good replica' <<< "$mount_output"; then
+    if (( mount_ret )); then
+	echo "FAIL: recovery didn't get past the lost btree nodes"
+	exit 1
+    fi
+
+    local scrub_ran scrub_ranges scrub_rewound scrub_bad scrub_lost_nodes scrub_repaired scrub_found
+    scrub_journal_counts
+
+    if (( !scrub_lost_nodes )); then
 	echo "FAIL: scrub didn't find the lost btree nodes"
 	exit 1
     fi
 
-    if grep 'rewinding from seq' <<< "$mount_output"; then
+    if (( scrub_rewound )); then
 	echo "FAIL: rewound for lost btree nodes - the rewind doesn't remove them"
-	exit 1
-    fi
-
-    if (( mount_ret )); then
-	echo "FAIL: recovery didn't get past the lost btree nodes"
 	exit 1
     fi
 
@@ -2929,23 +2946,24 @@ test_scrub_journal_btree_node_replicated()
     echo "Corrupted $nr_corrupted member 0 btree node replicas"
 
     # see test_scrub_journal_btree_node
-    mount_capture -t bcachefs -o scrub_recent_journal_entries=always,scrub_journal_max_rewind_secs=3600,verbose \
+    mount -t bcachefs -o scrub_recent_journal_entries=always,scrub_journal_max_rewind_secs=3600,verbose \
 	"${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]}" /mnt
 
-    if ! grep -q 'bad replicas, to repair from good ones' <<< "$mount_output"; then
+    local scrub_ran scrub_ranges scrub_rewound scrub_bad scrub_lost_nodes scrub_repaired scrub_found
+    scrub_journal_counts
+
+    if (( !scrub_bad )); then
 	echo "FAIL: scrub didn't find the bad btree node replicas"
 	exit 1
     fi
 
-    if grep 'rewinding from seq' <<< "$mount_output"; then
+    if (( scrub_rewound )); then
 	echo "FAIL: scrub rewound when every btree node had a good replica"
 	exit 1
     fi
 
-    local repaired=$(grep -o 'repairing [0-9]* extents/btree nodes from good replicas' <<< "$mount_output" |
-		     awk '{print $2}')
-    echo "repaired from good replicas: ${repaired:-none}"
-    if (( ${repaired:-0} == 0 )); then
+    echo "repaired from good replicas: $scrub_repaired"
+    if (( !scrub_repaired )); then
 	echo "FAIL: no btree node repaired from its good replica"
 	exit 1
     fi
@@ -2996,10 +3014,13 @@ test_scrub_journal_degraded()
     scratch_dev_unplug 1
 
     echo "Mounting degraded with scrub_recent_journal_entries=always..."
-    mount_capture -t bcachefs -o degraded=very,scrub_recent_journal_entries=always,verbose,fix_errors=yes \
+    mount -t bcachefs -o degraded=very,scrub_recent_journal_entries=always,verbose,fix_errors=yes \
 	UUID=$fs_uuid /mnt
 
-    if ! grep -q 'journal scrub: checking' <<< "$mount_output"; then
+    local scrub_ran scrub_ranges scrub_rewound scrub_bad scrub_lost_nodes scrub_repaired scrub_found
+    scrub_journal_counts
+
+    if (( !scrub_ranges )); then
 	echo "ERROR: scrub did not run on the degraded mount"
 	exit 1
     fi
@@ -3007,7 +3028,7 @@ test_scrub_journal_degraded()
     # The absent device's replicas aren't read at all: a device that isn't
     # there says nothing about whether it honoured flush/FUA, and mustn't be
     # taken for one that didn't - no report, no rewind.
-    if grep -E 'not honoring flush/FUA|rewinding from seq' <<< "$mount_output"; then
+    if (( scrub_found )); then
 	echo "ERROR: the absent device was taken for one that dropped a flush"
 	exit 1
     fi

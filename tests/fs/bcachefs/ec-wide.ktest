@@ -283,10 +283,11 @@ test_ec_wide_stripe_reuse()
     #
     # Rejected oracles, each tried and each wrong in an instructive way:
     #
-    #  - the wedge itself, via dmesg. Kept below as a second assertion because
-    #    it is the user-visible symptom, but it cannot be the primary: the
-    #    "Allocator stuck" print is fs-wide ratelimited to one per two minutes,
-    #    so a wedge shorter than that prints nothing and passes.
+    #  - the wedge itself, the allocator_stuck counter. Kept below as a second
+    #    assertion because it is the user-visible symptom, but it cannot be the
+    #    primary: it counts allocations that waited past
+    #    allocator_stuck_timeout, so a wedge shorter than that counts nothing
+    #    and passes.
     #  - stripe_reuse as a BOOLEAN. __stripe_alloc_or_reuse() calls
     #    stripe_reuse() from BOTH the new ec_should_reuse_stripe() arm and the
     #    old post-allocation-failure fallback, and they bump the same counter
@@ -318,14 +319,12 @@ test_ec_wide_stripe_reuse()
     fi
 
     local stuck
-    stuck=$(dmesg | grep -cE "Allocator stuck|bucket_alloc_blocked" || true)
+    bch_counter stuck allocator_stuck
     if ((stuck > 0)); then
-	echo "ERROR: allocator wedged ($stuck reports). That is the GH #880"
+	echo "ERROR: allocator wedged ($stuck allocations stuck). That is the GH #880"
 	echo "signature: a full-width stripe has nowhere to go, so allocation"
 	echo "blocks on copygc while copygc's writes consume the space it is"
-	echo "freeing. NOTE these messages are fs-wide ratelimited to one per"
-	echo "two minutes, so a handful means CONTINUOUSLY stuck, not"
-	echo "intermittently."
+	echo "freeing."
 	dmesg | grep -A25 "Allocator stuck" | head -60
 	return 1
     fi

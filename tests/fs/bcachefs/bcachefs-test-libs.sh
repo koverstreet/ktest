@@ -397,42 +397,46 @@ check_bcachefs_stripe_labels()
 # text of a log message or trace, which nothing keeps stable: rename the text
 # and a check that it's absent passes on nothing.
 #
-# Under set -e call these as plain assignments, x=$(bch_counter NAME): a
-# "local x=$(...)" swallows their failure.
+# These set a variable of the caller's, and when they can't read what they're
+# asked for they end the test, with exit: a count that isn't there must never
+# read as 0. Returning failure wouldn't do - from $(...), or a helper called
+# as "foo || return 1" or "if foo", set -e doesn't see it, and the empty
+# string reads as 0.
 
-# bch_counter NAME: counter NAME's count since mount, from
+# bch_counter VAR NAME: VAR = counter NAME's count since mount, from
 # /sys/fs/bcachefs/*/counters/NAME - a sectors counter in bytes, from sysfs's
-# human readable form, so approximate past 1k. With no such counter - not
-# mounted, renamed, removed - it fails and prints nothing: a counter that
-# isn't there must never read as 0.
+# human readable form, so approximate past 1k. No such counter - not mounted,
+# renamed, removed - ends the test.
 bch_counter()
 {
-    local f=$(echo /sys/fs/bcachefs/*/counters/$1) v=
+    local -n __bch_counter_var=$1
+    local f=$(echo /sys/fs/bcachefs/*/counters/$2) v=
 
     [[ -r $f ]] && v=$(awk '/since mount/ {print $3}' "$f" | sed 's/k$/K/' | numfmt --from=iec)
     if [[ ! $v =~ ^[0-9]+$ ]]; then
-	echo "bch_counter: no counter $1 at $f" >&2
-	return 1
+	echo "FAILED: no counter $2 at $f - can't tell what it counted"
+	exit 1
     fi
-    echo $v
+    __bch_counter_var=$v
 }
 
-# bch_sb_error_count ID: how many times the mounted filesystem has counted
-# superblock error ID - an fsck error's name, as show-super prints it - since
-# it was made, not since mount: the counts are the superblock's. From
+# bch_sb_error_count VAR ID: VAR = how many times the mounted filesystem has
+# counted superblock error ID - an fsck error's name, as show-super prints it
+# - since it was made, not since mount: the counts are the superblock's. From
 # /sys/fs/bcachefs/*/errors, which lists the ones that have happened.
 #
 # XXX: nothing enumerates the error ids, so a misspelled ID reads 0, the same
 # as one that never happened. Copy it from the source.
 bch_sb_error_count()
 {
+    local -n __bch_sb_error_var=$1
     local f=$(echo /sys/fs/bcachefs/*/errors)
 
     if [[ ! -r $f ]]; then
-	echo "bch_sb_error_count: no errors file at $f" >&2
-	return 1
+	echo "FAILED: no errors file at $f - can't tell what errors were counted"
+	exit 1
     fi
-    awk -v id="$1" '$1 == id {n = $2} END {print n + 0}' "$f"
+    __bch_sb_error_var=$(awk -v id="$2" '$1 == id {n = $2} END {print n + 0}' "$f")
 }
 
 # Superblock error counters after a test mean something went wrong - except

@@ -1120,14 +1120,16 @@ ec_unrebuildable_stripe()
     timeout 300 bcachefs reconcile wait /mnt || true
     cat /sys/fs/bcachefs/*/reconcile_status
 
-    local repair_bytes=$(ec_stripe_repair_bytes)
+    local repair_bytes now
+    bch_counter repair_bytes reconcile_stripe
     echo "stripe repair work: $repair_bytes bytes"
     (( repair_bytes )) || { echo "FAIL: no stripe repairs ran - nothing tested"; return 1; }
 
     # Once the readable data is out, what's left of these stripes can never
     # be repaired, and nothing is changing: reconcile must leave them be.
     sleep 30
-    local retried=$(( $(ec_stripe_repair_bytes) - repair_bytes ))
+    bch_counter now reconcile_stripe
+    local retried=$(( now - repair_bytes ))
     echo "stripe repair work in the next 30s: $retried bytes"
     (( retried <= 1 << 30 )) ||
 	{ echo "FAIL: reconcile retried $(numfmt --to=iec $retried) of stripe repairs in 30s on an idle filesystem"; return 1; }
@@ -2113,7 +2115,7 @@ ec_reconcile_stripes()
 # restarts it.
 #
 # Full filesystem; stripes capped at 3+1, so bch2_stripe_repair() can't bow out
-# with stripe_needs_block_evacuate and actually allocates. Evacuating a device
+# by narrowing and actually allocates. Evacuating a device
 # queues every stripe with a block on it for repair, and the rebuilds then fail
 # for space (bucket_alloc_no_progress, EAGAIN-class) while the device is still
 # readable.
@@ -2130,12 +2132,6 @@ ec_repair_no_space_setup()
     fill_device /mnt/fiotest || true
 }
 
-# reconcile_stripe counts the stripe repair work attempted, in sectors; as
-# bytes, for arithmetic:
-ec_stripe_repair_bytes()
-{
-    bch_counter reconcile_stripe
-}
 
 # Buckets of data still on dev-$1; 0 once an evacuate has drained it.
 # alloc_debug's usage rows are "<type> <buckets> <sectors> <fragmented>", and
@@ -2150,7 +2146,9 @@ ec_dev_bucket_count()
 
 ec_reconcile_thread_alive()
 {
-    if grep -q 'Reconcile thread exited' /sys/fs/bcachefs/*/reconcile_status; then
+    local errors
+    bch_counter errors reconcile_error
+    if (( errors )); then
 	cat /sys/fs/bcachefs/*/reconcile_status
 	echo "FAILED: reconcile thread exited on a stripe it couldn't repair"
 	return 1
@@ -2162,7 +2160,10 @@ test_ec_repair_no_space()
     set_watchdog 600
 
     ec_repair_no_space_setup
-    local before=$(ec_stripe_repair_bytes)
+
+    # reconcile_stripe: the stripe repair work attempted
+    local before after
+    bch_counter before reconcile_stripe
 
     bcachefs device set-state -f evacuating ${ktest_scratch_dev[0]}
 
@@ -2172,7 +2173,7 @@ test_ec_repair_no_space()
     done
 
     # Known positive: the repair path ran, so the thread had the chance to die
-    local after=$(ec_stripe_repair_bytes)
+    bch_counter after reconcile_stripe
     echo "stripe repair work: $before -> $after bytes"
     if (( after <= before )); then
 	echo "FAILED: no stripe repairs ran - this test didn't test anything"
@@ -2203,7 +2204,8 @@ test_ec_repair_no_space_spin()
     sleep 60
     ec_reconcile_thread_alive || return 1
 
-    local settled=$(ec_stripe_repair_bytes)
+    local settled later
+    bch_counter settled reconcile_stripe
     if (( settled == 0 )); then
 	echo "FAILED: no stripe repairs ran - this test didn't test anything"
 	return 1
@@ -2212,7 +2214,7 @@ test_ec_repair_no_space_spin()
     sleep 60
     ec_reconcile_thread_alive || return 1
 
-    local later=$(ec_stripe_repair_bytes)
+    bch_counter later reconcile_stripe
     local retried=$((later - settled))
     echo "stripe repair work: first pass $settled bytes, next 60s $retried bytes"
 
@@ -2236,9 +2238,6 @@ test_ec_repair_no_space_spin()
 # pieces of several, then every other file deleted. Free buckets stay near
 # zero - copygc's "can make progress" - while half of every bucket is
 # reclaimable.
-#
-# A narrowing shows in the reconcile_stripe tracepoint as
-# "ret stripe_needs_block_evacuate"; there's no counter for it.
 test_ec_repair_wait_copygc()
 {
     set_watchdog 1200
@@ -2262,11 +2261,6 @@ test_ec_repair_wait_copygc()
     sync
     bcachefs fs usage -h /mnt
 
-    local T=/sys/kernel/tracing
-    [[ -d $T/events ]] || mount -t tracefs nodev $T
-    echo 1 > $T/events/bcachefs/reconcile_stripe/enable
-    echo 1 > $T/tracing_on
-
     bcachefs device set-state -f evacuating ${ktest_scratch_dev[0]}
 
     local drained=false
@@ -2279,10 +2273,9 @@ test_ec_repair_wait_copygc()
 	sleep 1
     done
 
-    echo 0 > $T/tracing_on
     local repairs narrowed
-    repairs=$(ec_stripe_repair_bytes)
-    narrowed=$(grep -c 'ret stripe_needs_block_evacuate' $T/trace || true)
+    bch_counter repairs reconcile_stripe
+    bch_counter narrowed stripe_repair_narrow
     echo "stripe repair work: $repairs bytes, narrowed: $narrowed"
     bcachefs fs usage -h /mnt
 

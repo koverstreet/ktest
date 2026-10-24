@@ -190,18 +190,17 @@ test_reconcile_survives_disable_during_scan()
     # "Reconcile thread not running" came through bch2_reconcile_stop(), i.e. a
     # different path from this one - so #1209's two symptoms may be two bugs.)
     #
-    # So assert on what the user actually sees, which is also the thing that
-    # provably discriminates: the leaked flow-control value being formatted as
-    # an error by bch_err_fn().
-    local dmesg_out
-    dmesg_out=$(dmesg 2>&1 || true)
-    if grep -q "do_reconcile(): error" <<<"$dmesg_out"; then
-	echo "FAILED: do_reconcile() reported an error after toggling reconcile_enabled:"
-	grep "do_reconcile(): error" <<<"$dmesg_out"
+    # So assert on what provably discriminates: the leaked flow-control value
+    # ending the thread as an error, which reconcile_error counts.
+    local errors
+    bch_counter errors reconcile_error
+    if (( errors )); then
+	echo "FAILED: the reconcile thread exited on an error after toggling reconcile_enabled:"
+	dmesg | grep "do_reconcile(): error" || true
 	echo "  a flow-control value leaked out of the scan loop and ended the reconcile thread"
 	return 1
     fi
-    echo "OK: no do_reconcile() error after toggling reconcile_enabled during a scan"
+    echo "OK: the reconcile thread didn't exit on an error after toggling reconcile_enabled during a scan"
 
     umount /mnt
     bcachefs fsck -ny "$dev"

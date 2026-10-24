@@ -62,7 +62,7 @@ uncompressed_extents()
 assert_no_opts_mismatch()
 {
     local nr
-    nr=$(bch_sb_error_count extent_io_opts_not_set)
+    bch_sb_error_count nr extent_io_opts_not_set
     if (( nr )); then
 	echo "FAIL: extents disagree with their inode's options (extent_io_opts_not_set counted $nr times):"
 	dmesg | grep "incorrect/missing reconcile opts" | head -5
