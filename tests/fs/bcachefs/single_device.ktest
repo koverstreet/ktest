@@ -1171,8 +1171,13 @@ test_xattr()
     getfattr -n bcachefs_effective.compression /mnt/foo/bar
 
     echo "checking xattr deletion"
-    setfattr -x bcachefs.compression /mnt/foo/bar
-    #getfattr -n bcachefs.compression /mnt/foo/bar
+    # bar inherits it, and doesn't set it itself: bcachefs.* is the inode's
+    # own options, so it's not there to read or to remove
+    assert_fails getfattr -n bcachefs.compression /mnt/foo/bar
+    assert_fails setfattr -x bcachefs.compression /mnt/foo/bar
+    # foo set it: removed, it's gone
+    setfattr -x bcachefs.compression /mnt/foo
+    assert_fails getfattr -n bcachefs.compression /mnt/foo
 
     rsync -rX /mnt/foo/ /mnt/baz
 
