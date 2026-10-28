@@ -5,7 +5,6 @@
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
 
 config-scratch-devs 1G
-config-mem 2G
 
 # 'kvdb --nostart -c "sb set ..."' must actually write the superblock. It
 # didn't: every kvdb open short of --rw runs with nochanges (norecovery

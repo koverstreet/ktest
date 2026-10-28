@@ -6,7 +6,6 @@
 
 config-scratch-devs 2G
 
-config-mem 2G
 
 # Reproducer for the copygc livelock on buckets whose backpointers never
 # resolve (bcachefs-tools .claude/2026-07-11-copygc-livelock-missing-backpointers.md,
