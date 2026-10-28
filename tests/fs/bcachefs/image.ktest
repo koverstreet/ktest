@@ -159,6 +159,32 @@ test_build_from_bcachefs()
     build_from_fs bcachefs
 }
 
+# Data encrypted in userspace, read by the kernel. Userspace's ChaCha20 started
+# its keystream over at every call, so an extent encrypted in pieces - its write
+# bounce buffer, which userspace kmalloc()s 256k at a time - had each piece
+# encrypted as the first. Extents only span pieces past the default
+# encoded_extent_max, 256k, hence 1M here. Userspace reading it back makes the
+# same mistake, undoing it: only the kernel shows it.
+test_build_encrypted()
+{
+    local src=/root/encrypted-src
+
+    rm -rf $src
+    mkdir -p $src
+    for size in 4096 262144 266240 1048576 8388608; do
+	head -c $size /dev/urandom > $src/file-$size
+    done
+
+    bcachefs format -f --encrypted --no_passphrase --encoded_extent_max=1M	\
+	--source=$src ${ktest_scratch_dev[0]}
+
+    mount -t bcachefs -o ro ${ktest_scratch_dev[0]} /mnt
+    verify_trees_equal $src /mnt
+    umount /mnt
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+}
+
 # migrate from other filesystems in place:
 
 migrate_from_fs()
