@@ -418,7 +418,11 @@ require-kernel-config FAULT_INJECTION_CONFIGFS
 require-kernel-config SECCOMP
 require-kernel-config SECCOMP_FILTER
 
-if [[ $ktest_arch != x86 ]]; then
+# The kernel's own Rust is what bcachefs builds against from 7.0; before, its
+# vendored stack, which takes a kernel built with any rustc - and a 6.x
+# kernel's rust/ may not build with ours at all (6.16's target spec, with
+# rustc 1.96). And 32-bit x86 has no Rust.
+if [[ $ktest_arch != x86 ]] && version-ge "${ktest_kernel_version:-}" 7.0; then
     require-kernel-config RUST
 fi
 
