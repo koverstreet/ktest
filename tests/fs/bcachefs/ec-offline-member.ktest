@@ -1,0 +1,285 @@
+#!/usr/bin/env bash
+#
+# Erasure coded data with a block on an OFFLINE member must survive stripe
+# reuse, degraded reads, reconcile and a remount without the member, and writes
+# must keep going (or fail with ENOSPC) while it is gone.
+#
+# From a field report: a NAS with 8 HDDs, encrypted, erasure coded, one failing
+# HDD offline while the fs ran close to full. Extents whose data block sat on
+# the offline member were later found moved into other stripes as zeroes: the
+# parity matched the zeroes, and every copy failed its checksum.
+#
+# Here: random data in 256k files whose stripes span every member, alternating
+# with filler that is deleted so those stripes get empty blocks; the fs is
+# filled and churned so stripes get reused; one member goes read-only, then
+# offline (no block device). Every kept file must then read back with its
+# sha256: degraded, after reconcile has had time, and after a remount without
+# the member. Random data, not zeroes: an unfilled buffer must not pass.
+#
+# Two orders: the member goes offline after reuse ran with every member rw (into
+# a full fs), or, in the early_* tests, before the fill: its capacity is gone
+# before the fs fills, and reuse has to deal with its blocks from the start.
+#
+# A churn round whose writes are still going after 120 s is a stall: the
+# allocator state and the blocked tasks are dumped, the kept files are read
+# back, and the VM is powered off, since a writer stuck in the kernel can't be
+# killed and the cleanup between tests would wait for it forever.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config BCACHEFS_ERASURE_CODING
+# Also bounds the cleanup between tests, which waits for every process using
+# /mnt to die: a write stuck in the kernel never does.
+config-timeout 2400
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+
+OFFM_SUMS=/root/offm.sha256
+
+offm_ctr()
+{
+    awk '/since mount/ {print $3}' /sys/fs/bcachefs/*/counters/$1
+}
+
+offm_counters()
+{
+    local c out=
+    for c in stripe_reuse stripe_create stripe_create_fail data_read_retry data_read_promote; do
+	out+="$c $(offm_ctr $c 2>/dev/null) "
+    done
+    echo "$1: $out"
+}
+
+# What the allocator, copygc and reconcile are doing, and every blocked task.
+offm_stall_dump()
+{
+    local d
+    for d in /sys/fs/bcachefs/*/dev-*; do
+	echo "$d: $(cat $d/label 2>/dev/null) $(cat $d/state 2>/dev/null)"
+	timeout 5 head -24 $d/alloc_debug || true
+    done
+    timeout 5 cat /sys/fs/bcachefs/*/internal/copy_gc_wait || true
+    timeout 5 cat /sys/fs/bcachefs/*/reconcile_status || true
+    echo w > /proc/sysrq-trigger
+}
+
+# offm_bounded SECONDS CMD...: CMD in the background, given up on after SECONDS
+# (a process stuck in the kernel can't be killed, so neither can timeout's child).
+offm_bounded()
+{
+    local s=$1 pid i
+    shift
+    "$@" &
+    pid=$!
+    for i in $(seq 1 $s); do
+	kill -0 $pid 2>/dev/null || { wait $pid; return; }
+	sleep 1
+    done
+    echo "ERROR: still running after $s s: $*"
+    return 124
+}
+
+# The writer is stuck in the kernel: read back what can still be read, then take the
+# VM down (the cleanup can't unmount past an unkillable writer; later tests don't run).
+offm_wedged()
+{
+    offm_bounded 600 offm_verify "$1" || true
+    echo "writes stalled with the member offline: powering the VM off"
+    echo o > /proc/sysrq-trigger
+    sleep 60
+    false
+}
+
+# One churn round: hand back 32M, overwrite at random for 15 s; fails if
+# writes are still going after 120 s (a stall).
+offm_churn_round()
+{
+    (
+	truncate --size=$(($(stat -c '%s' /mnt/fiotest) - 33554432)) /mnt/fiotest
+	run_fio_base --name=randwrite --stonewall --rw=randwrite \
+	    --bsrange=4k-128k --runtime=15 --time_based || true
+    ) &
+    local pid=$! i
+    for i in $(seq 1 120); do
+	kill -0 $pid 2>/dev/null || { wait $pid; return 0; }
+	sleep 1
+    done
+    echo "ERROR: a churn round stalled for 120 s"
+    offm_counters "stalled"
+    offm_stall_dump
+    return 1
+}
+
+# NAME N: N kept files of random data, each followed by a filler file the same
+# size; the fillers are deleted afterwards.
+offm_write_kept()
+{
+    local i
+    mkdir -p /mnt/keep /mnt/filler
+    for i in $(seq 1 $2); do
+	head -c 262144 /dev/urandom > /mnt/keep/$1-$i
+	head -c 262144 /dev/urandom > /mnt/filler/$1-$i
+    done
+    sync
+    (cd /mnt && sha256sum keep/$1-*) >> $OFFM_SUMS
+}
+
+offm_verify()
+{
+    sync
+    echo 3 > /proc/sys/vm/drop_caches
+    local bad
+    bad=$(cd /mnt && sha256sum -c $OFFM_SUMS 2>&1 | grep -v ': OK$' || true)
+    if [[ -n $bad ]]; then
+	echo "ERROR: $1: $(echo "$bad" | grep -c .) of $(wc -l < $OFFM_SUMS) kept files no longer read back:"
+	echo "$bad" | head -20
+	offm_counters "$1"
+	return 1
+    fi
+    echo "$1: all $(wc -l < $OFFM_SUMS) kept files read back intact"
+}
+
+# Member 2 read-only, then offline (no block device after); OFFM_R0 = stripe_reuse then.
+offm_offline()
+{
+    local d
+    OFFM_OFF=${ktest_scratch_dev[2]} OFFM_OFFDIR=
+    for d in /sys/fs/bcachefs/*/dev-*; do
+	[[ $(basename "$(readlink -f $d/block 2>/dev/null)") = $(basename $OFFM_OFF) ]] && OFFM_OFFDIR=$d
+    done
+    [[ -n $OFFM_OFFDIR ]] || { echo "can't find the sysfs dir of $OFFM_OFF"; false; }
+    bcachefs device set-state ro $OFFM_OFF
+    # metadata has 2 copies here, so a plain offline is refused (degraded): force it
+    bcachefs device offline $OFFM_OFF 2>/dev/null || bcachefs device offline --force $OFFM_OFF
+    if [[ -e $OFFM_OFFDIR/block ]]; then
+	echo "$OFFM_OFF ($OFFM_OFFDIR) still has its block device: this run can't test an offline member"
+	false
+    fi
+    offm_counters "$OFFM_OFF read-only, then offline ($(basename $OFFM_OFFDIR) has no block device)"
+    OFFM_R0=$(offm_ctr stripe_reuse)
+}
+
+# do_ec_offline_member PROMOTE ORDER [FORMAT ARGS...]: PROMOTE=yes adds a sixth device
+# as the promote target, so the degraded reads promote; ORDER=late takes the member
+# offline after reuse ran with every member rw, ORDER=early before the fill.
+do_ec_offline_member()
+{
+    set_watchdog 1800
+    local promote=$1 order=$2 i c d
+    shift 2
+    local labels=() devs=("${ktest_scratch_dev[@]:0:5}")
+    for i in 0 1 2 3 4; do
+	labels+=(--label=hdd.hdd$i ${ktest_scratch_dev[$i]})
+    done
+    if [[ $promote = yes ]]; then
+	labels+=(--label=ssd.ssd0 ${ktest_scratch_dev[5]})
+	devs+=(${ktest_scratch_dev[5]})
+	set -- "$@" --foreground_target=hdd --background_target=hdd --promote_target=ssd
+    fi
+    rm -f $OFFM_SUMS
+
+    run_quiet "" bcachefs format -f --erasure_code --replicas=2 \
+	--fs_size=256M --bucket_size=256k "$@" "${labels[@]}"
+    mount -t bcachefs $(join_by : "${devs[@]}") /mnt
+
+    # A counter that can't be read must not read as "no reuse":
+    for c in stripe_reuse stripe_create; do
+	[[ $(offm_ctr $c) =~ ^[0-9]+$ ]] ||
+	    { echo "can't read a number out of counters/$c: this test can't say anything"; false; }
+    done
+
+    offm_write_kept a 192
+    rm -rf /mnt/filler
+    sync
+    if [[ $order = early ]]; then
+	offm_offline
+	offm_verify "degraded (reconstruct reads), before the fill"
+	if ! offm_bounded 900 fill_device /mnt/fiotest; then
+	    offm_counters "the fill stalled"
+	    offm_stall_dump
+	    offm_wedged "degraded, the fill stalled after +$(( $(offm_ctr stripe_reuse) - OFFM_R0 )) reuses"
+	fi
+    else
+	fill_device /mnt/fiotest
+    fi
+
+    if [[ $order = late ]]; then
+	# Reuse has to run with every member rw first, or "no damage" says nothing.
+	local nr=0
+	for i in $(seq 1 10); do
+	    offm_churn_round
+	    nr=$(offm_ctr stripe_reuse)
+	    echo "every member rw, round $i: stripe_reuse $nr"
+	    (( nr )) && break
+	done
+	(( nr )) || { echo "no stripe was reused with every member rw: this run says nothing"; false; }
+	offm_verify "every member rw, after reuse"
+	offm_offline
+	offm_verify "degraded (reconstruct reads), before more churn"
+    fi
+    local r0=$OFFM_R0
+    for i in $(seq 1 12); do
+	if ! offm_churn_round; then
+	    offm_wedged "degraded, writes stalled in round $i after +$(( $(offm_ctr stripe_reuse) - r0 )) reuses"
+	fi
+	echo "member offline, round $i: stripe_reuse +$(( $(offm_ctr stripe_reuse) - r0 ))"
+    done
+    local dr=$(( $(offm_ctr stripe_reuse) - r0 ))
+    offm_verify "degraded, after $dr reuses with the member offline"
+    sleep 60
+    offm_verify "degraded, 60 s later (reconcile)"
+
+    umount /mnt
+    local rest=()
+    for d in "${devs[@]}"; do
+	[[ $d = $OFFM_OFF ]] || rest+=($d)
+    done
+    mount -t bcachefs -o degraded $(join_by : "${rest[@]}") /mnt
+    offm_verify "remounted without the member"
+    offm_counters "end"
+    umount /mnt
+
+    # Kept files are checked above; besides, no read may have failed outright
+    # (recovered retries are expected with a member gone):
+    if bcachefs show-super -f errors,errors_v2 ${rest[0]} 2>/dev/null |
+	grep -E '^\s*data_read_(csum|io)_err\s'; then
+	echo "ERROR: unrecovered read errors in the superblock"
+	false
+    fi
+    if (( ! dr )); then
+	echo "inconclusive: no stripe was reused while the member was offline, so reuse never had to deal with its blocks"
+	false
+    fi
+}
+
+test_ec_offline_member_reuse()
+{
+    do_ec_offline_member no late
+}
+
+test_ec_offline_member_reuse_encrypted()
+{
+    do_ec_offline_member no late --encrypted --no_passphrase
+}
+
+test_ec_offline_member_promote_encrypted()
+{
+    do_ec_offline_member yes late --encrypted --no_passphrase
+}
+
+test_ec_offline_member_early_reuse_encrypted()
+{
+    do_ec_offline_member no early --encrypted --no_passphrase
+}
+
+test_ec_offline_member_early_promote_encrypted()
+{
+    do_ec_offline_member yes early --encrypted --no_passphrase
+}
+
+main "$@"
