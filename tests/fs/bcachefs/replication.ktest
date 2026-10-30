@@ -128,6 +128,87 @@ test_mount_mounted_by_its_devices()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# Scratch devices @... as held$i: their superblocks - formatted with
+# --superblock_size=64k, the first MB and the last 4MB - read at once, and the
+# rest waits until release_held_devs. A mount through them gets its
+# superblocks read and its devices claimed, and stops in recovery.
+hold_devs()
+{
+    local i
+    for i in "$@"; do
+	local dev=${ktest_scratch_dev[$i]}
+	local size=$(blockdev --getsz $dev)
+	local mid=$(( size - 2048 - 8192 ))
+	dmsetup create heldtail$i --table "0 $mid linear $dev 2048"
+	printf "0 2048 linear $dev 0\n2048 $mid linear /dev/mapper/heldtail$i 0\n%s 8192 linear $dev %s\n" \
+	    $(( 2048 + mid )) $(( 2048 + mid )) | dmsetup create held$i
+	# after: udev's probe of held$i reads its ends
+	dmsetup suspend heldtail$i
+    done
+}
+
+release_held_devs()
+{
+    local i
+    for i in "$@"; do
+	dmsetup resume heldtail$i
+    done
+}
+
+remove_held_devs()
+{
+    local i
+    for i in "$@"; do
+	dmsetup remove held$i
+	dmsetup remove heldtail$i
+    done
+}
+
+# A mount of a filesystem another mount is still bringing up - the same
+# devices, in another order - waits for it, and shares its superblock: the
+# registry's openings. Without them it fails at once, on a device the first
+# already has. The first is held in its open: the second has to be waiting
+# then, not failed - and the first still opening, or the test proves nothing.
+test_concurrent_first_mounts()
+{
+    set_watchdog 120
+    run_quiet "" bcachefs format -f --superblock_size=64k ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    hold_devs 0 1
+
+    mkdir -p /mnt/1 /mnt/2
+    mount -t bcachefs /dev/mapper/held0:/dev/mapper/held1 /mnt/1 &
+    local first=$!
+    sleep 1
+    mount -t bcachefs /dev/mapper/held1:/dev/mapper/held0 /mnt/2 &
+    local second=$!
+    sleep 1
+
+    if ! kill -0 $first 2>/dev/null; then
+	echo "TEST FAILED: the first mount wasn't still opening, so this proves nothing"
+	exit 1
+    fi
+    if ! kill -0 $second 2>/dev/null; then
+	echo "TEST FAILED: the second mount didn't wait for the first"
+	exit 1
+    fi
+
+    release_held_devs 0 1
+    wait $first
+    wait $second
+
+    if [[ $(stat -c %d /mnt/1) != $(stat -c %d /mnt/2) ]]; then
+	echo "TEST FAILED: the second mount isn't the first's superblock"
+	exit 1
+    fi
+
+    umount /mnt/2
+    umount /mnt/1
+    remove_held_devs 0 1
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_replicas()
 {
     run_basic_fio_test				\
