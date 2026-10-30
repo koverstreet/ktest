@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+#
+# Stripe reuse carries a stripe's live data blocks into the new stripe in
+# place, and the old stripe is deleted after the new one is committed. A
+# stripe's backpointer is at its block's position alone - device, offset and
+# the stripe's size - so for a carried block the two stripes share one, and
+# deleting the old stripe must not take the new one's with it.
+#
+# A device scan finds a device's stripes through those backpointers. With
+# them gone, evacuating a device stopped with the carried blocks still on it,
+# and device remove -f couldn't finish either. fsck doesn't see it: a stripe
+# backpointer's bucket_len is 0, so the bucket sector check finds nothing.
+#
+# Here: random data in 256k files, each followed by a filler file the same
+# size that's deleted, so their stripes get empty blocks; then the filesystem
+# is filled and churned until stripes are reused, which carries the kept
+# files' blocks forward. Every stripe block must then have its backpointer,
+# and the device with the most carried blocks must evacuate to empty.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config BCACHEFS_ERASURE_CODING
+
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+config-scratch-devs 4G
+
+SRB_SUMS=/root/srb.sha256
+
+srb_ctr()
+{
+    awk '/since mount/ {print $3}' /sys/fs/bcachefs/*/counters/$1
+}
+
+# The stripes and backpointers btrees' listings on stdin, in that order:
+# "missing <dev> <bucket> <stripe>" for each stripe block with no backpointer
+# for its stripe at its bucket, then "blocks <n> missing <m>".
+srb_missing_bps()
+{
+    awk '
+	/ type stripe / {
+	    for (i = 1; i < NF; i++)
+		if ($i == "stripe") {
+		    split($(i + 1), p, ":")
+		    idx = p[2]
+		}
+	    in_stripe = 1
+	    next
+	}
+	/ type backpointer / {
+	    in_stripe = 0
+	    if ($0 !~ /btree=stripes level=0 /)
+		next
+	    b = s = ""
+	    for (i = 1; i <= NF; i++) {
+		if ($i ~ /^bucket=/) {
+		    split(substr($i, 8), q, ":")
+		    b = q[1] ":" q[2]
+		}
+		if ($i ~ /^pos=/) {
+		    split(substr($i, 5), q, ":")
+		    s = q[2]
+		}
+	    }
+	    bp[b ":" s] = 1
+	    next
+	}
+	/^u64s / {
+	    in_stripe = 0
+	    next
+	}
+	in_stripe {
+	    for (i = 1; i <= NF; i++)
+		if ($i ~ /^[0-9]+:[0-9]+:[0-9]+$/) {
+		    split($i, q, ":")
+		    blk[q[1] ":" q[2] ":" idx] = 1
+		}
+	}
+	END {
+	    n = m = 0
+	    for (k in blk) {
+		n++
+		if (!(k in bp)) {
+		    m++
+		    split(k, q, ":")
+		    print "missing", q[1], q[2], q[3]
+		}
+	    }
+	    print "blocks", n, "missing", m
+	}'
+}
+
+srb_verify()
+{
+    sync
+    echo 3 > /proc/sys/vm/drop_caches
+    local bad
+    bad=$(cd /mnt && sha256sum -c $SRB_SUMS 2>&1 | grep -v ': OK$' || true)
+    if [[ -n $bad ]]; then
+	echo "ERROR: $1: $(echo "$bad" | grep -c .) of $(wc -l < $SRB_SUMS) kept files don't read back:"
+	echo "$bad" | head -20
+	return 1
+    fi
+    echo "$1: all $(wc -l < $SRB_SUMS) kept files read back intact"
+}
+
+# Reuse with kept data in the reused stripes, then a clean unmount; every
+# stripe block without its backpointer is listed in /root/srb.missing.
+srb_setup()
+{
+    local i nr=0
+
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=2				\
+	--fs_size=256M				\
+	"${ktest_scratch_dev[@]}"
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+
+    # a counter that can't be read must not read as "no reuse"
+    [[ $(srb_ctr stripe_reuse) =~ ^[0-9]+$ ]] ||
+	{ echo "can't read a number out of counters/stripe_reuse: this test can't say anything"; false; }
+
+    rm -f $SRB_SUMS
+    mkdir -p /mnt/keep /mnt/filler
+    for i in $(seq 1 192); do
+	head -c 262144 /dev/urandom > /mnt/keep/$i
+	head -c 262144 /dev/urandom > /mnt/filler/$i
+    done
+    sync
+    (cd /mnt && sha256sum keep/*) > $SRB_SUMS
+    rm -rf /mnt/filler
+    sync
+
+    # As test_ec_stripe_reuse: reuse needs the allocator starved, and
+    # overwrites on a full COW filesystem need some space handed back first.
+    fill_device /mnt/fiotest
+    for i in $(seq 1 10); do
+	truncate --size=$(($(stat -c '%s' /mnt/fiotest) - 33554432)) /mnt/fiotest
+	run_fio_base --name=randwrite --stonewall --rw=randwrite \
+	    --bsrange=4k-128k --runtime=15 --time_based || true
+	nr=$(srb_ctr stripe_reuse)
+	echo "round $i: stripe_reuse $nr"
+	(( nr >= 8 )) && break
+    done
+    (( nr )) || { echo "no stripe was reused: this run says nothing"; false; }
+
+    # room for an evacuation; the kept files' carried blocks stay
+    rm -f /mnt/fiotest
+    srb_verify "after $nr reuses"
+    umount /mnt
+
+    bcachefs list -b stripes "${ktest_scratch_dev[@]}" > /root/srb.stripes
+    bcachefs list -b backpointers "${ktest_scratch_dev[@]}" > /root/srb.bps
+    cat /root/srb.stripes /root/srb.bps | srb_missing_bps > /root/srb.missing
+    tail -n 1 /root/srb.missing
+    grep '^missing' /root/srb.missing | head -20 || true
+
+    local blocks=$(awk '$1 == "blocks" {print $2}' /root/srb.missing)
+    (( blocks )) || { echo "no stripe blocks in the listing: the parse is broken, this run says nothing"; false; }
+}
+
+test_ec_stripe_reuse_keeps_backpointers()
+{
+    set_watchdog 900
+    srb_setup
+
+    local missing=$(awk '$1 == "blocks" {print $4}' /root/srb.missing)
+    if (( missing )); then
+	echo "ERROR: $missing stripe blocks have no backpointer after stripe reuse"
+	false
+    fi
+
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+    srb_verify "remounted"
+    umount /mnt
+    bcachefs fsck -n "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+test_ec_evacuate_after_stripe_reuse()
+{
+    set_watchdog 1200
+    srb_setup
+
+    # The device with the most stripe blocks missing a backpointer, else the
+    # one with the most stripe blocks: a device scan has to find them all.
+    local idx=$(awk '$1 == "missing" {print $2}' /root/srb.missing | sort | uniq -c | sort -rn | awk 'NR == 1 {print $2}')
+    if [[ -z $idx ]]; then
+	idx=$(awk '/ type stripe / {s = 1; next} /^u64s / {s = 0} s {
+		for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+:[0-9]+:[0-9]+$/) { split($i, q, ":"); print q[1] } }' \
+	    /root/srb.stripes | sort | uniq -c | sort -rn | awk 'NR == 1 {print $2}')
+    fi
+
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+    local dev=/dev/$(basename "$(readlink -f /sys/fs/bcachefs/*/dev-$idx/block)")
+    echo "evacuating dev-$idx ($dev): $(grep -c "^missing $idx " /root/srb.missing || true) stripe blocks there without a backpointer"
+    bcachefs fs usage -h /mnt
+
+    # It waits until the device is empty: bounded, as a stall never ends.
+    if ! timeout 300 bcachefs device evacuate "$dev"; then
+	echo
+	echo "ERROR: evacuating $dev didn't finish in 300 s"
+	bcachefs fs usage -h /mnt
+	cat /sys/fs/bcachefs/*/reconcile_status || true
+	false
+    fi
+
+    bcachefs device remove "$dev"
+    srb_verify "$dev evacuated and removed"
+    umount /mnt
+
+    local d rest=()
+    for d in "${ktest_scratch_dev[@]}"; do
+	[[ $d = $dev ]] || rest+=($d)
+    done
+    bcachefs fsck -n "${rest[@]}"
+    bcachefs_test_end_checks "${rest[0]}"
+}
+
+main "$@"
