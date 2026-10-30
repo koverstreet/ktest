@@ -209,6 +209,58 @@ test_concurrent_first_mounts()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# Mounts of a multi-device filesystem by devices they don't share - each by
+# one, degraded: the second finds the first's opening by the UUID its
+# superblock says, waits, and shares its superblock; as does a mount after, by
+# either device. mount -i: the kernel's mount, with just the device named -
+# mount.bcachefs would find the rest by UUID, under the dm devices.
+test_concurrent_mounts_disjoint_devices()
+{
+    set_watchdog 120
+    # two replicas, so either device alone mounts degraded
+    run_quiet "" bcachefs format -f --replicas=2 --superblock_size=64k ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    hold_devs 0 1
+
+    mkdir -p /mnt/1 /mnt/2 /mnt/3
+    mount -i -t bcachefs -o degraded /dev/mapper/held0 /mnt/1 &
+    local first=$!
+    sleep 1
+    mount -i -t bcachefs -o degraded /dev/mapper/held1 /mnt/2 &
+    local second=$!
+    sleep 1
+
+    if ! kill -0 $first 2>/dev/null; then
+	echo "TEST FAILED: the first mount wasn't still opening, so this proves nothing"
+	exit 1
+    fi
+    if ! kill -0 $second 2>/dev/null; then
+	echo "TEST FAILED: the second mount didn't wait for the first"
+	exit 1
+    fi
+
+    release_held_devs 0 1
+    wait $first
+    wait $second
+
+    mount -i -t bcachefs -o degraded /dev/mapper/held1 /mnt/3
+
+    local dev=$(stat -c %d /mnt/1)
+    if [[ $(stat -c %d /mnt/2) != $dev || $(stat -c %d /mnt/3) != $dev ]]; then
+	echo "TEST FAILED: mounts of one filesystem aren't the one superblock"
+	exit 1
+    fi
+
+    umount /mnt/3
+    umount /mnt/2
+    umount /mnt/1
+    remove_held_devs 0 1
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    # mounted on one device of two, with two replicas: its writes were
+    ktest_expect_sb_errors="write_degraded_insufficient_devices"
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_replicas()
 {
     run_basic_fio_test				\
