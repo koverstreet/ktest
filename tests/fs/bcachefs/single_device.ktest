@@ -128,6 +128,25 @@ test_mount_again_after_ebusy()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# Emergency read-only lasts the rest of the mount, and stops the filesystem
+# without rewriting c->opts.read_only: a reconfigure going by the option would
+# find nothing to do, and report a remount rw successful - read-only.
+test_remount_rw_after_emergency_ro()
+{
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+
+    echo 1 > /sys/fs/bcachefs/*/internal/trigger_emergency_read_only
+    echo "test: remount rw"
+    assert_fails mount -o remount,rw /mnt
+    assert_fails touch /mnt/foo
+
+    umount /mnt
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+}
+
 test_mount_options()
 {
     local dev=${ktest_scratch_dev[0]}
