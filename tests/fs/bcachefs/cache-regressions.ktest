@@ -7,7 +7,6 @@ set -o pipefail
 
 require-kernel-config BCACHEFS_ERASURE_CODING
 require-kernel-config DYNAMIC_FTRACE
-require-kernel-config KPROBE_EVENTS
 config-scratch-devs 1G
 for ((i = 0; i < 5; i++)); do config-scratch-devs 2G; done
 
@@ -144,38 +143,40 @@ cache_finish()
     check_bcachefs_device_errors "${ktest_scratch_dev[@]}"
 }
 
-# Reconstruction is verified by tracing bch2_ec_read_extent(): with the function
-# tracer while it's C, with a kprobe on its symbol where it's Rust (no ftrace
-# entry).
+# Reconstruction is verified by tracing bch2_ec_read_extent() with the function
+# tracer. Where it's Rust it has no ftrace entry, and kprobes refuse it too
+# (notrace): then by the retries, as a reconstruct read is always punted to
+# bch2_rbio_retry() first. With one member offline and no checksum errors
+# (checked), nothing else retries.
 cache_ec_trace_start()
 {
     local trace=/sys/kernel/tracing
-    echo 0 > "$trace/tracing_on"
-    echo > "$trace/trace"
+    cache_ec_retries=
     if grep -q '^bch2_ec_read_extent\>' "$trace/available_filter_functions"; then
+        echo 0 > "$trace/tracing_on"
         echo bch2_ec_read_extent > "$trace/set_ftrace_filter"
         echo function > "$trace/current_tracer"
+        echo > "$trace/trace"
+        echo 1 > "$trace/tracing_on"
     else
-        echo 'p:cache_ec_read bch2_ec_read_extent' >> "$trace/kprobe_events" || \
-            cache_fail "bch2_ec_read_extent can't be traced; reconstruction would be unverified"
-        echo 1 > "$trace/events/kprobes/cache_ec_read/enable"
+        bch_counter cache_ec_retries data_read_retry
     fi
-    echo 1 > "$trace/tracing_on"
 }
 
 cache_ec_trace_stop()
 {
-    local trace=/sys/kernel/tracing
-    echo 0 > "$trace/tracing_on"
-    cat "$trace/trace" > "$test_output/evidence/reconstruct.trace"
-    if [[ -d $trace/events/kprobes/cache_ec_read ]]; then
-        echo 0 > "$trace/events/kprobes/cache_ec_read/enable"
-        echo '-:cache_ec_read' >> "$trace/kprobe_events"
-    else
+    local trace=/sys/kernel/tracing retries
+    if [[ -z $cache_ec_retries ]]; then
+        echo 0 > "$trace/tracing_on"
+        cat "$trace/trace" > "$test_output/evidence/reconstruct.trace"
         echo nop > "$trace/current_tracer"
         echo > "$trace/set_ftrace_filter"
+        grep -q 'bch2_ec_read_extent' "$test_output/evidence/reconstruct.trace" || cache_fail "no reconstruction happened"
+    else
+        bch_counter retries data_read_retry
+        echo "read retries during the passes: $((retries - cache_ec_retries))" | tee "$test_output/evidence/reconstruct.retries"
+        ((retries > cache_ec_retries)) || cache_fail "no reconstruction happened: no read was retried"
     fi
-    grep -q 'bch2_ec_read_extent' "$test_output/evidence/reconstruct.trace" || cache_fail "no reconstruction happened"
 }
 
 cache_degraded_promote()
