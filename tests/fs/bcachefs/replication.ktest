@@ -80,6 +80,54 @@ test_largebuckets()
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
 
+# A mount naming devices of a mounted filesystem - some of them, or all in
+# another order - is another mount of its superblock: every device named
+# resolves to the running filesystem. Devices of two filesystems are neither,
+# and fail without disturbing either mount. Wrong here is silent - a mount of
+# some other superblock - so it's checked by st_dev, and by a file written
+# through one mount and read through the others.
+test_mount_mounted_by_its_devices()
+{
+    set_watchdog 60
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[2]}
+
+    mkdir -p /mnt/1 /mnt/2 /mnt/3 /mnt/4 /mnt/5
+    mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[1]} /mnt/1
+    mount -t bcachefs ${ktest_scratch_dev[2]} /mnt/4
+
+    echo "test: by one of its devices"
+    mount -t bcachefs ${ktest_scratch_dev[1]} /mnt/2
+    echo "test: its devices reordered"
+    mount -t bcachefs ${ktest_scratch_dev[1]}:${ktest_scratch_dev[0]} /mnt/3
+
+    local dev=$(stat -c %d /mnt/1)
+    if [[ $(stat -c %d /mnt/2) != $dev || $(stat -c %d /mnt/3) != $dev ]]; then
+	echo "TEST FAILED: a mount by its devices isn't the mounted superblock"
+	exit 1
+    fi
+
+    echo foo > /mnt/1/foo
+    if [[ $(cat /mnt/2/foo) != foo || $(cat /mnt/3/foo) != foo ]]; then
+	echo "TEST FAILED: a file written through one mount isn't in the others"
+	exit 1
+    fi
+
+    echo "test: devices of two filesystems"
+    assert_fails mount -t bcachefs ${ktest_scratch_dev[0]}:${ktest_scratch_dev[2]} /mnt/5
+    [[ $(cat /mnt/3/foo) == foo ]]
+    touch /mnt/4/bar
+
+    umount /mnt/2
+    umount /mnt/1
+    umount /mnt/3
+    umount /mnt/4
+
+    bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
+    bcachefs fsck -ny ${ktest_scratch_dev[2]}
+    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+}
+
 test_replicas()
 {
     run_basic_fio_test				\
