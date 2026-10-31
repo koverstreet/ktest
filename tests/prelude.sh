@@ -917,6 +917,23 @@ kill_descendants()
     done
 }
 
+# A command run when the subtest exits, however it exits: cleanup that an early
+# exit, or a failed command under set -e, would otherwise skip - and that later
+# subtests would fail on. Run last first, before the subtest's jobs are killed:
+# cleanup may be what lets them finish.
+ktest_defer()
+{
+    ktest_deferred+=("$*")
+}
+
+run_deferred()
+{
+    local i
+    for ((i = ${#ktest_deferred[@]} - 1; i >= 0; i--)); do
+	eval "${ktest_deferred[i]}" || true
+    done
+}
+
 # Run one subtest so that nothing it started outlives it.
 #
 # A subtest runs in a subshell, so what it backgrounds - the antagonists,
@@ -958,7 +975,8 @@ run_test_isolated()
 	if [[ -n $cg ]]; then
 	    echo $BASHPID > "$cg/cgroup.procs" 2>/dev/null || true
 	fi
-	trap 'kill_descendants $BASHPID' EXIT
+	ktest_deferred=()
+	trap 'run_deferred; kill_descendants $BASHPID' EXIT
 	run_test "$name"
     )
     ret=$?
