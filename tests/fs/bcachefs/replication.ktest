@@ -151,6 +151,7 @@ release_held_devs()
 {
     local i
     for i in "$@"; do
+	dmsetup info heldtail$i &>/dev/null || continue
 	dmsetup resume heldtail$i
     done
 }
@@ -159,9 +160,21 @@ remove_held_devs()
 {
     local i
     for i in "$@"; do
+	dmsetup info held$i &>/dev/null || continue
 	dmsetup remove held$i
 	dmsetup remove heldtail$i
     done
+}
+
+# For ktest_defer: the devices released, the mounts through them finished and
+# unmounted, then removed - whether or not the test got that far
+unhold_devs()
+{
+    local mnt=$1; shift
+    release_held_devs "$@"
+    wait
+    umount $mnt 2>/dev/null
+    remove_held_devs "$@"
 }
 
 # A mount of a filesystem another mount is still bringing up - the same
@@ -174,6 +187,7 @@ test_concurrent_first_mounts()
     set_watchdog 120
     run_quiet "" bcachefs format -f --superblock_size=64k ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
     hold_devs 0 1
+    ktest_defer "unhold_devs '/mnt/2 /mnt/1' 0 1"
 
     mkdir -p /mnt/1 /mnt/2
     mount -t bcachefs /dev/mapper/held0:/dev/mapper/held1 /mnt/1 &
@@ -220,6 +234,7 @@ test_concurrent_mounts_disjoint_devices()
     # two replicas, so either device alone mounts degraded
     run_quiet "" bcachefs format -f --replicas=2 --superblock_size=64k ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]}
     hold_devs 0 1
+    ktest_defer "unhold_devs '/mnt/3 /mnt/2 /mnt/1' 0 1"
 
     mkdir -p /mnt/1 /mnt/2 /mnt/3
     mount -i -t bcachefs -o degraded /dev/mapper/held0 /mnt/1 &
