@@ -3309,25 +3309,25 @@ teardown_delay_devs()
 test_scrub_cancel()
 {
     set_watchdog 180
-    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
-    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    setup_delay_devs
+    run_quiet "" bcachefs format -f ${delay_devs[0]}
+    mount -t bcachefs ${delay_devs[0]} /mnt
 
-    # Enough data that the scrub can't finish before we get to cancel it. There
-    # is no --rate to slow a scrub down, so the only lever on how long it runs
-    # is how much it has to walk, and a scrub that has already finished tells us
-    # nothing about cancelling one: the first version wrote 100M and the scrub
-    # reported 100% complete before the two second wait below was up. That puts
-    # the rate somewhere above 70MB/s - we only know it beat the wait, not by
-    # how much - so size for the pessimistic end and leave the wait alone, since
-    # shortening it risks cancelling during startup instead of mid-walk.
-    dd if=/dev/urandom of=/mnt/testfile bs=1M count=2000 oflag=direct
+    run_fio_base				\
+	--name=frag				\
+	--rw=randwrite				\
+	--bs=4k					\
+	--filesize=32M
     sync
 
-    umount /mnt
-    mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
+    # A scrub that has already finished tells us nothing about cancelling one,
+    # and how much data that takes depends on the machine: 2G was scrubbed in
+    # under the two second wait below. Delayed reads make it slow anywhere, and
+    # a cancel only waits out the reads in flight.
+    set_read_delay 1000
 
     echo "Starting scrub in background..."
-    bcachefs scrub ${ktest_scratch_dev[0]} &
+    bcachefs scrub ${delay_devs[0]} &
     scrub_pid=$!
 
     # Let it get going, but nowhere near finishing
@@ -3344,7 +3344,7 @@ test_scrub_cancel()
     if ! kill -0 $scrub_pid 2>/dev/null; then
         if wait $scrub_pid; then
             echo "FAILED: scrub finished before we could cancel it"
-            echo "        (it needs more data to walk, or a shorter wait above)"
+            echo "        (it needs a longer read delay, or a shorter wait above)"
         else
             echo "FAILED: scrub exited nonzero before we could cancel it - it never started"
         fi
@@ -3384,7 +3384,9 @@ test_scrub_cancel()
     local end=$(date +%s)
     echo "Scrub exited in $((end - start)) seconds"
 
+    set_read_delay 0
     umount /mnt
+    teardown_delay_devs
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
     bcachefs_test_end_checks ${ktest_scratch_dev[0]}
 }
