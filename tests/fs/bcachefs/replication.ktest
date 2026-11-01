@@ -3291,7 +3291,9 @@ set_read_delay()
 	dmsetup reload scrubdelay$i --table \
 	    "0 $(blockdev --getsz $dev) delay $dev 0 $ms $dev 0 0"
 	dmsetup suspend scrubdelay$i
-	dmsetup resume scrubdelay$i
+	# Don't wait on udev: its blkid probe of the resumed device reads
+	# through the delay, ~24 reads in series - 73s per device at 3000ms
+	dmsetup resume --noudevsync scrubdelay$i
     done
 }
 

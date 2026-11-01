@@ -38,7 +38,9 @@ delay_dev_set_read()
 
     dmsetup reload $DELAY_NAME --table "0 $(blockdev --getsz $dev) delay $dev 0 $1 $dev 0 0"
     dmsetup suspend $DELAY_NAME
-    dmsetup resume $DELAY_NAME
+    # Don't wait on udev: its blkid probe of the resumed device reads
+    # through the delay, ~24 reads in series
+    dmsetup resume --noudevsync $DELAY_NAME
 }
 
 counter_since_mount()
