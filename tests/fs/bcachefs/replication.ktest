@@ -3629,6 +3629,129 @@ test_scrub_corrupt_single_replica()
     bcachefs_test_end_checks "$dev"
 }
 
+# A plain read of data corrupted on disk, with no other copy: it has to fail
+# with a checksum error, not return the corrupt bytes. Unmounted before the
+# corruption, so nothing's served from cache.
+test_read_corrupt_on_disk()
+{
+    ktest_expect_device_errors=1
+    ktest_expect_sb_errors="data_read_csum_err"
+    set_watchdog 60
+    setup_tracing `bcachefs_slowpath_tracepoints`
+
+    local dev=${ktest_scratch_dev[0]}
+
+    run_quiet "" bcachefs format -f --bucket_size=${BUCKET_SIZE_KB}k "$dev"
+    mount -t bcachefs "$dev" /mnt
+    dd if=/dev/urandom of=/mnt/testfile bs=1M count=4 oflag=direct
+    umount /mnt
+
+    local nr=$(bcachefs list -b extents "$dev" |
+	bcachefs_ptr_sectors $BUCKET_SIZE_SECTORS 0 | head -1 |
+	bcachefs_corrupt_sectors "$dev")
+    if ((nr == 0)); then
+	echo "ERROR: found no extent locations to corrupt"
+	return 1
+    fi
+
+    mount -t bcachefs "$dev" /mnt
+    if cat /mnt/testfile > /dev/null; then
+	echo "ERROR: read of corrupted data succeeded"
+	return 1
+    fi
+
+    local csum_errs
+    bch_sb_error_count csum_errs data_read_csum_err
+    umount /mnt
+
+    if ((csum_errs == 0)); then
+	echo "ERROR: read failed, but no data_read_csum_err counted"
+	return 1
+    fi
+
+    bcachefs fsck -ny "$dev"
+
+    # the read error's self_heal had no good copy to rewrite from:
+    bcachefs reset-counters --counters=data_update_fail "$dev"
+    bcachefs_test_end_checks "$dev"
+}
+
+# The same for a file small enough to be stored inline, in its extent key: its
+# bytes are in a btree node and the journal. Every copy of them on the device is
+# overwritten. The node's bset checksum catches it, but can't say which key went
+# bad, and the node is read anyway and rewritten: the extent's own checksum is
+# what has to fail the read.
+test_read_corrupt_inline_on_disk()
+{
+    ktest_expect_device_errors=1
+    ktest_expect_sb_errors="bset_bad_csum|data_read_csum_err"
+    set_watchdog 120
+
+    local dev=${ktest_scratch_dev[0]}
+    local good=$(head -c 256 /dev/urandom | tr -dc A-Za-z0-9 | head -c 48)
+    local bad=${good//?/X}
+
+    run_quiet "" bcachefs format -f "$dev"
+    mount -t bcachefs "$dev" /mnt
+    echo -n "$good" > /mnt/small
+    umount /mnt
+
+    mount -t bcachefs "$dev" /mnt
+    if [[ $(cat /mnt/small) != "$good" ]]; then
+	echo "ERROR: the file didn't read back after a remount, before any corruption:"
+	od -An -c /mnt/small | head -4
+	umount /mnt
+	return 1
+    fi
+    umount /mnt
+
+    if ! bcachefs list -b extents "$dev" | grep -q inline_data; then
+	echo "ERROR: the file wasn't stored inline - nothing to test"
+	return 1
+    fi
+
+    # Not grep -b: over long runs of NULs it reports the wrong offsets.
+    # strings prints each run of text with its offset; the copy is in it.
+    local offsets=$(strings -a -t d -n 8 "$dev" | awk -v s="$good" '
+	{ i = index($0, s); if (i) { match($0, /^ *[0-9]+ /); print $1 + i - 1 - RLENGTH } }')
+    if [[ -z $offsets ]]; then
+	echo "ERROR: found no copy of the file's bytes on $dev"
+	return 1
+    fi
+
+    local off
+    for off in $offsets; do
+	echo "overwriting the copy at byte $off (sector $((off / 512)))"
+	echo -n "$bad" | dd of="$dev" bs=1 seek="$off" conv=notrunc,fsync status=none
+    done
+
+    local left=$(strings -a -n 8 "$dev" | grep -c -- "$good" || true)
+    if ((left)); then
+	echo "ERROR: $left copies of the file's bytes still on $dev after overwriting them"
+	return 1
+    fi
+
+    mount -t bcachefs "$dev" /mnt
+    if cat /mnt/small > /tmp/got; then
+	echo "ERROR: read of corrupted inline data succeeded:"
+	od -An -c /tmp/got | head -4
+	umount /mnt
+	return 1
+    fi
+
+    local csum_errs
+    bch_sb_error_count csum_errs data_read_csum_err
+    umount /mnt
+
+    if ((csum_errs == 0)); then
+	echo "ERROR: read failed, but no data_read_csum_err counted"
+	return 1
+    fi
+
+    bcachefs fsck -ny "$dev"
+    bcachefs_test_end_checks "$dev"
+}
+
 # Print "extent# dev sector" for every replica pointer in a bkey
 # listing on stdin, grouping pointers by the extent they belong to.
 extent_replica_locations()
