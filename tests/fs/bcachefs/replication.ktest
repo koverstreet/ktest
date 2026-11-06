@@ -3741,10 +3741,22 @@ test_read_corrupt_inline_on_disk()
 
     local csum_errs
     bch_sb_error_count csum_errs data_read_csum_err
-    umount /mnt
 
     if ((csum_errs == 0)); then
 	echo "ERROR: read failed, but no data_read_csum_err counted"
+	umount /mnt
+	return 1
+    fi
+
+    # The node was rewritten from the bset that failed its checksum, so its
+    # checksums are good now: scrub has to find the extent by its own
+    local rc=0
+    bcachefs scrub "$dev" || rc=$?
+    echo "scrub exit code: $rc"
+    umount /mnt
+
+    if (((rc & 4) == 0)); then
+	echo "ERROR: scrub did not report the inline data as uncorrectable"
 	return 1
     fi
 
