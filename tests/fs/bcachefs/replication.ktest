@@ -3755,6 +3755,35 @@ test_read_corrupt_inline_on_disk()
 	return 1
     fi
 
+    # The key is poisoned, its damage recorded in the same transaction: once,
+    # however many reads fail on it - before the poisoning commits, or after,
+    # when they fail without checking it
+    local i nr
+    for i in $(seq 5); do
+	if cat /mnt/small > /dev/null 2>&1; then
+	    echo "ERROR: a later read of the corrupted inline data succeeded"
+	    umount /mnt
+	    return 1
+	fi
+    done
+    for i in $(seq 50); do
+	nr=$(bcachefs damage /mnt/small | awk '$1 == "data_read_csum_err" { print $3 }')
+	[[ -n $nr ]] && break
+	sleep 0.1
+    done
+    for i in $(seq 5); do
+	cat /mnt/small > /dev/null 2>&1 || true
+    done
+    sleep 1
+    nr=$(bcachefs damage /mnt/small | awk '$1 == "data_read_csum_err" { print $3 }')
+    echo "damage recorded: data_read_csum_err nr ${nr:-none}"
+    if [[ $nr != 1 ]]; then
+	echo "ERROR: the inline data's damage should be recorded once"
+	bcachefs damage /mnt/small
+	umount /mnt
+	return 1
+    fi
+
     # The node was rewritten from the bset that failed its checksum, so its
     # checksums are good now: scrub has to find the extent by its own
     local rc=0
