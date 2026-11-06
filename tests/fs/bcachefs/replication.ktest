@@ -2330,8 +2330,15 @@ test_self_healing()
     md5sum /mnt/test > /root/md5sum.after
     diff /root/md5sum.before /root/md5sum.after
 
-    # Should find nothing to correct:
-    bcachefs scrub /mnt
+    # The read healed the file. The btree node replicas the dd hit on vdd
+    # are scrub's to rewrite, and it reports them: exit 2, corrected. Nothing
+    # may be uncorrected (4), or fail outright (1)
+    local ret=0
+    bcachefs scrub /mnt || ret=$?
+    if (( ret & ~2 )); then
+	echo "ERROR: scrub exited $ret: after the read healed the file, only corrected btree nodes are expected"
+	exit 1
+    fi
     umount /mnt
 
     bcachefs fsck -ny ${ktest_scratch_dev[0]} ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
