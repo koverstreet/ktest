@@ -13,7 +13,7 @@ config-scratch-devs 16G
 config-scratch-devs 16G
 config-scratch-devs 16G
 
-config-mem 4G
+config-mem 8G
 
 test_ec_evacuate_after_degraded_io()
 {

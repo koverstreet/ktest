@@ -6,6 +6,11 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/../../test-libs.sh
 
+# The VM builds the module itself on a DKMS cache miss, and rustc compiling
+# bcachefs's Rust - one crate, one codegen unit - was OOM-killed at 3.8G in a
+# 4G VM:
+config-mem 8G
+
 # nodebug test variant: the harness passes ktest_bcachefs_no_debug (it
 # rides testrunner's ktest_* passthrough). Translate it once to the
 # internal NO_BCACHEFS_DEBUG that the checks below — and bcachefs_antagonist

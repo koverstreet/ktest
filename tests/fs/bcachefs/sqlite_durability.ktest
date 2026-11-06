@@ -8,7 +8,7 @@
 
 require-kernel-config EXT4_FS
 
-config-mem 4G
+config-mem 8G
 config-timeout 900
 
 config-scratch-devs 4G

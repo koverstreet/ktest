@@ -15,7 +15,7 @@ config-scratch-devs 4G
 config-scratch-devs 4G
 config-scratch-devs 4G
 
-config-mem 4G
+config-mem 8G
 
 test_recovery()
 {

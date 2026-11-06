@@ -2,7 +2,7 @@
 
 . $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
 
-config-mem 4G
+config-mem 8G
 config-cpus 12
 
 config-scratch-devs 8G
