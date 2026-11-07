@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+require-kernel-config BCACHEFS_TESTS
+
+config-scratch-devs 1G
+config-scratch-devs 4G
+config-scratch-devs 4G
+
+remove_rewrites_btree_node_with_missing_backpointer()
+{
+    set_watchdog 900
+
+    run_quiet "" bcachefs format -f			\
+	"$@"						\
+	--block_size=4k					\
+	--bucket_size=256k				\
+	--btree_node_size=64k				\
+	--metadata_replicas=2				\
+	--label=ssd.ssd1 ${ktest_scratch_dev[0]}	\
+	--label=hdd.hdd1 ${ktest_scratch_dev[1]}	\
+	--label=hdd.hdd2 ${ktest_scratch_dev[2]}	\
+	--metadata_target=ssd				\
+	--foreground_target=hdd				\
+	--background_target=hdd
+
+    mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
+
+    for i in $(seq 0 100000); do
+	echo "$i" > /mnt/file-$i
+    done
+    sync
+
+    echo test_btree_ptr_missing_backpointer_dev 1 1 > /sys/fs/bcachefs/*/perf_test
+    sync
+
+    local fsck_log=/tmp/device_remove_missing_backpointer.fsck.log
+    if bcachefs fsck -k -f -y -v \
+	-o recovery_passes=check_extents_to_backpointers,read_only=0 \
+	/mnt > "$fsck_log" 2>&1; then
+	local fsck_rc=0
+    else
+	local fsck_rc=$?
+    fi
+    cat "$fsck_log"
+
+    if [[ $fsck_rc -ne 0 ]] && ! grep -q "errors fixed" "$fsck_log"; then
+	return "$fsck_rc"
+    fi
+
+    bcachefs device remove ${ktest_scratch_dev[0]} /mnt
+
+    umount /mnt
+
+    bcachefs reset-counters ${ktest_scratch_dev[1]} > /dev/null
+
+    bcachefs fsck -ny ${ktest_scratch_dev[1]} ${ktest_scratch_dev[2]}
+    check_expected_missing_backpointer_error ${ktest_scratch_dev[1]}
+    check_bcachefs_device_errors ${ktest_scratch_dev[1]}
+    check_bcachefs_counters ${ktest_scratch_dev[1]}
+}
+
+check_expected_missing_backpointer_error()
+{
+    local dev=$1
+    local errors=$(bcachefs show-super -f errors "$dev" |
+	sed -n '/^errors /,${/^errors /!p;}')
+
+    if [[ -n $errors ]] &&
+	echo "$errors" | grep -vE '^ptr_to_missing_backpointer[[:space:]]'; then
+	echo "unexpected bcachefs errors on $dev"
+	return 1
+    fi
+}
+
+test_legacy_scan_device_removal()
+{
+    remove_rewrites_btree_node_with_missing_backpointer --version=1.26
+}
+
+test_fast_backpointer_device_removal()
+{
+    remove_rewrites_btree_node_with_missing_backpointer
+}
+
+main "$@"
