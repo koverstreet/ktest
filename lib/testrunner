@@ -36,10 +36,12 @@ ln -sf $ktest_out /ktest-out
 #
 # Not in lib/fstab, which is baked into the root image at build time - a
 # missing tag would then fail the boot mount on every non-nix host, and every
-# existing image would need rebuilding. Here, a host without a store just
-# leaves an empty directory.
-mkdir -p /nix/store
-mount -t virtiofs nix /nix/store 2>/dev/null || rmdir /nix/store 2>/dev/null || true
+# existing image would need rebuilding. Keyed on /host/nix/store, the same test
+# libktest.sh exports the tag on; the image's /nix symlink dangles on other hosts.
+if [[ -d /host/nix/store ]]; then
+    mkdir -p /nix/store
+    mount -t virtiofs nix /nix/store
+fi
 
 # Some home directories are in weird places:
 mkdir -p $(dirname $home)
