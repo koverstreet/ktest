@@ -1,0 +1,698 @@
+#!/usr/bin/env bash
+#
+# check_topology injection tests: btree topology broken on the unmounted image
+# - node pointers put into interior nodes raw, with `bcachefs kvdb set -L` and
+# `copy -L` (no interior update, nothing journalled, the nodes below left
+# alone), or nodes zeroed on disk - so that the next fsck has to repair it.
+#
+# Each test builds a filesystem whose extents btree is a root at level 1 over
+# a leaf per inode number shard, as a new filesystem is presplit - or, with 4k
+# nodes and more files, a root at level 2 over interior nodes over those -
+# breaks one thing about how the pointers cover their range, and asserts, as
+# fsck-inject does:
+#
+#   - fsck -y detects it (exit != 0) and records the expected error in the
+#     superblock, by name
+#   - no errors recorded beyond the ones the test declares
+#   - a second fsck -n runs clean
+#   - the data's all there, but for what the repair had to drop
+#
+# No bcachefs_test_end_checks: these tests intentionally stamp error
+# counters.
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 4G
+
+# new_fs's, so that a node's bucket:offset is a sector
+BUCKET_SECTORS=512
+
+# The largest inode number, as bash's integers hold it
+INODE_MAX=9223372036854775807
+
+dev()
+{
+    echo ${ktest_scratch_dev[0]}
+}
+
+kvdb()
+{
+    bcachefs kvdb $(dev) "$@"
+}
+
+kvdb_rw()
+{
+    bcachefs kvdb --rw $(dev) "$@"
+}
+
+recorded_errors()
+{
+    bcachefs show-super -f errors_v2 $(dev) |
+	sed -nE '/^errors(_v2)? /,${/^errors(_v2)? /!p;}' |
+	awk '{print $1}'
+}
+
+# The positions of the pointers at level $2 of btree $1, in order
+ptrs()
+{
+    kvdb -c "list -L $2 -k $1" | sed -n 's/.*type btree_ptr_v2 \([^ ]*\).*/\1/p'
+}
+
+# A filesystem whose extents btree's root is at level $1, $2 files of a 4k
+# block each, and $3...: options for format. An inode's shard is a hash of the
+# pid creating it: the files are created by four subshells, by printf - a
+# builtin, so the subshell's own open() - each subshell's in one shard, so a
+# few shards' leaves have files, and most none. The files' checksums go in
+# /tmp/sums and inode numbers in /tmp/inums, the extents btree's pointers at
+# level 1 in /tmp/ptrs and at level 2 in /tmp/ptrs2.
+new_fs()
+{
+    local depth=$1 nr=$2 s
+    shift 2
+
+    run_quiet "" bcachefs format -f --bucket_size=$(( BUCKET_SECTORS / 2 ))k "$@" $(dev)
+    mount -t bcachefs $(dev) /mnt
+
+    for s in 1 2 3 4; do
+	(
+	    for (( i = s; i <= nr; i += 4 )); do
+		printf '%s' "$(head -c 3072 /dev/urandom | base64 -w0)" > /mnt/f$i
+	    done
+	)
+    done
+    (cd /mnt; sha256sum f* > /tmp/sums; ls -i f* > /tmp/inums)
+    : > /tmp/lost
+    umount /mnt
+
+    echo "extents level 1:"
+    ptrs extents 1 | tee /tmp/ptrs
+    echo "extents level 2:"
+    ptrs extents 2 | tee /tmp/ptrs2
+
+    local nr1=$(wc -l < /tmp/ptrs) nr2=$(wc -l < /tmp/ptrs2)
+    if (( nr1 < 4 )); then
+	echo "TEST FAILED: extents has $nr1 nodes at level 0, wanted several"
+	exit 1
+    fi
+    if (( depth == 1 && nr2 != 0 )); then
+	echo "TEST FAILED: extents is deeper than a root at level 1"
+	exit 1
+    fi
+    if (( depth == 2 && (nr2 < 2 || $(ptrs extents 3 | wc -l) != 0) )); then
+	echo "TEST FAILED: extents isn't a root at level 2 over several nodes" \
+	     "($nr2 at level 1)"
+	exit 1
+    fi
+}
+
+# A root at level 2: 4k nodes, which want blocks smaller than that
+new_deep_fs()
+{
+    new_fs 2 3000 --block_size=512 --btree_node_size=4k
+}
+
+# The level 1 pointer $1 (0-based, from new_fs's list)
+ptr()
+{
+    sed -n "$(( $1 + 1 ))p" /tmp/ptrs
+}
+
+# The level 2 pointer $1
+ptr2()
+{
+    sed -n "$(( $1 + 1 ))p" /tmp/ptrs2
+}
+
+# The level 1 pointers in the node level 2 pointer $1 points to
+interior_children()
+{
+    local lo=
+    if (( $1 > 0 )); then
+	lo=$(ptr2 $(( $1 - 1 )))
+    fi
+    awk -v lo="$lo" -v hi="$(ptr2 $1)" '
+	lo == "" || on	{ print; if ($0 == hi) exit }
+	$0 == lo	{ on = 1 }' /tmp/ptrs
+}
+
+# What a dropped or orphaned node leaves in the allocation info: its bucket
+# still accounted to the btree
+NODE_DROP_ERRORS="alloc_key_dirty_sectors_wrong|alloc_key_data_type_wrong|alloc_key_to_missing_lru_entry|backpointer_to_missing_ptr|lru_entry_bad|freespace_key_wrong|need_discard_key_wrong|accounting_mismatch"
+
+# check_fsck <error>...: each detected and recorded - a fault that didn't
+# land is a test that didn't run - nothing undeclared
+# (ktest_expect_sb_errors), repaired. Allowed besides, in every test: a lookup
+# that runs into the damage before check_topology does checks the node and
+# records bad_min_key; and pointers to nodes the scan found have no bucket gens
+# yet, which check_allocations then fixes (stale_dirty_ptr).
+check_fsck()
+{
+    local expect rc1=0 rc2=0
+    local ktest_expect_sb_errors="$ktest_expect_sb_errors|btree_node_topology_bad_min_key|stale_dirty_ptr"
+
+    bcachefs fsck -y $(dev) || rc1=$?
+    echo "first fsck -y exited $rc1 (recorded: $(recorded_errors | xargs))"
+
+    if (( rc1 == 0 )); then
+	echo "TEST FAILED: fsck missed injected corruption"
+	exit 1
+    fi
+
+    for expect in "$@"; do
+	if ! recorded_errors | grep -qx "$expect"; then
+	    echo "TEST FAILED: $expect not recorded (recorded: $(recorded_errors | xargs))"
+	    exit 1
+	fi
+    done
+
+    if ! check_bcachefs_errors $(dev); then
+	echo "TEST FAILED: errors the test didn't declare" \
+	     "(ktest_expect_sb_errors='$ktest_expect_sb_errors')"
+	exit 1
+    fi
+
+    bcachefs fsck -n $(dev) || rc2=$?
+    echo "second fsck -n exited $rc2"
+
+    if (( rc2 != 0 )); then
+	echo "TEST FAILED: errors remain after fsck -y"
+	exit 1
+    fi
+}
+
+# Every file there, its contents as written - but for the files named in
+# /tmp/lost: the ones the repair had to drop
+check_data()
+{
+    mount -t bcachefs $(dev) /mnt
+    if ! (cd /mnt; awk 'FILENAME == ARGV[1] { lost[$1]; next } !($2 in lost)' /tmp/lost /tmp/sums |
+	  sha256sum --quiet -c); then
+	echo "TEST FAILED: data lost or wrong after the repair"
+	exit 1
+    fi
+    umount /mnt
+}
+
+# A pointer's inode: SPOS_MAX's and U64_MAX as INODE_MAX
+ptr_inode()
+{
+    local i=${1%%:*}
+    case $i in
+	SPOS_MAX|U64_MAX) echo $INODE_MAX ;;
+	*)		  echo $i ;;
+    esac
+}
+
+# The inode numbers whose extents level 1 pointer $1's leaf holds: "lo hi".
+# Each file is one extent, so none spans two leaves. (In bash: awk's doubles
+# can't tell apart inode numbers this far up a shard.)
+leaf_inodes()
+{
+    local lo=0
+    if (( $1 > 0 )); then
+	lo=$(( $(ptr_inode $(ptr $(( $1 - 1 )))) + 1 ))
+    fi
+    echo $lo $(ptr_inode $(ptr $1))
+}
+
+# The files with extents in level 1 pointer $1's leaf, to /tmp/lost: the ones
+# losing it loses
+lost_leaf()
+{
+    local lo hi inum name
+    read lo hi <<< "$(leaf_inodes $1)"
+    while read inum name; do
+	if (( inum >= lo && inum <= hi )); then
+	    echo $name
+	fi
+    done < /tmp/inums > /tmp/lost
+    echo "lost by the repair: $(xargs < /tmp/lost)"
+}
+
+# Whether level 1 pointer $1's leaf has files' extents in it
+leaf_has_files()
+{
+    local lo hi inum name
+    read lo hi <<< "$(leaf_inodes $1)"
+    while read inum name; do
+	if (( inum >= lo && inum <= hi )); then
+	    return 0
+	fi
+    done < /tmp/inums
+    return 1
+}
+
+# The first leaf, but for the first and last, with files in it - one whose
+# loss loses data, and leaves a gap with leaves either side
+data_leaf()
+{
+    local n=$(wc -l < /tmp/ptrs) i
+    for (( i = 1; i < n - 1; i++ )); do
+	if leaf_has_files $i; then
+	    echo $i
+	    return
+	fi
+    done
+    echo "TEST FAILED: no files in any leaf between the first and last" >&2
+    return 1
+}
+
+# The first leaf from $1 on that, with the one after it, has no files - so
+# neither's been rewritten since the presplit, and the first is the newer,
+# by one - and isn't the last but one
+empty_pair()
+{
+    local n=$(wc -l < /tmp/ptrs) i
+    for (( i = $1; i + 2 < n; i++ )); do
+	if ! leaf_has_files $i && ! leaf_has_files $(( i + 1 )); then
+	    echo $i
+	    return
+	fi
+    done
+    echo "TEST FAILED: no two leaves from $1 on without files" >&2
+    return 1
+}
+
+# Level 1 pointer $1's leaf, from empty_pair(), made newer than the one before
+# it: rewritten three times, each its seq + 1, from one behind to two ahead
+make_newer()
+{
+    local p=$(ptr $1)
+    kvdb_rw -c "rewrite -L 1 extents $p" -c "rewrite -L 1 extents $p" -c "rewrite -L 1 extents $p"
+}
+
+# Leaf $1's first position: the one after the last of the leaf before it,
+# which ends at a shard boundary
+leaf_min()
+{
+    if (( $1 == 0 )); then
+	echo POS_MIN
+	return
+    fi
+    local p=$(ptr $(( $1 - 1 )))
+    if [[ $p != *:U64_MAX:U32_MAX ]]; then
+	echo "TEST FAILED: leaf $(( $1 - 1 )) ends at $p, not a shard boundary" >&2
+	return 1
+    fi
+    echo $(( ${p%%:*} + 1 )):0:0
+}
+
+# The sector the first pointer of the key printed on stdin points to: printed
+# as bucket:offset, in new_fs's buckets
+ptr_sector()
+{
+    local b o
+    read b o <<< "$(sed -nE '0,/ptr:/s/.*ptr: +[^ ]+ [0-9]+:([0-9]+):([0-9]+) .*/\1 \2/p')"
+    echo $(( b * BUCKET_SECTORS + o ))
+}
+
+# The sector the node at pointer $3, at level $2 of btree $1, starts at
+child_sector()
+{
+    kvdb -c "get -L $2 $1 $3" | ptr_sector
+}
+
+# The sector btree $1's root, at level $2, starts at - from its key, which no
+# node holds, so list prints it
+root_sector()
+{
+    bcachefs list -m nodes -b $1 -l $2 $(dev) | ptr_sector
+}
+
+# The node at sector $1 zeroed - its header: it won't read, and the node scan
+# finds nothing there
+zero_node()
+{
+    dd if=/dev/zero of=$(dev) bs=512 seek=$1 count=8 conv=notrunc oflag=direct status=none
+}
+
+# The extents btree's pointers $2... at level $1 deleted, in one kvdb session:
+# their nodes written once, after all of them
+delete_ptrs()
+{
+    local level=$1 p args=()
+    shift
+    for p in "$@"; do
+	args+=(-c "set -L $level extents $p deleted")
+    done
+    kvdb_rw "${args[@]}"
+}
+
+# A position as copy's fields take it: three numbers
+pos_fields()
+{
+    case $1 in
+	POS_MIN) echo 0:0:0 ;;
+	*)	 echo $1 | sed 's/U64_MAX/18446744073709551615/g; s/U32_MAX/4294967295/' ;;
+    esac
+}
+
+# The pointer at $1 given the range from $2 to its end - min_key set, and
+# BTREE_PTR_RANGE_UPDATED, so that reading the node takes that for its range -
+# by copying the pointer over itself, raw: its node, and the one before it, are
+# left as they were, so the two overlap. (Not update -L: an interior update
+# changes the cached node's key too, and a running filesystem takes a key that
+# doesn't match its node's header for memory corruption.)
+#
+# Which one the repair keeps is which is newer, by BTREE_NODE_SEQ: a split
+# gives both halves its node's seq + 1, and the presplit splits a leaf at the
+# last shard boundary inside it, from the right, so the leaves' seqs fall left
+# to right, but for the first two, which are equal - in leaves no file's in,
+# since writing one rewrites its leaf, seq + 1 again: empty_pair(). For the
+# one after to be newer, make_newer().
+set_min()
+{
+    kvdb_rw -c "$(set_min_cmd $1 $2)"
+    kvdb -c "get -L 1 extents $1"
+}
+
+# set_min()'s kvdb command, for a session with other damage in it: a
+# filesystem opened read-write with its topology already broken has its own
+# updates trip on it, go emergency read-only, and leave what's injected next
+# unwritten - so each test's damage goes in in one session
+set_min_cmd()
+{
+    local inode offset snapshot
+    IFS=: read -r inode offset snapshot <<< "$(pos_fields $2)"
+    echo "copy -L 1 extents $1 $1 min_key.inode=$inode min_key.offset=$offset min_key.snapshot=$snapshot flags=1"
+}
+
+# A leaf's pointer gone from the root: a gap between the leaves either side of
+# it - the leaf itself still on disk, where the node scan finds it and fills
+# the gap back in.
+test_gap_filled_from_scan()
+{
+    new_fs 1 600
+    kvdb_rw -c "set -L 1 extents $(ptr 1) deleted"
+
+    ktest_expect_sb_errors="btree_node_topology_gap_between_nodes"
+    check_fsck btree_node_topology_gap_between_nodes
+    check_data
+}
+
+# The last leaf's pointer gone: the leaf before it ends short of the root's
+# end, and the scan fills the rest in.
+test_last_child_short()
+{
+    new_fs 1 600
+    kvdb_rw -c "set -L 1 extents $(ptr $(( $(wc -l < /tmp/ptrs) - 1 ))) deleted"
+
+    ktest_expect_sb_errors="btree_node_topology_bad_max_key"
+    check_fsck btree_node_topology_bad_max_key
+    check_data
+}
+
+# Every pointer gone from the root: an empty interior node, which is the root
+# - dropped, and the btree rebuilt from what the node scan finds.
+test_empty_interior_node()
+{
+    new_fs 1 600
+    delete_ptrs 1 $(cat /tmp/ptrs)
+
+    ktest_expect_sb_errors="btree_node_topology_interior_node_empty|$NODE_DROP_ERRORS"
+    check_fsck btree_node_topology_interior_node_empty
+    check_data
+}
+
+# A leaf's range moved back over the last position of the one before: it's
+# newer, so the one before is cut short of it. That's the shard pivot, where
+# there's no key: nothing is lost.
+test_next_overlaps_prev_end()
+{
+    new_fs 1 600
+    local i
+    i=$(empty_pair 0)
+    make_newer $(( i + 1 ))
+    set_min $(ptr $(( i + 1 ))) $(ptr $i)
+
+    ktest_expect_sb_errors="btree_node_topology_bad_max_key"
+    check_fsck btree_node_topology_bad_max_key
+    check_data
+}
+
+# A leaf's range moved back over all of the one before's: it's newer, so the
+# one before is dropped - it had no files, so nothing is lost.
+test_next_overwrites_prev()
+{
+    new_fs 1 600
+    local i
+    i=$(empty_pair 0)
+    make_newer $(( i + 1 ))
+    set_min $(ptr $(( i + 1 ))) $(leaf_min $i)
+
+    ktest_expect_sb_errors="btree_node_topology_overwritten_by_next_node|$NODE_DROP_ERRORS"
+    check_fsck btree_node_topology_overwritten_by_next_node
+    check_data
+}
+
+# The last leaf's range moved back over the last key of the one before it,
+# which is newer: the one before keeps its range, and the last one's start is
+# moved back up past it. Nothing is lost.
+test_next_bad_min_key()
+{
+    new_fs 1 600
+    local n=$(wc -l < /tmp/ptrs)
+    if leaf_has_files $(( n - 2 )) || leaf_has_files $(( n - 1 )); then
+	echo "TEST FAILED: the last two leaves have files: rewritten, their seqs unknown"
+	exit 1
+    fi
+    set_min $(ptr $(( n - 1 ))) $(ptr $(( n - 2 )))
+
+    ktest_expect_sb_errors="btree_node_topology_bad_min_key"
+    check_fsck btree_node_topology_bad_min_key
+    check_data
+}
+
+# Not here: btree_node_topology_overwritten_by_prev_node - a node wholly
+# inside the range of an older one before it - isn't reachable by moving
+# pointers. Its range would have to end at most one position past the one
+# before, and the leaves new_fs makes span whole shards.
+
+# A leaf that won't read - its pointer's seq not the node's: dropped, and the
+# node scan, which finds the node whole, fills the gap back in.
+test_child_unreadable()
+{
+    new_fs 1 600
+    local i
+    i=$(data_leaf)
+    kvdb_rw -c "copy -L 1 extents $(ptr $i) $(ptr $i) seq=1"
+
+    ktest_expect_sb_errors="data_lost_btree_node_read_error|btree_node_bad_seq|btree_node_topology_gap_between_nodes"
+    check_fsck btree_node_topology_gap_between_nodes btree_node_bad_seq
+    check_data
+}
+
+# A leaf zeroed on disk: dropped, and the scan finds nothing for its range, so
+# the next leaf's start is moved down over it. Its files are lost.
+test_child_lost()
+{
+    new_fs 1 600
+    local i
+    i=$(data_leaf)
+    zero_node $(child_sector extents 1 $(ptr $i))
+    lost_leaf $i
+
+    ktest_expect_sb_errors="data_lost_btree_node_read_error|btree_node_bad_magic|btree_node_topology_gap_between_nodes"
+    check_fsck btree_node_topology_gap_between_nodes btree_node_bad_magic
+    check_data
+}
+
+# The last leaf zeroed: dropped, and with nothing from the scan, the one before
+# it is made to end where the root does.
+test_last_child_lost()
+{
+    new_fs 1 600
+    local n=$(wc -l < /tmp/ptrs)
+    zero_node $(child_sector extents 1 $(ptr $(( n - 1 ))))
+    lost_leaf $(( n - 1 ))
+
+    ktest_expect_sb_errors="data_lost_btree_node_read_error|btree_node_bad_magic|btree_node_topology_bad_max_key"
+    check_fsck btree_node_topology_bad_max_key btree_node_bad_magic
+    check_data
+}
+
+# The extents root zeroed: a root at level 1 made up, and filled from what the
+# scan finds - every leaf, so nothing is lost.
+test_root_unreadable()
+{
+    new_fs 1 600
+    zero_node $(root_sector extents 1)
+
+    ktest_expect_sb_errors="data_lost_btree_node_read_error|btree_node_bad_magic|btree_root_read_error"
+    check_fsck btree_root_read_error btree_node_bad_magic
+    check_data
+}
+
+# The xattrs btree's root and leaves zeroed - it's empty: there's nothing for
+# the scan to find, and the btree starts over as an empty leaf.
+test_root_unreadable_scan_found_nothing()
+{
+    new_fs 1 600
+    for p in $(ptrs xattrs 1); do
+	zero_node $(child_sector xattrs 1 $p)
+    done
+    zero_node $(root_sector xattrs 1)
+
+    ktest_expect_sb_errors="data_lost_btree_node_read_error|btree_node_bad_magic|btree_root_read_error|btree_root_unreadable_and_scan_found_nothing"
+    check_fsck btree_root_unreadable_and_scan_found_nothing btree_root_read_error
+    check_data
+}
+
+# The snapshot_trees root zeroed - a btree that isn't recovered from the scan:
+# it starts over empty, flagged as having lost data, and is rebuilt from the
+# snapshots btree.
+test_root_unreadable_lost()
+{
+    new_fs 1 600
+    zero_node $(root_sector snapshot_trees 0)
+
+    ktest_expect_sb_errors="data_lost_btree_node_read_error|btree_node_bad_magic|btree_root_read_error|snapshot_to_bad_snapshot_tree"
+    check_fsck btree_root_read_error btree_node_bad_magic
+    check_data
+}
+
+# Every pointer in a level 1 node gone: an empty interior node, not the root -
+# dropped, which leaves a gap in the root, or its end short, and no scan to fill
+# that above level 1, so a neighbouring interior node's range is moved over it;
+# then that one's leaves don't reach its new end, and that the scan fills.
+#
+# The node with fewest leaves, rewritten first: each deletion is a whiteout, and
+# a 4k node written to many times has a block taken by each write.
+test_deep_empty_interior_child()
+{
+    new_deep_fs
+    local j nr min=0 min_nr=$INODE_MAX
+    for (( j = 0; j < $(wc -l < /tmp/ptrs2); j++ )); do
+	nr=$(interior_children $j | wc -l)
+	if (( nr < min_nr )); then
+	    min=$j
+	    min_nr=$nr
+	fi
+    done
+    echo "emptying level 1 node $min, of $min_nr leaves"
+    kvdb_rw -c "rewrite -L 2 extents $(ptr2 $min)"
+    delete_ptrs 1 $(interior_children $min)
+
+    ktest_expect_sb_errors="btree_node_topology_interior_node_empty|btree_node_topology_gap_between_nodes|btree_node_topology_bad_max_key|$NODE_DROP_ERRORS"
+    check_fsck btree_node_topology_interior_node_empty
+    check_data
+}
+
+# The root's first pointer gone: a gap at level 2, the next interior node's
+# start moved down over it, and the gap below that filled from the scan.
+test_deep_interior_gap()
+{
+    new_deep_fs
+    kvdb_rw -c "set -L 2 extents $(ptr2 0) deleted"
+
+    ktest_expect_sb_errors="btree_node_topology_gap_between_nodes|$NODE_DROP_ERRORS"
+    check_fsck btree_node_topology_gap_between_nodes
+    check_data
+}
+
+# The root's last pointer gone: the interior node before it is made to end
+# where the root does, and its last leaf, short of that, filled up to it from
+# the scan.
+test_deep_interior_short()
+{
+    new_deep_fs
+    kvdb_rw -c "set -L 2 extents $(ptr2 $(( $(wc -l < /tmp/ptrs2) - 1 ))) deleted"
+
+    ktest_expect_sb_errors="btree_node_topology_bad_max_key|$NODE_DROP_ERRORS"
+    check_fsck btree_node_topology_bad_max_key
+    check_data
+}
+
+# Several faults in one node: repairs one after another in a pass, and what
+# the walk finds again after one.
+
+# Two leaves' pointers gone: both gaps filled from the scan in one pass, and
+# the walk again finds nothing.
+test_two_gaps()
+{
+    new_fs 1 600
+    delete_ptrs 1 $(ptr 1) $(ptr 3)
+
+    ktest_expect_sb_errors="btree_node_topology_gap_between_nodes"
+    check_fsck btree_node_topology_gap_between_nodes
+    check_data
+}
+
+# A gap, then further on an overlap: two different repairs in one walk.
+test_gap_and_overlap()
+{
+    new_fs 1 600
+    local i
+    i=$(empty_pair 3)
+    make_newer $(( i + 1 ))
+    kvdb_rw -c "set -L 1 extents $(ptr 1) deleted" \
+	    -c "$(set_min_cmd $(ptr $(( i + 1 ))) $(ptr $i))"
+
+    ktest_expect_sb_errors="btree_node_topology_gap_between_nodes|btree_node_topology_bad_max_key"
+    check_fsck btree_node_topology_gap_between_nodes btree_node_topology_bad_max_key
+    check_data
+}
+
+# A leaf zeroed, and the next one's pointer gone: the zeroed leaf dropped, one
+# gap over both, which the scan fills only the second half of; walking again
+# finds the first half, which the scan has nothing for, and moves the next
+# leaf's start down over it. The zeroed leaf's files are lost.
+test_lost_beside_gap()
+{
+    new_fs 1 600
+    local i n=$(wc -l < /tmp/ptrs)
+    i=$(data_leaf)
+    if (( i + 2 >= n )); then
+	echo "TEST FAILED: leaf $i, with files, has no leaf past the next"
+	exit 1
+    fi
+    local sector=$(child_sector extents 1 $(ptr $i))
+    kvdb_rw -c "set -L 1 extents $(ptr $(( i + 1 ))) deleted"
+    zero_node $sector
+    lost_leaf $i
+
+    ktest_expect_sb_errors="data_lost_btree_node_read_error|btree_node_bad_magic|btree_node_topology_gap_between_nodes"
+    check_fsck btree_node_topology_gap_between_nodes btree_node_bad_magic
+    check_data
+}
+
+# A leaf overwritten by the next, which drops it and walks the node again -
+# where a gap further on is found. The dropped leaf had no files.
+test_drop_prev_then_gap()
+{
+    new_fs 1 600
+    local i n=$(wc -l < /tmp/ptrs)
+    i=$(empty_pair 0)
+    if (( i + 4 >= n )); then
+	echo "TEST FAILED: no leaf for a gap past leaf $(( i + 1 ))"
+	exit 1
+    fi
+    make_newer $(( i + 1 ))
+    kvdb_rw -c "$(set_min_cmd $(ptr $(( i + 1 ))) $(leaf_min $i))" \
+	    -c "set -L 1 extents $(ptr $(( i + 3 ))) deleted"
+
+    ktest_expect_sb_errors="btree_node_topology_overwritten_by_next_node|btree_node_topology_gap_between_nodes|$NODE_DROP_ERRORS"
+    check_fsck btree_node_topology_overwritten_by_next_node btree_node_topology_gap_between_nodes
+    check_data
+}
+
+# Faults at both levels: the root's last pointer gone, and in the first
+# interior node a leaf's - the root's end repaired, and the gap below.
+test_deep_two_levels()
+{
+    new_deep_fs
+    local nr_first=$(interior_children 0 | wc -l)
+    if (( nr_first < 3 )); then
+	echo "TEST FAILED: the first interior node has $nr_first leaves, wanted 3"
+	exit 1
+    fi
+    # one session: see set_min_cmd()
+    kvdb_rw -c "set -L 1 extents $(ptr 1) deleted" \
+	    -c "set -L 2 extents $(ptr2 $(( $(wc -l < /tmp/ptrs2) - 1 ))) deleted"
+
+    ktest_expect_sb_errors="btree_node_topology_bad_max_key|btree_node_topology_gap_between_nodes|$NODE_DROP_ERRORS"
+    check_fsck btree_node_topology_bad_max_key btree_node_topology_gap_between_nodes
+    check_data
+}
+
+main "$@"
