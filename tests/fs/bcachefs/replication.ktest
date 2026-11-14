@@ -2192,8 +2192,9 @@ test_replicas3_replace_failed_member()
 
 test_key_type_error()
 {
-    # A replicas=2 filesystem mounted very_degraded on one device: every
-    # write is degraded.
+    # foo's only copy is on the second device, which is offlined before it's
+    # removed: online, the remove would evacuate foo, racing the drop of its
+    # pointers. Offline, they're dropped, and reading it hits key_type_error.
     ktest_expect_sb_errors="data_lost_device_removed|write_degraded_insufficient_devices"
     set_watchdog 20
 
@@ -2205,9 +2206,7 @@ test_key_type_error()
 
     dd if=/dev/zero of=/mnt/foo bs=64k count=8 oflag=direct
 
-    umount /mnt
-    mount -t bcachefs -o very_degraded ${ktest_scratch_dev[0]} /mnt
-
+    bcachefs device offline --force ${ktest_scratch_dev[1]}
     bcachefs device remove --force ${ktest_scratch_dev[1]}
 
     # should fail:
