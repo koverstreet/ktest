@@ -469,6 +469,51 @@ scratch_dev_replug_all()
     done
 }
 
+# Whether nothing holds @dev - no mount, no other exclusive open - asked the
+# way the next test's mkfs will ask, by opening it O_EXCL. fuser can't say:
+# it sees only processes, and a mounted filesystem holds its devices from
+# inside the kernel.
+dev_unclaimed()
+{
+    perl -MFcntl -e 'sysopen(my $f, $ARGV[0], O_RDONLY | O_EXCL) or exit 1' "$1"
+}
+
+# After a failed test, unmount what it left under /mnt until its scratch
+# devices are free. Retried, not done once: a mount can stay busy for a moment
+# after the last process using it is gone, with nothing for fuser to find.
+scratch_devs_release()
+{
+    local i mnt dev held=()
+
+    for ((i = 0; i < 30; i++)); do
+	awk '$2 ~ /^\/mnt/ {print $2}' /proc/mounts | sort -r | while read -r mnt; do
+	    fuser -k -M -m "$mnt" >/dev/null 2>&1 || true
+	    umount "$mnt" 2>/dev/null || true
+	done
+
+	held=()
+	for dev in "${ktest_scratch_dev[@]}"; do
+	    if [[ -b $dev ]] && ! dev_unclaimed "$dev"; then
+		held+=("$dev")
+	    fi
+	done
+
+	if [[ ${#held[@]} = 0 ]]; then
+	    return
+	fi
+	sleep 1
+    done
+
+    echo "scratch devices still in use after a failed test, after ${i}s: ${held[*]}"
+    for dev in "${held[@]}"; do
+	awk -v d="${dev##*/}" 'index($1, d)' /proc/mounts
+	{ ls -A "/sys/class/block/${dev##*/}/holders" 2>/dev/null || true; } | sed "s|^|$dev held by |"
+    done
+    awk '$2 ~ /^\/mnt/ {print $2}' /proc/mounts | while read -r mnt; do
+	fuser -v -M -m "$mnt" 2>&1 || true
+    done
+}
+
 # scratch_dev_unplug <index>
 # scratch_dev_plug   <index>
 #
@@ -1041,13 +1086,7 @@ run_tests()
 	    $ktest_failfast  && break
 	    [[ $# = 1 ]] && break
 
-	    awk '{print $2}' /proc/mounts | grep ^/mnt | sort -r 2>/dev/null | while read -r mnt; do
-		while [[ -n $(fuser -k -M -m $mnt) ]]; do
-		    sleep 1
-		done
-		umount $mnt
-	    done
-
+	    scratch_devs_release
 	    scratch_dev_replug_all
 	fi
     done
