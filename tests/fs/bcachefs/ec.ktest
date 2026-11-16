@@ -2654,7 +2654,15 @@ test_ec_pending_after_device_add()
 
     umount /mnt
     bcachefs fsck -ny "${ktest_scratch_dev[@]:0:3}"
-    bcachefs_test_end_checks ${ktest_scratch_dev[0]}
+
+    # More trans_restart_upgrade and data_update_fail than usual: the
+    # devices are fresh and alike, so each extent's two replicas sit at the
+    # same offset on both, and reconcile's phys threads - one per rotational
+    # device, each walking its own in LBA order - reach each extent in
+    # lockstep. Both commit its reconcile opts, restarting each other, and
+    # the second's data update is refused as in flight. Real devices' layouts
+    # diverge, and the second thread finds the extent already moved.
+    bcachefs_test_end_checks --ratio=8 ${ktest_scratch_dev[0]}
 }
 
 
