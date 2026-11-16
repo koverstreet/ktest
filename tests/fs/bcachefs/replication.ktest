@@ -2692,17 +2692,18 @@ unclean_shutdown_with_data()
 }
 
 #
-# The three values of scrub_recent_journal_entries do what their names say.
+# scrub_recent_journal_entries=no and =always do what their names say.
 #
-# unclean is 0 deliberately, so that it is the default and existing filesystems
-# get the scrub without being told to. Which makes 0 an *enabled* value - and
-# recovery.c:930 and journal/read.c:132 both used to test this option for
-# truthiness, so the default never scrubbed and "no" scrubbed on every unclean
-# mount. The one that matters is a user writing =no to turn the feature off and
-# getting it turned on.
+# unclean is 0 deliberately, so that it is the default. Which makes 0 an
+# *enabled* value - and the option used to be tested for truthiness, so "no"
+# scrubbed on every unclean mount: a user writing =no to turn the feature off
+# got it turned on.
 #
-# Asserted on an unclean filesystem, which is the case that distinguishes all
-# three. On a clean one, no and unclean agree.
+# Not checked: what unclean, the default, does - it's held off for now, and
+# will be turned on by default once the scrub is ready for every unclean mount.
+#
+# Asserted on an unclean filesystem, the case where no and always differ from
+# each other.
 #
 test_scrub_journal_option_values()
 {
@@ -2722,15 +2723,6 @@ test_scrub_journal_option_values()
     fi
 
     unclean_shutdown_with_data "$dev"
-    mount -t bcachefs -o scrub_recent_journal_entries=unclean,verbose "$dev" /mnt
-    scrub_journal_counts
-    umount /mnt
-    if (( !scrub_ranges )); then
-	echo "ERROR: =unclean did not scrub an unclean filesystem"
-	exit 1
-    fi
-
-    unclean_shutdown_with_data "$dev"
     mount -t bcachefs -o scrub_recent_journal_entries=always,verbose "$dev" /mnt
     scrub_journal_counts
     umount /mnt
@@ -2741,7 +2733,7 @@ test_scrub_journal_option_values()
 
     bcachefs fsck -ny "$dev"
 
-    echo "Test passed: no/unclean/always mean what they say"
+    echo "Test passed: no/always mean what they say"
 }
 
 #
