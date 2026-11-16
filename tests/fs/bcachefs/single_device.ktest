@@ -2758,6 +2758,9 @@ with_scsi_debug()
     set -e
 
     umount /mnt 2>/dev/null || true
+    # A format's close sets off udev's probe of the disk, which holds it - and
+    # the module - open: "Module scsi_debug is in use"
+    udevadm settle
     modprobe -r scsi_debug
     return $ret
 }
