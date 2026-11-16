@@ -2977,7 +2977,6 @@ scrub_journal_btree_node_setup()
     local devs=("${ktest_scratch_dev[@]:0:$nr_devs}")
 
     run_quiet "" bcachefs format -f		\
-	--errors=ro				\
 	--replicas=$nr_devs			\
 	--bucket_size=${BUCKET_SIZE_KB}k	\
 	--no_initialize				\
