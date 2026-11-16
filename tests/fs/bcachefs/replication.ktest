@@ -2617,7 +2617,7 @@ test_scrub_journal_clean()
 
     local dev=${ktest_scratch_dev[0]}
 
-    run_quiet "" bcachefs format -f --errors=ro "$dev"
+    run_quiet "" bcachefs format -f "$dev"
 
     mount -t bcachefs "$dev" /mnt
     dd if=/dev/urandom of=/mnt/data bs=1M count=32 status=none
@@ -2678,7 +2678,7 @@ unclean_shutdown_with_data()
 {
     local dev=$1
 
-    run_quiet "" bcachefs format -f --errors=ro --no_initialize "$dev"
+    run_quiet "" bcachefs format -f --no_initialize "$dev"
     mount -t bcachefs "$dev" /mnt
 
     run_fio_base			\
@@ -2751,7 +2751,7 @@ test_scrub_journal_no_corruption()
 
     local dev=${ktest_scratch_dev[0]}
 
-    run_quiet "" bcachefs format -f --errors=ro --no_initialize "$dev"
+    run_quiet "" bcachefs format -f --no_initialize "$dev"
 
     mount -t bcachefs "$dev" /mnt
 
@@ -2804,7 +2804,6 @@ test_scrub_journal()
     local dev=${ktest_scratch_dev[0]}
 
     run_quiet "" bcachefs format -f		\
-	--errors=ro				\
 	--bucket_size=${BUCKET_SIZE_KB}k	\
 	--no_initialize				\
 	"$dev"
@@ -2902,7 +2901,6 @@ test_scrub_journal_replicated()
     local dev1=${ktest_scratch_dev[1]}
 
     run_quiet "" bcachefs format -f		\
-	--errors=ro				\
 	--replicas=2				\
 	--bucket_size=${BUCKET_SIZE_KB}k	\
 	--no_initialize				\
