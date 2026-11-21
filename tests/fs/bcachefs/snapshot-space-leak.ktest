@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+#
+# Data that no subvolume can see, that nothing ever reclaims.
+#
+# Snapshotting forks: bch2_snapshot_node_create() demotes the existing node to
+# an interior node and creates two fresh leaves, one for the source subvolume,
+# one for the snapshot. The data as of that moment lives at the interior node.
+# Delete the file in both leaves and those extents are invisible everywhere -
+# but still allocated. The interior node isn't dead (both children are live
+# subvolumes) and isn't redundant either: check_should_delete_snapshot() bails
+# at `if (nr_live_children == 2) return 0;`, and nothing looks for keys that
+# are overwritten in *every* leaf - __bch2_key_has_snapshot_overwrites()
+# answers "any descendant", a different question. See the "keys that have been
+# overwritten in all child snapshots ... (unimplemented?)" comment in
+# fs/snapshots/delete.c.
+#
+# Not a corruption: fsck passes clean and the fs is permanently short of
+# space. Both tests assert fsck IS clean as well as that the space came back,
+# so the leak can't hide behind a passing fsck.
+#
+# Space is read offline from the accounting btree's gc-verified `replicas`
+# counters. The per-snapshot numbers in the failure dump are
+# BCH_DISK_ACCOUNTING_snapshot, which gc never recomputes
+# (bch2_accounting_is_mem() excludes it) - diagnostic, not oracle.
+#
+# The controls live elsewhere, and pin these failures to snapshots and to the
+# two-live-children case specifically:
+#
+#   generic/015			no snapshots in play: space comes back
+#   subvol.ktest:snapshots_simple  interior node with ONE live child: reclaimed
+
+. $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/bcachefs-test-libs.sh
+
+config-scratch-devs 8G
+
+config-timeout $(stress_timeout)
+
+DEV=${ktest_scratch_dev[0]}
+
+DATA_MB=256
+SLOP_MB=32	# btree/journal noise between measurements
+
+used_sectors() { bcachefs_used_sectors $DEV; }
+mb()           { bcachefs_sectors_to_mb $1; }
+
+dump_state()
+{
+    echo "--- disk usage by snapshot id ---"
+    bcachefs list -b accounting $DEV 2>/dev/null |
+	sed -n 's/.*: snapshot id=\([0-9]*\) \([0-9]*\)$/\1 \2/p' |
+	while read -r id sectors; do
+	    printf '  snapshot %-12s %10s sectors  %6s MiB\n' \
+		   "$id" "$sectors" "$(mb $sectors)"
+	done
+
+    # Indirect extents show up as zero above however much they hold: reflink_v
+    # lives in the reflink btree at snapshot 0, and buckets.c only mods the
+    # snapshot counter for a nonzero k.k->p.snapshot. Count them separately.
+    echo "--- reflink btree (no snapshot accounting) ---"
+    bcachefs list -b reflink $DEV 2>/dev/null |
+	awk '/type reflink_v/ { for (i=1;i<=NF;i++) if ($i=="refcount:") rc[$(i+1)]++; n++; next }
+	     /c_size/        { for (i=1;i<=NF;i++) if ($i=="c_size")    { s += $(i+1); break } }
+	     END {
+		printf "  reflink_v keys: %d, on disk: %d sectors (%d MiB)\n", n, s, s/2048
+		for (r in rc)
+		    printf "  refcount %-4s : %d keys\n", r, rc[r]
+	     }'
+
+    echo "--- snapshots btree ---"
+    bcachefs list -b snapshots  $DEV 2>/dev/null | sed 's/^/  /'
+    echo "--- subvolumes btree ---"
+    bcachefs list -b subvolumes $DEV 2>/dev/null | sed 's/^/  /'
+}
+
+# After deleting the data everywhere it was visible the fs must be both
+# consistent and no fuller than it started.
+assert_reclaimed()
+{
+    local base=$1
+    local now=$(used_sectors)
+    local leaked=$(( now - base ))
+
+    echo "baseline ${base} sectors ($(mb $base) MiB), now ${now} sectors ($(mb $now) MiB)"
+
+    # If fsck ever does start catching this, fail here rather than pass quietly.
+    if ! bcachefs fsck -n $DEV; then
+	echo "TEST FAILED: fsck found errors (expected a clean, merely-leaky fs)"
+	dump_state
+	exit 1
+    fi
+
+    if (( leaked > SLOP_MB * 2048 )); then
+	echo "TEST FAILED: $(mb $leaked) MiB still allocated after deleting the data in every subvolume that could see it"
+	echo "             (fsck is clean - the fs is consistent and permanently short of space)"
+	dump_state
+	exit 1
+    fi
+
+    echo "OK: reclaimed to within $(mb $leaked) MiB of baseline"
+}
+
+# Formatted and mounted, baseline usage in $baseline.
+fresh_fs()
+{
+    run_quiet "" bcachefs format -f $DEV
+
+    baseline=$(used_sectors)
+
+    mount -t bcachefs $DEV /mnt
+}
+
+finish()
+{
+    bcachefs_settle_snapshot_deletion /mnt
+    umount /mnt
+}
+
+# Both leaves whiteout the file; the extents sit at the interior node,
+# reachable from nowhere. Both subvolumes still exist, so the interior node is
+# neither dead nor redundant and nothing comes back for those keys.
+test_delete_in_all_snapshots()
+{
+    fresh_fs
+
+    dd if=/dev/urandom of=/mnt/file bs=1M count=$DATA_MB oflag=direct
+
+    pushd /mnt
+    bcachefs subvolume snapshot snap
+    popd
+
+    [[ -f /mnt/snap/file ]]		# the snapshot really can see it
+
+    rm /mnt/file			# dead in the root subvol's leaf
+    rm /mnt/snap/file			# dead in the snapshot's leaf too
+
+    bcachefs subvolume list /mnt
+
+    finish
+    assert_reclaimed $baseline
+
+    bcachefs_test_end_checks $DEV
+}
+
+# Same mechanism, one level removed: the only surviving reflink_p keys are the
+# unreachable ones at the interior node, so every leaked reflink_v sits at
+# refcount 1 held by a key no subvolume can see.
+#
+# Separate test because a fix gets this for free - dropping a reflink_p runs
+# the trigger, the refcount hits zero - but only if the deletion goes through
+# the normal trigger path. This catches one that shortcuts around it.
+test_reflink_delete_in_all_snapshots()
+{
+    fresh_fs
+
+    dd if=/dev/urandom of=/mnt/file bs=1M count=$DATA_MB oflag=direct
+    cp --reflink=always /mnt/file /mnt/clone
+    rm /mnt/file			# only the indirect extents remain
+    sync
+
+    pushd /mnt
+    bcachefs subvolume snapshot snap
+    popd
+
+    [[ -f /mnt/snap/clone ]]
+
+    rm /mnt/clone
+    rm /mnt/snap/clone
+
+    finish
+    assert_reclaimed $baseline
+
+    bcachefs_test_end_checks $DEV
+}
+
+main "$@"
