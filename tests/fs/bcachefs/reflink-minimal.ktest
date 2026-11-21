@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+#
+# The minimal #927 case: one owner clones a file from a directory with
+# data_replicas=1, erasure_code=0 into one with data_replicas=2,
+# erasure_code=1. The shared data should end up at durability 2 (erasure
+# coded), with the old replica kept until then, both files intact, and a
+# promoted (cached) copy kept.
+#
+# test_reflink_raise_by_propagate: the raise, done by
+#   reflink-option-propagate on the destination after the clone.
+# test_reflink_raise_at_clone: the same with nothing run after the clone;
+#   fails today (nothing raises shared data at clone).
+
+# shellcheck source=tests/fs/bcachefs/bcachefs-test-libs.sh
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+
+rm_setup()
+{
+    local devs=("${ktest_scratch_dev[@]}")
+    run_quiet "" bcachefs format -f --data_replicas=1 \
+	--label=ssd.1 "${devs[0]}" \
+	--label=hdd.1 "${devs[1]}" --label=hdd.2 "${devs[2]}" \
+	--label=hdd.3 "${devs[3]}" --label=hdd.4 "${devs[4]}" \
+	--foreground_target=hdd --background_target=hdd --promote_target=ssd
+    mount -t bcachefs "$(join_by : "${devs[@]}")" /mnt
+
+    mkdir /mnt/r1 /mnt/r2
+    bcachefs set-file-option --data_replicas=1 --erasure_code=0 /mnt/r1
+    bcachefs set-file-option --data_replicas=2 --erasure_code=1 /mnt/r2
+
+    dd if=/dev/urandom of=/mnt/r1/f bs=1M count=16 oflag=direct status=none
+    sum=$(md5sum < /mnt/r1/f)
+    # A read promotes to ssd: a cached copy to keep.
+    dd if=/mnt/r1/f of=/dev/null bs=1M iflag=direct status=none
+    timeout 60 bcachefs reconcile wait /mnt
+    cp --reflink=always /mnt/r1/f /mnt/r2/f
+}
+
+# rm_check: both files intact; every shared extent at durability >= 2, and
+# some erasure coded; a cached copy left
+rm_check()
+{
+    local devs=("${ktest_scratch_dev[@]}") keys n low cached ec fail=0
+
+    # The tail of the file can sit in a stripe still waiting to fill, kept
+    # replicated meanwhile, so reconcile may not finish: give it time, then
+    # check durability.
+    timeout 60 bcachefs reconcile wait /mnt || bcachefs reconcile status /mnt | head -12
+    for f in /mnt/r1/f /mnt/r2/f; do
+	echo 3 > /proc/sys/vm/drop_caches
+	[[ $(md5sum < $f) == "$sum" ]] || { echo "ERROR: $f differs"; fail=1; }
+    done
+    bcachefs fs usage /mnt | sed -n '/Erasure coded/,/^$/p'
+    umount /mnt
+
+    keys=$(bcachefs list -b reflink "${devs[@]}")
+    echo "$keys"
+    n=$(grep -c 'type reflink_v' <<< "$keys" || true)
+    low=$(grep 'type reflink_v' <<< "$keys" | grep -vcE 'durability: [2-9]' || true)
+    cached=$(grep -cE 'ptr: .*cached' <<< "$keys" || true)
+    ec=$(grep -cE 'stripe|ec:' <<< "$keys" || true)
+    echo "reflink_v keys $n, below durability 2: $low, cached ptrs: $cached, ec lines: $ec"
+    (( n > 0 )) || { echo "ERROR: no shared extents"; fail=1; }
+    (( low == 0 )) || { echo "ERROR: $low shared extents below durability 2"; fail=1; }
+    (( ec > 0 )) || { echo "ERROR: shared data not erasure coded"; fail=1; }
+    (( cached > 0 )) || { echo "ERROR: no cached copy left"; fail=1; }
+
+    bcachefs fsck -ny "${devs[@]}"
+    bcachefs_test_end_checks "${devs[0]}"
+    (( !fail )) || exit 1
+}
+
+test_reflink_raise_by_propagate()
+{
+    set_watchdog 300
+    rm_setup
+    bcachefs reflink-option-propagate /mnt/r2/f
+    rm_check
+}
+
+test_reflink_raise_at_clone()
+{
+    set_watchdog 300
+    rm_setup
+    rm_check
+}
+
+main "$@"
