@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+#
+# Recovering two blocks of a stripe with two parity blocks, when neither is Q.
+#
+# test_ec_raid6_recov_data_data: two data blocks of a 4+2 stripe bad.
+# test_ec_raid6_recov_data_p: a data block and P bad.
+# test_ec_raid6_recov_data_q: a data block and Q bad.
+#
+# Each is within what two parity blocks cover; O_DIRECT reads of the file must
+# reconstruct the data.
+
+# shellcheck source=tests/fs/bcachefs/bcachefs-test-libs.sh
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+require-kernel-config BCACHEFS_ERASURE_CODING
+
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+config-scratch-devs 1G
+
+r6_bucket_kb=512
+
+r6_uuid()
+{
+    local entry
+    for entry in /sys/fs/bcachefs/*; do
+	[[ ${entry##*/} =~ ^[0-9a-f-]{36}$ ]] && echo "${entry##*/}" && return
+    done
+}
+
+# The first stripe with a live data block on member 0:
+# "<nr_data> <dev>:<sector> ..." for each block, data blocks first.
+r6_stripe()
+{
+    awk -v bsz=$((r6_bucket_kb * 2)) '
+	function flush() { if (live) { print nd line; exit } live = 0; line = ""; idx = 0 }
+	/type stripe/ { flush() }
+	match($0, /blocks [0-9]+:[0-9]+/) {
+	    split(substr($0, RSTART + 7, RLENGTH - 7), b, ":")
+	    nd = b[1]
+	}
+	{
+	    for (i = 1; i < NF; i++)
+		if ($i ~ /^[0-9]+:[0-9]+:[0-9]+$/ && $(i + 1) == "gen") {
+		    split($i, p, ":")
+		    split($(i + 2), c, "#")
+		    if (p[1] == 0 && idx < nd && c[2] > 0)
+			live = 1
+		    line = line " " p[1] ":" p[2] * bsz + p[3]
+		    idx++
+		}
+	}
+	END { flush() }' "/sys/kernel/debug/bcachefs/$(r6_uuid)/btrees/stripes/keys"
+}
+
+# r6_test <data|P|Q>: the second bad block
+r6_test()
+{
+    set_watchdog 300
+
+    local devs=("${ktest_scratch_dev[@]}")
+    run_quiet "" bcachefs format -f		\
+	--erasure_code				\
+	--replicas=3				\
+	--ec_max_data_blocks=4			\
+	--bucket_size=${r6_bucket_kb}k		\
+	"${devs[@]}"
+    mount -t bcachefs "$(join_by : "${devs[@]}")" /mnt
+
+    dd if=/dev/urandom of=/mnt/data bs=1M count=32 conv=fsync status=none
+    local md5
+    md5=$(md5sum < /mnt/data)
+    timeout 120 bcachefs reconcile wait /mnt || true
+
+    local f
+    read -r -a f < <(r6_stripe)
+    if (( ${#f[@]} != 7 )); then
+	echo "ERROR: no 4+2 stripe with data on device 0 - this run tests nothing"
+	exit 1
+    fi
+
+    # Device 0's data block, and another data block, P or Q:
+    local bad=() i
+    for (( i = 1; i <= f[0]; i++ )); do
+	[[ ${f[i]%%:*} == 0 ]] && bad+=("${f[i]}")
+    done
+    if [[ $1 == P ]]; then
+	bad+=("${f[f[0] + 1]}")
+    elif [[ $1 == Q ]]; then
+	bad+=("${f[f[0] + 2]}")
+    else
+	for (( i = 1; i <= f[0]; i++ )); do
+	    [[ ${f[i]%%:*} != 0 ]] && { bad+=("${f[i]}"); break; }
+	done
+    fi
+
+    local b
+    for b in "${bad[@]}"; do
+	dd if=/dev/urandom of="${devs[${b%%:*}]}" bs=512 seek="${b#*:}"	\
+	    count=$((r6_bucket_kb * 2)) oflag=direct conv=notrunc status=none
+    done
+    echo "corrupted stripe blocks ${bad[*]} (dev:sector)"
+
+    local got
+    got=$(dd if=/mnt/data bs=1M iflag=direct status=none | md5sum)
+
+    umount /mnt
+    bcachefs fsck -ny "${devs[@]}"
+
+    if [[ $got != "$md5" ]]; then
+	echo "ERROR: two bad blocks of a stripe with two parity blocks weren't reconstructed"
+	exit 1
+    fi
+
+    ktest_expect_device_errors=1
+    ktest_expect_sb_errors="data_read_csum_err_recovered"
+    bcachefs_test_end_checks "${devs[0]}"
+}
+
+test_ec_raid6_recov_data_data()
+{
+    r6_test data
+}
+
+test_ec_raid6_recov_data_p()
+{
+    r6_test P
+}
+
+test_ec_raid6_recov_data_q()
+{
+    r6_test Q
+}
+
+main "$@"
