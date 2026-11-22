@@ -1,0 +1,622 @@
+#!/usr/bin/env bash
+
+. "$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")/bcachefs-test-libs.sh"
+
+require-kernel-config BCACHEFS_FS=y
+
+config-mem 4G
+config-cpus 2
+config-scratch-devs 1G 'iops=300,bps=104857600'
+config-scratch-devs 1G 'iops=300,bps=104857600'
+config-scratch-devs 1G 'iops=300,bps=104857600'
+
+devs()
+{
+    join_by : "${ktest_scratch_dev[@]}"
+}
+
+mounted_fs_uuid()
+{
+	local -a mounts=(/sys/fs/bcachefs/*/options)
+	local targets=()
+
+	mapfile -t targets < <(findmnt -rn -t bcachefs -o TARGET)
+	if [[ $(findmnt -rn -T /mnt -o FSTYPE) != bcachefs ||
+	      ${#targets[@]} != 1 || ${targets[0]} != /mnt ||
+	      ${#mounts[@]} != 1 ]]; then
+	    echo "expected exactly the test bcachefs mount at /mnt"
+	    return 1
+	fi
+
+	local options=${mounts[0]}
+	local uuid=${options%/options}
+	uuid=${uuid##*/}
+	[[ $uuid =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]] || {
+	    echo "invalid bcachefs sysfs UUID: $uuid"
+	    return 1
+	}
+	printf '%s\n' "$uuid"
+}
+
+log_test_identity()
+{
+	local source_path source_sha uuid
+	source_path=$(readlink -e "${BASH_SOURCE[0]}")
+	source_sha=$(sha256sum "$source_path" | awk '{print $1}')
+	uuid=$(mounted_fs_uuid)
+	echo "ROTATIONAL_TEST_SHA256=$source_sha filesystem_uuid=$uuid mount=/mnt"
+}
+
+read_reconcile_options()
+{
+	local uuid=$1
+	local options=/sys/fs/bcachefs/$uuid/options
+	printf 'effective_options uuid=%s metadata_target=%s background_target=%s move_ios_in_flight=%s move_bytes_in_flight=%s\n' \
+	    "$uuid" "$(<"$options/metadata_target")" \
+	    "$(<"$options/background_target")" \
+	    "$(<"$options/move_ios_in_flight")" \
+	    "$(<"$options/move_bytes_in_flight")"
+}
+
+log_device_target_identity()
+{
+	local uuid=$1
+	local sysfs=/sys/fs/bcachefs/$uuid
+	local src_rotational dst_rotational data_rotational
+	src_rotational=$(<"$sysfs/dev-0/rotational")
+	dst_rotational=$(<"$sysfs/dev-1/rotational")
+	data_rotational=$(<"$sysfs/dev-2/rotational")
+	echo "device_targets uuid=$uuid src_device=0 src_rotational=$src_rotational metadata_target_device=1 metadata_rotational=$dst_rotational data_device=2 data_rotational=$data_rotational"
+	[[ $src_rotational == 0 && $dst_rotational == 1 && $data_rotational == 0 ]]
+}
+
+dump_move_window_debug()
+{
+    bcachefs fs usage -h --all /mnt || true
+    bcachefs reconcile status /mnt || true
+    cat /sys/fs/bcachefs/*/internal/moving_ctxts || true
+}
+
+src_has_user_data()
+{
+    awk '$1 == "user" { found = $2 > 0 } END { exit !found }' \
+	/sys/fs/bcachefs/*/dev-0/alloc_debug
+}
+
+# The mover reports its live counter and limit pairs as current/max.  Do not
+# turn this into a throughput assertion: the invariant is that no in-flight
+# counter exceeds the limit selected for this context.  The explicit dst
+# target makes this a background reconcile context, so a rotational target
+# must not report a window above min(global, 8 ios/1 MiB).
+check_reconcile_window()
+{
+	local snapshot=$1
+	local target=$2
+	local context=$3
+	local policy=$4 wait_for_work=${5:-0}
+
+	awk -v target="$target" -v expected_context="$context" -v policy="$policy" -v wait_for_work="$wait_for_work" '
+function pair(s, v) {
+    n = split(s, v, "/")
+    return n == 2 && v[1] ~ /^[0-9]+$/ && v[2] ~ /^[0-9]+$/
+}
+function bad_pair(kind, cur, max) {
+    printf "invalid %s window: %s/%s\n", kind, cur, max > "/dev/stderr"
+    bad = 1
+}
+function check_context() {
+    if (!reads || !writes) {
+        print "reconcile target " target " context omitted a move window" > "/dev/stderr"
+        bad = 1
+        return
+    }
+    seen = 1
+    if (read_ios > read_ios_max)
+        bad_pair("read ios", read_ios, read_ios_max)
+    if (read_sectors > read_sectors_max)
+        bad_pair("read sectors", read_sectors, read_sectors_max)
+    if (write_ios > write_ios_max)
+        bad_pair("write ios", write_ios, write_ios_max)
+    if (write_sectors > write_sectors_max)
+        bad_pair("write sectors", write_sectors, write_sectors_max)
+
+    # The test sets global limits above these values. These are upper bounds,
+    # not floors: a lower global setting remains valid by design.
+    if (policy == "ssd") {
+        if (read_ios_max != 64 || write_ios_max != 64)
+            bad_pair("SSD ios maximum", read_ios_max, 64)
+        if (read_sectors_max != 131072 || write_sectors_max != 131072)
+            bad_pair("SSD sector maximum", read_sectors_max, 131072)
+    } else {
+        if (read_ios_max > 8 || write_ios_max > 8)
+            bad_pair("rotational ios maximum", read_ios_max, 8)
+        if (read_sectors_max > 2048 || write_sectors_max > 2048)
+            bad_pair("rotational sector maximum", read_sectors_max, 2048)
+    }
+}
+/^[^[:space:]]/ {
+    context = $1
+    sub(/:$/, "", context)
+    reads = writes = 0
+    bytes_seen = keys_moved = -1
+    if (context == expected_context)
+        context_seen = 1
+}
+$1 == "bytes" && $2 == "seen:" { bytes_seen = $3 }
+$1 == "keys" && $2 == "moved:" { keys_moved = $3 }
+$1 == "reads:" && $2 == "ios" && $4 == "sectors" {
+    if (!pair($3, p))
+        bad_pair("read ios", $3, "?")
+    else {
+        read_ios = p[1] + 0
+        read_ios_max = p[2] + 0
+    }
+    if (!pair($5, p))
+        bad_pair("read sectors", $5, "?")
+    else {
+        read_sectors = p[1] + 0
+        read_sectors_max = p[2] + 0
+    }
+    reads = 1
+}
+$1 == "writes:" && $2 == "ios" && $4 == "sectors" {
+    if (!pair($3, p))
+        bad_pair("write ios", $3, "?")
+    else {
+        write_ios = p[1] + 0
+        write_ios_max = p[2] + 0
+    }
+    if (!pair($5, p))
+        bad_pair("write sectors", $5, "?")
+    else {
+        write_sectors = p[1] + 0
+        write_sectors_max = p[2] + 0
+    }
+    writes = 1
+}
+$1 == "limit" && $2 == "source:" && context == expected_context {
+    if (wait_for_work && (bytes_seen == -1 || keys_moved == -1)) {
+        print "reconcile context omitted its work counters" > "/dev/stderr"
+        bad = 1
+    }
+    if (wait_for_work &&
+        reads && writes && read_ios == 0 && write_ios == 0 &&
+        read_sectors == 0 && write_sectors == 0 &&
+        bytes_seen == "0" && keys_moved == "0") {
+        context_seen = 0
+        next
+    }
+    source_seen = 1
+    if ((policy == "ssd" && $3 != "global") ||
+        (policy != "ssd" && ($3 != "reconcile" || $4 != "target" || $5 != target))) {
+        printf "unexpected limit source for %s: %s\n", expected_context, $0 > "/dev/stderr"
+        bad = 1
+    } else {
+        check_context()
+    }
+}
+END {
+    if (context_seen && !source_seen) {
+        print "reconcile context omitted its limit source" > "/dev/stderr"
+        bad = 1
+    }
+    if (bad)
+        exit 1
+    exit context_seen ? 0 : 2
+}
+' "$snapshot"
+}
+
+check_rotational_reconcile_window()
+{
+	check_reconcile_window "$1" "$2" "$3" rotational "${4:-0}"
+}
+
+observe_rotational_reconcile_window()
+{
+	local target=$1 context=$2
+	local i snapshot status
+
+    for i in $(seq 1 1200); do
+        snapshot="$ktest_out/moving_ctxts.$i"
+        cat /sys/fs/bcachefs/*/internal/moving_ctxts > "$snapshot"
+
+	if check_rotational_reconcile_window "$snapshot" "$target" "$context" 1; then
+	    return 0
+	else
+            status=$?
+            if (( status == 1 )); then
+                echo "rotational reconcile window exceeded its reported limit"
+                cat "$snapshot"
+                return 1
+            fi
+        fi
+
+	sleep .1
+	done
+
+	echo "did not observe a rotational reconcile target move window in $context"
+    dump_move_window_debug
+    return 1
+}
+
+test_rotational_target_move_window()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f			\
+	--data_checksum=none				\
+	--bucket_size=256k				\
+	--replicas=1					\
+	--foreground_target=src				\
+	--background_target=src				\
+	--metadata_target=dst				\
+	--rotational=1 --label=src "${ktest_scratch_dev[0]}" \
+	--rotational=1 --label=dst "${ktest_scratch_dev[1]}" \
+	--rotational=1 --label=dst "${ktest_scratch_dev[2]}"
+
+    mount -t bcachefs "$(devs)" /mnt
+
+    # Keep each written extent at or below the 1 MiB rotational window, so
+    # this test exercises concurrency accounting rather than an unavoidable
+    # single-extent oversize reservation.
+    dd if=/dev/zero of=/mnt/src-data bs=1M count=512 oflag=direct status=none
+    sync
+
+    if ! src_has_user_data; then
+	echo "test setup failed: source device has no user data"
+	dump_move_window_debug
+	return 1
+    fi
+
+    # Lift global limits above the rotational limits. The asserted maxima are
+    # intentionally upper bounds, because the kernel policy is min(global,
+    # rotational cap), not a promise to increase a lower global limit.
+    echo 64 > /sys/fs/bcachefs/*/options/move_ios_in_flight
+    echo 64M > /sys/fs/bcachefs/*/options/move_bytes_in_flight
+    echo dst > /sys/fs/bcachefs/*/options/background_target
+
+	observe_rotational_reconcile_window dst reconcile_work
+
+    # Completion is semantic: the target work is drained and source user data
+    # really moved, rather than merely observing a transient diagnostic line.
+    timeout 120 bcachefs reconcile wait --types target /mnt
+    if src_has_user_data; then
+	echo "source device still has user data after target reconcile"
+	dump_move_window_debug
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+src_has_btree_data()
+{
+    bcachefs fs usage -f devices /mnt |
+	awk '$2 == "(device" && $1 == "src" { in_dev=1; next }
+	     $2 == "(device" { in_dev=0 }
+	     in_dev && $1 == "btree:" { found = $2 > 0 }
+	     END { exit !found }'
+}
+
+usage_dev_bytes()
+{
+    local label=$1 type=$2
+
+    bcachefs fs usage -f devices /mnt |
+	awk -v label="$label" -v type="$type:" '
+	    $2 == "(device" && $1 == label { in_dev=1; next }
+	    $2 == "(device" { in_dev=0 }
+	    in_dev && $1 == type { print $2; exit }'
+}
+
+kick_reconcile_io_clock()
+{
+	dd if=/dev/urandom of=/mnt/reconcile-clock-kick bs=1M count=32 \
+	    oflag=direct status=none || return
+	sync
+}
+
+check_uncapped_ssd_reconcile_window()
+{
+	check_reconcile_window "$1" data reconcile_work ssd 1
+}
+
+observe_uncapped_ssd_reconcile_window()
+{
+	local uuid=$1 ready_file=$2 i snapshot status
+	: > "$ready_file"
+	echo "ssd_observer_armed uuid=$uuid"
+	for i in $(seq 1 12000); do
+	    if [[ $(<"/sys/fs/bcachefs/$uuid/options/background_target") != data ]]; then
+		sleep .01
+		continue
+	    fi
+	    snapshot="$ktest_out/ssd_moving_ctxts.$i"
+	    cat "/sys/fs/bcachefs/$uuid/internal/moving_ctxts" > "$snapshot"
+	    if check_uncapped_ssd_reconcile_window "$snapshot"; then
+		echo "observed uncapped SSD reconcile_work window"
+		return 0
+	    else
+		status=$?
+		if (( status == 1 )); then
+		    echo "SSD reconcile_work did not retain the global 64 IO/64 MiB window"
+		    cat "$snapshot"
+		    return 1
+		fi
+	    fi
+	    sleep .01
+	done
+	echo "did not observe the SSD reconcile_work window"
+	dump_move_window_debug
+	return 1
+}
+
+observe_metadata_scan_limits()
+{
+	local uuid=$1 target=$2 ready_file=$3 captured_file=$4
+	local i snapshot snapshot_text status_before status_after phase_before phase_after status
+
+	echo "metadata_observer_armed uuid=$uuid"
+	: > "$ready_file"
+	for i in $(seq 1 2400); do
+	    if [[ $(<"/sys/fs/bcachefs/$uuid/options/metadata_target") != "$target" ]]; then
+		sleep .001
+		continue
+	    fi
+	    status_before=$(<"/sys/fs/bcachefs/$uuid/reconcile_status") || return 1
+	    if [[ ! $status_before =~ scanning:[[:space:]]+metadata([[:space:]]|$) ]]; then
+		sleep .001
+		continue
+	    fi
+	    snapshot="$ktest_out/metadata_moving_ctxts.$i"
+	    snapshot_text=$(<"/sys/fs/bcachefs/$uuid/internal/moving_ctxts") || return 1
+	    status_after=$(<"/sys/fs/bcachefs/$uuid/reconcile_status") || return 1
+	    phase_before=$(grep -E 'scanning:[[:space:]]+metadata([[:space:]]|$)' <<<"$status_before" | head -1 || true)
+	    phase_after=$(grep -E 'scanning:[[:space:]]+metadata([[:space:]]|$)' <<<"$status_after" | head -1 || true)
+	    if [[ -n $phase_before && -n $phase_after ]]; then
+		printf '%s\n' "$snapshot_text" > "$snapshot"
+		echo "canonical_metadata_phase uuid=$uuid before=$phase_before after=$phase_after" | tee -a "$ktest_out/metadata_scan_limits.log"
+		if check_rotational_reconcile_window "$snapshot" "$target" reconcile_scan; then
+		    touch "$captured_file"
+		    echo "observed metadata reconcile_scan limits from UUID-scoped moving_ctxts"
+		    return 0
+		else
+		    status=$?
+		    if (( status == 1 )); then
+			touch "$captured_file"
+			echo "observed metadata phase with incorrect target or rotational limits"
+			cat "$snapshot"
+			return 1
+		    fi
+		fi
+	    fi
+	    sleep .001
+	done
+	echo "did not correlate metadata phase with a reconcile_scan moving context for filesystem $uuid"
+	dump_move_window_debug
+	return 1
+}
+
+run_metadata_scan_observer()
+{
+	local done_file=$1
+	shift
+	local result=0
+
+	observe_metadata_scan_limits "$@" || result=$?
+	printf '%s\n' "$result" > "$done_file"
+	return "$result"
+}
+
+advance_metadata_scan_clock()
+{
+	local uuid=$1 observer_pid=$2 captured_file=$3 done_file=$4
+	local max_bytes=$((64 * 1024 * 1024))
+	local chunk_bytes=$((4 * 1024 * 1024))
+	local max_seconds=45
+	local started=$SECONDS bytes=0 status_text observer_result remaining_seconds command_timeout
+	local sysfs=/sys/fs/bcachefs/$uuid
+
+	while (( bytes < max_bytes && SECONDS - started < max_seconds )); do
+	    [[ -e $captured_file ]] && return 0
+	    if [[ -e $done_file ]]; then
+		observer_result=$(<"$done_file")
+		echo "metadata observer exited before correlated capture: status=$observer_result"
+		return 1
+	    fi
+	    if ! kill -0 "$observer_pid" 2>/dev/null; then
+		wait "$observer_pid" 2>/dev/null || true
+		echo "metadata observer exited without a terminal receipt"
+		return 1
+	    fi
+	    status_text=$(cat "$sysfs/reconcile_status") || {
+		echo "could not read reconcile status for filesystem $uuid"
+		return 1
+	    }
+	    if grep -Eq '^scanning:[[:space:]]+metadata([[:space:]]|$)' <<<"$status_text"; then
+		sleep .05
+		continue
+	    fi
+	    if grep -q '^waiting:' <<<"$status_text"; then
+		if (( bytes + chunk_bytes > max_bytes )); then
+		    break
+		fi
+		remaining_seconds=$((max_seconds - (SECONDS - started)))
+		(( remaining_seconds > 0 )) || break
+		command_timeout=$remaining_seconds
+		(( command_timeout > 5 )) && command_timeout=5
+		if ! timeout "$command_timeout" dd if=/dev/urandom of=/mnt/reconcile-clock-kick \
+		    bs=1M count=4 oflag=direct status=none; then
+		    echo "metadata clock advance write failed for filesystem $uuid"
+		    return 1
+		fi
+		remaining_seconds=$((max_seconds - (SECONDS - started)))
+		(( remaining_seconds > 0 )) || break
+		command_timeout=$remaining_seconds
+		(( command_timeout > 5 )) && command_timeout=5
+		if ! timeout "$command_timeout" sync; then
+		    echo "metadata clock advance sync failed for filesystem $uuid"
+		    return 1
+		fi
+		bytes=$((bytes + chunk_bytes))
+		echo "metadata_clock_advance uuid=$uuid bytes=$bytes/$max_bytes elapsed=$((SECONDS - started))/$max_seconds"
+	    else
+		sleep .05
+	    fi
+	done
+
+	[[ -e $captured_file ]] && return 0
+	status_text=$(cat "$sysfs/reconcile_status" 2>&1 || true)
+	echo "metadata clock budget exhausted uuid=$uuid bytes=$bytes/$max_bytes elapsed=$((SECONDS - started))/$max_seconds"
+	grep -E '^(waiting:|io wait remaining:|scanning:)' <<<"$status_text" || true
+	return 1
+}
+
+test_rotational_metadata_target_move_window()
+{
+    set_watchdog 300
+
+    run_quiet "" bcachefs format -f			\
+	--data_checksum=none				\
+	--bucket_size=256k				\
+	--btree_node_size=16k				\
+	--replicas=1					\
+	--foreground_target=src				\
+	--background_target=src				\
+	--metadata_target=src				\
+	--rotational=0 --label=src "${ktest_scratch_dev[0]}" \
+	--rotational=1 --label=dst "${ktest_scratch_dev[1]}" \
+	--rotational=0 --label=data "${ktest_scratch_dev[2]}"
+
+    mount -t bcachefs "$(devs)" /mnt
+    local fs_uuid i metadata_files=65536 metadata_file_count
+    fs_uuid=$(mounted_fs_uuid)
+    log_test_identity
+    log_device_target_identity "$fs_uuid"
+    dd if=/dev/zero of=/mnt/src-data bs=1M count=512 oflag=direct status=none
+    mkdir /mnt/metadata-fixture
+    for i in $(seq 1 "$metadata_files"); do
+	: > "/mnt/metadata-fixture/file-$i"
+    done
+    sync
+    metadata_file_count=$(find /mnt/metadata-fixture -maxdepth 1 -type f | wc -l)
+    if [[ $metadata_file_count -ne $metadata_files ]]; then
+	echo "metadata fixture setup failed: expected $metadata_files files, found $metadata_file_count"
+	return 1
+    fi
+    echo "metadata_fixture uuid=$fs_uuid empty_files=$metadata_file_count user_data_file=512MiB"
+
+    if ! src_has_user_data || ! src_has_btree_data; then
+	echo "test setup failed: source device lacks user or btree data"
+	dump_move_window_debug
+	return 1
+    fi
+	if [[ $(<"/sys/fs/bcachefs/$fs_uuid/options/background_target") != src ]]; then
+	    echo "test setup failed: SSD data target is not src for filesystem $fs_uuid"
+	    return 1
+	fi
+
+    echo 64 > /sys/fs/bcachefs/*/options/move_ios_in_flight
+    echo 64M > /sys/fs/bcachefs/*/options/move_bytes_in_flight
+
+	local options=/sys/fs/bcachefs/$fs_uuid/options
+	local observer_ready="$ktest_out/metadata_observer.ready"
+	local observer_captured="$ktest_out/metadata_observer.captured"
+	local observer_done="$ktest_out/metadata_observer.done"
+	rm -f "$observer_ready" "$observer_captured" "$observer_done"
+	run_metadata_scan_observer "$observer_done" "$fs_uuid" dst \
+	    "$observer_ready" "$observer_captured" &
+	local observer_pid=$!
+	for i in $(seq 1 100); do
+	    [[ -e $observer_ready ]] && break
+	    if ! kill -0 "$observer_pid" 2>/dev/null; then
+		wait "$observer_pid"
+		return 1
+	    fi
+	    sleep .05
+	done
+	if [[ ! -e $observer_ready ]]; then
+	    echo "metadata observer did not become ready"
+	    kill "$observer_pid" 2>/dev/null || true
+	    wait "$observer_pid" || true
+	    return 1
+	fi
+	echo dst > "$options/metadata_target"
+	if [[ $(<"$options/metadata_target") != dst ]]; then
+	    echo "metadata_target readback failed for filesystem $fs_uuid"
+	    wait "$observer_pid" || true
+	    return 1
+	fi
+	read_reconcile_options "$fs_uuid"
+	if advance_metadata_scan_clock "$fs_uuid" "$observer_pid" \
+	    "$observer_captured" "$observer_done"; then
+	    wait "$observer_pid"
+	else
+	    local observer_status=$?
+	    kill "$observer_pid" 2>/dev/null || true
+	    wait "$observer_pid" 2>/dev/null || true
+	    dump_move_window_debug
+	    return "$observer_status"
+	fi
+	timeout 120 bcachefs reconcile wait --types target /mnt
+
+	if src_has_btree_data || ! src_has_user_data ||
+	   (( $(usage_dev_bytes dst btree) == 0 )) ||
+	   (( $(usage_dev_bytes dst user) != 0 )) ||
+	   (( $(usage_dev_bytes data user) != 0 )) ||
+	   [[ $(find /mnt/metadata-fixture -maxdepth 1 -type f | wc -l) -ne $metadata_files ]]; then
+	    echo "metadata reconcile did not move only btree data to the metadata target"
+	dump_move_window_debug
+	return 1
+	fi
+
+	local ssd_observer_ready="$ktest_out/ssd_observer.ready"
+	rm -f "$ssd_observer_ready"
+	observe_uncapped_ssd_reconcile_window "$fs_uuid" "$ssd_observer_ready" &
+	local observer_pid=$!
+	for i in $(seq 1 100); do
+	    [[ -e $ssd_observer_ready ]] && break
+	    if ! kill -0 "$observer_pid" 2>/dev/null; then
+		wait "$observer_pid"
+		return 1
+	    fi
+	    sleep .05
+	done
+	if [[ ! -e $ssd_observer_ready ]]; then
+	    echo "SSD observer did not become ready"
+	    kill "$observer_pid" 2>/dev/null || true
+	    wait "$observer_pid" || true
+	    return 1
+	fi
+	if ! echo data > "$options/background_target" ||
+	   [[ $(<"$options/background_target") != data ]]; then
+	    echo "SSD background_target transition failed for filesystem $fs_uuid"
+	    kill "$observer_pid" 2>/dev/null || true
+	    wait "$observer_pid" || true
+	    return 1
+	fi
+	read_reconcile_options "$fs_uuid"
+	if ! kick_reconcile_io_clock; then
+	    echo "SSD reconcile I/O-clock kick failed for filesystem $fs_uuid"
+	    kill "$observer_pid" 2>/dev/null || true
+	    wait "$observer_pid" || true
+	    return 1
+	fi
+	wait "$observer_pid"
+	timeout 120 bcachefs reconcile wait --types target /mnt
+    if src_has_user_data || (( $(usage_dev_bytes data user) == 0 )) ||
+	   (( $(usage_dev_bytes dst user) != 0 )); then
+	echo "data reconcile did not use the SSD background target"
+	dump_move_window_debug
+	return 1
+    fi
+
+    umount /mnt
+    bcachefs fsck -ny "${ktest_scratch_dev[@]}"
+    bcachefs_test_end_checks "${ktest_scratch_dev[0]}"
+}
+
+main "$@"
