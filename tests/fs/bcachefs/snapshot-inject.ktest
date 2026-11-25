@@ -1920,6 +1920,7 @@ test_creation_parent_dangling()
     kvdb_rw -c "update subvolumes 0:4:0 creation_parent=31337"
 
     skip_snaps=""
+    ktest_expect_sb_errors="subvol_creation_parent_missing"
     check_fsck repair
 }
 
