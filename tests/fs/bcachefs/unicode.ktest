@@ -31,6 +31,53 @@ test_casefold_basic()
     bcachefs fsck -ny ${ktest_scratch_dev[0]}
 }
 
+# Names past ASCII, folded by the kernel when they're created, then checked by
+# userspace's fold - fsck rehashes every dirent with it: os/unicode, a port of
+# the kernel's, must give the same bytes or fsck sees a hash mismatch. Each name
+# is looked up by another spelling the kernel folds to the same: full casefold,
+# canonical decomposition and mark order, Hangul, ignorables, and a malformed
+# name the kernel's cursor passes a stray continuation byte through.
+test_casefold_unicode_names()
+{
+    set_watchdog 60
+
+    run_quiet "" bcachefs format -f ${ktest_scratch_dev[0]}
+    mount ${ktest_scratch_dev[0]} /mnt
+
+    mkdir /mnt/cf
+    bcachefs set-file-option --casefold /mnt/cf
+
+    # UTF-8 as bytes: $'\u...' depends on the locale
+    local names=(
+        $'Stra\xc3\x9fe'                            STRASSE         # Straße
+        $'\xc3\x89t\xc3\xa9'                        $'e\xcc\x81te\xcc\x81'  # Été
+        $'o\xcc\x82\xcc\x81\xcc\xb8'                $'O\xcc\xb8\xcc\x82\xcc\x81'
+        $'\xce\xa3\xce\x91\xce\xa3'                 $'\xcf\x83\xce\xb1\xcf\x82'  # ΣΑΣ, σας
+        $'\xed\x95\x9c\xea\xb5\xad\xec\x96\xb4'     $'\xe1\x84\x92\xe1\x85\xa1\xe1\x86\xab\xe1\x84\x80\xe1\x85\xae\xe1\x86\xa8\xe1\x84\x8b\xe1\x85\xa5'  # 한국어, as jamo
+        $'a\xe2\x80\x8bb'                           AB              # U+200B ignorable
+        $'\xc4\xb0stanbul'                          $'i\xcc\x87STANBUL'  # İstanbul
+        $'a\xcc\x81\x80\xcc\x96'                    $'A\xcc\x81\x80\xcc\x96'
+    )
+
+    local i
+    for ((i = 0; i < ${#names[@]}; i += 2)); do
+        echo "$i" > "/mnt/cf/${names[i]}"
+    done
+
+    for ((i = 0; i < ${#names[@]}; i += 2)); do
+        [[ $(cat "/mnt/cf/${names[i + 1]}") == "$i" ]]
+    done
+
+    umount /mnt
+    bcachefs fsck -ny ${ktest_scratch_dev[0]}
+
+    mount ${ktest_scratch_dev[0]} /mnt
+    for ((i = 0; i < ${#names[@]}; i += 2)); do
+        [[ $(cat "/mnt/cf/${names[i]}") == "$i" ]]
+    done
+    umount /mnt
+}
+
 # Test casefold_disabled mount option
 test_casefold_disabled()
 {
