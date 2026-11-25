@@ -51,9 +51,10 @@
 # subvol_no_keys_subvol_gone. The rest use `set subvolumes ... deleted` as
 # scaffolding to condemn a subvolume, where a tombstone is what happens -
 # stranded_keys, tombstoned_child, missing_child, interrupted_deletion,
-# no_keys_with_data, runtime_tombstone_child_repair. Two of those have "tombstone" in the
-# name and inject a removal. Unaudited; the sb error counters will say
-# which are actually testing something else than they say.
+# no_keys_with_data, runtime_tombstone_child_repair. Two of those have
+# "tombstone" in the name and inject a removal. Unaudited; the sb error
+# counters will say which are actually testing something else than they
+# say.
 #
 # Cases were derived by walking every error site in
 # fs/snapshots/check_snapshots.c and subvolume.c plus the snapshot ids in
@@ -1100,15 +1101,12 @@ test_missing_child()
 	 -c "set subvolumes 0:$last_subvol:0 deleted"
 
     # expect=repair: resurrect the missing child as a leaf (parent=us,
-    # derived depth/tree, no subvol) so its keys stay reachable; if empty,
-    # the next deletion run condemns it through the front door. The
-    # resurrected leaf carries no subvol, so it isn't walked; it stays
-    # skipped, and the oracle is converge-clean + every other snap intact.
-    #
-    # The subvolume went too: its dirent now names nothing, and its root
-    # inode loses its subvol, its dirent and its path.
-    skip_snaps="snap-$((NR_SNAPS - 1))"
-    ktest_expect_sb_errors="snapshot_child_missing_but_accounted|dirent_to_missing_subvol|inode_bi_subvol_missing|inode_points_to_missing_dirent|inode_unreachable"
+    # derived depth/tree) so its keys stay reachable. The subvolume went
+    # too, and nothing points at the leaf: its subvolume is rebuilt, at the
+    # id its root inode names, and the surviving snap-2 dirent reconnects
+    # it - snap-2 comes back whole.
+    skip_snaps=""
+    ktest_expect_sb_errors="snapshot_child_missing_but_accounted|subvol_missing"
     check_fsck repair
 }
 
@@ -2616,11 +2614,9 @@ test_subvol_no_keys_subvol_gone()
 # (snapshot_deleted_but_linked, at mount, pass 19) undeletes the node:
 # a snapshot's data lives at ancestor ids, so even an accounting-empty
 # leaf may be someone's snapshot. Here nothing claims it (the subvolume
-# was removed too), so it stays as an unclaimed live leaf, and
-# check_dirents removes the dangling snap-2 dirent
-# (dirent_to_missing_subvol) - the namespace converges minus snap-2
-# while the node remains recoverable. The mount must succeed with the
-# surviving snaps' data intact.
+# was removed too), so its subvolume is rebuilt around its root inode,
+# and the surviving snap-2 dirent reconnects it. The mount must succeed
+# with every snap's data intact, snap-2's included.
 test_runtime_tombstone_child_repair()
 {
     setup_snapshot_tree
@@ -2645,9 +2641,8 @@ test_runtime_tombstone_child_repair()
     }
     umount /mnt
 
-    # the repaired state: the rest of the tree matches the reference
-    # (snap-2 is gone from the namespace, its node undeleted in place)
-    skip_snaps="snap-$((NR_SNAPS - 1))"
+    # the repaired state: the whole tree matches the reference
+    skip_snaps=""
     verify_fs_state must-mount
 
     # undeleted, not destroyed
