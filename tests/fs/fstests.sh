@@ -29,6 +29,11 @@ config-scratch-devs 2G
 
 config-timeout 7200
 
+# Groups a ktest leaves out - fuse.ktest's quota. Not listed, as well as
+# excluded with -x: CI runs each listed test by name, and ./check runs a
+# named test whatever -x says.
+fstests_exclude_groups=()
+
 list_tests()
 {
     pushd $(dirname $(readlink -e "${BASH_SOURCE[0]}"))/xfstests > /dev/null
@@ -44,7 +49,10 @@ list_tests()
     for g in generic shared "$FSTYP"; do
 	[[ ! -f tests/$g/group.list ]] && continue
 	grep -hE '[0-9][0-9][0-9] .*(auto|dangerous)' tests/$g/group.list|
-	    sed -e "s/ .*//" -e "s/^/$g\//"
+	    awk -v x="${fstests_exclude_groups[*]}" '
+		BEGIN	{ for (i = split(x, g); i; i--) excl[g[i]] }
+			{ for (i = 2; i <= NF; i++) if ($i in excl) next; print $1 }'|
+	    sed -e "s/^/$g\//"
     done
 
     popd > /dev/null
@@ -99,8 +107,11 @@ EOF
     export MKFS_OPTIONS
 
     cd "$ktest_dir/tests/fs/xfstests"
-    local rc=0
-    ./check "$@" || rc=$?
+    local rc=0 g excl=()
+    for g in "${fstests_exclude_groups[@]}"; do
+	excl+=(-x "$g")
+    done
+    ./check "${excl[@]}" "$@" || rc=$?
 
     # _check_dmesg failures only name the .dmesg file; the artifact isn't
     # otherwise preserved, so a sub-console-loglevel splat is invisible in
