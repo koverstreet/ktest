@@ -70,29 +70,13 @@
 #            second run may still error, an unmountable fs only warns
 #
 # All tests assert the full repair and FAIL until their corresponding
-# repair lands - that's the point. The still-open repairs (full-suite
-# sweep 2026-07-20; R1/R2/R4/R5 have landed and their tests now pass):
+# repair lands - that's the point. The still-open repairs (CI,
+# 2026-11-25):
 #   R3     - wrong_parent: child's parent pointer re-aim
-#   R6/backref family - the subvolume<->snapshot backref/condemnation
-#            repairs (missing_main_subvol, unlinked_subvol and
-#            no_keys_with_keys have since landed and pass):
-#            snapshot_to_missing_subvol, deleted_live_subvol (ne
-#            state_wrong_codeword; repair landed 2026-07-21, awaiting
-#            verification), subvol_backref_cleared/stolen,
-#            subvol_child_bit_missing, subvol_deleted_flag_conflict,
-#            subvol_no_keys_subvol_gone, subvol_to_dead_node_no_backref,
-#            subvol_to_missing_node, two_subvols_one_snapshot,
-#            creation_parent_dangling, dangling_subvol,
-#            missing_root_node, orphan_become_tree_root,
-#            runtime_tombstone_child_repair
-#   D1     - cross-btree condemnation in the runtime delete collector
-#            (runtime_will_delete_backref_cleared; the node-local guard
-#            catches a retained v.subvol backref, only the subvolumes-btree
-#            scan catches flag AND field both cleared). CAUTION: currently
-#            spins recovery in an unbounded check_subvols <->
-#            delete_dead_snapshots rewind loop - kill the test promptly.
-#   stale_state_tombstone - legacy flags-only tombstone with a stale
-#            no_keys state field (field report, 2026-07-20)
+#   R1     - orphan_become_tree_root, three_children_conflict: a node with
+#            no parent that'll have it becomes a tree root
+#   subvol_to_missing_node - recreate the node as a root child, lossy
+#   missing_root_node - rebuild a tree's root node from its children
 #
 # Known splats (pre-existing, surfaced by the 2026-07-20 sweep), which
 # fail otherwise-repairing tests via check_dmesg - and can bleed into the
@@ -1352,11 +1336,12 @@ test_dangling_subvol()
 
     kvdb_rw -c "update subvolumes 0:4:0 snapshot=$(snap_root)"
 
-    # expect=repair (FAILING until R6/I6 lands): the subvol's snapshot
-    # pointer is the lie - fix it to the node that actually holds the
-    # backref, or clear the stale holder's backref. The subvol must
-    # resolve to the correct snapshot, so the full manifest must match.
+    # expect=repair: the subvol's snapshot pointer is the lie - the root
+    # doesn't backref it, and the leaf that does is claimed by nothing else -
+    # so check_snapshots repoints it at that leaf. The subvol must resolve to
+    # the correct snapshot, so the full manifest must match.
     skip_snaps=""
+    ktest_expect_sb_errors="snapshot_subvol_backref_wrong"
     check_fsck repair
 }
 
@@ -2362,10 +2347,12 @@ test_two_subvols_one_snapshot()
 
     kvdb_rw -c "set subvolumes 0:5:0 subvolume snapshot=$snap inode=$inode fs_path_parent=$fparent snap=1"
 
-    # expect=repair (FAILING): the subvolumes-btree scan (R6's helper) must
-    # find the duplicate and clear the one the snapshot doesn't backref
-    # (subvol 5). Full manifest must match (subvol 4 / snap-2 intact).
+    # Subvol 5 is "other": the clone overwrote it. Its own leaf still
+    # backrefs 5, and snap-2's backrefs 4, so 5 is repointed at its leaf, its
+    # root taken from there. Full manifest must match (other, and subvol 4 /
+    # snap-2, intact). The clone has no state field: subvol_state_bad.
     skip_snaps=""
+    ktest_expect_sb_errors="snapshot_tree_to_wrong_subvol|snapshot_subvol_backref_wrong|subvol_state_bad"
     check_fsck repair
 }
 
