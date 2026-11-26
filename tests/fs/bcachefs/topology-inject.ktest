@@ -6,8 +6,8 @@
 # alone), or nodes zeroed on disk - so that the next fsck has to repair it.
 #
 # Each test builds a filesystem whose extents btree is a root at level 1 over
-# a leaf per inode number shard, as a new filesystem is presplit - or, with 4k
-# nodes and more files, a root at level 2 over interior nodes over those -
+# a leaf per inode number shard, as a new filesystem is presplit - or, with 64k
+# nodes and many more files, a root at level 2 over interior nodes over those -
 # breaks one thing about how the pointers cover their range, and asserts, as
 # fsck-inject does:
 #
@@ -58,16 +58,18 @@ ptrs()
     kvdb -c "list -L $2 -k $1" | sed -n 's/.*type btree_ptr_v2 \([^ ]*\).*/\1/p'
 }
 
-# A filesystem whose extents btree's root is at level $1, $2 files of a 4k
-# block each, and $3...: options for format. An inode's shard is a hash of the
-# pid creating it: the files are created by four subshells, by printf - a
-# builtin, so the subshell's own open() - each subshell's in one shard, so a
-# few shards' leaves have files, and most none. The files' checksums go in
-# /tmp/sums and inode numbers in /tmp/inums, the extents btree's pointers at
-# level 1 in /tmp/ptrs and at level 2 in /tmp/ptrs2.
+# A filesystem whose extents btree's root is at level $1, $2 files of a block
+# each - $file_bytes, 4k by default - and $3...: options for format. An inode's
+# shard is a hash of the pid creating it: the files are created by four
+# subshells, by printf - a builtin, so the subshell's own open() - each
+# subshell's in one shard, so a few shards' leaves have files, and most none. A
+# file is its subshell's random block and its own number: nothing forked per
+# file, for the deep tests' many. The files' checksums go in /tmp/sums and
+# inode numbers in /tmp/inums, the extents btree's pointers at level 1 in
+# /tmp/ptrs and at level 2 in /tmp/ptrs2.
 new_fs()
 {
-    local depth=$1 nr=$2 s
+    local depth=$1 nr=$2 bytes=${file_bytes:-4096} s
     shift 2
 
     run_quiet "" bcachefs format -f --bucket_size=$(( BUCKET_SECTORS / 2 ))k "$@" $(dev)
@@ -75,12 +77,16 @@ new_fs()
 
     for s in 1 2 3 4; do
 	(
+	    # base64, 4 characters for 3 bytes, and 8 digits: $bytes
+	    data=$(head -c $(( (bytes - 8) * 3 / 4 )) /dev/urandom | base64 -w0)
 	    for (( i = s; i <= nr; i += 4 )); do
-		printf '%s' "$(head -c 3072 /dev/urandom | base64 -w0)" > /mnt/f$i
+		printf '%s%08d' "$data" $i > /mnt/f$i
 	    done
 	)
     done
-    (cd /mnt; sha256sum f* > /tmp/sums; ls -i f* > /tmp/inums)
+    (cd /mnt
+     find . -maxdepth 1 -name 'f*' -printf '%P\0' | xargs -0 sha256sum > /tmp/sums
+     find . -maxdepth 1 -name 'f*' -printf '%i %P\n' > /tmp/inums)
     : > /tmp/lost
     umount /mnt
 
@@ -105,10 +111,12 @@ new_fs()
     fi
 }
 
-# A root at level 2: 4k nodes, which want blocks smaller than that
+# A root at level 2: the smallest nodes format allows, and enough files to fill
+# more than one interior node with leaves - a 512 byte block each, which is
+# still an extent, too big to be inline data
 new_deep_fs()
 {
-    new_fs 2 3000 --block_size=512 --btree_node_size=4k
+    file_bytes=512 new_fs 2 1000000 --block_size=512 --btree_node_size=64k
 }
 
 # The level 1 pointer $1 (0-based, from new_fs's list)
@@ -557,7 +565,7 @@ test_root_unreadable_lost()
 # then that one's leaves don't reach its new end, and that the scan fills.
 #
 # The node with fewest leaves, rewritten first: each deletion is a whiteout, and
-# a 4k node written to many times has a block taken by each write.
+# a node written to many times has a block taken by each write.
 test_deep_empty_interior_child()
 {
     new_deep_fs
