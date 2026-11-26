@@ -2371,7 +2371,6 @@ test_many_device_mount()
     done
 
     run_quiet "" bcachefs format -f		\
-	--bucket_size=32k			\
 	--block_size=4k				\
 	"${devs[@]}"
 

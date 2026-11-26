@@ -58,7 +58,7 @@ test_format_across_all()
 {
     set_watchdog 300
 
-    run_quiet "" bcachefs format -f --bucket_size=32k "${ktest_scratch_dev[@]}"
+    run_quiet "" bcachefs format -f "${ktest_scratch_dev[@]}"
 
     mount -t bcachefs "$(IFS=:; echo "${ktest_scratch_dev[*]}")" /mnt
     dd if=/dev/urandom of=/mnt/foo bs=1M count=64 oflag=direct
