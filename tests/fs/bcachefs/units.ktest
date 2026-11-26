@@ -14,7 +14,7 @@ fi
 config-mem	    8G
 config-scratch-devs 8G
 
-btree_node_size=32k
+btree_node_size=64k
 
 run_test_inner()
 {

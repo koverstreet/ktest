@@ -290,11 +290,11 @@ test_replicas_variable_buckets()
     set_watchdog 1200
     run_quiet "" bcachefs format -f			\
 	--replicas=2					\
-	--bucket_size=32k	${ktest_scratch_dev[0]}	\
-	--bucket_size=64k	${ktest_scratch_dev[1]}	\
-	--bucket_size=128k	${ktest_scratch_dev[2]}	\
-	--bucket_size=128k	${ktest_scratch_dev[3]}	\
-	--bucket_size=128k	${ktest_scratch_dev[4]}
+	--bucket_size=64k	${ktest_scratch_dev[0]}	\
+	--bucket_size=128k	${ktest_scratch_dev[1]}	\
+	--bucket_size=256k	${ktest_scratch_dev[2]}	\
+	--bucket_size=256k	${ktest_scratch_dev[3]}	\
+	--bucket_size=256k	${ktest_scratch_dev[4]}
 
     mount -t bcachefs "$(join_by : "${ktest_scratch_dev[@]}")" /mnt
     fs_mark -v -n 20000 -s 4096 -k -S 0 -D 1000 -N 100000 -d /mnt -t 60

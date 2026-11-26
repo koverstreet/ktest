@@ -462,7 +462,7 @@ test_merge_torture_flakey()
 	dmsetup resume flakey
     }
 
-    run_quiet "" bcachefs format -f --btree_node_size=32k /dev/mapper/flakey
+    run_quiet "" bcachefs format -f --btree_node_size=64k /dev/mapper/flakey
 
     for i in `seq 0 $loops`; do
 	echo "loop: $i"
@@ -515,7 +515,7 @@ d_test_merge_torture()
     local loops=$((($ktest_priority + 1) * 3))
     local n=10M
 
-    run_quiet "" bcachefs format -f --btree_node_size=8k --no_initialize ${ktest_scratch_dev[0]}
+    run_quiet "" bcachefs format -f --btree_node_size=64k --no_initialize ${ktest_scratch_dev[0]}
 
     for i in `seq 0 $loops`; do
 	mount -t bcachefs -o fsck ${ktest_scratch_dev[0]} /mnt
@@ -1091,23 +1091,23 @@ run_copygc_torture()
 test_copygc_torture()
 {
     #run_copygc_torture --bucket_size=256k --btree_node_size=8k
-    run_copygc_torture --bucket_size=32k --btree_node_size=32k
+    run_copygc_torture --bucket_size=64k --btree_node_size=64k
 }
 
 test_copygc_torture_no_checksum()
 {
-    run_copygc_torture --bucket_size=256k --btree_node_size=16k --data_checksum=none
+    run_copygc_torture --bucket_size=256k --btree_node_size=64k --data_checksum=none
 }
 
 test_copygc_torture_lz4()
 {
-    run_copygc_torture --bucket_size=256k --btree_node_size=16k --compression=lz4
+    run_copygc_torture --bucket_size=256k --btree_node_size=64k --compression=lz4
 }
 
 test_small_buckets()
 {
     run_basic_fio_test				\
-	--bucket_size=32k				\
+	--bucket_size=64k				\
 	${ktest_scratch_dev[0]}
 }
 
@@ -1125,7 +1125,7 @@ test_small_nodes()
     run_basic_fio_test				\
 	--block_size=512			\
 	--bucket_size=256k			\
-	--btree_node_size=4k			\
+	--btree_node_size=64k			\
 	${ktest_scratch_dev[0]}
 }
 
