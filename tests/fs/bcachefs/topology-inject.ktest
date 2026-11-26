@@ -694,9 +694,12 @@ test_deep_two_levels()
 	echo "TEST FAILED: the first interior node has $nr_first leaves, wanted 3"
 	exit 1
     fi
-    # one session: see set_min_cmd()
-    kvdb_rw -c "set -L 1 extents $(ptr 1) deleted" \
-	    -c "set -L 2 extents $(ptr2 $(( $(wc -l < /tmp/ptrs2) - 1 ))) deleted"
+    # two sessions, not one as set_min_cmd() says: the interior node's write,
+    # done in the first, updates its pointer in the root - which trips on the
+    # root's damage if that's in already. The root's own write updates no
+    # parent.
+    kvdb_rw -c "set -L 1 extents $(ptr 1) deleted"
+    kvdb_rw -c "set -L 2 extents $(ptr2 $(( $(wc -l < /tmp/ptrs2) - 1 ))) deleted"
 
     ktest_expect_sb_errors="btree_node_topology_bad_max_key|btree_node_topology_gap_between_nodes|$NODE_DROP_ERRORS"
     check_fsck btree_node_topology_bad_max_key btree_node_topology_gap_between_nodes
