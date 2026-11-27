@@ -72,11 +72,10 @@
 # All tests assert the full repair and FAIL until their corresponding
 # repair lands - that's the point. The still-open repairs (CI,
 # 2026-11-25):
-#   R3     - wrong_parent: child's parent pointer re-aim
-#   R1     - orphan_become_tree_root, three_children_conflict: a node with
-#            no parent that'll have it becomes a tree root
-#   subvol_to_missing_node - recreate the node as a root child, lossy
-#   missing_root_node - rebuild a tree's root node from its children
+#   (none - wrong_parent, missing_root_node, three_children_conflict,
+#   orphan_become_tree_root and subvol_to_missing_node landed 2026-11-27:
+#   a node whose place is lost is re-homed where its tree has room, else
+#   made a tree root)
 #
 # Known splats (pre-existing, surfaced by the 2026-07-20 sweep), which
 # fail otherwise-repairing tests via check_dmesg - and can bleed into the
@@ -1023,12 +1022,11 @@ test_subvol_to_missing_node()
     kvdb_rw -c "update snapshots 0:$parent:0 children[0]=$other children[1]=0" \
 	 -c "set snapshots 0:$victim:0 deleted"
 
-    # expect=repair (FAILING until the lossy reattach lands): recreate the
-    # node as a root child - ancestry explicitly lost (the
-    # subvol_to_missing_root philosophy). The victim's view of older files
-    # is gone, so it stays skipped; the oracle is converge-clean + every
-    # other snap intact.
-    skip_snaps="snap-$((NR_SNAPS - 1))"
+    # expect=repair: reconstruct_snapshots recreates the node where what's
+    # left places it - a leaf in the one live interior of its tree with an
+    # empty child slot, the slot its parent forgot it from. Its ancestry is
+    # restored with it: the full manifest must match.
+    skip_snaps=""
     check_fsck repair
 }
 
@@ -1255,7 +1253,7 @@ test_wrong_parent()
 
     kvdb_rw -c "update snapshots 0:$victim:0 parent=$root depth=1 skip[0]=0 skip[1]=0 skip[2]=0"
 
-    # expect=repair (FAILING until R3 lands): corroborate - if the claimed
+    # expect=repair: corroborate - if the claimed
     # parent also claims the child, our pointer is stale -> replace with
     # the real parent; if no corroboration, we're the only claimant ->
     # set child.parent = us. The victim's ancestry is restored, so the
@@ -1355,13 +1353,12 @@ test_missing_root_node()
 
     kvdb_rw -c "set snapshots 0:$(snap_root):0 deleted"
 
-    # expect=repair (FAILING - hardest case): reconstruct the tree-root
-    # snapshot node from its surviving children. Pass-ordering trap:
-    # check_snapshot_trees deletes the now-dangling tree key first, then
-    # every child fail-stops on the missing parent in check_snapshot
-    # (pass 19) before reconstruction can run. The repair must precede
-    # that fail-stop, or the tree-key deletion must be withheld. Full
-    # manifest must match once the whole tree's ancestry is restored.
+    # expect=repair: reconstruct the tree-root snapshot node from its
+    # surviving children. check_snapshot_trees withholds deleting the
+    # now-dangling tree key - nodes in the tree still name its root as their
+    # parent - and check_snapshots recreates the root where the children and
+    # the tree key place it. Full manifest must match once the whole tree's
+    # ancestry is restored.
     skip_snaps=""
     check_fsck repair
 }
@@ -2384,34 +2381,42 @@ test_three_children_conflict()
     kvdb_rw -c "update snapshots 0:$nreal:0 children[0]=$other children[1]=0" \
 	 -c "update snapshots 0:$N:0 parent=$P depth=$(( $(snap_field $P depth) + 1 )) skip[0]=0 skip[1]=0 skip[2]=0"
 
-    # expect=repair (FAILING): N can't be installed (parent full) - safe
-    # re-home is R1 become-tree-root for snap-2 (ancestry lost). snap-2
-    # stays skipped; everything else intact.
-    skip_snaps="snap-2"
+    # expect=repair: N can't be installed (parent full) and nothing claims
+    # it, so it's re-homed - into the one live interior of its tree with an
+    # empty child slot, which is nreal, the slot the injection cleared. Its
+    # ancestry is restored, not lost: the full manifest must match.
+    skip_snaps=""
     check_fsck repair
 }
 
-# R1 become-tree-root: parent points at a nonexistent id AND no node claims
-# this child (vs test_orphan_node, where the real parent still claims it ->
-# R3 restore). Orphan snap-2 and reparent it to garbage.
+# R1 become-tree-root: a node's parent pointer is garbage AND no node claims
+# it, and its tree has no room for it (vs test_orphan_node, where the real
+# parent still claims it -> R3 restore; and three_children_conflict, where
+# the tree has a slot to re-home it in).
+#
+# The garbage has to pass key validation, which wants a parent above the
+# node's id - and every id above a node of the main tree is one of its own
+# nodes. So the victim is "other", a tree to itself created after the main
+# tree (its id is below all of them), and the garbage is the main tree's
+# root: a parent that exists, in another tree, that doesn't list it.
 test_orphan_become_tree_root()
 {
     setup_snapshot_tree
 
-    local N=$(subvol_snapshot 4)			# snap-2's node
-    local nreal=$(snap_field $N parent)
-    local nreal_c=($(snap_field $nreal children))
-    local other
-    for c in ${nreal_c[@]}; do [[ $c != $N ]] && other=$c; done
+    local N=$(subvol_snapshot 5)			# other's node, its tree's root
+    local garbage=$(snap_root)
 
-    kvdb_rw -c "update snapshots 0:$nreal:0 children[0]=$other children[1]=0" \
-	 -c "update snapshots 0:$N:0 parent=31337 depth=0 skip[0]=0 skip[1]=0 skip[2]=0"
+    [[ $(snap_field $N parent) == 0 ]]
+    [[ $(snap_field $N tree) != $(snap_field $garbage tree) ]]
 
-    # expect=repair (FAILING until R1's become-root lands): nobody claims N,
-    # its parent is garbage -> become tree root (parent=0, depth=0, skip=0,
-    # snapshot_tree_ptr_repair). snap-2's ancestry is lost, so it stays
-    # skipped; everything else intact.
-    skip_snaps="snap-2"
+    kvdb_rw -c "update snapshots 0:$N:0 parent=$garbage depth=1 skip[0]=0 skip[1]=0 skip[2]=0"
+
+    # expect=repair: nobody claims N, and its parent can't have it - full,
+    # and not its tree - so it's re-homed; its own tree has no node with room
+    # for it, so it becomes a tree root again (parent=0, depth=0), and its
+    # tree's key still names it as root. Nothing was inherited, so nothing
+    # is lost: the full manifest must match.
+    skip_snaps=""
     check_fsck repair
 }
 
