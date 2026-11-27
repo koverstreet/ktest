@@ -1769,6 +1769,9 @@ test_interrupted_deletion()
 
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume delete /mnt/snap-2
+    # The delete only unlinks: until the worker has marked the leaf
+    # will_delete there's nothing dead to delete, or to interrupt.
+    wait_nr_unlinked_subvols 0 30
     # Synchronous, so the interruption is deterministic rather than a race
     # with the background pass.
     echo 1 > /sys/fs/bcachefs/*/internal/trigger_delete_dead_snapshots
