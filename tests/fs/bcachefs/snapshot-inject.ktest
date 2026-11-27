@@ -1534,6 +1534,9 @@ test_refused_interior_delete()
     # damage happened.
     mount -t bcachefs ${ktest_scratch_dev[0]} /mnt
     bcachefs subvolume delete /mnt/snap-1
+    # The delete only unlinks: the worker tombstones the subvolume and marks
+    # its leaf will_delete, and until it has there's nothing dead to delete.
+    wait_nr_unlinked_subvols 0 30
     echo 1 > /sys/fs/bcachefs/*/internal/trigger_delete_dead_snapshots
     umount /mnt
 

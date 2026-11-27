@@ -750,6 +750,32 @@ bcachefs_test_end_checks()
     check_bcachefs_counters "${ratio[@]}" "$@"
 }
 
+# Subvolumes deleted but not yet torn down: their key sits in state "unlinked"
+# until the cleanup worker runs bch2_subvolume_set_deleted().
+nr_unlinked_subvols()
+{
+    bcachefs list -b subvolumes /mnt | grep -cw unlinked || true
+}
+
+# wait_nr_unlinked_subvols <nr> <seconds>
+#
+# Polls once a second: each bcachefs list opens a (nostart) bch_fs to format
+# keys, which logs.
+wait_nr_unlinked_subvols()
+{
+    local nr
+
+    for _ in $(seq 1 $2); do
+	nr=$(nr_unlinked_subvols)
+	[[ $nr == "$1" ]] && return 0
+	sleep 1
+    done
+
+    echo "$nr subvolumes still unlinked after $2s, expected $1"
+    bcachefs list -b subvolumes /mnt
+    return 1
+}
+
 # On-disk corruption injection: parse physical pointer locations out of
 # bkey listings (bcachefs list / list_journal), then overwrite them on
 # the raw device. Used by the scrub corruption tests.
